@@ -4,4 +4,6 @@
 :root {
   --message-image-width: 640px;
   --message-bubble-max-width: 680px;
+  --header-icon-size: 48px;
+  --header-title-font-size: 32px;
 }

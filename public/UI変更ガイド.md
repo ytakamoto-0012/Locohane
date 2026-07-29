@@ -19,7 +19,7 @@ SPAの `public/build/` とは別経路なので、フロントエンドの再ビ
 | 起動時のWelcomeメッセージ | `public/settings/welcome.md` | `{skills}` はスキル一覧に置換される。存在しない場合は [app.py:164-167](../app.py#L164-L167) のデフォルト文言にフォールバック |
 | チャット画像のプレビューサイズ等、簡単な見た目調整 | `public/custom.css` | CSS変数を上書きするだけで反映。`.chainlit/config.toml` の `custom_css = "/public/custom.css"` で読み込まれる（Chainlit標準機能） |
 
-現状 `public/settings/` には `header.md` と `welcome.md` のみ存在し、`icon.png` は未配置。アイコンを表示したい場合はここに画像ファイルを追加する。
+アイコンを表示したい場合は `public/settings/` に画像ファイルを追加する。
 
 ### `public/custom.css` で上書きできるCSS変数
 
@@ -29,6 +29,8 @@ SPAの `public/build/` とは別経路なので、フロントエンドの再ビ
 |---|---|---|
 | `--message-image-width` | `320px` | `show_image` で表示するインライン画像の幅（`height` は `auto` でアスペクト比維持。指定サイズより小さい画像は拡大され、大きい画像は縮小される） |
 | `--message-bubble-max-width` | `560px` | メッセージ吹き出し（`.message-bubble`）の最大幅 |
+| `--header-icon-size` | `22px` | ヘッダー左アイコン（`.app-header-icon`）の幅・高さ |
+| `--header-title-font-size` | `14px` | ヘッダータイトル文字列（`.app-header-title`）のフォントサイズ |
 
 編集後はブラウザをリロードするだけで反映される（Chainlitサーバー再起動・`npm run build` は不要）。
 

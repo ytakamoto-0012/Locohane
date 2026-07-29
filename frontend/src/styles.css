@@ -13,6 +13,8 @@
   --shadow-sm: 0 1px 2px rgba(20, 20, 30, 0.05), 0 1px 1px rgba(20, 20, 30, 0.04);
   --message-image-width: 320px;
   --message-bubble-max-width: 560px;
+  --header-icon-size: 22px;
+  --header-title-font-size: 14px;
 }
 
 :root[data-theme='dark'] {
@@ -60,15 +62,15 @@
 }
 
 .app-header-icon {
-  width: 22px;
-  height: 22px;
+  width: var(--header-icon-size);
+  height: var(--header-icon-size);
   border-radius: 5px;
   object-fit: cover;
 }
 
 .app-header-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--header-title-font-size);
   letter-spacing: 0.02em;
   color: var(--text);
 }
