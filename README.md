@@ -12,7 +12,7 @@
 起動時に `skills/` を走査して読む、それだけ。ファイルの保存・削除のパスとタイミングが
 コードから明確に追える状態を最優先する。
 
-![代替テキスト](public\settings\icon.png)
+![Locohane](public\settings\icon.png)
 
 名前の由来：**Lo**cal（ローカル環境）+ 小羽（**cohane** / 軽量さ・和名っぽさ）
 
