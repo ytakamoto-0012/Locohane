@@ -1,0 +1,983 @@
+"""設定ローダー。
+
+役割:
+- config.ini を読み込み、LLM 接続情報と全保存先パスを 1 つの frozen dataclass に集約する。
+- 環境変数が設定されていればそれで上書きする（config.ini の値より優先）。
+- data 配下（checkpoints / uploads / logs / memory）のディレクトリを起動時に作成する。
+
+このファイル自体は Agent Skills 仕様には対応しない（純粋なアプリ設定）。
+「何がどこに溜まるか」をコードから追えるようにするための土台。
+"""
+
+from __future__ import annotations
+
+import ast
+import configparser
+import json
+import os
+import re
+from dataclasses import dataclass, fields, replace
+from pathlib import Path
+
+from . import memory
+
+# プロジェクトルート（このファイルは <root>/src/config.py なので 2 つ上がルート）。
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.ini"
+
+
+@dataclass(frozen=True)
+class Config:
+    """アプリ全体の設定。すべて絶対パスに解決済みで保持する。
+
+    load_config() によってのみ構築される frozen dataclass。
+
+    Attributes:
+        base_url: llama.cpp server（OpenAI 互換）のベース URL。
+        api_key: LLM API キー。llama.cpp は認証不要のためダミー値でよい。
+        model: 使用するモデル名。
+        temperature: 生成時のtemperature。
+        top_p: 累積確率上位のみサンプリングする閾値。None なら未指定
+            （llama-server既定に委ねる）。
+        top_k: 上位k候補のみサンプリングする（llama.cpp拡張、OpenAI標準API
+            には無いため extra_body 経由で渡す）。None なら未指定。
+        repeat_penalty: 直近生成トークンの再出現を抑制する係数（llama.cpp
+            拡張、extra_body 経由）。None なら未指定。
+        frequency_penalty: 出現済みトークン全体への一律ペナルティ（OpenAI
+            標準API）。None なら未指定。
+        presence_penalty: 一度でも出現したトークンへの一律ペナルティ
+            （OpenAI標準API）。None なら未指定。
+        max_tokens: 1リクエストあたりの最大生成トークン数。None なら
+            無制限（llama-server既定に委ねる）。
+        dry_multiplier: DRY (Don't Repeat Yourself) サンプラーの強度
+            （llama.cpp拡張、extra_body 経由）。repeat_penalty より長い
+            フレーズ単位の反復に効く。None または 0.0 で無効。
+        dry_base: DRY サンプラーの反復長に対するペナルティ指数増加率。
+            None なら未指定（llama-server既定に委ねる）。
+        dry_allowed_length: DRY サンプラーがこの文字数以下の反復を許容する
+            閾値。None なら未指定。
+        dry_penalty_last_n: DRY サンプラーが反復検出に遡って見るトークン数
+            （-1 でコンテキスト全体）。None なら未指定。
+        dry_sequence_breakers: DRY サンプラーが反復検出をリセットする区切り
+            文字列のリスト。None なら未指定（llama-server既定に委ねる）。
+        track_token_usage: LLM応答のトークン使用量（入力/出力/合計）を
+            取得するかどうか。True の場合 build_model（src/llm.py）が
+            ChatOpenAI の stream_usage=True を有効化し、app.py・eval側で
+            使用量を集計・表示できるようにする。llama-server が
+            stream_options.include_usage 拡張に対応していない場合のみ
+            False にする（その場合トークン数は表示されない）。
+        request_timeout_seconds: LLMサーバーへのHTTPリクエストのタイムアウト
+            秒数（httpx.Timeoutのread/write/poolに適用。connectは別途固定値を
+            使う）。build_model（src/llm.py）がhttpx.AsyncClient/httpx.Client
+            の生成時に渡す。ストリーミング中はチャンク到達のたびにタイマーが
+            リセットされるため、正常な長時間生成は妨げない。ThinkingLoopDetected
+            発生後のaclose失敗でクライアントが壊れたまま次のリクエストが応答
+            ヘッダー待ちで無期限にハングした本番incidentへの対策
+            （詳細はsrc/llm.pyのChatLlamaCpp._astream / build_model参照）。
+        stream_chunk_timeout_seconds: ストリーミング中にチャンクが一定時間
+            届かない場合のタイムアウト秒数（langchain_openaiのstream_chunk_
+            timeout。request_timeout_secondsとは別物で「チャンクとチャンクの
+            間隔」の上限）。build_model（src/llm.py）がChatLlamaCppの
+            コンストラクタに渡す。大きなコンテキストのプロンプト処理(prefill)
+            に時間がかかる環境ほどこの秒数に到達しやすい。
+        skills_dir: スキル群を格納するディレクトリの絶対パス。
+        agents_dir: エージェント種別定義（dispatch_agent の agent_type、
+            ClaudeCode の .claude/agents/*.md 相当）を格納するディレクトリの
+            絶対パス。*.md 1ファイル = 1種別、frontmatterで name/
+            description/tools（省略時は既定ツール一式を継承）を指定する。
+        locohane_skills_dir: skills_dir に追加でマージ走査するディレクトリの
+            絶対パス（既定 .locohane/skills）。同名スキルが両方に存在する
+            場合はこちらが優先される（scan_skills() 参照）。
+        locohane_agents_dir: agents_dir に追加でマージ走査するディレクトリの
+            絶対パス（既定 .locohane/agents）。同名定義が両方に存在する
+            場合はこちらが優先される（scan_agent_types() 参照）。
+        system_prompt_path: システムプロンプトのテンプレートファイル
+            （{{skills}} にスキル一覧を差し込む）の絶対パス。
+        project_instructions_path: プロジェクト固有の追加指示ファイル
+            （ClaudeCode の CLAUDE.md 相当）の絶対パス。既定 .locohane/LOCOHANE.md。
+            ファイルが存在しなくてもエラーにはならず、システムプロンプトの
+            {{project_instructions}} には「（プロジェクト固有の指示はありません）」
+            が差し込まれる（render_project_instructions_block() 参照）。
+        checkpoint_db: LangGraph の会話状態を永続化する SQLite ファイルの絶対パス。
+        upload_dir: ユーザーがアップロードしたファイルの保存先絶対パス。
+        log_dir: アプリケーションログの出力先絶対パス。
+        log_level: ログの詳細度（"info"/"debug"/"none"のいずれか、大文字小文字は
+            区別しない）。"info" は現行仕様（各ツール呼び出しの概要のみ）、
+            "debug" はツール呼び出しの全引数・全結果・LLM応答本文・thinking
+            （reasoning_content）まで記録、"none" はログを一切生成しない。
+            app.py の _setup() がこの値に応じてロギングを設定する。
+        log_clear_on_startup: 起動のたびに新しい app_*.log ファイルを作成する
+            か、直近の既存ファイルに追記を試みるか。False（既定）なら直近の
+            app_*.log への追記を試みる（既に log_max_lines を超えていれば
+            その場で新しいファイルにローテーションする）。True なら起動の
+            たびに必ず新しい日時つきファイルを作成する。log_level="none" の
+            ときは意味を持たない。
+        log_max_lines: 1つのログファイル（app_YYYYMMDD_HH[_N].log）が保持する
+            最大行数。この行数を超えたら新しいファイルへローテーションする
+            （src/log_rotation.py の LineCountRotatingFileHandler が使う）。
+            0以下でローテーション無効化。log_level="none" のときは意味を
+            持たない。
+        log_retention_days: ローテーションで増え続ける古い app_*.log の
+            保持日数。この日数を過ぎた（更新日時が古い）ファイルは自動削除
+            する。0以下で無効化。同じ log_dir に evals/run_case.py が書く
+            evals.log は対象外（cleanup 呼び出し側で pattern="app_*.log"
+            を指定するため）。
+        log_cleanup_interval_hours: 上記の自動削除チェックの実行間隔（時間）。
+        chat_log_enabled: 会話ログ（ユーザー発言とAIの最終応答）をテキスト
+            ファイルへ記録する機能の有効/無効（[chat_log].enabled）。
+        chat_log_dir: 会話ログの保存先ルートディレクトリの絶対パス。
+            実際には <chat_log_dir>/<ユーザー名>/<日付>_<thread_id>.log の
+            構成で書き出す（src/chat_log.py 参照）。
+        default_workdir: エージェントの既定の作業ディレクトリ（run_script の
+            cwd、スクリプトが生成するファイルの出力先の基準）。Chainlit の
+            ChatSettings でセッション単位の作業ディレクトリが指定されな
+            かった場合に使われる。run_script 専用ではなくエージェント全体の
+            作業拠点という位置づけのため、他の run_script 実行設定とは
+            分けて保存先パス群に含める。
+        memory_dir: 永続メモリー（User/Feedback/Project/Reference）の
+            保存先ルートディレクトリの絶対パス。配下に4種のtype
+            サブディレクトリと索引ファイル MEMORY.md を持つ
+            （src/memory.py 参照）。
+        help_path: help ツールが読み込んで返すヘルプ本文（ユーザー向け、
+            Markdown）ファイルの絶対パス。
+        upload_retention_days: アップロードファイルの保持日数。この日数を
+            過ぎた（更新日時が古い）ファイルは自動削除する。0以下で無効化。
+        upload_cleanup_interval_hours: アップロードファイル自動削除の
+            チェック間隔（時間）。起動時にも1回チェックする。
+        default_workdir_retention_days: default_workdir 直下に溜まり続ける
+            ファイルの保持日数。この日数を過ぎた（更新日時が古い）ファイルは
+            自動削除する。0以下で無効化。ユーザーが ChatSettings で指定した
+            セッション単位の work_dir は対象外。
+        default_workdir_cleanup_interval_hours: default_workdir 自動削除の
+            チェック間隔（時間）。起動時にも1回チェックする。
+        path_memory_dir: パスメモリー（src/path_memory.py）が
+            会話ごとのレジストリファイル（<thread_id>.json）を保存する
+            ルートディレクトリの絶対パス。
+        path_memory_retention_days: パスメモリーの保持日数。この日数を
+            過ぎたレジストリファイルは自動削除する。0以下で無効化。
+        path_memory_cleanup_interval_hours: パスメモリー自動削除のチェック
+            間隔（時間）。起動時にも1回チェックする。
+        path_memory_max_entries: パスメモリー1会話あたりの登録上限件数。
+        script_timeout: run_script の実行タイムアウト秒数。
+        script_python: run_script が .py スクリプトを起動する際に使う
+            Python 実行ファイル。
+        code_exec_enabled: execute_python_code ツール（LLMが生成した
+            Pythonコードをその場で実行する）の有効/無効。False の場合、
+            ツールは呼び出されてもエラー文字列を返すのみでコードは
+            実行されない。
+        file_tools_duplicate_guard_enabled: 読み取り専用の Read/Glob/Grep/
+            json_query ツールを同一引数で繰り返し呼び出すのを防ぐガード機能の
+            有効/無効。
+        file_tools_duplicate_guard_max_calls: 同一シグネチャ（ツール名+引数）
+            の呼び出しを何回まで許可するか。この回数に達した以降の呼び出しは
+            エラーで拒否する。
+        file_tools_duplicate_guard_carry_over_to_main: サブエージェント
+            （dispatch_agent）内での呼び出し履歴を、メインエージェントの重複
+            判定へ持ち越すかどうか。True なら両者で呼び出し集合を共有し、
+            False なら別々に管理する（src/tools.py の _IN_SUBAGENT 参照）。
+        graph_impl: ReAct ループの実装切替。"handwritten"（手書き
+            StateGraph）または "prebuilt"（LangGraph の
+            create_react_agent）。build_graph() が参照する。
+        graph_recursion_limit: メインの ReAct ループ（agent→tools 遷移）の
+            最大反復回数。LangGraph の recursion_limit にそのまま渡す
+            （単位はノード遷移数で、subagent_max_iterations とは数え方が
+            異なる）。
+        subagent_max_iterations: dispatch_agent が内部で回す ReAct
+            ループの最大反復回数（agent→tools 遷移の回数）。
+        subagent_max_parallel: dispatch_agent ツールの実LLM呼び出しを同時に
+            何件まで許可するか。単一インスタンスのllama-serverへdispatch_agentの
+            並列リクエストが飛ぶとチェックポイント破損（ToolMessage欠落に
+            よるValueError）が本番で発生したための保険措置。1以上は
+            asyncio.Semaphore(N)でその値までにガードし（既定1＝完全直列化）、
+            0以下はガードを無効化して並列呼び出しをそのまま許可する（検証用）。
+        subagent_token_guard_enabled: dispatch_agent 内のLLM応答の
+            usage_metadata.total_tokens を監視し、閾値超過時に注意喚起
+            （ソフト）→打ち切り（ハード）を行う機能の有効/無効。
+            track_token_usage=False の場合は usage_metadata が取得できず
+            実質発火しない（run_subagent 側で無条件に無効化される）。
+        subagent_token_guard_soft_threshold: 直近1回のLLM呼び出しの
+            total_tokens がこの値以上になったら、そのiterationのtool_calls
+            は通常通り実行した上で、次のモデル呼び出し前に「まとめて回答
+            せよ」という注意メッセージを1回だけ注入する。
+        subagent_token_guard_hard_threshold: ソフト警告後もなお
+            total_tokens がこの値以上の応答が続いた場合、そのtool_calls
+            は実行せず、それ以上model.ainvoke()を呼ばずに打ち切る
+            （subagent_max_iterations到達時と同じ要約フォーマットで返す）。
+            subagent_token_guard_soft_threshold以上の値を設定すること。
+        subagent_empty_response_max_retries: dispatch_agent内のLLM応答が
+            tool_callsも本文も空（LLMサーバー側の異常応答。本番ログ
+            2026-07-23で確認）だった場合に再試行する最大回数。この回数を
+            使い切ってもなお空の応答が続いた場合は、正常終了として空文字列を
+            返さず、それまでに集めたツール実行結果を要約して打ち切る
+            （subagent_max_iterations到達時と同じ要約フォーマット）。
+        approval_timeout_seconds: create_plan/approve_plan の計画承認で
+            ユーザーの応答を待つ秒数。未応答は安全側に倒してタイムアウト
+            扱いにする。0以下は無期限待ち（タイムアウトしない）。
+        ask_user_text_timeout_seconds: ask_user_text（自由記述の質問）
+            でユーザーの応答を待つ秒数。0以下は無期限待ち。
+        ask_user_choice_timeout_seconds: ask_user_choice（選択肢形式の
+            質問）でユーザーの応答を待つ秒数。0以下は無期限待ち。
+        ask_user_multi_text_timeout_seconds: ask_user_multi_text
+            （複数項目の自由記述フォーム）でユーザーの応答を待つ秒数。
+        plan_badge_allow_unlock: 送信ボタン付近の Plan Mode / Edit Automatically
+            バッジをクリックした際、Plan Mode → Edit Automatically 方向への
+            切り替え（ロック解除）も許可するか。False にすると Edit
+            Automatically → Plan Mode 方向（ロック）のクリックのみ有効になり、
+            ロック解除は approve_plan（ユーザー承認フロー）経由に限定される
+            （config.ini の [plan].allow_badge_unlock 由来）。
+        thinking_loop_guard_enabled: LLM応答（thinking/本文）のストリーミング中に
+            反復ループを検知したら生成を打ち切って再試行する機能の有効/無効。
+        thinking_loop_guard_window_chars: ループ検知の判定対象に使う
+            直近テキストのウィンドウ文字数。
+        thinking_loop_guard_check_interval_chars: このバイト数増えるごとに
+            再チェックする。
+        thinking_loop_guard_confirm_count: 反復判定条件が連続で何回成立したら
+            確定でループと判定するか（誤検知防止）。
+        thinking_loop_guard_max_history_chars: 直近ウィンドウとの最長一致
+            部分文字列を探す際に比較対象とする、過去履歴の上限文字数
+            （MAX_K）。大きいほど長い周期の反復も検知できるが計算コストが
+            増える。
+        thinking_loop_guard_match_ratio_threshold: 直近ウィンドウと過去履歴の
+            最長一致長をwindow_charsで割った値（match_ratio）がこの値を
+            上回った場合にループ確定とする（真の反復ループと正当なJSON生成等を
+            区別するため）。
+        thinking_loop_guard_max_retries: ループ検知後、注意メッセージを注入して
+            再試行する最大回数。
+        thinking_loop_guard_nudge_messages: ループ検知後に注入する注意メッセージの
+            候補リスト。リトライ回数に応じて順番に使い、使い切ったらランダムに
+            選ぶ（src.llm.pick_loop_nudge_message 参照）。空リストなら組み込みの
+            既定文言を使う。
+        context_trim_enabled: 会話履歴中の古い ToolMessage を切り詰めて
+            LLMへの入力を抑える機能の有効/無効（src.context_trim 参照）。
+        context_trim_keep_recent_tool_messages: 全文保持する直近 ToolMessage
+            の件数。これより古い ToolMessage のみ切り詰め対象にする。
+        context_trim_truncated_max_chars: 切り詰め対象 ToolMessage の
+            content を、先頭何文字まで残すか（超過分はマーカー文言に置換）。
+        context_compaction_enabled: リクエスト（LLM呼び出し）1回あたりの
+            トークン数が閾値を超えたら会話履歴を要約して圧縮する機能の
+            有効/無効（src.context_compaction 参照）。context_trim と異なり
+            永続履歴（checkpointer上のメッセージ）自体を書き換える。
+        context_compaction_token_threshold: 圧縮を発火させるトークン数の
+            閾値（直近1回のLLM呼び出しの total_tokens で判定）。
+            track_token_usage=False の場合は判定材料が無いため実質発火しない。
+        context_compaction_keep_recent_turns: 圧縮時に丸ごと保持する直近の
+            ユーザーターン数（HumanMessage単位）。tool_calls とそれに
+            対応する ToolMessage の対応関係を壊さないよう、この境界
+            （直近N個目のHumanMessage直前）でのみ古い側を切り離す。
+        context_compaction_min_messages_to_compact: 会話全体のメッセージ数が
+            この件数未満なら、閾値を超えていても圧縮しない安全弁。
+        context_compaction_prompt_path: 要約を指示するプロンプト本文
+            （Markdown）の絶対パス。
+        auth_enabled: ログイン認証機能のON/OFF（[auth].enabled）。True の場合、
+            app.py がモジュール読み込み時に @cl.password_auth_callback を
+            登録し、未ログインユーザーはチャット画面にアクセスできなくなる。
+        auth_require_password: auth_enabled=True のとき、ユーザー名だけで
+            なくパスワードの一致まで要求するかどうか（[auth].require_password）。
+            False の場合、auth_users に登録済みのユーザー名であればパスワードの
+            内容は問わない。
+        auth_users: ログイン可能なユーザー名→パスワードの対応表。config.ini
+            には対応するキーが存在せず、環境変数 AUTH_USERS（.env 推奨）
+            のみから読む機密情報専用フィールド（他フィールドと異なり
+            config.ini 側フォールバックを持たない）。
+    """
+
+    # --- LLM (llama.cpp server / OpenAI 互換) ---
+    base_url: str
+    api_key: str
+    model: str
+    temperature: float
+    top_p: float | None
+    top_k: int | None
+    repeat_penalty: float | None
+    frequency_penalty: float | None
+    presence_penalty: float | None
+    max_tokens: int | None
+    dry_multiplier: float | None
+    dry_base: float | None
+    dry_allowed_length: int | None
+    dry_penalty_last_n: int | None
+    dry_sequence_breakers: list[str] | None
+    track_token_usage: bool
+    request_timeout_seconds: float
+    stream_chunk_timeout_seconds: float
+
+    # --- 保存先パス（すべて絶対パス） ---
+    skills_dir: Path
+    agents_dir: Path
+    locohane_skills_dir: Path
+    locohane_agents_dir: Path
+    system_prompt_path: Path
+    project_instructions_path: Path
+    checkpoint_db: Path
+    upload_dir: Path
+    log_dir: Path
+    log_level: str
+    log_clear_on_startup: bool
+    default_workdir: Path
+    memory_dir: Path
+    help_path: Path
+
+    # --- アップロードファイルの自動削除 ---
+    upload_retention_days: int
+    upload_cleanup_interval_hours: float
+
+    # --- default_workdir 直下のファイルの自動削除 ---
+    default_workdir_retention_days: int
+    default_workdir_cleanup_interval_hours: float
+
+    # --- パスメモリー（src/path_memory.py）の保存・自動削除 ---
+    path_memory_dir: Path
+    path_memory_retention_days: int
+    path_memory_cleanup_interval_hours: float
+    path_memory_max_entries: int
+
+    # --- ログファイル（app_*.log）の行数ベースローテーション・自動削除 ---
+    log_max_lines: int
+    log_retention_days: int
+    log_cleanup_interval_hours: float
+
+    # --- 会話ログ（[chat_log]） ---
+    chat_log_enabled: bool
+    chat_log_dir: Path
+
+    # --- run_script / execute_python_code 共通実行設定 ---
+    script_timeout: int
+    script_python: str
+    code_exec_enabled: bool
+
+    # --- Read/Glob/Grep/json_query 重複呼び出しガード（src/tools.py の _check_file_tools_duplicate） ---
+    file_tools_duplicate_guard_enabled: bool
+    file_tools_duplicate_guard_max_calls: int
+    file_tools_duplicate_guard_carry_over_to_main: bool
+
+    # --- グラフ実装切替 ---
+    graph_impl: str
+    graph_recursion_limit: int
+
+    # --- サブエージェント（dispatch_agent）設定 ---
+    subagent_max_iterations: int
+    subagent_max_parallel: int
+    subagent_token_guard_enabled: bool
+    subagent_token_guard_soft_threshold: int
+    subagent_token_guard_hard_threshold: int
+    subagent_empty_response_max_retries: int
+
+    # --- ユーザー応答待ちタイムアウト（Chainlit の Ask*Message） ---
+    approval_timeout_seconds: int
+    ask_user_text_timeout_seconds: int
+    ask_user_choice_timeout_seconds: int
+    ask_user_multi_text_timeout_seconds: int
+
+    # --- Plan Mode / Edit Automatically バッジ（送信ボタン付近のUI） ---
+    plan_badge_allow_unlock: bool
+
+    # --- LLM応答の反復ループ検知（src/llm.py の ChatLlamaCpp） ---
+    thinking_loop_guard_enabled: bool
+    thinking_loop_guard_window_chars: int
+    thinking_loop_guard_check_interval_chars: int
+    thinking_loop_guard_confirm_count: int
+    thinking_loop_guard_max_history_chars: int
+    thinking_loop_guard_match_ratio_threshold: float
+    thinking_loop_guard_max_retries: int
+    thinking_loop_guard_nudge_messages: list[str]
+
+    # --- 会話履歴トリミング（src/context_trim.py） ---
+    context_trim_enabled: bool
+    context_trim_keep_recent_tool_messages: int
+    context_trim_truncated_max_chars: int
+
+    # --- 会話履歴の自動要約・圧縮（src/context_compaction.py） ---
+    context_compaction_enabled: bool
+    context_compaction_token_threshold: int
+    context_compaction_keep_recent_turns: int
+    context_compaction_min_messages_to_compact: int
+    context_compaction_prompt_path: Path
+
+    # --- ログイン認証（[auth]、機密情報は .env 側） ---
+    auth_enabled: bool
+    auth_require_password: bool
+    auth_users: dict[str, str]
+
+    # --- MCP（Model Context Protocol）サーバー接続（[mcp]、src/mcp_client.py） ---
+    # .locohane/settings.json（Claude Code/Qwen Code の mcpServers 形式を参考にした
+    # 設定ファイル、git管理対象）の "mcp" ブロックがあれば、ここに列挙する4値は
+    # load_config() の末尾でその内容により上書きされる（config.ini/環境変数はデフォルト値）。
+    mcp_enabled: bool
+    mcp_settings_path: Path
+    mcp_connect_timeout_seconds: float
+    mcp_call_timeout_seconds: float
+
+
+def _resolve(base: Path, value: str) -> Path:
+    """config.ini 内の相対パスをプロジェクトルート基準の絶対パスへ解決する。
+
+    Args:
+        base: 相対パスの基準ディレクトリ（通常は PROJECT_ROOT）。
+        value: config.ini または環境変数から得た生のパス文字列。
+            絶対パスであればそのまま使う。
+
+    Returns:
+        value が絶対パスならそれをそのまま Path 化したもの、相対パスなら
+        base 基準で resolve() した絶対パス。
+    """
+    p = Path(value)
+    return p if p.is_absolute() else (base / p).resolve()
+
+
+def _as_bool(value: bool | str) -> bool:
+    """config.ini のbool値、または環境変数由来の文字列をboolへ変換する。
+
+    Args:
+        value: config.ini から得た bool、または環境変数から得た文字列。
+
+    Returns:
+        value が bool ならそのまま。文字列なら "0"/"false"/"no"（大文字小文字
+        を問わない）を False、それ以外を True として扱う。
+    """
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in ("0", "false", "no")
+
+
+def _as_optional_float(value: float | str | None) -> float | None:
+    """config.ini の空欄、または環境変数の空文字列を None（未指定）として扱う。
+
+    Args:
+        value: config.ini から得た値、または環境変数から得た文字列。
+
+    Returns:
+        空欄・None なら None、それ以外は float に変換した値。
+    """
+    if value is None:
+        return None
+    if isinstance(value, float):
+        return value
+    text = str(value).strip()
+    return float(text) if text else None
+
+
+def _as_optional_int(value: int | str | None) -> int | None:
+    """config.ini の空欄、または環境変数の空文字列を None（未指定）として扱う。
+
+    Args:
+        value: config.ini から得た値、または環境変数から得た文字列。
+
+    Returns:
+        空欄・None なら None、それ以外は int に変換した値。
+    """
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    return int(text) if text else None
+
+
+def _as_optional_str_list(value: str | None) -> list[str] | None:
+    """config.ini のカンマ区切り文字列を list[str] に変換する。空欄は None。
+
+    Args:
+        value: config.ini から得たカンマ区切り文字列、または環境変数由来の文字列。
+
+    Returns:
+        空欄・None なら None、それ以外はカンマ区切りで分割し前後の空白を
+        取り除いた文字列のリスト。
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return [item.strip() for item in text.split(",")]
+
+
+def _as_message_list(value: str | None) -> list[str]:
+    """config.ini のJSON/Python風リスト値を list[str] に変換する。
+
+    例: '["a", "b"]' や、末尾カンマを含む複数行の配列リテラル。
+    json.loads ではなく ast.literal_eval を使うのは、末尾カンマ等の
+    Python的な緩い記法（コピペしやすい）も許容するため。
+
+    Args:
+        value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
+            空欄・None なら空リストとして扱う。
+
+    Returns:
+        パースした文字列のリスト（空要素は除外）。
+
+    Raises:
+        ValueError: 値がリスト（配列）として解釈できない場合
+            （構文エラー、またはリスト以外の型だった場合）。
+    """
+    if value is None:
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(
+            f"config.ini の値はJSON/Pythonのリスト（配列）形式で指定してください: {text!r}"
+        ) from e
+    if not isinstance(parsed, list):
+        raise ValueError(f"config.ini の値はリスト（配列）形式で指定してください: {text!r}")
+    return [str(item) for item in parsed if str(item).strip()]
+
+
+def _parse_auth_users(value: str | None) -> dict[str, str]:
+    """AUTH_USERS環境変数（Python風の [["user","pass"], ...] リテラル）を
+    ユーザー名→パスワードの辞書へ変換する。
+
+    _as_message_list と同様 ast.literal_eval を使う（末尾カンマ等の緩い
+    記法も許容し、.env へのコピペを容易にするため）。
+
+    Args:
+        value: 環境変数 AUTH_USERS の生文字列。空欄・None なら空辞書。
+
+    Returns:
+        {ユーザー名: パスワード} の辞書（重複ユーザー名は後勝ち）。
+
+    Raises:
+        ValueError: リストとして解釈できない場合、または各要素が
+            [ユーザー名, パスワード] の2要素配列でない場合。
+    """
+    if not value or not value.strip():
+        return {}
+    text = value.strip()
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(f"AUTH_USERS はPythonのリスト形式で指定してください: {text!r}") from e
+    if not isinstance(parsed, list):
+        raise ValueError(f"AUTH_USERS はリスト（配列）形式で指定してください: {text!r}")
+    users: dict[str, str] = {}
+    for item in parsed:
+        if not (isinstance(item, (list, tuple)) and len(item) == 2):
+            raise ValueError(
+                f"AUTH_USERS の各要素は [ユーザー名, パスワード] の2要素にしてください: {item!r}"
+            )
+        users[str(item[0])] = str(item[1])
+    return users
+
+
+def load_config(config_path: Path | None = None) -> Config:
+    """config.ini を読み、環境変数で上書きした Config を返す。
+
+    環境変数（設定されていれば config.ini より優先）:
+      LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_TEMPERATURE
+      LLM_TOP_P / LLM_TOP_K / LLM_REPEAT_PENALTY / LLM_FREQUENCY_PENALTY / LLM_PRESENCE_PENALTY / LLM_MAX_TOKENS
+      LLM_DRY_MULTIPLIER / LLM_DRY_BASE / LLM_DRY_ALLOWED_LENGTH / LLM_DRY_PENALTY_LAST_N / LLM_DRY_SEQUENCE_BREAKERS
+      LLM_TRACK_TOKEN_USAGE
+      SKILLS_DIR / AGENTS_DIR / LOCOHANE_SKILLS_DIR / LOCOHANE_AGENTS_DIR / SYSTEM_PROMPT_PATH / PROJECT_INSTRUCTIONS_PATH / CHECKPOINT_DB / UPLOAD_DIR / LOG_DIR / LOG_LEVEL / LOG_CLEAR_ON_STARTUP / DEFAULT_WORKDIR / MEMORY_DIR / HELP_PATH
+      UPLOAD_RETENTION_DAYS / UPLOAD_CLEANUP_INTERVAL_HOURS
+      PATH_MEMORY_DIR / PATH_MEMORY_RETENTION_DAYS / PATH_MEMORY_CLEANUP_INTERVAL_HOURS / PATH_MEMORY_MAX_ENTRIES
+      SCRIPT_TIMEOUT / SCRIPT_PYTHON / SCRIPT_REQUIRE_APPROVAL
+      CODE_EXECUTION_ENABLED / CODE_EXECUTION_REQUIRE_APPROVAL
+      FILE_TOOLS_DUPLICATE_GUARD_ENABLED / FILE_TOOLS_DUPLICATE_GUARD_MAX_CALLS /
+      FILE_TOOLS_DUPLICATE_GUARD_CARRY_OVER_TO_MAIN
+      GRAPH_IMPL / GRAPH_RECURSION_LIMIT
+      SUBAGENT_MAX_ITERATIONS / SUBAGENT_SYSTEM_PROMPT_PATH / SUBAGENT_MAX_PARALLEL
+      SUBAGENT_TOKEN_GUARD_ENABLED / SUBAGENT_TOKEN_GUARD_SOFT_THRESHOLD /
+      SUBAGENT_TOKEN_GUARD_HARD_THRESHOLD
+      APPROVAL_TIMEOUT_SECONDS / ASK_USER_TEXT_TIMEOUT_SECONDS / ASK_USER_CHOICE_TIMEOUT_SECONDS
+      PLAN_BADGE_ALLOW_UNLOCK
+      THINKING_LOOP_GUARD_ENABLED / THINKING_LOOP_GUARD_WINDOW_CHARS /
+      THINKING_LOOP_GUARD_CHECK_INTERVAL_CHARS / THINKING_LOOP_GUARD_COMPRESSION_RATIO_THRESHOLD /
+      THINKING_LOOP_GUARD_CONFIRM_COUNT / THINKING_LOOP_GUARD_MAX_RETRIES /
+      THINKING_LOOP_GUARD_NUDGE_MESSAGES
+      CONTEXT_TRIM_ENABLED / CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES / CONTEXT_TRIM_TRUNCATED_MAX_CHARS
+      CONTEXT_COMPACTION_ENABLED / CONTEXT_COMPACTION_TOKEN_THRESHOLD /
+      CONTEXT_COMPACTION_KEEP_RECENT_TURNS / CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT /
+      CONTEXT_COMPACTION_PROMPT_PATH
+      AUTH_ENABLED / AUTH_REQUIRE_PASSWORD / AUTH_USERS（AUTH_USERS は .env 専用、
+      config.ini 側フォールバックを持たない）
+      CHAT_LOG_ENABLED / CHAT_LOG_DIR
+      MCP_ENABLED / MCP_SETTINGS_PATH / MCP_CONNECT_TIMEOUT_SECONDS / MCP_CALL_TIMEOUT_SECONDS
+      （これら4値は .locohane/settings.json の "mcp" ブロックがあればさらに
+      上書きされる。config.ini/環境変数はその既定値という位置づけ）
+
+    パス系の値はすべて _resolve() でプロジェクトルート基準の絶対パスへ
+    解決し、checkpoint_db の親ディレクトリ・upload_dir・log_dir は
+    存在しなければここで作成する（アプリ起動時に呼ぶことを想定）。
+
+    Args:
+        config_path: 読み込む config.ini のパス。省略時は
+            <プロジェクトルート>/config.ini（DEFAULT_CONFIG_PATH）を使う。
+
+    Returns:
+        LLM 接続情報・各種保存先パス・run_script 実行設定を集約した
+        frozen な Config インスタンス。
+
+    Raises:
+        FileNotFoundError: config_path（または既定の config.ini）が
+            存在しない場合。
+        configparser.Error: config.ini の構文が不正な場合。
+    """
+    path = config_path or DEFAULT_CONFIG_PATH
+    if not path.exists():
+        raise FileNotFoundError(path)
+    parser = configparser.ConfigParser()
+    parser.read(path, encoding="utf-8")
+
+    llm = parser["llm"] if parser.has_section("llm") else {}
+    paths = parser["paths"] if parser.has_section("paths") else {}
+    uploads = parser["uploads"] if parser.has_section("uploads") else {}
+    default_workdir_section = parser["default_workdir"] if parser.has_section("default_workdir") else {}
+    path_memory = parser["path_memory"] if parser.has_section("path_memory") else {}
+    log_section = parser["log"] if parser.has_section("log") else {}
+    chat_log = parser["chat_log"] if parser.has_section("chat_log") else {}
+    scripts = parser["scripts"] if parser.has_section("scripts") else {}
+    file_tools_duplicate_guard = (
+        parser["file_tools_duplicate_guard"]
+        if parser.has_section("file_tools_duplicate_guard")
+        else {}
+    )
+    graph = parser["graph"] if parser.has_section("graph") else {}
+    subagent = parser["subagent"] if parser.has_section("subagent") else {}
+    timeouts = parser["timeouts"] if parser.has_section("timeouts") else {}
+    plan_section = parser["plan"] if parser.has_section("plan") else {}
+    thinking_loop_guard = (
+        parser["thinking_loop_guard"] if parser.has_section("thinking_loop_guard") else {}
+    )
+    context_trim = parser["context_trim"] if parser.has_section("context_trim") else {}
+    context_compaction = (
+        parser["context_compaction"] if parser.has_section("context_compaction") else {}
+    )
+    auth = parser["auth"] if parser.has_section("auth") else {}
+    mcp = parser["mcp"] if parser.has_section("mcp") else {}
+
+    cfg = Config(
+        base_url=os.getenv("LLM_BASE_URL", llm.get("base_url", "http://localhost:8080/v1")),
+        api_key=os.getenv("LLM_API_KEY", llm.get("api_key", "dummy-not-used")),
+        model=os.getenv("LLM_MODEL", llm.get("model", "local-model")),
+        temperature=float(os.getenv("LLM_TEMPERATURE", llm.get("temperature", 0.3))),
+        top_p=_as_optional_float(os.getenv("LLM_TOP_P", llm.get("top_p", ""))),
+        top_k=_as_optional_int(os.getenv("LLM_TOP_K", llm.get("top_k", ""))),
+        repeat_penalty=_as_optional_float(os.getenv("LLM_REPEAT_PENALTY", llm.get("repeat_penalty", ""))),
+        frequency_penalty=_as_optional_float(os.getenv("LLM_FREQUENCY_PENALTY", llm.get("frequency_penalty", ""))),
+        presence_penalty=_as_optional_float(os.getenv("LLM_PRESENCE_PENALTY", llm.get("presence_penalty", ""))),
+        max_tokens=_as_optional_int(os.getenv("LLM_MAX_TOKENS", llm.get("max_tokens", ""))),
+        dry_multiplier=_as_optional_float(os.getenv("LLM_DRY_MULTIPLIER", llm.get("dry_multiplier", ""))),
+        dry_base=_as_optional_float(os.getenv("LLM_DRY_BASE", llm.get("dry_base", ""))),
+        dry_allowed_length=_as_optional_int(os.getenv("LLM_DRY_ALLOWED_LENGTH", llm.get("dry_allowed_length", ""))),
+        dry_penalty_last_n=_as_optional_int(os.getenv("LLM_DRY_PENALTY_LAST_N", llm.get("dry_penalty_last_n", ""))),
+        dry_sequence_breakers=_as_optional_str_list(
+            os.getenv("LLM_DRY_SEQUENCE_BREAKERS", llm.get("dry_sequence_breakers", ""))
+        ),
+        track_token_usage=_as_bool(
+            os.getenv("LLM_TRACK_TOKEN_USAGE", llm.get("track_token_usage", True))
+        ),
+        request_timeout_seconds=float(
+            os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", llm.get("request_timeout_seconds", 300))
+        ),
+        stream_chunk_timeout_seconds=float(
+            os.getenv(
+                "LLM_STREAM_CHUNK_TIMEOUT_SECONDS",
+                llm.get("stream_chunk_timeout_seconds", 120),
+            )
+        ),
+        skills_dir=_resolve(PROJECT_ROOT, os.getenv("SKILLS_DIR", paths.get("skills_dir", "./skills"))),
+        agents_dir=_resolve(PROJECT_ROOT, os.getenv("AGENTS_DIR", paths.get("agents_dir", "./agents"))),
+        locohane_skills_dir=_resolve(
+            PROJECT_ROOT, os.getenv("LOCOHANE_SKILLS_DIR", paths.get("locohane_skills_dir", "./.locohane/skills"))
+        ),
+        locohane_agents_dir=_resolve(
+            PROJECT_ROOT, os.getenv("LOCOHANE_AGENTS_DIR", paths.get("locohane_agents_dir", "./.locohane/agents"))
+        ),
+        system_prompt_path=_resolve(PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", paths.get("system_prompt_path", "./system_prompt/system_prompt.md"))),
+        project_instructions_path=_resolve(
+            PROJECT_ROOT,
+            os.getenv("PROJECT_INSTRUCTIONS_PATH", paths.get("project_instructions_path", "./.locohane/LOCOHANE.md")),
+        ),
+        checkpoint_db=_resolve(PROJECT_ROOT, os.getenv("CHECKPOINT_DB", paths.get("checkpoint_db", "./data/checkpoints.sqlite"))),
+        upload_dir=_resolve(PROJECT_ROOT, os.getenv("UPLOAD_DIR", paths.get("upload_dir", "./data/uploads"))),
+        log_dir=_resolve(PROJECT_ROOT, os.getenv("LOG_DIR", paths.get("log_dir", "./data/logs"))),
+        log_level=os.getenv("LOG_LEVEL", paths.get("log_level", "info")).strip().lower(),
+        log_clear_on_startup=_as_bool(
+            os.getenv("LOG_CLEAR_ON_STARTUP", paths.get("log_clear_on_startup", False))
+        ),
+        default_workdir=_resolve(PROJECT_ROOT, os.getenv("DEFAULT_WORKDIR", paths.get("default_workdir", "./"))),
+        memory_dir=_resolve(PROJECT_ROOT, os.getenv("MEMORY_DIR", paths.get("memory_dir", "./data/memory"))),
+        help_path=_resolve(PROJECT_ROOT, os.getenv("HELP_PATH", paths.get("help_path", "./system_prompt/help.md"))),
+        upload_retention_days=int(os.getenv("UPLOAD_RETENTION_DAYS", uploads.get("retention_days", 7))),
+        upload_cleanup_interval_hours=float(os.getenv("UPLOAD_CLEANUP_INTERVAL_HOURS", uploads.get("cleanup_interval_hours", 1))),
+        default_workdir_retention_days=int(os.getenv("DEFAULT_WORKDIR_RETENTION_DAYS", default_workdir_section.get("retention_days", 7))),
+        default_workdir_cleanup_interval_hours=float(os.getenv("DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS", default_workdir_section.get("cleanup_interval_hours", 1))),
+        path_memory_dir=_resolve(PROJECT_ROOT, os.getenv("PATH_MEMORY_DIR", path_memory.get("dir", "./data/path_memory"))),
+        path_memory_retention_days=int(os.getenv("PATH_MEMORY_RETENTION_DAYS", path_memory.get("retention_days", 1))),
+        path_memory_cleanup_interval_hours=float(os.getenv("PATH_MEMORY_CLEANUP_INTERVAL_HOURS", path_memory.get("cleanup_interval_hours", 1))),
+        path_memory_max_entries=int(os.getenv("PATH_MEMORY_MAX_ENTRIES", path_memory.get("max_entries", 500))),
+        log_max_lines=int(os.getenv("LOG_MAX_LINES", log_section.get("max_lines", 5000))),
+        log_retention_days=int(os.getenv("LOG_RETENTION_DAYS", log_section.get("retention_days", 7))),
+        log_cleanup_interval_hours=float(
+            os.getenv("LOG_CLEANUP_INTERVAL_HOURS", log_section.get("cleanup_interval_hours", 1))
+        ),
+        chat_log_enabled=_as_bool(os.getenv("CHAT_LOG_ENABLED", chat_log.get("enabled", False))),
+        chat_log_dir=_resolve(
+            PROJECT_ROOT, os.getenv("CHAT_LOG_DIR", chat_log.get("dir", "./data/logs_chat"))
+        ),
+        script_timeout=int(os.getenv("SCRIPT_TIMEOUT", scripts.get("timeout", 60))),
+        script_python=os.getenv("SCRIPT_PYTHON", scripts.get("python", "python")),
+        code_exec_enabled=_as_bool(
+            os.getenv("CODE_EXECUTION_ENABLED", scripts.get("code_execution_enabled", True))
+        ),
+        file_tools_duplicate_guard_enabled=_as_bool(
+            os.getenv(
+                "FILE_TOOLS_DUPLICATE_GUARD_ENABLED",
+                file_tools_duplicate_guard.get("enabled", True),
+            )
+        ),
+        file_tools_duplicate_guard_max_calls=int(
+            os.getenv(
+                "FILE_TOOLS_DUPLICATE_GUARD_MAX_CALLS",
+                file_tools_duplicate_guard.get("max_calls", 1),
+            )
+        ),
+        file_tools_duplicate_guard_carry_over_to_main=_as_bool(
+            os.getenv(
+                "FILE_TOOLS_DUPLICATE_GUARD_CARRY_OVER_TO_MAIN",
+                file_tools_duplicate_guard.get("carry_over_to_main", True),
+            )
+        ),
+        graph_impl=os.getenv("GRAPH_IMPL", graph.get("implementation", "handwritten")),
+        graph_recursion_limit=int(os.getenv("GRAPH_RECURSION_LIMIT", graph.get("recursion_limit", 50))),
+        subagent_max_iterations=int(os.getenv("SUBAGENT_MAX_ITERATIONS", subagent.get("max_iterations", 6))),
+        subagent_max_parallel=int(
+            os.getenv("SUBAGENT_MAX_PARALLEL", subagent.get("max_parallel", 1))
+        ),
+        subagent_token_guard_enabled=_as_bool(
+            os.getenv(
+                "SUBAGENT_TOKEN_GUARD_ENABLED", subagent.get("token_guard_enabled", True)
+            )
+        ),
+        subagent_token_guard_soft_threshold=int(
+            os.getenv(
+                "SUBAGENT_TOKEN_GUARD_SOFT_THRESHOLD",
+                subagent.get("token_guard_soft_threshold", 40000),
+            )
+        ),
+        subagent_token_guard_hard_threshold=int(
+            os.getenv(
+                "SUBAGENT_TOKEN_GUARD_HARD_THRESHOLD",
+                subagent.get("token_guard_hard_threshold", 55000),
+            )
+        ),
+        subagent_empty_response_max_retries=int(
+            os.getenv(
+                "SUBAGENT_EMPTY_RESPONSE_MAX_RETRIES",
+                subagent.get("empty_response_max_retries", 2),
+            )
+        ),
+        approval_timeout_seconds=int(
+            os.getenv("APPROVAL_TIMEOUT_SECONDS", timeouts.get("approval_seconds", 300))
+        ),
+        ask_user_text_timeout_seconds=int(
+            os.getenv("ASK_USER_TEXT_TIMEOUT_SECONDS", timeouts.get("ask_user_text_seconds", 60))
+        ),
+        ask_user_choice_timeout_seconds=int(
+            os.getenv(
+                "ASK_USER_CHOICE_TIMEOUT_SECONDS", timeouts.get("ask_user_choice_seconds", 90)
+            )
+        ),
+        ask_user_multi_text_timeout_seconds=int(
+            os.getenv(
+                "ASK_USER_MULTI_TEXT_TIMEOUT_SECONDS",
+                timeouts.get("ask_user_multi_text_seconds", 60),
+            )
+        ),
+        plan_badge_allow_unlock=_as_bool(
+            os.getenv("PLAN_BADGE_ALLOW_UNLOCK", plan_section.get("allow_badge_unlock", True))
+        ),
+        thinking_loop_guard_enabled=_as_bool(
+            os.getenv(
+                "THINKING_LOOP_GUARD_ENABLED", thinking_loop_guard.get("enabled", True)
+            )
+        ),
+        thinking_loop_guard_window_chars=int(
+            os.getenv(
+                "THINKING_LOOP_GUARD_WINDOW_CHARS", thinking_loop_guard.get("window_chars", 600)
+            )
+        ),
+        thinking_loop_guard_check_interval_chars=int(
+            os.getenv(
+                "THINKING_LOOP_GUARD_CHECK_INTERVAL_CHARS",
+                thinking_loop_guard.get("check_interval_chars", 150),
+            )
+        ),
+        thinking_loop_guard_confirm_count=int(
+            os.getenv(
+                "THINKING_LOOP_GUARD_CONFIRM_COUNT", thinking_loop_guard.get("confirm_count", 2)
+            )
+        ),
+        thinking_loop_guard_max_history_chars=int(
+            os.getenv(
+                "THINKING_LOOP_GUARD_MAX_HISTORY_CHARS",
+                thinking_loop_guard.get("max_history_chars", 4000),
+            )
+        ),
+        thinking_loop_guard_match_ratio_threshold=float(
+            os.getenv(
+                "THINKING_LOOP_GUARD_MATCH_RATIO_THRESHOLD",
+                thinking_loop_guard.get("match_ratio_threshold", 0.2),
+            )
+        ),
+        thinking_loop_guard_max_retries=int(
+            os.getenv(
+                "THINKING_LOOP_GUARD_MAX_RETRIES", thinking_loop_guard.get("max_retries", 2)
+            )
+        ),
+        thinking_loop_guard_nudge_messages=_as_message_list(
+            os.getenv(
+                "THINKING_LOOP_GUARD_NUDGE_MESSAGES", thinking_loop_guard.get("nudge_messages", "")
+            )
+        ),
+        context_trim_enabled=_as_bool(
+            os.getenv("CONTEXT_TRIM_ENABLED", context_trim.get("enabled", True))
+        ),
+        context_trim_keep_recent_tool_messages=int(
+            os.getenv(
+                "CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES",
+                context_trim.get("keep_recent_tool_messages", 5),
+            )
+        ),
+        context_trim_truncated_max_chars=int(
+            os.getenv(
+                "CONTEXT_TRIM_TRUNCATED_MAX_CHARS",
+                context_trim.get("truncated_max_chars", 2000),
+            )
+        ),
+        context_compaction_enabled=_as_bool(
+            os.getenv("CONTEXT_COMPACTION_ENABLED", context_compaction.get("enabled", True))
+        ),
+        context_compaction_token_threshold=int(
+            os.getenv(
+                "CONTEXT_COMPACTION_TOKEN_THRESHOLD",
+                context_compaction.get("token_threshold", 60000),
+            )
+        ),
+        context_compaction_keep_recent_turns=int(
+            os.getenv(
+                "CONTEXT_COMPACTION_KEEP_RECENT_TURNS",
+                context_compaction.get("keep_recent_turns", 2),
+            )
+        ),
+        context_compaction_min_messages_to_compact=int(
+            os.getenv(
+                "CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT",
+                context_compaction.get("min_messages_to_compact", 10),
+            )
+        ),
+        context_compaction_prompt_path=_resolve(
+            PROJECT_ROOT,
+            os.getenv(
+                "CONTEXT_COMPACTION_PROMPT_PATH",
+                context_compaction.get(
+                    "compaction_prompt_path", "./system_prompt/compaction_prompt.md"
+                ),
+            ),
+        ),
+        auth_enabled=_as_bool(os.getenv("AUTH_ENABLED", auth.get("enabled", False))),
+        auth_require_password=_as_bool(
+            os.getenv("AUTH_REQUIRE_PASSWORD", auth.get("require_password", True))
+        ),
+        auth_users=_parse_auth_users(os.getenv("AUTH_USERS", "")),
+        mcp_enabled=_as_bool(os.getenv("MCP_ENABLED", mcp.get("enabled", True))),
+        mcp_settings_path=_resolve(
+            PROJECT_ROOT,
+            os.getenv("MCP_SETTINGS_PATH", mcp.get("settings_path", "./.locohane/settings.json")),
+        ),
+        mcp_connect_timeout_seconds=float(
+            os.getenv("MCP_CONNECT_TIMEOUT_SECONDS", mcp.get("connect_timeout_seconds", 15))
+        ),
+        mcp_call_timeout_seconds=float(
+            os.getenv("MCP_CALL_TIMEOUT_SECONDS", mcp.get("call_timeout_seconds", 60))
+        ),
+    )
+
+    # .locohane/settings.json の "mcp" ブロックがあれば、config.ini/環境変数由来の
+    # 既定値をさらに上書きする（settings.json が最優先）。settings.json の
+    # "mcpServers" 本体の読み込みは src/mcp_client.py 側で独立して行うため、
+    # ここでは config.py が mcp_client.py に依存する循環importを避けるため、
+    # このブロックだけを自前で読む（構文エラーは他のconfig読み込みと同様に伝播させる）。
+    mcp_overrides = _load_mcp_global_overrides(cfg.mcp_settings_path)
+    if mcp_overrides:
+        cfg = replace(
+            cfg,
+            mcp_enabled=_as_bool(mcp_overrides.get("enabled", cfg.mcp_enabled)),
+            mcp_connect_timeout_seconds=float(
+                mcp_overrides.get("connectTimeoutSeconds", cfg.mcp_connect_timeout_seconds)
+            ),
+            mcp_call_timeout_seconds=float(
+                mcp_overrides.get("callTimeoutSeconds", cfg.mcp_call_timeout_seconds)
+            ),
+        )
+
+    # data 配下のディレクトリを確実に用意する（checkpoint_db は親ディレクトリを作る）。
+    cfg.checkpoint_db.parent.mkdir(parents=True, exist_ok=True)
+    cfg.upload_dir.mkdir(parents=True, exist_ok=True)
+    cfg.log_dir.mkdir(parents=True, exist_ok=True)
+    cfg.path_memory_dir.mkdir(parents=True, exist_ok=True)
+    cfg.default_workdir.mkdir(parents=True, exist_ok=True)
+    memory.ensure_dirs(cfg.memory_dir)
+
+    return cfg
+
+
+def _load_mcp_global_overrides(path: Path) -> dict:
+    """.locohane/settings.json の "mcp" ブロック（全体挙動の上書き設定）を読む。
+
+    src/mcp_client.py には依存しない自己完結の実装（循環import回避）。
+    "mcpServers"（個々のサーバー定義）はここでは読まない
+    （src/mcp_client.py が起動時に独立して読み込む）。
+
+    Args:
+        path: cfg.mcp_settings_path（既定 <root>/.locohane/settings.json）。
+
+    Returns:
+        "mcp" ブロックの内容（dict）。ファイル不在、または "mcp" キー
+        自体が無ければ空の dict。
+
+    Raises:
+        json.JSONDecodeError: settings.json の構文が不正な場合
+            （config.ini 同様、設定ミスを起動時に検出するためfail fastする）。
+    """
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data.get("mcp", {}) if isinstance(data, dict) else {}
+
+
+_CONFIG_VAR_PATTERN = re.compile(r"\$\{(\w+)\}")
+
+
+def expand_config_vars(template: str, config: Config) -> str:
+    """テンプレート文字列内の ``${フィールド名}`` を Config の実際の値へ展開する。
+
+    システムプロンプトやツールのdocstringに config.ini の値（例: 反復回数の
+    上限）をハードコードせず参照させるための汎用機構。変数名は Config
+    dataclass の属性名をそのまま使う（例: ``${subagent_max_iterations}``）。
+    属性名は「セクション名_キー名」で一意になるよう命名されているため、
+    セクション修飾なしのフラットな名前で衝突しない。
+
+    Args:
+        template: ``${変数名}`` を含む文字列。
+        config: 値の取得元となる Config インスタンス。
+
+    Returns:
+        ``${変数名}`` を実際の値の文字列表現に置き換えた文字列。
+
+    Raises:
+        ValueError: テンプレート中に Config に存在しないフィールド名が
+            参照されている場合。設定ミス（typo等）を起動時に検出できるよう
+            fail-fast する。
+    """
+    values = {f.name: getattr(config, f.name) for f in fields(config)}
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in values:
+            raise ValueError(f"未定義のconfig変数が参照されています: ${{{name}}}")
+        return str(values[name])
+
+    return _CONFIG_VAR_PATTERN.sub(_replace, template)

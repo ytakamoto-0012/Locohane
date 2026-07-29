@@ -1,0 +1,7 @@
+/* ビルド不要でUIを微調整するためのカスタムCSS。
+   ここを編集してブラウザをリロードするだけで反映される（サーバー再起動・npm buildは不要）。 */
+
+:root {
+  --message-image-width: 640px;
+  --message-bubble-max-width: 680px;
+}

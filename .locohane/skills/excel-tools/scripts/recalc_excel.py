@@ -1,0 +1,113 @@
+"""Excel COM経由でxlsx/xlsm/xlsの数式を再計算・保存し、エラーセルを検出する。
+
+excel-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
+run_script から
+    python recalc_excel.py <path>
+の形で呼ばれる。
+
+pure-Pythonの数式評価ライブラリは対応関数が限定的で正確性に欠けるため、
+ローカルにインストール済みのMicrosoft Excelを非表示（ヘッドレス）起動して
+実際に計算させる（pywin32のCOM経由）。処理後は必ずExcelを終了させる
+（try/finally）。
+
+前提・制約（SKILL.mdにも記載）:
+- ローカルにMicrosoft Excelがインストールされ、対話セッションから
+  呼び出されている必要がある（サービスとしての実行は不可）。
+- 万一途中でスクリプトが強制終了された場合、EXCEL.EXEプロセスが
+  残留する可能性がある（タスクマネージャーでの終了が必要）。
+- インターネットからダウンロードしたとマークされたファイル（保護された
+  ビュー対象）は正しく開けない場合がある。
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+from _common import setup_utf8_stdio
+
+_XL_CELL_TYPE_FORMULAS = -4123
+_XL_ERRORS = 16
+
+
+def _collect_errors(workbook) -> list[dict]:
+    errors: list[dict] = []
+    for sheet in workbook.Worksheets:
+        used = sheet.UsedRange
+        if used is None:
+            continue
+        try:
+            error_cells = used.SpecialCells(_XL_CELL_TYPE_FORMULAS, _XL_ERRORS)
+        except Exception:
+            # 対象セルが1つも無い場合、SpecialCellsはCOMエラーを送出する。
+            continue
+        for area in error_cells.Areas:
+            for cell in area.Cells:
+                # 遅延バインディング(DispatchEx)では Address はパラメータ付きメソッドとして
+                # 呼び出せない（文字列プロパティとして返る）ため、絶対参照形式から "$" を除去する。
+                address = cell.Address.replace("$", "")
+                errors.append({"sheet": sheet.Name, "cell": address, "value": str(cell.Text)})
+    return errors
+
+
+def _recalc(path: Path) -> dict:
+    import pythoncom
+    import win32com.client as win32
+
+    pythoncom.CoInitialize()
+    excel = None
+    workbook = None
+    try:
+        excel = win32.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        excel.AutomationSecurity = 3  # msoAutomationSecurityForceDisable（マクロ確認ダイアログの抑止）
+        workbook = excel.Workbooks.Open(str(path), UpdateLinks=0, IgnoreReadOnlyRecommended=True)
+        excel.CalculateFullRebuild()
+        errors = _collect_errors(workbook)
+        workbook.Save()
+        return {"path": str(path), "recalculated": True, "errors": errors}
+    finally:
+        if workbook is not None:
+            try:
+                workbook.Close(SaveChanges=False)
+            except Exception:
+                pass
+        if excel is not None:
+            try:
+                excel.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+
+
+def main() -> int:
+    setup_utf8_stdio()
+    if len(sys.argv) < 2:
+        print("usage: recalc_excel.py <path>", file=sys.stderr)
+        return 1
+
+    path = Path(sys.argv[1])
+    if not path.is_file():
+        print(f"ファイルが見つかりません: {sys.argv[1]}", file=sys.stderr)
+        return 1
+    if path.suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
+        print(f"対応拡張子は .xlsx/.xlsm/.xls のみです: {path.suffix}", file=sys.stderr)
+        return 1
+
+    try:
+        result = _recalc(path)
+    except ImportError as e:
+        print(f"必要なライブラリが見つかりません（pywin32が必要です）: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001 - COMエラーはExcelのバージョン・状態により多様なため丸めて報告する
+        print(f"Excelでの再計算に失敗しました: {e}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

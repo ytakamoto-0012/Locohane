@@ -1,0 +1,54 @@
+id: annual_schedule_xlsx_end_to_end_large
+target: system_prompt_scale
+work_dir: evals/fixtures/annual_schedule_large
+timeout_seconds: 3600
+turns:
+  - >-
+    作業ディレクトリには年ごとのフォルダがあり、それぞれに子供会の活動記録
+    （写真、一部の年だけ ocr_md フォルダにOCR済みのmarkdownあり）が
+    入っています。今年子供会の会長になったので、この過去実績情報をもとに、
+    来年の年間行事予定表を annual_schedule.xlsx というファイル名でExcelで
+    作ってください。予定表は月間ベースと週間ベースの２パターンを作成し、週間
+    ベースには準備、段取り、片付け、打ち合わせ時期などもわかるようにしてください。
+    
+expect:
+  tool_called_any: [run_script]
+  tool_call_args_contains:
+    run_script: {script: "scripts/edit_excel.py"}
+  response_not_contains: ["申し訳ありません", "できません", "機能がありません"]
+auto_approve: true
+judge: |
+  ユーザー報告の元シナリオ（大量の画像+一部OCR mdフォルダから過去実績を
+  読み取り、年間行事予定表のxlsxを作る）を実データ規模で再現する
+  end-to-end検証。evals/fixtures/annual_schedule_large は
+  generate_annual_schedule_fixture.py --preset large（既定: 5年×8件≒52ファイル）
+  で生成した、実データ規模に近い構成。以下を確認せよ:
+  1. execute_python_code、または run_script で file-tools 以外のスキル
+     （excel-tools の edit_excel.py 等）を呼ぶ前に、create_plan → approve_plan
+     を経由しているか（計画未承認のままだとツール側でブロックされ
+     「エラー: 計画が未承認のため実行できません」が返るため、これが
+     返っている場合は不合格）。
+  2. excel-tools スキル（read_skill args: skill_name=excel-tools）を読み、
+     edit_excel.py を run_script で呼び出して annual_schedule.xlsx（または
+     それに類するファイル名）を作成しているか。
+  3. run_script の ToolMessage（実行結果）が正常終了（エラーでない、
+     "applied_ops" 等の成功を示す内容）になっているか。
+  4. 生成した予定表の中身が、過去実績（ランダム生成のため具体的な行事名は
+     ケースごとに変わる）を一切参照せず一般的な行事名を当て推量しているだけ
+     ではなく、実際にフォルダ内の複数年・複数行事の情報を読み取った形跡が
+     transcript（read_skill_file/run_script/dispatch_agent 等の呼び出し内容）
+     から確認できるか。
+  5. 大量ファイルの探索中に、同じ失敗を繰り返す・タイプミスを繰り返す等の
+     明らかなループに陥っていないか。turn_cutoffs（recursion_limit/
+     thinking_loop によるターン打ち切り）が発生していないか結果JSONを確認し、
+     発生していれば理由を報告せよ（打ち切り自体は不合格の直接理由にはしない
+     が、何が起きたかは必ず報告すること）。
+  6. 最終回答がユーザーに生成ファイルの場所を伝えているか。
+  いずれかに明確に反する場合は不合格とせよ。
+notes: >-
+  end-to-end本丸ケース（旧021の統合版。021は縮小フィクスチャで内容が
+  重複するため削除し、こちらに一本化した）。/tune-prompt system_prompt の
+  自動ループには含めない（毎イテレーション実行するには重すぎるため）。
+  `python evals/fixtures/generate_annual_schedule_fixture.py --preset large`
+  でフィクスチャを再生成できる（決定論的、seed固定）。
+  `python evals/run_all.py system_prompt_scale` で手動実行する。

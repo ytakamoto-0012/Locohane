@@ -1,0 +1,58 @@
+type IconName = 'paperclip' | 'folder' | 'palette' | 'sun' | 'moon' | 'monitor' | 'plus';
+
+function IconPath({ name }: { name: IconName }) {
+  switch (name) {
+    case 'paperclip':
+      return (
+        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.07 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+      );
+    case 'folder':
+      return <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />;
+    case 'palette':
+      return (
+        <>
+          <path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.4-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h2.3c2.3 0 4.2-1.9 4.2-4.2C21.5 6 17.2 2 12 2z" />
+          <circle cx="6.5" cy="11.5" r="1.3" />
+          <circle cx="9.5" cy="7.3" r="1.3" />
+          <circle cx="14.5" cy="7.3" r="1.3" />
+          <circle cx="17.3" cy="11.5" r="1.3" />
+        </>
+      );
+    case 'sun':
+      return (
+        <>
+          <circle cx="12" cy="12" r="4.3" />
+          <path d="M12 1.5v2.5M12 20v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M1.5 12h2.5M20 12h2.5M4.2 19.8l1.8-1.8M18 6l1.8-1.8" />
+        </>
+      );
+    case 'moon':
+      return <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z" />;
+    case 'monitor':
+      return (
+        <>
+          <rect x="2.5" y="3.5" width="19" height="13" rx="2" />
+          <path d="M8 20.5h8M12 16.5v4" />
+        </>
+      );
+    case 'plus':
+      return <path d="M12 5v14M5 12h14" />;
+  }
+}
+
+export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <IconPath name={name} />
+    </svg>
+  );
+}
