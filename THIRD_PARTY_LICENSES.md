@@ -7,7 +7,7 @@
 再生成:
 
 ```bash
-C:/DT_Python/Python311/env_claudecode/Scripts/python.exe tools/gen_licenses.py
+python tools/gen_licenses.py
 ```
 
 ## ライセンス種別サマリ

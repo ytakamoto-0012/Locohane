@@ -361,30 +361,52 @@ llama-server --model C:\path\to\model.gguf --alias local-model --host 127.0.0.1 
 > - Gemma 系 → 独自の Gemma Terms of Use
 > 迷ったら Apache 2.0 のモデル（Qwen2.5 等）を選ぶのが安全です。
 
-### 3. config.ini の最低限の設定
+### 3. 環境依存パスの最低限の設定
 
-llama-server を起動したら、`config.ini` のうち環境依存で必ず実際の値に
-合わせる必要がある以下4項目を設定する。
+llama-server を起動したら、環境依存で必ず実際の値に合わせる必要がある
+パス設定を行う。これらは `config.ini` だけでなく `app.bat` と
+プロジェクト直下の `CLAUDE.md` にも分散しているので注意する。
+
+**`config.ini`（LLM接続先・エージェントが実行時に使うPython）**
 
 | セクション | キー | 設定する値 |
 |---|---|---|
 | `[llm]` | `base_url` | 手順2で起動した llama-server の OpenAI 互換エンドポイント（例: `http://localhost:8080/v1`） |
 | `[llm]` | `api_key` | llama.cpp は認証不要のため通常はダミー値のままでよい |
 | `[llm]` | `model` | 手順2の `--alias` と一致させるモデル名 |
-| `[scripts]` | `python` | `.py` スクリプト実行に使う Python 実行ファイルの絶対パス |
+| `[scripts]` | `python` | `run_script`/`execute_python_code` ツール（LLMが実行時に呼び出す）が使う Python 実行ファイルの絶対パス |
+
+**`app.bat`（アプリ本体＝chainlitサーバーを起動する仮想環境）**
+
+| 変数 | 設定する値 |
+|---|---|
+| `PYTHON_DIR` | `chainlit run app.py` を実行する Python 仮想環境のディレクトリ（`Scripts` はこの変数からの相対で解決される） |
+
+**プロジェクト `CLAUDE.md`（Claude Code がこのプロジェクトを開発・テストする際に使う実行環境）**
+
+| 見出し | 設定する値 |
+|---|---|
+| `Python実行環境` | Claude Code がスクリプト実行・動作確認に使う Python 実行ファイルの絶対パス（通常は `app.bat` の `PYTHON_DIR` と同じ仮想環境） |
+| `Node.jsパス` | `frontend/`（package.json あり）のビルド・テストに Claude Code が使う Node.js のディレクトリ |
+
+これら3ファイルは用途が異なるため、同じ値を指すこともあれば異なることもある。
+`config.ini` の `[scripts].python` はアプリ実行中にLLMが呼び出すスクリプト用、
+`app.bat` の `PYTHON_DIR` はアプリ本体の起動用、プロジェクト `CLAUDE.md` の
+2項目は開発時に Claude Code が使う用、という違いを意識して設定する。
 
 **方法A: `setup-basic-config` スキルを使う（推奨）**
 
-Claude Code 上で `/setup-basic-config` を実行すると、上記4項目の現在値を
-提示した上で対話形式で新しい値を確認し、`config.ini` を更新してくれる
-（`.claude/skills/setup-basic-config/SKILL.md`）。
+Claude Code 上で `/setup-basic-config` を実行すると、上記3ファイル・
+7項目の現在値を提示した上で対話形式で新しい値を確認し、まとめて
+更新してくれる（`.claude/skills/setup-basic-config/SKILL.md`）。
 
-**方法B: `config.ini` を直接編集する**
+**方法B: 各ファイルを直接編集する**
 
 エディタで `config.ini` を開き、`[llm]` セクションの
 `base_url`/`api_key`/`model`、`[scripts]` セクションの
-`python` を直接書き換える。各項目の意味は後述の
-「設定リファレンス（config.ini）」も参照。
+`python` を直接書き換える。`app.bat` の `PYTHON_DIR` と、プロジェクト
+`CLAUDE.md` の「Python実行環境」「Node.jsパス」も同様に書き換える。
+各項目の意味は後述の「設定リファレンス（config.ini）」も参照。
 
 ### 4. アプリ起動
 
