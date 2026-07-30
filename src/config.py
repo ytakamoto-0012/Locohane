@@ -93,11 +93,14 @@ class Config:
             場合はこちらが優先される（scan_agent_types() 参照）。
         system_prompt_path: システムプロンプトのテンプレートファイル
             （{{skills}} にスキル一覧を差し込む）の絶対パス。
-        project_instructions_path: プロジェクト固有の追加指示ファイル
-            （ClaudeCode の CLAUDE.md 相当）の絶対パス。既定 .locohane/LOCOHANE.md。
-            ファイルが存在しなくてもエラーにはならず、システムプロンプトの
-            {{project_instructions}} には「（プロジェクト固有の指示はありません）」
-            が差し込まれる（render_project_instructions_block() 参照）。
+        project_instructions_paths: プロジェクト固有の追加指示ファイル
+            （ClaudeCode の CLAUDE.md 相当）の絶対パスのリスト。既定
+            [.locohane/LOCOHANE.md]。1つも存在しなくてもエラーにはならず、
+            システムプロンプトの {{project_instructions}} には
+            「（プロジェクト固有の指示はありません）」が差し込まれる
+            （render_project_instructions_block() 参照）。複数パスは
+            nudge_messages と同じJSON/Python風リスト形式（角カッコ＋
+            改行複数行OK）で指定できる。
         checkpoint_db: LangGraph の会話状態を永続化する SQLite ファイルの絶対パス。
         upload_dir: ユーザーがアップロードしたファイルの保存先絶対パス。
         log_dir: アプリケーションログの出力先絶対パス。
@@ -314,7 +317,7 @@ class Config:
     locohane_skills_dir: Path
     locohane_agents_dir: Path
     system_prompt_path: Path
-    project_instructions_path: Path
+    project_instructions_paths: list[Path]
     checkpoint_db: Path
     upload_dir: Path
     log_dir: Path
@@ -537,6 +540,28 @@ def _as_message_list(value: str | None) -> list[str]:
     return [str(item) for item in parsed if str(item).strip()]
 
 
+def _as_path_list(value: str | None, base: Path) -> list[Path]:
+    """config.ini のパス指定を list[Path] に変換する。
+
+    従来通りの単一パス（角カッコなしのプレーンな文字列）と、
+    nudge_messages と同じJSON/Python風リスト形式（角カッコ＋改行複数行OK、
+    例: '[\n    "./a.md",\n    "./b.md",\n    ]'）の両方を許容する
+    （後方互換のため、既存の config.ini を書き換えなくても動く）。
+
+    Args:
+        value: config.ini または環境変数から得た生の文字列。
+        base: 相対パスの解決基準ディレクトリ（通常は PROJECT_ROOT）。
+
+    Returns:
+        _resolve() で絶対パス化した Path のリスト（空欄なら空リスト）。
+    """
+    text = str(value).strip() if value is not None else ""
+    if not text:
+        return []
+    items = _as_message_list(text) if text.startswith("[") else [text]
+    return [_resolve(base, item) for item in items]
+
+
 def _parse_auth_users(value: str | None) -> dict[str, str]:
     """AUTH_USERS環境変数（Python風の [["user","pass"], ...] リテラル）を
     ユーザー名→パスワードの辞書へ変換する。
@@ -699,9 +724,11 @@ def load_config(config_path: Path | None = None) -> Config:
             PROJECT_ROOT, os.getenv("LOCOHANE_AGENTS_DIR", paths.get("locohane_agents_dir", "./.locohane/agents"))
         ),
         system_prompt_path=_resolve(PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", paths.get("system_prompt_path", "./system_prompt/system_prompt.md"))),
-        project_instructions_path=_resolve(
+        project_instructions_paths=_as_path_list(
+            os.getenv(
+                "PROJECT_INSTRUCTIONS_PATH", paths.get("project_instructions_path", "./.locohane/LOCOHANE.md")
+            ),
             PROJECT_ROOT,
-            os.getenv("PROJECT_INSTRUCTIONS_PATH", paths.get("project_instructions_path", "./.locohane/LOCOHANE.md")),
         ),
         checkpoint_db=_resolve(PROJECT_ROOT, os.getenv("CHECKPOINT_DB", paths.get("checkpoint_db", "./data/checkpoints.sqlite"))),
         upload_dir=_resolve(PROJECT_ROOT, os.getenv("UPLOAD_DIR", paths.get("upload_dir", "./data/uploads"))),

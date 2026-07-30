@@ -508,7 +508,7 @@ async def _setup() -> None:
     # 完了した後の最後の差し込みとして扱う。
     system_prompt = system_prompt.replace(
         "{{project_instructions}}",
-        render_project_instructions_block(_config.project_instructions_path),
+        render_project_instructions_block(_config.project_instructions_paths),
     )
 
     # サブエージェント共通の注意事項（反復回数の定義・フォールバック方針）を、

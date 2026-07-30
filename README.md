@@ -74,7 +74,7 @@
                  └───┬───────────────────────────┬──────────────┘
                      │ モデル呼び出し             │ ツール実行
        ┌─────────────▼───────────┐   ┌───────────▼──────────────────────┐
-       │ ChatOpenAI              │   │ src/tools.py (29ツール)            │
+       │ ChatOpenAI              │   │ src/tools.py (29ツール)             │
        │  → llama-server /v1     │   │  read_skill / read_skill_file /    │
        │  (OpenAI 互換)          │   │  run_script / execute_python_code /│
        └─────────────────────────┘   │  get_tool_source / check_work_dir_status /│
@@ -131,7 +131,38 @@
 スキル読み込みは **すべて LangGraph のツールコール** として実装しており、グラフのトレースに乗り
 Chainlit 側で「今このスキルを読んでいます」等のステップとして可視化される。
 
-上記3段階に加えて、スキルの読み込みとは独立したツールが以下の30個ある（いずれも `src/tools.py`）。
+### ビルトインツール一覧とLLMへの公開方法
+
+「ビルトインツール」とは、スキル本文とは独立して常時 LLM に公開される、状態を持たない
+関数群を指す（対して SKILL.md は「知識・手順書」であり、それ自体はツールではない。
+LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトインツール**を経由して
+間接的にスキル本文やスクリプトへアクセスする）。
+
+**LLM への認識のさせ方**: system_prompt.md 等のテキストへツールの説明を埋め込む
+方式（プロンプトベース）では**ない**。OpenAI 互換 API の `tools` パラメータとして
+リクエストのたびに構造化データで送信する方式を取る。
+
+1. 各ツールは `src/tools.py` で LangChain の `@tool` デコレータ付き関数として定義する。
+   関数の docstring が `description`、型ヒント付き引数が JSON Schema の `parameters` に
+   自動変換される（`langchain_core.tools.tool` の標準機能。本プロジェクト側に
+   独自の変換コードはない）。
+2. `get_all_tools()`（`src/tools.py`）がビルトインツールと MCP 由来の動的ツールを
+   合流させたリストを返す。
+3. `src/graph.py` の `build_model(config).bind_tools(get_all_tools())`（サブエージェント側は
+   `src/subagent.py`）が、このリストを `ChatOpenAI` 系クラス（`src/llm.py` の
+   `ChatLlamaCpp`）に紐付ける。
+4. 実際の HTTP リクエスト送信時、`bind_tools` で渡した関数群が OpenAI Function Calling
+   形式の `tools` 配列へ変換され、`base_url`（llama-server の `/v1` エンドポイント）
+   宛のリクエストボディに含まれる。LLM 側の応答に含まれる `tool_calls` を
+   LangGraph が受け取り、対応する Python 関数を実行する。
+
+つまり LLM が「どんなツールが使えるか」を知る手がかりは、システムプロンプトの文章では
+なく、**リクエストごとに送られる `tools` フィールドそのもの**である
+（`name`/`description`/`parameters` 込みで、モデルの Function Calling 機能が解釈する）。
+スキルの frontmatter（name/description）だけはこれとは別に、`src/skills.py` が
+起動時にシステムプロンプトへテキスト注入する（Discovery 段階、こちらはプロンプトベース）。
+
+上記3段階に加えて、スキルの読み込みとは独立したツールが以下の29個ある（いずれも `src/tools.py`）。
 
 | ツール | 役割 |
 |--------|------|
@@ -172,14 +203,14 @@ Locohane/
 ├── app.bat                 # Windows用起動バッチ
 ├── chainlit.md             # Chainlit ウェルカム画面
 ├── CLAUDE.md               # プロジェクト固有の追加指示（Claude Code 形式）
+├── QWEN.md                 # プロジェクト固有の追加指示（Qwen Code 形式、内容はCLAUDE.md参照の1行）
 ├── LICENSE                 # 本プロジェクトのライセンス（MIT）
 ├── THIRD_PARTY_LICENSES.md # 依存OSSライセンス一覧（tools/gen_licenses.pyで再生成）
 ├── memo.md                 # 開発者向けメモ
+├── issue.md                # 既知の課題メモ
 ├── pytest.ini              # pytest設定
 ├── .env.example            # 環境変数サンプル
 ├── .gitignore              # Git除外設定
-├── bin/
-│   └── officecli-win-x64.exe  # Officeファイル操作用CLIツール
 ├── .chainlit/
 │   ├── config.toml         # Chainlit設定
 │   └── translations/       # 多言語翻訳ファイル
@@ -206,6 +237,7 @@ Locohane/
 ├── public/                  # Chainlit公開ファイル
 │   ├── build/               # フロントエンドビルド成果物
 │   ├── settings/            # ヘッダー・アイコン・ウェルカム文言の設定
+│   ├── icons/                # UIアイコン画像
 │   ├── custom.css           # カスタムCSS
 │   └── UI変更ガイド.md      # UIカスタマイズガイド
 ├── system_prompt/
@@ -221,6 +253,8 @@ Locohane/
 │   ├── run_case.py          # 1ケース実行（Chainlit UI不要）
 │   ├── case_schema.py       # ケースYAMLのスキーマ
 │   ├── headless_chainlit.py # Chainlitスタブ
+│   ├── timing_callbacks.py  # config_timeouts用の実測タイミング計測コールバック
+│   ├── analyze_timing.py    # 実測タイミング結果の集計・分析
 │   ├── tuning_log.md        # チューニング履歴
 │   ├── cases/               # 評価ケース（YAML）
 │   │   ├── system_prompt/   # システムプロンプト用ケース
@@ -233,7 +267,7 @@ Locohane/
 │   ├── config.py            # config.ini ローダー（frozen dataclass）
 │   ├── skills.py            # スキル発見ミドルウェア（第1段階 Discovery）
 │   ├── agent_types.py       # エージェント種別発見（agents/*.md）
-│   ├── tools.py             # LangGraph ツール30種（第2・第3段階＋独立ツール）
+│   ├── tools.py             # LangGraph ツール29種（第2・第3段階＋独立ツール）
 │   ├── file_tools.py        # Read/Glob/Grep/json_query のロジック層
 │   ├── path_memory.py       # パスメモリー（@N）レジストリの読み書き
 │   ├── memory.py            # 永続メモリーの読み書き・索引再構築
@@ -532,7 +566,7 @@ YAML frontmatter 付き Markdown ファイルとして保存する。ロジッ�
 再評価する仕組み。`.claude/skills/tune-prompt/SKILL.md` の手順書に沿って
 Claude Code から `/tune-prompt system_prompt` のように実行する。
 
-- 評価ケースは `evals/cases/<target>/*.yaml`（現状 `system_prompt` に17件）。
+- 評価ケースは `evals/cases/<target>/*.yaml`（現状 `system_prompt` に1件、`system_prompt_scale` に1件）。
   ルールベース判定（`expect`: 特定ツールの呼び出し有無・応答文字列の含有等）と、
   自由記述の `judge`（transcript を読んで合否判断させる）を併用できる。
 - `python evals/run_all.py system_prompt` で全ケースを直列実行し、結果は
@@ -576,7 +610,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[paths]` | `locohane_skills_dir` | `skills_dir` にマージ走査する追加スキルフォルダ（同名は優先） | `LOCOHANE_SKILLS_DIR` |
 | `[paths]` | `locohane_agents_dir` | `agents_dir` にマージ走査する追加エージェント種別フォルダ（同名は優先） | `LOCOHANE_AGENTS_DIR` |
 | `[paths]` | `system_prompt_path` | メインエージェント用システムプロンプトのテンプレート | `SYSTEM_PROMPT_PATH` |
-| `[paths]` | `project_instructions_path` | プロジェクト固有の追加指示ファイル（ClaudeCode の CLAUDE.md 相当、存在しなくてもエラーにならない） | `PROJECT_INSTRUCTIONS_PATH` |
+| `[paths]` | `project_instructions_path` | プロジェクト固有の追加指示ファイル（ClaudeCode の CLAUDE.md 相当、存在しなくてもエラーにならない）。`nudge_messages` と同じリスト形式で複数パス指定可 | `PROJECT_INSTRUCTIONS_PATH` |
 | `[paths]` | `checkpoint_db` | 会話状態 SQLite | `CHECKPOINT_DB` |
 | `[paths]` | `upload_dir` | アップロード保存先 | `UPLOAD_DIR` |
 | `[paths]` | `log_dir` | ログ出力先 | `LOG_DIR` |
@@ -635,6 +669,9 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[auth]` | `require_password` | 認証ON時、パスワード一致を必須にするか（`false`＝ユーザー名のみで通す） | `AUTH_REQUIRE_PASSWORD` |
 | `[chat_log]` | `enabled` | 会話ログ（ユーザー発言・AI最終応答）のテキストファイル記録の有効/無効 | `CHAT_LOG_ENABLED` |
 | `[chat_log]` | `dir` | 会話ログの保存先ルートディレクトリ | `CHAT_LOG_DIR` |
+| `[checkpointer]` | `op_timeout_seconds` | LangGraphの会話状態SQLite（`[paths].checkpoint_db`）に対する1回あたりの操作（aget_tuple/aput_writes等）タイムアウト秒数。超過時はcheckpointer再構築へフォールバック | `CHECKPOINTER_OP_TIMEOUT_SECONDS` |
+| `[checkpointer]` | `close_timeout_seconds` | checkpointer再構築時に旧DB接続をクローズする際のタイムアウト秒数 | `CHECKPOINTER_CLOSE_TIMEOUT_SECONDS` |
+| `[checkpointer]` | `shutdown_drain_timeout_seconds` | アプリシャットダウン時、保留中の非同期タスクの完了を待つ最大秒数 | `CHECKPOINTER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS` |
 | `[mcp]` | `enabled` | MCPサーバー自動接続機能の有効/無効（既定値。`.locohane/settings.json` の `"mcp"."enabled"` があればそちらが優先） | `MCP_ENABLED` |
 | `[mcp]` | `settings_path` | `.locohane/settings.json` のパス | `MCP_SETTINGS_PATH` |
 | `[mcp]` | `connect_timeout_seconds` | 1サーバーあたりの起動（プロセス起動+initialize+tools/list）のタイムアウト秒数 | `MCP_CONNECT_TIMEOUT_SECONDS` |
@@ -677,7 +714,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 詳細・thinkingは含まない）を、データベースを使わずテキストファイルへ記録する。
 
 - 保存先: `[chat_log].dir`（既定 `./data/logs_chat`）配下に
-  `<ユーザー名>/<日付>_<thread_id>.log` の構成で書き出す。
+  `<ユーザー名>/<日時>_<thread_id>.log`（日時は秒単位まで含む）の構成で書き出す。
 - ユーザー名はログイン中のユーザー識別子（`[auth]` 参照）。`[auth] enabled = false`
   で未ログインの場合は `anonymous` にまとめる。
 - 1つのチャットセッション（タブ）につき1ファイルへ追記し続ける（日をまたいでも
