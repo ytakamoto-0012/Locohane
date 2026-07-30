@@ -133,6 +133,25 @@ _ASK_USER_CHOICE_TIMEOUT_SECONDS: int = 90
 _ASK_USER_MULTI_TEXT_TIMEOUT_SECONDS: int = 60
 _PLAN_BADGE_ALLOW_UNLOCK: bool = True
 
+# run_script は本来「書き込み系ツール」として一律に計画承認を要求するが、
+# 副作用のない純粋な読み取り専用スクリプトはここに (skill_name, script_filename)
+# を明示的に登録することで承認チェックを免除できる（read_vba.py は oletools で
+# ファイルのバイト列を読むだけ、read_excel.py も openpyxl/xlrd でファイルを
+# 読むだけで、いずれもExcel本体・COMを使わず書き込みも発生しないため対象外とした。
+# read_docx.py/read_pdf.py/read_pptx.py/inspect_pptx.py も同様に対象ファイルを
+# 読むだけで書き込みは発生しない。render_pdf_pages.py はユーザーの元PDFは変更
+# しないが、レンダリング結果のPNGをスキル内のrendered/へ新規保存する点で他とは
+# 異なるものの、対象自体は読み取り専用のため同様に対象外とした）。
+_PLAN_APPROVAL_EXEMPT_SCRIPTS: set[tuple[str, str]] = {
+    ("excel-tools", "read_vba.py"),
+    ("excel-tools", "read_excel.py"),
+    ("docx-tools", "read_docx.py"),
+    ("pdf-tools", "read_pdf.py"),
+    ("pdf-tools", "render_pdf_pages.py"),
+    ("pptx-tools", "read_pptx.py"),
+    ("pptx-tools", "inspect_pptx.py"),
+}
+
 
 # 「無期限待ち」の代替として使う実質無期限の秒数（2^31-1 ≈ 68年）。
 # chainlit.types.AskSpec は pydantic dataclass で timeout: int（Optional化されて
@@ -1087,7 +1106,9 @@ async def run_script(
     Agent Skills 標準の progressive disclosure における第3段階（Execute）に相当する。
     書き込み系ツールのため、create_plan/approve_plan で計画が承認済み
     （cl.user_session["plan_approved"] が True）でない限り実行できない
-    （未承認の場合はエラーを返す）。
+    （未承認の場合はエラーを返す）。ただし副作用のない読み取り専用スクリプト
+    （`_PLAN_APPROVAL_EXEMPT_SCRIPTS` に登録済みのもの。例: excel-tools の
+    read_vba.py）はこの承認チェックを免除される。
 
     Args:
         skill_name: スクリプトを持つスキルのフォルダ名。
@@ -1333,6 +1354,9 @@ async def _run_script_impl(
     pydantic の ValidatedFunction が *args/**kwargs 用プレースホルダとして
     予約している名前と衝突し、生成されるスキーマのフィールド名が
     "v__args" に化けて run_script() 呼び出しが TypeError になるため使えない）。
+
+    (skill_name, script_filename) が _PLAN_APPROVAL_EXEMPT_SCRIPTS に
+    登録されている場合は計画未承認でも実行できる。
     """
     args = script_args or []
     # args 内の各要素で `@N`（パスメモリー参照）を実パスへ解決する。
@@ -1350,7 +1374,8 @@ async def _run_script_impl(
         return f"エラー: {e}"
     workdir = _resolve_workdir(need_write=True)
 
-    if not cl.user_session.get("plan_approved"):
+    is_plan_exempt = (skill_name, script_filename) in _PLAN_APPROVAL_EXEMPT_SCRIPTS
+    if not is_plan_exempt and not cl.user_session.get("plan_approved"):
         logger.info(
             "run_script: 計画未承認のためブロック skill=%s script=%s", skill_name, script_filename
         )
