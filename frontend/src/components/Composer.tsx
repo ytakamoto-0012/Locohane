@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent } from 'react';
+import { useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
 import { useChatData, useChatInteract } from '@chainlit/react-client';
 import type { IFileRef, IStep } from '@chainlit/react-client';
 import { WorkDirButton } from './WorkDirButton';
@@ -20,7 +20,7 @@ export function Composer({ plan }: { plan?: IStep }) {
 
   const isReplying = askUser?.spec.type === 'text';
 
-  const handleAttach = (files: FileList | null) => {
+  const handleAttach = (files: FileList | File[] | null) => {
     if (!files) return;
     Array.from(files).forEach((file) => {
       const entry: PendingAttachment = { name: file.name, uploading: true };
@@ -36,6 +36,23 @@ export function Composer({ plan }: { plan?: IStep }) {
           setAttachments((prev) => prev.filter((a) => a !== entry));
         });
     });
+  };
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData?.items ?? []);
+    const imageFiles = items
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+      .map((file, i) => {
+        if (file.name && file.name !== 'image.png') return file;
+        const ext = file.type.split('/')[1] ?? 'png';
+        const renamed = new File([file], `clipboard-${Date.now()}-${i}.${ext}`, { type: file.type });
+        return renamed;
+      });
+    if (imageFiles.length === 0) return;
+    e.preventDefault();
+    handleAttach(imageFiles);
   };
 
   const submit = () => {
@@ -90,6 +107,7 @@ export function Composer({ plan }: { plan?: IStep }) {
           disabled={disabled}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           rows={4}
         />
         <div className="composer-toolbar">

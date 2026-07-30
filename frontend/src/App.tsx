@@ -7,6 +7,7 @@ import { SidePanel } from './components/SidePanel';
 import { Composer } from './components/Composer';
 import { AskActionBar } from './components/AskActionBar';
 import { AskFormBar } from './components/AskFormBar';
+import { AskChoiceFormBar } from './components/AskChoiceFormBar';
 import { AskTextBar } from './components/AskTextBar';
 import { AskFileDropzone } from './components/AskFileDropzone';
 import {
@@ -56,6 +57,7 @@ function App() {
         </div>
         <AskActionBar />
         <AskFormBar />
+        <AskChoiceFormBar />
         <AskTextBar />
         <AskFileDropzone />
         <Composer plan={plan} />

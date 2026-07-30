@@ -25,7 +25,9 @@ LangChain の @tool として定義する。read_skill/read_skill_file/run_scrip
 - ask_user_question(AskUserQuestion) … ユーザーへ自由記述で追加質問する。labels省略時は
   単発質問（Chainlit AskUserMessage）、labels指定時は複数項目をまとめて提示する
   フォーム（Chainlit AskElementMessage + CustomElement）
-- ask_user_choice … ユーザーへ選択肢形式で追加質問する（Chainlit AskActionMessage）
+- ask_user_choice … ユーザーへ選択肢形式で追加質問する。multi_select省略/False時は
+  単一選択（Chainlit AskActionMessage）、multi_select=True時は複数選択可能な
+  チェックボックスフォーム（Chainlit AskElementMessage + CustomElement）
 - create_memory / update_memory / delete_memory / read_memory / search_memory /
   list_memories … スレッドをまたぐ永続メモリー（src/memory.py）の読み書き。
   主エージェントのみに公開し、dispatch_agent のサブエージェントには渡さない。
@@ -2023,32 +2025,51 @@ async def ask_user_question(question: str, labels: list[str] | None = None) -> s
 
 
 @tool
-async def ask_user_choice(question: str, choices: list[str]) -> str:
+async def ask_user_choice(
+    question: str, choices: list[str], multi_select: bool = False
+) -> str:
     """会話を続けるために必要な選択を、ユーザーに選択肢形式で質問する。
 
-    複数の進め方・方針からユーザーに1つ選んでもらいたい場合に使う。
+    複数の進め方・方針からユーザーに1つ（または複数）選んでもらいたい場合に使う。
     自由記述の回答が必要な場合は AskUserQuestion を使うこと。
 
     Args:
         question: ユーザーに表示する質問文。
         choices: 選択肢の文字列リスト（1件以上）。
+        multi_select: True の場合、チェックボックス形式で複数選択できるように
+            表示し、選択された選択肢をまとめて返す（未選択のまま送信された
+            場合は "(選択なし)" を返す）。False（既定）の場合は従来通り、
+            選択肢ボタンをクリックした時点で即座にその1件を選んで返す
+            （択一で確定させたい場合はこちら）。
 
     Returns:
-        ユーザーが選んだ選択肢の文字列。choices が空の場合や、設定値
-        （config.ini の [timeouts].ask_user_choice_seconds。0以下は無期限待ち）
-        の秒数以内に応答が無い場合は、例外を送出せず「エラー: ...」形式の
-        文字列を返す。
+        multi_select=False（既定）: ユーザーが選んだ選択肢の文字列。
+        multi_select=True: ユーザーが選択した選択肢を「、」区切りで連結した
+        文字列（未選択なら "(選択なし)"）。
+        choices が空の場合や、設定値（config.ini の
+        [timeouts].ask_user_choice_seconds。0以下は無期限待ち）の秒数以内に
+        応答が無い場合は、例外を送出せず「エラー: ...」形式の文字列を返す。
     """
     if not choices:
         return "エラー: choices が空です。1件以上の選択肢を指定してください。"
-    logger.info("ask_user_choice: %s choices=%s", question, choices)
+    logger.info(
+        "ask_user_choice: %s choices=%s multi_select=%s", question, choices, multi_select
+    )
+    timeout = _resolve_ask_timeout(_ASK_USER_CHOICE_TIMEOUT_SECONDS)
+    if multi_select:
+        element = cl.CustomElement(
+            name="MultiChoiceForm", props={"question": question, "choices": choices}
+        )
+        res = await cl.AskElementMessage(content=question, element=element, timeout=timeout).send()
+        if res is None:
+            return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
+        selected = res.get("values") or []
+        return "、".join(selected) if selected else "(選択なし)"
     actions = [
         cl.Action(name=f"choice_{i}", payload={"value": c}, label=c)
         for i, c in enumerate(choices)
     ]
-    res = await cl.AskActionMessage(
-        content=question, actions=actions, timeout=_resolve_ask_timeout(_ASK_USER_CHOICE_TIMEOUT_SECONDS)
-    ).send()
+    res = await cl.AskActionMessage(content=question, actions=actions, timeout=timeout).send()
     if res is None:
         return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
     return res["payload"].get("value") or res.get("label", "")

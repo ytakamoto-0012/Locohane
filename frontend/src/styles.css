@@ -467,6 +467,14 @@
   color: inherit;
 }
 
+.ask-choice-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
 .ask-form-submit {
   align-self: flex-end;
   padding: 8px 16px;
