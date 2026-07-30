@@ -221,12 +221,11 @@ class Config:
         approval_timeout_seconds: create_plan/approve_plan の計画承認で
             ユーザーの応答を待つ秒数。未応答は安全側に倒してタイムアウト
             扱いにする。0以下は無期限待ち（タイムアウトしない）。
-        ask_user_text_timeout_seconds: ask_user_text（自由記述の質問）
+        ask_user_question_timeout_seconds: AskUserQuestion（自由記述の
+            質問。labels省略時は単発質問、labels指定時は複数項目フォーム）
             でユーザーの応答を待つ秒数。0以下は無期限待ち。
         ask_user_choice_timeout_seconds: ask_user_choice（選択肢形式の
             質問）でユーザーの応答を待つ秒数。0以下は無期限待ち。
-        ask_user_multi_text_timeout_seconds: ask_user_multi_text
-            （複数項目の自由記述フォーム）でユーザーの応答を待つ秒数。
         plan_badge_allow_unlock: 送信ボタン付近の Plan Mode / Edit Automatically
             バッジをクリックした際、Plan Mode → Edit Automatically 方向への
             切り替え（ロック解除）も許可するか。False にすると Edit
@@ -373,9 +372,8 @@ class Config:
 
     # --- ユーザー応答待ちタイムアウト（Chainlit の Ask*Message） ---
     approval_timeout_seconds: int
-    ask_user_text_timeout_seconds: int
+    ask_user_question_timeout_seconds: int
     ask_user_choice_timeout_seconds: int
-    ask_user_multi_text_timeout_seconds: int
 
     # --- Plan Mode / Edit Automatically バッジ（送信ボタン付近のUI） ---
     plan_badge_allow_unlock: bool
@@ -790,18 +788,14 @@ def load_config(config_path: Path | None = None) -> Config:
         approval_timeout_seconds=int(
             os.getenv("APPROVAL_TIMEOUT_SECONDS", timeouts.get("approval_seconds", 300))
         ),
-        ask_user_text_timeout_seconds=int(
-            os.getenv("ASK_USER_TEXT_TIMEOUT_SECONDS", timeouts.get("ask_user_text_seconds", 60))
+        ask_user_question_timeout_seconds=int(
+            os.getenv(
+                "ASK_USER_QUESTION_TIMEOUT_SECONDS", timeouts.get("ask_user_question_seconds", 60)
+            )
         ),
         ask_user_choice_timeout_seconds=int(
             os.getenv(
                 "ASK_USER_CHOICE_TIMEOUT_SECONDS", timeouts.get("ask_user_choice_seconds", 90)
-            )
-        ),
-        ask_user_multi_text_timeout_seconds=int(
-            os.getenv(
-                "ASK_USER_MULTI_TEXT_TIMEOUT_SECONDS",
-                timeouts.get("ask_user_multi_text_seconds", 60),
             )
         ),
         plan_badge_allow_unlock=_as_bool(

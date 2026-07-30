@@ -90,7 +90,7 @@ def suggest_similar_dir(path: Path) -> str:
 
 
 def read_file(path: Path, offset: int = 0, limit: int = 10) -> dict:
-    """行番号付きでテキストファイルを読み込む（旧 read_file.py 相当）。
+    """行番号付きでテキストファイルを読み込む。
 
     Args:
         path: 読み込む絶対パス。
@@ -201,10 +201,7 @@ def glob_search(base: Path, pattern: str, head_limit: int = 200) -> dict:
     files = [str(p.resolve()) for p in truncated_files]
     directory_paths = [str(p.resolve()) for p in truncated_dirs]
     file_details = [_file_detail(p) for p in truncated_files]
-    directories = [
-        {"path": path_str, **_count_contents(p)}
-        for path_str, p in zip(directory_paths, truncated_dirs)
-    ]
+    directories = [{"path": path_str, **_count_contents(p)} for path_str, p in zip(directory_paths, truncated_dirs)]
     base_contents = _count_contents(base)
 
     return {

@@ -3,7 +3,7 @@ import { useChatData, useChatInteract } from '@chainlit/react-client';
 import type { IStep } from '@chainlit/react-client';
 
 /**
- * ask_user_text（自由記述の単発質問）専用の表示コンポーネント。
+ * AskUserQuestion（labels省略時の自由記述単発質問）専用の表示コンポーネント。
  * backend では cl.AskUserMessage(spec.type === 'text') として届く。
  * 質問文自体は既にアシスタントメッセージとしてスレッドに表示済みのため、
  * ここでは入力欄と送信ボタンのみを提供する。送信は Composer の

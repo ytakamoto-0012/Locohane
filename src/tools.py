@@ -22,10 +22,10 @@ LangChain の @tool として定義する。read_skill/read_skill_file/run_scrip
 - show_image      … 第3段階(Execute): 画像ファイルをチャットUIにプレビュー表示するだけ
   （LLM自身は内容を見ない。provide_download の画像版。ユーザーへの「表示して」「見せて」はこちら）
 - dispatch_agent  … タスクをサブエージェントへ委譲し、最終回答のみを受け取る
-- ask_user_text   … ユーザーへ自由記述で追加質問する（Chainlit AskUserMessage）
+- ask_user_question(AskUserQuestion) … ユーザーへ自由記述で追加質問する。labels省略時は
+  単発質問（Chainlit AskUserMessage）、labels指定時は複数項目をまとめて提示する
+  フォーム（Chainlit AskElementMessage + CustomElement）
 - ask_user_choice … ユーザーへ選択肢形式で追加質問する（Chainlit AskActionMessage）
-- ask_user_multi_text … ユーザーへ複数項目の自由記述欄を同時に提示して質問する
-  （Chainlit AskElementMessage + CustomElement）
 - create_memory / update_memory / delete_memory / read_memory / search_memory /
   list_memories … スレッドをまたぐ永続メモリー（src/memory.py）の読み書き。
   主エージェントのみに公開し、dispatch_agent のサブエージェントには渡さない。
@@ -152,9 +152,8 @@ _HELP_PATH: Path | None = None
 _PATH_MEMORY_DIR: Path | None = None
 _PATH_MEMORY_MAX_ENTRIES: int = 500
 _APPROVAL_TIMEOUT_SECONDS: int = 300
-_ASK_USER_TEXT_TIMEOUT_SECONDS: int = 60
+_ASK_USER_QUESTION_TIMEOUT_SECONDS: int = 60
 _ASK_USER_CHOICE_TIMEOUT_SECONDS: int = 90
-_ASK_USER_MULTI_TEXT_TIMEOUT_SECONDS: int = 60
 _PLAN_BADGE_ALLOW_UNLOCK: bool = True
 
 # run_script は本来「書き込み系ツール」として一律に計画承認を要求するが、
@@ -207,9 +206,8 @@ def init_tools(
     path_memory_max_entries: int,
     code_exec_enabled: bool = False,
     approval_timeout_seconds: int = 300,
-    ask_user_text_timeout_seconds: int = 60,
+    ask_user_question_timeout_seconds: int = 60,
     ask_user_choice_timeout_seconds: int = 90,
-    ask_user_multi_text_timeout_seconds: int = 60,
     plan_badge_allow_unlock: bool = True,
     dispatch_agent_max_parallel: int = 1,
     graph_tool_max_parallel: int = 1,
@@ -260,16 +258,13 @@ def init_tools(
         approval_timeout_seconds: create_plan/approve_plan の計画承認で
             ユーザーの応答を待つ秒数（config.ini の
             [timeouts].approval_seconds 由来）。0以下は無期限待ちを意味する。
-        ask_user_text_timeout_seconds: ask_user_text がユーザーの応答を
-            待つ秒数（config.ini の [timeouts].ask_user_text_seconds 由来）。
-            0以下は無期限待ちを意味する。
+        ask_user_question_timeout_seconds: AskUserQuestion（自由記述の
+            質問。labels省略時は単発質問、labels指定時は複数項目フォーム）
+            がユーザーの応答を待つ秒数（config.ini の
+            [timeouts].ask_user_question_seconds 由来）。0以下は無期限待ちを意味する。
         ask_user_choice_timeout_seconds: ask_user_choice がユーザーの
             応答を待つ秒数（config.ini の
             [timeouts].ask_user_choice_seconds 由来）。0以下は無期限待ちを意味する。
-        ask_user_multi_text_timeout_seconds: ask_user_multi_text
-            （複数項目の自由記述フォーム）でユーザーの応答を待つ秒数
-            （config.ini の [timeouts].ask_user_multi_text_seconds 由来）。
-            0以下は無期限待ちを意味する。
         plan_badge_allow_unlock: 送信ボタン付近の Plan Mode / Edit Automatically
             バッジをクリックした際、Plan Mode → Edit Automatically 方向
             （ロック解除）も許可するか。False の場合はロック方向のクリックのみ
@@ -294,9 +289,8 @@ def init_tools(
     global _MEMORY_ROOT
     global _HELP_PATH
     global _PATH_MEMORY_DIR, _PATH_MEMORY_MAX_ENTRIES
-    global _APPROVAL_TIMEOUT_SECONDS, _ASK_USER_TEXT_TIMEOUT_SECONDS
+    global _APPROVAL_TIMEOUT_SECONDS, _ASK_USER_QUESTION_TIMEOUT_SECONDS
     global _ASK_USER_CHOICE_TIMEOUT_SECONDS
-    global _ASK_USER_MULTI_TEXT_TIMEOUT_SECONDS
     global _PLAN_BADGE_ALLOW_UNLOCK
     global _DISPATCH_AGENT_SEMAPHORE
     global _TOOL_CALL_SEMAPHORE
@@ -315,9 +309,8 @@ def init_tools(
     _PATH_MEMORY_DIR = Path(path_memory_dir).resolve()
     _PATH_MEMORY_MAX_ENTRIES = path_memory_max_entries
     _APPROVAL_TIMEOUT_SECONDS = approval_timeout_seconds
-    _ASK_USER_TEXT_TIMEOUT_SECONDS = ask_user_text_timeout_seconds
+    _ASK_USER_QUESTION_TIMEOUT_SECONDS = ask_user_question_timeout_seconds
     _ASK_USER_CHOICE_TIMEOUT_SECONDS = ask_user_choice_timeout_seconds
-    _ASK_USER_MULTI_TEXT_TIMEOUT_SECONDS = ask_user_multi_text_timeout_seconds
     _PLAN_BADGE_ALLOW_UNLOCK = plan_badge_allow_unlock
     _DISPATCH_AGENT_SEMAPHORE = (
         asyncio.Semaphore(dispatch_agent_max_parallel) if dispatch_agent_max_parallel > 0 else None
@@ -1984,30 +1977,49 @@ async def toggle_plan_mode_from_ui() -> None:
     )
 
 
-@tool
-async def ask_user_text(question: str) -> str:
+@tool("AskUserQuestion")
+async def ask_user_question(question: str, labels: list[str] | None = None) -> str:
     """会話を続けるために必要な追加情報を、ユーザーに自由記述で質問する。
 
     要求が曖昧・情報が不足している等、自由記述の回答（固有名詞・ファイルパス・
     詳細な要望など）が必要な場合に使う。選択肢から選んでほしい場合は
     ask_user_choice を使うこと。
 
+    単一の質問なら labels を省略する。複数項目（例:
+    ファイル名と出力形式）をまとめて一度に自由記述で答えてほしい場合のみ、
+    labels に入力欄ごとのラベルを列挙する。項目ごとに本ツールを繰り返す
+    必要はない。
+
     Args:
-        question: ユーザーに表示する質問文。
+        question: ユーザーに表示する質問文（labels指定時はフォーム全体の
+            見出しとして表示）。
+        labels: 複数項目をまとめて聞きたい場合の、入力欄ごとのラベル文字列
+            リスト。省略時（None または空リスト）は単一の自由記述入力欄を
+            表示する。
 
     Returns:
-        ユーザーが入力した回答テキスト。設定値（config.ini の
-        [timeouts].ask_user_text_seconds。0以下は無期限待ち）の秒数以内に
-        応答が無い場合は、例外を送出せず「エラー: ユーザーからの応答が
-        ありませんでした（タイムアウト）。」を返す。
+        labels を省略した場合はユーザーが入力した回答テキストをそのまま返す。
+        labels を指定した場合は "ラベル: 入力値" を改行区切りで並べた文字列を
+        返す。設定値（config.ini の [timeouts].ask_user_question_seconds。
+        0以下は無期限待ち）の秒数以内に応答が無い場合は、例外を送出せず
+        「エラー: ユーザーからの応答がありませんでした（タイムアウト）。」を返す。
     """
-    logger.info("ask_user_text: %s", question)
-    res = await cl.AskUserMessage(
-        content=question, timeout=_resolve_ask_timeout(_ASK_USER_TEXT_TIMEOUT_SECONDS)
-    ).send()
+    timeout = _resolve_ask_timeout(_ASK_USER_QUESTION_TIMEOUT_SECONDS)
+    if not labels:
+        logger.info("ask_user_question: %s", question)
+        res = await cl.AskUserMessage(content=question, timeout=timeout).send()
+        if res is None:
+            return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
+        return res.get("output", "")
+    logger.info("ask_user_question: %s labels=%s", question, labels)
+    element = cl.CustomElement(
+        name="MultiTextForm", props={"question": question, "labels": labels}
+    )
+    res = await cl.AskElementMessage(content=question, element=element, timeout=timeout).send()
     if res is None:
         return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
-    return res.get("output", "")
+    values = res.get("values") or []
+    return "\n".join(f"{label}: {value}" for label, value in zip(labels, values))
 
 
 @tool
@@ -2015,7 +2027,7 @@ async def ask_user_choice(question: str, choices: list[str]) -> str:
     """会話を続けるために必要な選択を、ユーザーに選択肢形式で質問する。
 
     複数の進め方・方針からユーザーに1つ選んでもらいたい場合に使う。
-    自由記述の回答が必要な場合は ask_user_text を使うこと。
+    自由記述の回答が必要な場合は AskUserQuestion を使うこと。
 
     Args:
         question: ユーザーに表示する質問文。
@@ -2040,40 +2052,6 @@ async def ask_user_choice(question: str, choices: list[str]) -> str:
     if res is None:
         return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
     return res["payload"].get("value") or res.get("label", "")
-
-
-@tool
-async def ask_user_multi_text(question: str, labels: list[str]) -> str:
-    """会話を続けるために必要な複数項目の情報を、自由記述の入力欄を並べて一度に質問する。
-
-    ask_user_choice の自由記述版。項目ごとに ask_user_text を繰り返すのではなく、
-    labels に列挙した項目それぞれに対応する入力欄を同時に表示し、ユーザーが
-    まとめて入力してから送信できるようにする。項目が1つだけの場合は ask_user_text
-    を使うこと。選択肢から選んでほしい場合は ask_user_choice を使うこと。
-
-    Args:
-        question: フォーム全体に表示する質問文（見出し）。
-        labels: 入力欄ごとのラベル文字列リスト（1件以上）。
-
-    Returns:
-        "ラベル: 入力値" を改行区切りで並べた文字列。labels が空の場合や、設定値
-        （config.ini の [timeouts].ask_user_multi_text_seconds。0以下は無期限待ち）
-        の秒数以内に応答が無い場合は、例外を送出せず「エラー: ...」形式の
-        文字列を返す。
-    """
-    if not labels:
-        return "エラー: labels が空です。1件以上の入力項目を指定してください。"
-    logger.info("ask_user_multi_text: %s labels=%s", question, labels)
-    element = cl.CustomElement(
-        name="MultiTextForm", props={"question": question, "labels": labels}
-    )
-    res = await cl.AskElementMessage(
-        content=question, element=element, timeout=_resolve_ask_timeout(_ASK_USER_MULTI_TEXT_TIMEOUT_SECONDS)
-    ).send()
-    if res is None:
-        return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
-    values = res.get("values") or []
-    return "\n".join(f"{label}: {value}" for label, value in zip(labels, values))
 
 
 @tool(response_format="content_and_artifact")
@@ -2512,9 +2490,8 @@ _BASE_TOOLS: list[BaseTool] = [
     json_query,
     list_path_memory,
     dispatch_agent,
-    ask_user_text,
+    ask_user_question,
     ask_user_choice,
-    ask_user_multi_text,
     create_plan,
     approve_plan,
     update_task_progress,

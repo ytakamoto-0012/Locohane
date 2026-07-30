@@ -21,8 +21,8 @@ description: Locohane の config.ini の timeout系設定（[llm].request_timeou
 | `[llm]` | `stream_chunk_timeout_seconds` | `max_stream_chunk_gap_seconds`（ストリーミング中のチャンク間隔の最大値） |
 | `[scripts]` | `timeout` | `max_script_seconds`（`run_script`/`execute_python_code` 実行時間の最大値） |
 
-**対象外**: `[timeouts]` セクション（`approval_seconds`/`ask_user_text_seconds`/
-`ask_user_choice_seconds`/`ask_user_multi_text_seconds`）は「人間の応答待ち」
+**対象外**: `[timeouts]` セクション（`approval_seconds`/`ask_user_question_seconds`/
+`ask_user_choice_seconds`）は「人間の応答待ち」
 であり、ハードウェアスペックとは無関係なので**絶対に触らない**。
 
 ## 前提条件の確認

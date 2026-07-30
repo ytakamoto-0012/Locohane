@@ -1,5 +1,5 @@
 """Chainlit の UI 呼び出しをスタブ化し、Chainlit サーバー無しで
-src.tools のツール群（run_script / execute_python_code / ask_user_text /
+src.tools のツール群（run_script / execute_python_code / AskUserQuestion /
 ask_user_choice / create_plan / approve_plan / update_task_progress）を
 そのまま ainvoke できるようにする。
 
@@ -65,7 +65,7 @@ class _FakeAskUserMessage:
     """cl.AskUserMessage の代替。scripted_text_answers を順に1件ずつ消費する。
 
     尽きた場合は None を返す（本物のタイムアウトと同じ扱いにし、
-    ask_user_text 側の「エラー: ユーザーからの応答がありませんでした」
+    AskUserQuestion 側の「エラー: ユーザーからの応答がありませんでした」
     という分岐も正当なテスト対象にする）。
     """
 
@@ -103,8 +103,9 @@ def install(auto_approve: bool = True, scripted_text_answers: list[str] | None =
     Args:
         auto_approve: run_script/execute_python_code/approve_plan の
             承認ダイアログを自動で承認するか拒否するか。
-        scripted_text_answers: ask_user_text が呼ばれるたびに1件ずつ
-            消費して返す回答のリスト。尽きればタイムアウト扱い（None）。
+        scripted_text_answers: AskUserQuestion が labels 省略（単一質問）で
+            呼ばれるたびに1件ずつ消費して返す回答のリスト。尽きればタイムアウト
+            扱い（None）。
     """
     _state["auto_approve"] = auto_approve
     _state["scripted_text_answers"] = list(scripted_text_answers or [])

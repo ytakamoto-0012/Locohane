@@ -7,7 +7,7 @@ interface IMultiTextFormProps {
 }
 
 /**
- * ask_user_multi_text（複数項目の自由記述フォーム）専用の表示コンポーネント。
+ * AskUserQuestion（labels指定時の複数項目自由記述フォーム）専用の表示コンポーネント。
  * backend では cl.AskElementMessage(spec.type === 'element') として届くため、
  * askUser.spec.element_id に一致するカスタム要素の props（question/labels）を
  * 元にラベル付き入力欄をまとめて描画し、送信時に askUser.callback へ

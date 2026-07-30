@@ -5,7 +5,7 @@
 - @cl.on_message で LangGraph を astream_events で回し、トークンをストリーミング表示。
 - スキル読み込み(read_skill)・ファイル読み込み(read_skill_file)・スクリプト実行(run_script)・
   画像読み込み(view_image)・サブエージェント委譲(dispatch_agent)・ユーザーへの追加質問
-  (ask_user_text/ask_user_choice)の各ツールコールを cl.Step として可視化
+  (AskUserQuestion/ask_user_choice)の各ツールコールを cl.Step として可視化
   （「今このスキルを読んでいます」が見える状態）。
   dispatch_agent は内部で独立した ReAct ループを回すが、その内部の思考過程・
   ツール呼び出しはグラフのトレースに乗らないため Step としては表示されない
@@ -100,9 +100,8 @@ _TOOL_LABELS = {
     "analyze_image": "画像解析",
     "show_image": "画像表示",
     "dispatch_agent": "サブエージェント実行",
-    "ask_user_text": "ユーザーへの質問（自由記述）",
+    "AskUserQuestion": "ユーザーへの質問（自由記述）",
     "ask_user_choice": "ユーザーへの質問（選択式）",
-    "ask_user_multi_text": "ユーザーへの質問（複数自由記述）",
     "create_plan": "実行計画作成",
     "approve_plan": "計画承認確認",
     "update_task_progress": "進捗更新",
@@ -538,9 +537,8 @@ async def _setup() -> None:
         _config.path_memory_max_entries,
         _config.code_exec_enabled,
         _config.approval_timeout_seconds,
-        _config.ask_user_text_timeout_seconds,
+        _config.ask_user_question_timeout_seconds,
         _config.ask_user_choice_timeout_seconds,
-        _config.ask_user_multi_text_timeout_seconds,
         _config.plan_badge_allow_unlock,
         _config.subagent_max_parallel,
         _config.graph_tool_max_parallel,

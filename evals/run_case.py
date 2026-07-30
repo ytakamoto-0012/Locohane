@@ -325,7 +325,7 @@ async def _run(case: EvalCase) -> dict:
             path_memory_max_entries=config.path_memory_max_entries,
             code_exec_enabled=config.code_exec_enabled,
             approval_timeout_seconds=config.approval_timeout_seconds,
-            ask_user_text_timeout_seconds=config.ask_user_text_timeout_seconds,
+            ask_user_question_timeout_seconds=config.ask_user_question_timeout_seconds,
             ask_user_choice_timeout_seconds=config.ask_user_choice_timeout_seconds,
             dispatch_agent_max_parallel=config.subagent_max_parallel,
         )

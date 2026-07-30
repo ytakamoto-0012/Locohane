@@ -74,7 +74,7 @@
                  └───┬───────────────────────────┬──────────────┘
                      │ モデル呼び出し             │ ツール実行
        ┌─────────────▼───────────┐   ┌───────────▼──────────────────────┐
-       │ ChatOpenAI              │   │ src/tools.py (30ツール)            │
+       │ ChatOpenAI              │   │ src/tools.py (29ツール)            │
        │  → llama-server /v1     │   │  read_skill / read_skill_file /    │
        │  (OpenAI 互換)          │   │  run_script / execute_python_code /│
        └─────────────────────────┘   │  get_tool_source / check_work_dir_status /│
@@ -83,9 +83,8 @@
                                       │  dispatch_agent / create_plan /    │
                                       │  approve_plan / update_task_progress/│
                                       │  get_plan_status / lock_plan_mode /│
-                                      │  ask_user_text / ask_user_choice / │
-                                      │  ask_user_multi_text / provide_download /│
-                                      │  show_image /                      │
+                                      │  AskUserQuestion / ask_user_choice /│
+                                      │  provide_download / show_image /   │
                                       │  create_memory / update_memory /   │
                                       │  delete_memory / read_memory /     │
                                       │  search_memory / list_memories /   │
@@ -151,7 +150,7 @@ Chainlit 側で「今このスキルを読んでいます」等のステップ�
 | `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される |
 | `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ |
 | `get_plan_status` / `lock_plan_mode` | 現在 Plan Mode（書き込み系ツールがブロックされたロック状態）か Edit Automatically（承認済み計画を実行できる状態）かを確認し、後者から前者へユーザー承認なしに手動で戻す |
-| `ask_user_text` / `ask_user_choice` / `ask_user_multi_text` | 会話継続に必要な追加情報をユーザーへ質問（自由記述／選択肢／複数項目の自由記述を同時に提示） |
+| `AskUserQuestion` / `ask_user_choice` | 会話継続に必要な追加情報をユーザーへ質問（`AskUserQuestion` は自由記述。`labels` 省略時は単一入力、指定時は複数項目をまとめて提示。`ask_user_choice` は選択肢形式） |
 | `create_memory` / `update_memory` / `delete_memory` / `read_memory` / `search_memory` / `list_memories` | スレッドをまたぐ永続メモリー（`src/memory.py`）の保存・更新・削除・全文読込・検索・一覧。主エージェントのみに公開し `dispatch_agent` のサブエージェントには渡さない |
 | `help` | ユーザー向けヘルプ本文（`system_prompt/help.md`）をそのまま返す |
 
@@ -582,9 +581,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[subagent]` | `token_guard_hard_threshold` | ハード打ち切りのトークン閾値 | `SUBAGENT_TOKEN_GUARD_HARD_THRESHOLD` |
 | `[subagent]` | `empty_response_max_retries` | 空応答の再試行回数 | `SUBAGENT_EMPTY_RESPONSE_MAX_RETRIES` |
 | `[timeouts]` | `approval_seconds` | `approve_plan`／`run_script`・`execute_python_code`の個別実行確認でユーザー応答を待つ秒数。`0`で無期限待ち | `APPROVAL_TIMEOUT_SECONDS` |
-| `[timeouts]` | `ask_user_text_seconds` | `ask_user_text`（自由記述質問）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_TEXT_TIMEOUT_SECONDS` |
+| `[timeouts]` | `ask_user_question_seconds` | `AskUserQuestion`（自由記述質問。`labels`省略時は単一入力、指定時は複数項目フォーム）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_QUESTION_TIMEOUT_SECONDS` |
 | `[timeouts]` | `ask_user_choice_seconds` | `ask_user_choice`（選択肢質問）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_CHOICE_TIMEOUT_SECONDS` |
-| `[timeouts]` | `ask_user_multi_text_seconds` | `ask_user_multi_text`（複数項目自由記述）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_MULTI_TEXT_TIMEOUT_SECONDS` |
 | `[plan]` | `allow_badge_unlock` | Plan Mode バッジの双方向切り替えを許可するか | `PLAN_ALLOW_BADGE_UNLOCK` |
 | `[default_workdir]` | `retention_days` | default_workdir 配下のファイル保持日数（0以下で自動削除無効） | `DEFAULT_WORKDIR_RETENTION_DAYS` |
 | `[default_workdir]` | `cleanup_interval_hours` | default_workdir 自動削除チェック間隔（時間） | `DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS` |

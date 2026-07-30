@@ -51,8 +51,8 @@ class EvalCase:
         auto_approve: run_script/execute_python_code/approve_plan の
             承認ダイアログを自動承認するか拒否するか
             （evals/headless_chainlit.install に渡す）。
-        scripted_text_answers: ask_user_text が呼ばれるたびに1件ずつ消費して
-            返す回答のリスト。
+        scripted_text_answers: AskUserQuestion が labels 省略（単一質問）で
+            呼ばれるたびに1件ずつ消費して返す回答のリスト。
         work_dir: run_script/execute_python_code/view_image が使う作業
             ディレクトリ（_resolve_workdir）をこのケース専用に固定したい
             場合のプロジェクトルート相対パス（例:
