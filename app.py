@@ -1128,8 +1128,9 @@ async def on_message(message: cl.Message) -> None:
     inputs = {"messages": [human_message]}
     turn_totals = {"input": 0, "output": 0, "total": 0}  # このターンのトークン使用量
     # 無言終了（tool_calls も回答テキストも無いまま終わる）を検知した場合、
-    # 最終回答を促して自動的に1回だけリトライする（下のループ末尾を参照）。
-    max_empty_retries = 2
+    # 最終回答を促して自動的にリトライする（下のループ末尾を参照。
+    # [thinking_loop_guard].empty_response_max_retries 由来）。
+    max_empty_retries = _config.thinking_loop_guard_empty_response_max_retries
     # LLM応答の反復ループ（src/llm.py の ChatLlamaCpp が検知して
     # ThinkingLoopDetected を送出する）を検知した場合の再試行回数と、
     # 注入した注意メッセージ（機械的なもの）のid（成功後に履歴から取り除くため）。

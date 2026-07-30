@@ -257,6 +257,10 @@ class Config:
             候補リスト。リトライ回数に応じて順番に使い、使い切ったらランダムに
             選ぶ（src.llm.pick_loop_nudge_message 参照）。空リストなら組み込みの
             既定文言を使う。
+        thinking_loop_guard_empty_response_max_retries: 無言終了（tool_calls も
+            本文も空のAIMessage）を検知した場合、最終回答を促して再試行する
+            最大回数。thinking_loop_guard_max_retries と合算予算
+            （total_retries）を共有する。
         context_trim_enabled: 会話履歴中の古い ToolMessage を切り詰めて
             LLMへの入力を抑える機能の有効/無効（src.context_trim 参照）。
         context_trim_keep_recent_tool_messages: 全文保持する直近 ToolMessage
@@ -390,6 +394,7 @@ class Config:
     thinking_loop_guard_match_ratio_threshold: float
     thinking_loop_guard_max_retries: int
     thinking_loop_guard_nudge_messages: list[str]
+    thinking_loop_guard_empty_response_max_retries: int
 
     # --- 会話履歴トリミング（src/context_trim.py） ---
     context_trim_enabled: bool
@@ -869,6 +874,12 @@ def load_config(config_path: Path | None = None) -> Config:
         thinking_loop_guard_nudge_messages=_as_message_list(
             os.getenv(
                 "THINKING_LOOP_GUARD_NUDGE_MESSAGES", thinking_loop_guard.get("nudge_messages", "")
+            )
+        ),
+        thinking_loop_guard_empty_response_max_retries=int(
+            os.getenv(
+                "THINKING_LOOP_GUARD_EMPTY_RESPONSE_MAX_RETRIES",
+                thinking_loop_guard.get("empty_response_max_retries", 2),
             )
         ),
         context_trim_enabled=_as_bool(

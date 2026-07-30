@@ -371,6 +371,7 @@ async def _run(case: EvalCase) -> dict:
                             graph,
                             {"messages": [HumanMessage(content=turn)]},
                             run_config,
+                            max_retries=config.thinking_loop_guard_empty_response_max_retries,
                             nudge_messages=config.thinking_loop_guard_nudge_messages,
                             loop_max_retries=config.thinking_loop_guard_max_retries,
                         )
