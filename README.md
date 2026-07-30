@@ -574,6 +574,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[file_tools_duplicate_guard]` | `carry_over_to_main` | サブエージェント内の呼び出し履歴をメイン判定へ持ち越すかどうか | `FILE_TOOLS_DUPLICATE_GUARD_CARRY_OVER` |
 | `[graph]` | `implementation` | ReAct ループの実装（`handwritten` または `prebuilt`） | `GRAPH_IMPL` |
 | `[graph]` | `recursion_limit` | メインReActループ（agent→tools遷移）の最大反復回数。超過時は打ち切りメッセージを表示 | `GRAPH_RECURSION_LIMIT` |
+| `[graph]` | `max_parallel` | メインエージェントのツール呼び出し（ImageAwareToolNode）の同時実行数上限。1以上でSemaphore(N)ガード、0以下でガード無効化 | `GRAPH_TOOL_MAX_PARALLEL` |
 | `[subagent]` | `max_iterations` | `dispatch_agent` の内部ReActループの最大反復回数 | `SUBAGENT_MAX_ITERATIONS` |
 | `[subagent]` | `max_parallel` | `dispatch_agent` の実LLM呼び出しの同時実行数上限。1以上でSemaphore(N)ガード、0以下でガード無効化 | `SUBAGENT_MAX_PARALLEL` |
 | `[subagent]` | `token_guard_enabled` | サブエージェントのトークン使用量ガードの有効/無効 | `SUBAGENT_TOKEN_GUARD_ENABLED` |

@@ -543,6 +543,7 @@ async def _setup() -> None:
         _config.ask_user_multi_text_timeout_seconds,
         _config.plan_badge_allow_unlock,
         _config.subagent_max_parallel,
+        _config.graph_tool_max_parallel,
     )
 
     # チェックポインタ（会話状態の永続化）。接続はアプリ寿命で保持する。

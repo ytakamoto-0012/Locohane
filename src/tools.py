@@ -97,6 +97,30 @@ _IN_SUBAGENT: contextvars.ContextVar[bool] = contextvars.ContextVar(
 # 未実行時（テスト等）の安全側フォールバック。
 _DISPATCH_AGENT_SEMAPHORE: "asyncio.Semaphore | None" = asyncio.Semaphore(1)
 
+# メインエージェントの全ツール呼び出し（ImageAwareToolNode 経由）の同時実行数を
+# ガードするセマフォ。init_tools() が config.ini の [graph].max_parallel に
+# 応じて再設定する。None はガード無効を表す。既定 Semaphore(1) は init_tools()
+# 未実行時（テスト等）の安全側フォールバック。
+_TOOL_CALL_SEMAPHORE: "asyncio.Semaphore | None" = asyncio.Semaphore(1)
+
+
+async def _tool_call_semaphore_wrap(request, execute):
+    """ToolNode(awrap_tool_call=...) 用インターセプタ。
+
+    全ツール呼び出し（同期/非同期問わず _execute_tool_async 経由で正しく
+    振り分けられた実行）を _TOOL_CALL_SEMAPHORE で待ち合わせる。dispatch_agent
+    は専用の _DISPATCH_AGENT_SEMAPHORE でも重ねてガードされる形になるが、
+    単に入れ子になるだけで問題ない。
+    """
+    sem = _TOOL_CALL_SEMAPHORE
+    if sem is None:
+        return await execute(request)
+    if sem.locked():
+        tool_name = request.tool_call.get("name")
+        logger.info("tool_call: 空きスロットが無いため待機します tool=%r", tool_name)
+    async with sem:
+        return await execute(request)
+
 
 @dataclass(frozen=True)
 class ResolvedAgentType:
@@ -188,6 +212,7 @@ def init_tools(
     ask_user_multi_text_timeout_seconds: int = 60,
     plan_badge_allow_unlock: bool = True,
     dispatch_agent_max_parallel: int = 1,
+    graph_tool_max_parallel: int = 1,
 ) -> None:
     """ツールが使う設定を注入する（app 起動時に一度だけ呼ぶ）。
 
@@ -254,6 +279,11 @@ def init_tools(
             その値までにガードし（既定1＝完全直列化）、0以下はガードを
             無効化して並列呼び出しをそのまま許可する
             （config.ini の [subagent].max_parallel 由来）。
+        graph_tool_max_parallel: メインエージェントの全ツール呼び出し
+            （ImageAwareToolNode）を _TOOL_CALL_SEMAPHORE で同時に何件まで
+            許可するか。1以上はその値までにガードし（既定1＝完全直列化）、
+            0以下はガードを無効化して並列呼び出しをそのまま許可する
+            （config.ini の [graph].max_parallel 由来）。
 
     Returns:
         None。副作用としてモジュール globals を更新するのみ。
@@ -269,6 +299,7 @@ def init_tools(
     global _ASK_USER_MULTI_TEXT_TIMEOUT_SECONDS
     global _PLAN_BADGE_ALLOW_UNLOCK
     global _DISPATCH_AGENT_SEMAPHORE
+    global _TOOL_CALL_SEMAPHORE
     _skills_root_list = [skills_root] if isinstance(skills_root, (str, Path)) else list(skills_root)
     _SKILLS_ROOTS = [Path(p).resolve() for p in _skills_root_list]
     _SCRIPT_PYTHON = script_python
@@ -290,6 +321,9 @@ def init_tools(
     _PLAN_BADGE_ALLOW_UNLOCK = plan_badge_allow_unlock
     _DISPATCH_AGENT_SEMAPHORE = (
         asyncio.Semaphore(dispatch_agent_max_parallel) if dispatch_agent_max_parallel > 0 else None
+    )
+    _TOOL_CALL_SEMAPHORE = (
+        asyncio.Semaphore(graph_tool_max_parallel) if graph_tool_max_parallel > 0 else None
     )
     # 各ツールの description（LLMに見えるツールスキーマ説明）内の ${変数名} を
     # config.ini の実値へ展開する。@tool デコレータが docstring から description を
@@ -2254,7 +2288,17 @@ class ImageAwareToolNode(ToolNode):
     画像を content に持つ HumanMessage を会話履歴へ追加する。
     handwritten/prebuilt いずれのグラフ実装でも、素の ToolNode の代わりに
     このクラスを使うだけで画像受け渡しに対応できる。
+
+    また ToolNode の公式拡張点 awrap_tool_call 経由で、全ツール呼び出しを
+    _TOOL_CALL_SEMAPHORE によりガードする（_tool_call_semaphore_wrap 参照。
+    ToolNode._afunc が同一AIMessage内の複数tool_callsを asyncio.gather() で
+    完全並列実行する挙動への対策。dispatch_agent 専用の
+    _DISPATCH_AGENT_SEMAPHORE と同じ理由づけのメインエージェント版）。
     """
+
+    def __init__(self, tools, **kwargs):
+        kwargs.setdefault("awrap_tool_call", _tool_call_semaphore_wrap)
+        super().__init__(tools, **kwargs)
 
     def invoke(self, input, config=None, **kwargs):  # noqa: A002
         _log_tool_calls_debug(input)

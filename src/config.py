@@ -182,6 +182,14 @@ class Config:
             最大反復回数。LangGraph の recursion_limit にそのまま渡す
             （単位はノード遷移数で、subagent_max_iterations とは数え方が
             異なる）。
+        graph_tool_max_parallel: メインエージェントのツール呼び出し
+            （ImageAwareToolNode）を同時に何件まで並列実行してよいか。
+            ToolNode は同一AIMessage内の複数tool_callsを asyncio.gather()
+            で完全並列実行するため、共有リソース（llama-server・DB等）への
+            同時アクセスや呼び出し順の乱れが起きうる（subagent_max_parallel
+            と同じ理由づけのメインエージェント版）。1以上は
+            asyncio.Semaphore(N)でその値までにガードし（既定1＝完全直列化）、
+            0以下はガードを無効化して並列呼び出しをそのまま許可する。
         subagent_max_iterations: dispatch_agent が内部で回す ReAct
             ループの最大反復回数（agent→tools 遷移の回数）。
         subagent_max_parallel: dispatch_agent ツールの実LLM呼び出しを同時に
@@ -353,6 +361,7 @@ class Config:
     # --- グラフ実装切替 ---
     graph_impl: str
     graph_recursion_limit: int
+    graph_tool_max_parallel: int
 
     # --- サブエージェント（dispatch_agent）設定 ---
     subagent_max_iterations: int
@@ -748,6 +757,9 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         graph_impl=os.getenv("GRAPH_IMPL", graph.get("implementation", "handwritten")),
         graph_recursion_limit=int(os.getenv("GRAPH_RECURSION_LIMIT", graph.get("recursion_limit", 50))),
+        graph_tool_max_parallel=int(
+            os.getenv("GRAPH_TOOL_MAX_PARALLEL", graph.get("max_parallel", 1))
+        ),
         subagent_max_iterations=int(os.getenv("SUBAGENT_MAX_ITERATIONS", subagent.get("max_iterations", 6))),
         subagent_max_parallel=int(
             os.getenv("SUBAGENT_MAX_PARALLEL", subagent.get("max_parallel", 1))
