@@ -288,8 +288,8 @@ Locohane/
 
 - **SKILL.md frontmatter**: `name`・`description`（必須）を検証。
   `license`・`compatibility`・`metadata`・`allowed-tools`（任意）は読み取り可能。
-- **`name` 検証ルール**（仕様どおり）: 1〜64 文字 / 小文字英数字とハイフンのみ /
-  先頭末尾ハイフン不可 / 連続ハイフン不可 / **親ディレクトリ名と一致**。
+- **`name` 検証ルール**: 1〜64 文字 / 小文字英数字・ハイフン・アンダースコアのみ /
+  先頭末尾は区切り文字不可 / 区切り文字の連続不可 / **親ディレクトリ名と一致**。
 - **`description` 検証**: 非空・1024 文字以内。
 - **ディレクトリ構造**: `scripts/`・`references/`・`assets/` を想定した読み込み・実行。
 - **progressive disclosure の 3 段階**（Discovery / Read / Execute）。

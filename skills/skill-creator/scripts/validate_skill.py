@@ -23,7 +23,7 @@ from pathlib import Path
 
 from _common import print_json
 
-_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+_NAME_RE = re.compile(r"^[a-z0-9]+([_-][a-z0-9]+)*$")
 _NAME_MAX = 64
 _DESC_MAX = 1024
 
@@ -67,10 +67,10 @@ def _validate(name: str | None, description: str | None, dir_name: str) -> str |
         return "name が無い、または文字列でない"
     if len(name) > _NAME_MAX:
         return f"name が {_NAME_MAX} 文字を超えている"
-    if "--" in name:
-        return "name に連続ハイフン (--) が含まれる"
+    if "--" in name or "__" in name or "-_" in name or "_-" in name:
+        return "name に区切り文字 (- や _) の連続が含まれる"
     if not _NAME_RE.match(name):
-        return "name は小文字英数字とハイフンのみ・先頭末尾ハイフン不可"
+        return "name は小文字英数字・ハイフン・アンダースコアのみ・先頭末尾は区切り文字不可"
     if name != dir_name:
         return f"name '{name}' が親ディレクトリ名 '{dir_name}' と一致しない"
     if not isinstance(description, str) or not description.strip():

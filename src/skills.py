@@ -28,9 +28,9 @@ import yaml
 logger = logging.getLogger(__name__)
 
 # 仕様の name 検証ルール:
-#   1〜64文字 / 小文字英数字とハイフンのみ / 先頭末尾ハイフン不可 / 連続ハイフン不可
-# （下記正規表現で「先頭末尾ハイフン不可」を担保。連続ハイフンは別途チェック。）
-_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+#   1〜64文字 / 小文字英数字・ハイフン・アンダースコアのみ / 先頭末尾の区切り文字不可 / 区切り文字の連続不可
+# （下記正規表現で「先頭末尾不可」を担保。区切り文字の連続は別途チェック。）
+_NAME_RE = re.compile(r"^[a-z0-9]+([_-][a-z0-9]+)*$")
 _NAME_MAX = 64
 _DESC_MAX = 1024
 
@@ -92,8 +92,9 @@ def _validate(name: object, description: object, dir_name: str) -> str | None:
     """name / description を仕様に照らして検証する。
 
     Agent Skills 仕様の name 検証ルール（1〜64文字、小文字英数字と
-    ハイフンのみ、先頭末尾ハイフン不可、連続ハイフン不可、親ディレクトリ名と
-    一致必須）と、description の必須・文字数上限（1024文字）を検証する。
+    ハイフン・アンダースコアのみ、先頭末尾の区切り文字不可、区切り文字の
+    連続不可、親ディレクトリ名と一致必須）と、description の必須・
+    文字数上限（1024文字）を検証する。
 
     Args:
         name: frontmatter から取得した name の生値（型不正を検出するため object）。
@@ -108,10 +109,10 @@ def _validate(name: object, description: object, dir_name: str) -> str | None:
         return "name が無い、または文字列でない"
     if len(name) > _NAME_MAX:
         return f"name が {_NAME_MAX} 文字を超えている"
-    if "--" in name:
-        return "name に連続ハイフン (--) が含まれる"
+    if "--" in name or "__" in name or "-_" in name or "_-" in name:
+        return "name に区切り文字 (- や _) の連続が含まれる"
     if not _NAME_RE.match(name):
-        return "name は小文字英数字とハイフンのみ・先頭末尾ハイフン不可"
+        return "name は小文字英数字・ハイフン・アンダースコアのみ・先頭末尾は区切り文字不可"
     if name != dir_name:
         return f"name '{name}' が親ディレクトリ名 '{dir_name}' と一致しない"
     if not isinstance(description, str) or not description.strip():
