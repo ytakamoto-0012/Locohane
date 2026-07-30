@@ -130,11 +130,24 @@ _config = load_config()
 # 使い回すため保持しておく。
 _system_prompt = None
 _checkpointer = None
-_CHECKPOINTER_OP_TIMEOUT_SECONDS = 15.0
 
 
 class _CheckpointerTimeout(Exception):
     """checkpointer操作のタイムアウト検知用例外。"""
+
+
+class _CheckpointerConnectionClosed(_CheckpointerTimeout):
+    """checkpointer操作の実行中にDB接続が閉じられていたことを示す例外。
+
+    aiosqliteはバックグラウンドスレッドのキューに操作を積んだ後、実際に
+    その操作が処理される前に別タスクが接続をclose()すると
+    ValueError("no active connection" / "Connection closed") を送出する
+    （アプリシャットダウン処理やcheckpointer再構築との競合。issue.md
+    「DB接続切れエラー（no active connection）」参照）。on_message側は
+    _CheckpointerTimeout を捕捉してcheckpointer再構築へ倒す設計のため、
+    そのサブクラスとして扱い同じ復旧経路（turn_broken_exc +
+    checkpointer_needs_rebuild）に合流させる。
+    """
 
 
 class _TimeoutGuardedSqliteSaver(AsyncSqliteSaver):
@@ -148,9 +161,20 @@ class _TimeoutGuardedSqliteSaver(AsyncSqliteSaver):
     """
 
     async def _guarded(self, coro):
-        """コルーチンを _CHECKPOINTER_OP_TIMEOUT_SECONDS でタイムアウト包む。"""
-        async with asyncio.timeout(_CHECKPOINTER_OP_TIMEOUT_SECONDS):
-            return await coro
+        """コルーチンを [checkpointer].op_timeout_seconds でタイムアウト包む。
+
+        DB接続がクローズ済みの状態で操作が実行された場合の ValueError
+        （_CheckpointerConnectionClosed のdocstring参照）もここで検知し、
+        未処理のまま伝播させて on_message をクラッシュさせる代わりに
+        _CheckpointerTimeout系の復旧経路へ変換する。
+        """
+        try:
+            async with asyncio.timeout(_config.checkpointer_op_timeout_seconds):
+                return await coro
+        except ValueError as exc:
+            if "no active connection" in str(exc) or "Connection closed" in str(exc):
+                raise _CheckpointerConnectionClosed(str(exc)) from exc
+            raise
 
     async def aget_tuple(self, config):
         return await self._guarded(super().aget_tuple(config))
@@ -184,7 +208,7 @@ async def _rebuild_checkpointer(thread_id: str):
     _checkpointer = new_saver
     if old_saver is not None:
         try:
-            async with asyncio.timeout(3.0):
+            async with asyncio.timeout(_config.checkpointer_close_timeout_seconds):
                 await old_saver.conn.close()
         except Exception:  # noqa: BLE001 - リークを許容してログのみ
             logging.getLogger(__name__).debug(
@@ -239,9 +263,51 @@ async def _on_app_startup() -> None:
 @cl.on_app_shutdown
 async def _on_app_shutdown() -> None:
     """プロセス終了時に一度だけ呼ばれる。接続済みMCPサーバーのstdioサブプロセスを
-    正常終了させる（src.mcp_client.shutdown_mcp_tools 参照）。
+    正常終了させ（src.mcp_client.shutdown_mcp_tools 参照）、checkpointerの
+    DB接続を保留中タスクの後始末を待ってから閉じる
+    （_close_checkpointer_gracefully 参照）。
     """
     await shutdown_mcp_tools()
+    await _close_checkpointer_gracefully()
+
+
+async def _close_checkpointer_gracefully() -> None:
+    """保留中の非同期タスクを完了（またはキャンセル）させてから、checkpointerの
+    DB接続を閉じる。
+
+    先に接続を閉じてしまうと、その時点でまだ実行中だったcheckpointer操作
+    （_TimeoutGuardedSqliteSaver.aget_tuple/aput_writes等。on_messageの
+    ストリーム処理等が発行する）がaiosqliteのバックグラウンドスレッド上で
+    ValueError: no active connection を送出してクラッシュする
+    （issue.md「DB接続切れエラー（no active connection）」の原因1〜3）。
+    このシャットダウンフック自身を除く全タスクを
+    [checkpointer].shutdown_drain_timeout_seconds まで待ち、なお残って
+    いるものはキャンセルして後始末の完了を待ってから接続を閉じる。
+    """
+    if _checkpointer is None:
+        return
+    current = asyncio.current_task()
+    pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+    if pending:
+        _done, still_pending = await asyncio.wait(
+            pending, timeout=_config.checkpointer_shutdown_drain_timeout_seconds
+        )
+        if still_pending:
+            logging.getLogger(__name__).warning(
+                "シャットダウン: %d件の保留タスクが規定時間内に終わらなかったためキャンセルします",
+                len(still_pending),
+            )
+            for task in still_pending:
+                task.cancel()
+            await asyncio.gather(*still_pending, return_exceptions=True)
+    try:
+        async with asyncio.timeout(_config.checkpointer_close_timeout_seconds):
+            await _checkpointer.conn.close()
+    except Exception:  # noqa: BLE001 - シャットダウン時はベストエフォート、ログのみ
+        logging.getLogger(__name__).debug(
+            "シャットダウン時のcheckpointer接続クローズに失敗しました（リークを許容）",
+            exc_info=True,
+        )
 
 
 # public/settings/ 配下は Chainlit の /public/{filename:path} ルートで静的配信される
@@ -1313,14 +1379,16 @@ async def on_message(message: cl.Message) -> None:
             await _finalize_orphaned_steps(steps, "connection_error")
             checkpointer_needs_rebuild = True
         except _CheckpointerTimeout as exc:
-            # checkpointer操作（ロック取得）がタイムアウトした。
-            # 共有のSQLite接続が固着している可能性が高い。
-            # turn_broken_exc + checkpointer_needs_rebuild をセットし、
-            # 対応1の後処理へ合流させる。
+            # checkpointer操作がタイムアウトした（ロック取得の固着）、または
+            # 操作の実行中にDB接続が閉じられていた（_CheckpointerConnectionClosed。
+            # issue.md「DB接続切れエラー」参照）。いずれも共有のSQLite接続が
+            # 不健全な状態にある可能性が高い。turn_broken_exc +
+            # checkpointer_needs_rebuild をセットし、対応1の後処理へ合流させる。
             turn_broken_exc = exc
             checkpointer_needs_rebuild = True
             logging.getLogger(__name__).warning(
-                "チェックポインタ操作がタイムアウトしました: %s [%s]",
+                "チェックポインタ操作が失敗しました（%s）: %s [%s]",
+                type(exc).__name__,
                 exc,
                 describe_current_task(),
             )

@@ -407,6 +407,11 @@ class Config:
     mcp_connect_timeout_seconds: float
     mcp_call_timeout_seconds: float
 
+    # --- checkpointer（LangGraphの会話状態を永続化するSQLite接続）タイムアウト ---
+    checkpointer_op_timeout_seconds: float
+    checkpointer_close_timeout_seconds: float
+    checkpointer_shutdown_drain_timeout_seconds: float
+
 
 def _resolve(base: Path, value: str) -> Path:
     """config.ini 内の相対パスをプロジェクトルート基準の絶対パスへ解決する。
@@ -646,6 +651,7 @@ def load_config(config_path: Path | None = None) -> Config:
     )
     auth = parser["auth"] if parser.has_section("auth") else {}
     mcp = parser["mcp"] if parser.has_section("mcp") else {}
+    checkpointer = parser["checkpointer"] if parser.has_section("checkpointer") else {}
 
     cfg = Config(
         base_url=os.getenv("LLM_BASE_URL", llm.get("base_url", "http://localhost:8080/v1")),
@@ -892,6 +898,24 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         mcp_call_timeout_seconds=float(
             os.getenv("MCP_CALL_TIMEOUT_SECONDS", mcp.get("call_timeout_seconds", 60))
+        ),
+        checkpointer_op_timeout_seconds=float(
+            os.getenv(
+                "CHECKPOINTER_OP_TIMEOUT_SECONDS",
+                checkpointer.get("op_timeout_seconds", 15),
+            )
+        ),
+        checkpointer_close_timeout_seconds=float(
+            os.getenv(
+                "CHECKPOINTER_CLOSE_TIMEOUT_SECONDS",
+                checkpointer.get("close_timeout_seconds", 3),
+            )
+        ),
+        checkpointer_shutdown_drain_timeout_seconds=float(
+            os.getenv(
+                "CHECKPOINTER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS",
+                checkpointer.get("shutdown_drain_timeout_seconds", 5),
+            )
         ),
     )
 
