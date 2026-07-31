@@ -217,14 +217,23 @@ _DEFAULT_LOOP_NUDGE = "直前の応答は同じ内容を繰り返すループに
 # openai SDK が httpx 例外をラップしないケースがあるため、両系統を1箇所に集約。
 # APIConnectionError はサブクラスに APITimeoutError も含む。
 # InternalServerError は 5xx。4xx はリトライ対象に含めない（クライアント側の誤り）。
+#
+# httpx側は個別の例外クラスを列挙するのではなく、その共通基底クラスである
+# httpx.TransportError を使う。ストリーミング応答のヘッダー受信後（チャンク
+# 受信中）に発生する低レベル例外はopenai SDKにもラップされず生のhttpx例外が
+# そのまま上がってくるため（ChatLlamaCpp._astream参照）、個別列挙方式だと
+# 新しい例外型（例: llama-serverプロセスが応答途中で落ちた際のhttpx.ReadError）
+# が1つ漏れるたびに on_message の回復経路（_rebuild_checkpointer/
+# _rebuild_graph）を素通りしてセッションが復旧不能になる再発を繰り返す
+# （本番incident・2026-07-31: httpx.ReadErrorがこのタプルに含まれておらず
+# Chainlit最上位ハンドラまで伝播し、グラフ・checkpointerが再構築されないまま
+# セッションが壊れ続けた）。基底クラスにしておけば
+# ConnectError/ReadError/WriteError/WriteTimeout/PoolTimeout/
+# RemoteProtocolError等のトランスポート層例外を将来にわたって網羅できる。
 LLM_CONNECTION_ERRORS: tuple[type[Exception], ...] = (
     openai.APIConnectionError,
     openai.InternalServerError,
-    httpx.ConnectError,
-    httpx.ReadTimeout,
-    httpx.RemoteProtocolError,
-    httpx.WriteError,
-    httpx.PoolTimeout,
+    httpx.TransportError,
 )
 
 

@@ -19,7 +19,7 @@ skill-creator スキルの実行スクリプト（progressive disclosure 第3段
 `skills/`（word-counter 等の既存スキルの置き場）を評価対象にしたい場合の
 み `--skill-root skills` を明示する。
 
-with_skill:    本番の skills_dir / locohane_skills_dir をそのまま使う。
+with_skill:    本番の skills_dir / locohane_skills_dirs をそのまま使う。
 without_skill: 対象スキルの有無以外は本番と同じ状態にした一時ディレクトリを
                作り、対象スキルのフォルダだけ除外して評価する（baseline）。
 old_skill:     --replacement-dir に指定した旧バージョンのスキル一式で
@@ -49,7 +49,7 @@ from _common import (
     workspace_dir,
 )
 
-_ENV_VAR_BY_ROOT = {"skills": "SKILLS_DIR", "locohane": "LOCOHANE_SKILLS_DIR"}
+_ENV_VAR_BY_ROOT = {"skills": "SKILLS_DIR", "locohane": "PROJECT_LOCOHANE_DIR"}
 
 
 def _skill_root_dir(root_key: str) -> Path:
@@ -65,15 +65,20 @@ def _build_isolated_env(skill_root: str, skill_name: str, mode: str, replacement
 
     root_dir = _skill_root_dir(skill_root)
     tmp_root = Path(tempfile.mkdtemp(prefix="skill-creator-eval-"))
+    # locohane の場合、環境変数は PROJECT_LOCOHANE_DIR（「.locohane」相当の
+    # ディレクトリそのもの）を指すため、スキル本体は tmp_root/skills/ 配下へ
+    # コピーする（skills の場合は tmp_root 自体が SKILLS_DIR 相当のため直下へ）。
+    copy_dest_root = tmp_root / "skills" if skill_root == "locohane" else tmp_root
+    copy_dest_root.mkdir(parents=True, exist_ok=True)
     if root_dir.is_dir():
         for child in root_dir.iterdir():
-            dest = tmp_root / child.name
+            dest = copy_dest_root / child.name
             if child.is_dir():
                 shutil.copytree(child, dest)
             else:
                 shutil.copy2(child, dest)
 
-    target_in_tmp = tmp_root / skill_name
+    target_in_tmp = copy_dest_root / skill_name
     if mode == "without_skill":
         if target_in_tmp.exists():
             shutil.rmtree(target_in_tmp)

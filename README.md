@@ -116,9 +116,9 @@
 （コンテキスト節約のため意図的な設計）。種別定義は `agents/*.md`（`name`/`description`/`tools`
 の frontmatter、ClaudeCode の `.claude/agents/*.md` 相当）を起動時に走査して読み込む。
 
-起動時に `.locohane/LOCOHANE.md`（存在すれば）も読み込まれ、システムプロンプトの
-`{{project_instructions}}` へ差し込まれる（ClaudeCode の CLAUDE.md 相当、
-`src/project_instructions.py` 参照）。
+起動時に `[paths].project_locohane_dir`（既定 `.locohane`）配下の `LOCOHANE.md`
+（存在すれば）も読み込まれ、システムプロンプトの `{{project_instructions}}` へ
+差し込まれる（ClaudeCode の CLAUDE.md 相当、`src/project_instructions.py` 参照）。
 
 ### progressive disclosure（3 段階）の実装場所
 
@@ -162,13 +162,16 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 スキルの frontmatter（name/description）だけはこれとは別に、`src/skills.py` が
 起動時にシステムプロンプトへテキスト注入する（Discovery 段階、こちらはプロンプトベース）。
 
-上記3段階に加えて、スキルの読み込みとは独立したツールが以下の29個ある（いずれも `src/tools.py`）。
+上記3段階に加えて、スキルの読み込みとは独立したツールが以下の32個ある（いずれも `src/tools.py`）。
 
 | ツール | 役割 |
 |--------|------|
 | `read_skill` | スキルの SKILL.md 本文全体を読み込む（progressive disclosure 第2段階） |
 | `read_skill_file` | skills ディレクトリ配下のファイルを読み込む（references/assets 等。progressive disclosure 第3段階） |
-| `run_script` | スキルの scripts/ 配下のスクリプトを実行する（要承認。`config.ini` で承認不要に切替可） |
+| `run_script` | スキルの scripts/ 配下のスクリプトを実行する（要承認。`config.ini` で承認不要に切替可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `run_script_background` を使う |
+| `run_script_background` | `run_script` と同じスクリプトをバックグラウンドで起動し、即座に `job_id` を返す（要承認は同様）。完了を待たずエージェントのターンを解放する |
+| `check_script_job` | `run_script_background` のジョブの状況（実行中の経過秒数・途中出力）または最終結果を取得する |
+| `stop_script_job` | `run_script_background` のジョブを強制終了する |
 | `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可） |
 | `get_tool_source` | `run_script` がエラーになった際、原因調査用にスクリプトの絶対パスを返す（中身は返さない） |
 | `check_work_dir_status` | 現在の作業ディレクトリの実際のアクセス状況を確認する |
@@ -185,8 +188,8 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `create_memory` / `update_memory` / `delete_memory` / `read_memory` / `search_memory` / `list_memories` | スレッドをまたぐ永続メモリー（`src/memory.py`）の保存・更新・削除・全文読込・検索・一覧。主エージェントのみに公開し `dispatch_agent` のサブエージェントには渡さない |
 | `help` | ユーザー向けヘルプ本文（`system_prompt/help.md`）をそのまま返す |
 
-`run_script` と `execute_python_code` は書き込み系ツールのため、`create_plan`/`approve_plan`
-で計画がユーザー承認済み（`cl.user_session["plan_approved"]` が True）でない限り実行できず、
+`run_script`（`run_script_background` 含む）と `execute_python_code` は書き込み系ツールのため、
+`create_plan`/`approve_plan` で計画がユーザー承認済み（`cl.user_session["plan_approved"]` が True）でない限り実行できず、
 未承認の場合はエラーを返す（Plan Mode）。承認自体は `cl.AskActionMessage` による
 ✅承認/🚫拒否ボタンで行い、タイムアウト時は安全側（拒否）に倒す。`execute_python_code` は
 `config.ini` の `[scripts] code_execution_enabled` でツール自体を無効化できる。
@@ -219,8 +222,8 @@ Locohane/
 │       ├── setup-basic-config/
 │       ├── tune-config-timeouts/
 │       └── tune-prompt/
-├── .locohane/
-│   ├── LOCOHANE.md.example  # LOCOHANE.md のサンプル
+├── .locohane/                # project_locohane_dir（既定）。配下を起動時に自動検知
+│   ├── LOCOHANE.md.example  # LOCOHANE.md のサンプル（配置するとプロジェクト固有指示になる）
 │   ├── settings.json        # MCPサーバー接続設定
 │   ├── skills/              # skills_dir にマージ走査される追加スキル（同名は優先）
 │   │   ├── README.md
@@ -229,6 +232,18 @@ Locohane/
 │   │   ├── pdf-tools/        # PDF読込・ページ画像化・PDF生成
 │   │   └── pptx-tools/       # PowerPoint読込・生成・テンプレート部分編集
 │   └── agents/              # agents_dir にマージ走査される追加エージェント種別（同名は優先）
+├── .officecli/                # このディレクトリに配置すると利用可能。（config.ini の project_locohane_dir にディレクトリ登録必要）
+│   │                           # OfficeCLI（外部OSS、Apache 2.0、要別途インストール）の配置先。
+│   │                           # .gitignore 対象のためリポジトリには同梱されない
+│   ├── bin/officecli.exe     # 単一バイナリ本体（.NET runtime内蔵、Office製品のインストール不要）
+│   ├── skills/                # skills_dir にマージ走査される、OfficeCLI公式配布のSKILL.md群
+│   │   ├── morph-ppt/         # 既存pptxを指定デザインスタイルへ再構成するスキル
+│   │   └── morph-ppt-3d/      # 3Dモデル(.glb)を含むpptx編集スキル
+│   ├── LICENSE                # Apache License 2.0
+│   ├── NOTICE
+│   ├── THIRD-PARTY-NOTICES.txt # OfficeCLIが内包する第三者コンポーネント一覧
+│   ├── SECURITY.md
+│   └── README_ja.md           # OfficeCLI公式README（日本語版）
 ├── frontend/                # カスタムReactフロントエンド
 │   ├── src/
 │   │   ├── components/      # UIコンポーネント（AskFormBar, PlanCard, SidePanel等）
@@ -469,6 +484,17 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 
 スキル開発の詳細な手順・規約は [`skills/SKILLS_README.md`](skills/SKILLS_README.md) を参照。
 
+上記に加え、[OfficeCLI](https://github.com/iOfficeAI/OfficeCLI)（外部OSS、後述）を
+`.officecli/` に導入すると、同梱の `morph-ppt`（既存pptxを指定デザインスタイルへ
+再構成）・`morph-ppt-3d`（3Dモデル(.glb)を含むpptx編集）スキルも `project_locohane_dir`
+経由で自動検知される。
+
+処理時間が `[scripts].timeout`（既定300秒）に近づく、または超えうるスクリプトを持つスキルは、
+SKILL.md 側で `run_script` ではなく `run_script_background` を使うよう指示し、起動後は
+ユーザーに実行中である旨を伝えた上で、後続のやり取りで `check_script_job` を呼んで状況を
+確認するパターンを明記する（完了通知はポーリング方式。エージェントが自発的にターン内で
+待ち続けるのではなく、ユーザーとの次のやり取りで確認する運用を想定）。
+
 ### 新しいスキルの追加方法
 
 `skills/<name>/SKILL.md` を作るだけ（`<name>` はフォルダ名 = frontmatter の `name`）。
@@ -488,6 +514,29 @@ description: 何をするスキルか、いつ使うかを具体的に書く。
 ```
 
 アプリを再起動すると起動時走査で自動的に発見される（動的リロードはしない）。
+
+### OfficeCLI の導入（任意）
+
+[OfficeCLI](https://github.com/iOfficeAI/OfficeCLI)（Apache License 2.0）は、Word/Excel/
+PowerPointをOfficeのインストールなしで読み書きできる、AIエージェント向けの単一バイナリCLI
+（`.NET runtime`内蔵）。本プロジェクトへは直接組み込まず、公式配布物一式（バイナリ・付属
+スキル・ライセンス文書）をリポジトリ直下 `.officecli/` にそのまま展開し、`config.ini` の
+`project_locohane_dir` に `"./.officecli"` を追加することで、同梱の `skills/`（`morph-ppt`・
+`morph-ppt-3d`）を Locohane のスキル発見機構（`skills_dir` へのマージ走査）に乗せる形で
+利用する。
+
+- **導入手順**: [公式リリース](https://github.com/iOfficeAI/OfficeCLI/releases)から
+  Windows用バイナリ（`officecli-win-x64.exe` 等）を取得し、`.officecli/bin/officecli.exe`
+  として配置する（付属の `LICENSE`・`NOTICE`・`THIRD-PARTY-NOTICES.txt`・`skills/` も
+  公式配布のまま `.officecli/` 配下に置く）。
+- **`.gitignore` 対象**: `.officecli/` はリポジトリにコミットされない
+  （外部OSSバイナリのため、利用者ごとに個別導入する想定）。導入しない場合、
+  `project_locohane_dir` に指定していても該当ディレクトリが存在しないだけでエラーには
+  ならない。
+- **完全オフライン運用時の注意**: OfficeCLIはバックグラウンドで更新の自動チェックを行う
+  （既定で有効）。オフライン環境で使う場合は `officecli config autoUpdate false` で
+  恒久的に無効化するか、実行のたびに環境変数 `OFFICECLI_SKIP_UPDATE=1` を設定してスキップ
+  する（詳細は後述の「外部通信について（完全オフライン保証）」を参照）。
 
 ---
 
@@ -607,10 +656,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `stream_chunk_timeout_seconds` | ストリーミング中にチャンクが届かない場合のタイムアウト秒数 | `LLM_STREAM_CHUNK_TIMEOUT_SECONDS` |
 | `[paths]` | `skills_dir` | スキルフォルダ | `SKILLS_DIR` |
 | `[paths]` | `agents_dir` | エージェント種別定義フォルダ（`dispatch_agent` の `agent_type`） | `AGENTS_DIR` |
-| `[paths]` | `locohane_skills_dir` | `skills_dir` にマージ走査する追加スキルフォルダ（同名は優先） | `LOCOHANE_SKILLS_DIR` |
-| `[paths]` | `locohane_agents_dir` | `agents_dir` にマージ走査する追加エージェント種別フォルダ（同名は優先） | `LOCOHANE_AGENTS_DIR` |
+| `[paths]` | `project_locohane_dir` | プロジェクト固有の拡張ディレクトリ（ClaudeCode の `.claude/` 相当）。配下の `skills/`（`skills_dir` にマージ走査、同名は優先）・`agents/`（`agents_dir` にマージ走査、同名は優先）・`LOCOHANE.md`（プロジェクト固有指示、存在しなくてもエラーにならない）を自動検知する。`nudge_messages` と同じリスト形式で複数ディレクトリ指定可 | `PROJECT_LOCOHANE_DIR` |
 | `[paths]` | `system_prompt_path` | メインエージェント用システムプロンプトのテンプレート | `SYSTEM_PROMPT_PATH` |
-| `[paths]` | `project_instructions_path` | プロジェクト固有の追加指示ファイル（ClaudeCode の CLAUDE.md 相当、存在しなくてもエラーにならない）。`nudge_messages` と同じリスト形式で複数パス指定可 | `PROJECT_INSTRUCTIONS_PATH` |
 | `[paths]` | `checkpoint_db` | 会話状態 SQLite | `CHECKPOINT_DB` |
 | `[paths]` | `upload_dir` | アップロード保存先 | `UPLOAD_DIR` |
 | `[paths]` | `log_dir` | ログ出力先 | `LOG_DIR` |
@@ -624,6 +671,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[scripts]` | `timeout` | `run_script`/`execute_python_code` 共通のタイムアウト秒 | `SCRIPT_TIMEOUT` |
 | `[scripts]` | `python` | `.py` 実行に使う Python | `SCRIPT_PYTHON` |
 | `[scripts]` | `code_execution_enabled` | `execute_python_code` ツール自体の有効/無効 | `CODE_EXECUTION_ENABLED` |
+| `[scripts]` | `background_max_runtime_seconds` | `run_script_background` のジョブを強制終了するまでの上限秒 | `SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS` |
+| `[scripts]` | `background_job_retention_seconds` | `run_script_background` の完了済みジョブが `check_script_job` で未回収のまま残ってよい秒数 | `SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS` |
 | `[file_tools_duplicate_guard]` | `enabled` | Read/Glob/Grep/json_query ツールの同一引数繰り返し呼び出しを防止するガードの有効/無効 | `FILE_TOOLS_DUPLICATE_GUARD_ENABLED` |
 | `[file_tools_duplicate_guard]` | `max_calls` | 同一シグネチャの呼び出しを許可する回数（既定1回） | `FILE_TOOLS_DUPLICATE_GUARD_MAX_CALLS` |
 | `[file_tools_duplicate_guard]` | `carry_over_to_main` | サブエージェント内の呼び出し履歴をメイン判定へ持ち越すかどうか | `FILE_TOOLS_DUPLICATE_GUARD_CARRY_OVER` |
@@ -757,6 +806,18 @@ THIRD_PARTY_LICENSES.md には含まれていません。npm 依存を追加・�
 [Chainlit](https://github.com/Chainlit/chainlit)（Apache 2.0）が同梱するデフォルトの
 favicon をそのまま使用しています。
 
+### OfficeCLI（外部バイナリツール、任意導入）
+
+上記の pip / npm 依存とは別に、`.officecli/` に導入する
+[OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) は **Apache License 2.0** の
+外部OSSで、本プロジェクトのソースコードには組み込まれていません（`.gitignore`
+対象、詳細は上記「OfficeCLI の導入（任意）」参照）。単一バイナリ内に
+`DocumentFormat.OpenXml`・`System.CommandLine`・`.NET Runtime`（いずれもMIT
+License）を同梱しており、帰属表示は `.officecli/THIRD-PARTY-NOTICES.txt` に
+含まれています。GPL / AGPL / LGPL は含まれず、商用利用可能です。詳細は
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) の「pip依存以外の同梱物（手動記載）」
+セクションを参照。
+
 ### 外部通信について（完全オフライン保証）
 
 本スタックの外部送信はすべて **opt-in**（API キー設定時のみ）で、既定では発生しません。
@@ -776,10 +837,18 @@ MCPサーバー機能（`.locohane/settings.json`、上記「MCPサーバー接�
 ネットワーク通信を行うかどうかは各MCPサーバーの実装次第であり、本プロジェクトの
 管理範囲外です。
 
+`.officecli/` に [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) を導入した場合、
+`officecli` バイナリ自身が**既定でバックグラウンド更新チェックの外部通信を行います**
+（本プロジェクトのコードが行うものではありません）。完全オフライン運用したい場合は、
+`officecli config autoUpdate false` で恒久的に無効化するか、実行のたびに環境変数
+`OFFICECLI_SKIP_UPDATE=1` を設定してください。導入しない場合はこの通信も発生しません。
+
 ### 商用利用時のチェックリスト
 
 - [ ] 使用する **GGUF モデルのライセンス** を確認する（→ 上記「llama-server 起動例」の注記）
 - [ ] 依存を追加・更新したら `tools/gen_licenses.py` で告知ファイルを再生成する
+- [ ] `.officecli/` を導入した場合、完全オフライン運用が必要なら
+      `officecli config autoUpdate false` で自動更新チェックを無効化する
 
 ---
 

@@ -288,9 +288,7 @@ async def _close_checkpointer_gracefully() -> None:
     current = asyncio.current_task()
     pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
     if pending:
-        _done, still_pending = await asyncio.wait(
-            pending, timeout=_config.checkpointer_shutdown_drain_timeout_seconds
-        )
+        _done, still_pending = await asyncio.wait(pending, timeout=_config.checkpointer_shutdown_drain_timeout_seconds)
         if still_pending:
             logging.getLogger(__name__).warning(
                 "シャットダウン: %d件の保留タスクが規定時間内に終わらなかったためキャンセルします",
@@ -487,13 +485,13 @@ async def _setup() -> None:
         root_logger.addHandler(file_handler)
 
     # 第1段階 Discovery: スキルを走査して name+description をシステムプロンプトへ。
-    # skills_dir と locohane_skills_dir をマージ（同名は locohane 側優先）。
-    skills = scan_skills([_config.skills_dir, _config.locohane_skills_dir])
+    # skills_dir と locohane_skills_dirs をマージ（同名は locohane 側優先）。
+    skills = scan_skills([_config.skills_dir, *_config.locohane_skills_dirs])
     system_prompt = build_system_prompt(skills, _config.system_prompt_path)
     # エージェント種別（agents/*.md、ClaudeCode の .claude/agents/*.md 相当）を走査し、
     # 各種別のシステムプロンプトにも {{skills}} を差し込む。
-    # agents_dir と locohane_agents_dir をマージ（同名は locohane 側優先）。
-    agent_type_defs = scan_agent_types([_config.agents_dir, _config.locohane_agents_dir])
+    # agents_dir と locohane_agents_dirs をマージ（同名は locohane 側優先）。
+    agent_type_defs = scan_agent_types([_config.agents_dir, *_config.locohane_agents_dirs])
     skills_block = render_skills_block(skills)
     agent_type_defs = [replace(a, system_prompt=a.system_prompt.replace("{{skills}}", skills_block)) for a in agent_type_defs]
     # 永続メモリーの索引（MEMORY.md）を {{memory}} へ差し込む（常に読み込まれる仕様）。
@@ -521,10 +519,10 @@ async def _setup() -> None:
     agent_type_defs = [replace(a, system_prompt=f"{a.system_prompt}\n\n{subagent_common}") for a in agent_type_defs]
 
     # ツールに skills ルート等を注入（dispatch_agent 用にエージェント種別定義も渡す）。
-    # locohane_skills_dir を先に置くことで、read_skill/run_script/analyze_image 等の
+    # locohane_skills_dirs を先に置くことで、read_skill/run_script/analyze_image 等の
     # 実体解決も scan_skills() と同じ「.locohane 側優先」のマージ挙動になる。
     init_tools(
-        [_config.locohane_skills_dir, _config.skills_dir],
+        [*_config.locohane_skills_dirs, _config.skills_dir],
         _config.script_python,
         _config.script_timeout,
         _config,
@@ -542,6 +540,8 @@ async def _setup() -> None:
         _config.plan_badge_allow_unlock,
         _config.subagent_max_parallel,
         _config.graph_tool_max_parallel,
+        script_background_max_runtime_seconds=_config.script_background_max_runtime_seconds,
+        script_background_job_retention_seconds=_config.script_background_job_retention_seconds,
     )
 
     # チェックポインタ（会話状態の永続化）。接続はアプリ寿命で保持する。
@@ -771,7 +771,7 @@ async def on_chat_start() -> None:
         ]
     ).send()
 
-    skills = scan_skills([_config.skills_dir, _config.locohane_skills_dir])
+    skills = scan_skills([_config.skills_dir, *_config.locohane_skills_dirs])
     names = "、".join(s.name for s in skills) or "（なし）"
     welcome_template = _load_settings_text("welcome.md", _WELCOME_TEMPLATE_DEFAULT)
     await cl.Message(content=welcome_template.replace("{skills}", names)).send()
@@ -1484,6 +1484,36 @@ async def on_message(message: cl.Message) -> None:
                     exc_info=True,
                 )
             raise
+        except Exception as exc:  # noqa: BLE001
+            # 上のどの except 節にも一致しない未分類の例外に対する保険。
+            # 個別に列挙した例外型（LLM_CONNECTION_ERRORS等）から1つ漏れて
+            # いた場合、従来はここで捕捉されずChainlit最上位ハンドラまで
+            # 伝播し、turn_broken_exc が一切セットされないままターンが
+            # 終わってしまっていた（_rebuild_checkpointer/_rebuild_graphが
+            # 一度も呼ばれず、壊れたLLMクライアント/checkpointerを抱えた
+            # セッションが永久に復旧しない。本番incident・2026-07-31:
+            # httpx.ReadErrorがLLM_CONNECTION_ERRORSに含まれておらず発生。
+            # 根本対応はsrc.llm.LLM_CONNECTION_ERRORSをhttpx.TransportError
+            # 基底クラスへ広げたことだが、今後また未知の例外型が漏れても
+            # セッションを自己修復可能な状態に保つため、ここでも
+            # except LLM_CONNECTION_ERRORS と同じ回復処理に倒す）。
+            turn_broken_exc = exc
+            checkpointer_needs_rebuild = True
+            logging.getLogger(__name__).error(
+                "on_message: 未分類の例外を検知しました（%s）: %s [%s]",
+                type(exc).__name__,
+                exc,
+                describe_current_task(),
+                exc_info=True,
+            )
+            if thinking is not None:
+                thinking.end = utc_now()
+                await thinking.update()
+                thinking = None
+            if answer is not None:
+                await answer.send()
+                answer = None
+            await _finalize_orphaned_steps(steps, "unclassified_error")
         finally:
             # astream_events() の非同期ジェネレータは、async for が
             # ThinkingLoopDetected/GraphRecursionError で中断された場合、
@@ -1525,6 +1555,20 @@ async def on_message(message: cl.Message) -> None:
         # 直接原因（後始末が別タスクに漏れたこと）を悪化させるだけなので採用しない。
         if loop_exc is not None:
             if loop_attempt < loop_max_retries:
+                if loop_exc.client_broken:
+                    # ストリームの後始末（_astreamのfinally節でのagen.aclose()）
+                    # が失敗し、httpx.AsyncClientの内部状態が壊れている
+                    # 可能性が高い（ThinkingLoopDetected.client_brokenの
+                    # docstring参照）。_rebuild_graphは新しいクライアントを
+                    # 用意するだけで、壊れた旧クライアントの根底のTCP接続を
+                    # 明示的には切断しないため、そのままだとllama-server側に
+                    # 旧ストリームが残り続け、次のリトライが応答ヘッダー
+                    # 待ちで恒久的にハングしうる（本番incident・2026-07-20:
+                    # 7分11秒間ハング。2026-07-31: 同型の事象が再発し、
+                    # ユーザーが手動キャンセルするまで復帰しなかった）。
+                    # on_stopのaclose_active_llm_clientsと同じ処理を、
+                    # ここでもリトライ前に呼んで旧接続を強制クローズする。
+                    await aclose_active_llm_clients(thread_id)
                 graph = _rebuild_graph(thread_id)
                 logging.getLogger(__name__).warning(
                     "ThinkingLoopDetected: リトライ前にLLMグラフを再構築しました " "(client_broken=%s) [%s]",
@@ -1555,7 +1599,7 @@ async def on_message(message: cl.Message) -> None:
                 turn_broken_exc,
                 describe_current_task(),
             )
-            await cl.Message(content="通信エラーのため中断しました。Llamaサーバーの再起動後、" "少し待って再送信してください。").send()
+            await cl.Message(content="通信エラーのため中断しました。Llamaサーバーの再起動後、" "少し待って「続けて」と送信してください。").send()
             return
 
         if thinking is not None:

@@ -55,6 +55,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -140,11 +141,13 @@ class ResolvedAgentType:
 
 # init_tools() で注入されるモジュール設定（起動時に一度だけ設定）。
 # 複数ディレクトリ対応（scan_skills()/scan_agent_types() と同じマージ設計。
-# 例: [locohane_skills_dir, skills_dir]。前方のディレクトリが優先される）。
+# 例: [*locohane_skills_dirs, skills_dir]。前方のディレクトリが優先される）。
 _SKILLS_ROOTS: list[Path] | None = None
 _SCRIPT_PYTHON: str = "python"
 _SCRIPT_TIMEOUT: int = 60
 _CODE_EXEC_ENABLED: bool = False
+_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS: int = 3600
+_SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS: int = 1800
 _DEFAULT_WORKDIR: Path | None = None
 _LLM_CONFIG: Config | None = None
 _AGENT_TYPES: dict[str, ResolvedAgentType] = {}
@@ -213,6 +216,8 @@ def init_tools(
     plan_badge_allow_unlock: bool = True,
     dispatch_agent_max_parallel: int = 1,
     graph_tool_max_parallel: int = 1,
+    script_background_max_runtime_seconds: int = 3600,
+    script_background_job_retention_seconds: int = 1800,
 ) -> None:
     """ツールが使う設定を注入する（app 起動時に一度だけ呼ぶ）。
 
@@ -223,7 +228,7 @@ def init_tools(
     Args:
         skills_root: skills ディレクトリのルートパス、またはその並び。
             複数渡した場合は渡した順に探索され、前方のディレクトリが優先
-            される（例: [locohane_skills_dir, skills_dir]）。各要素は
+            される（例: [*locohane_skills_dirs, skills_dir]）。各要素は
             resolve() により絶対パスへ正規化した上でモジュール変数に保持する。
         script_python: run_script が .py スクリプトを起動する際に使う
             Python 実行ファイル（例: "python", "C:\\path\\to\\python.exe"）。
@@ -281,12 +286,20 @@ def init_tools(
             許可するか。1以上はその値までにガードし（既定1＝完全直列化）、
             0以下はガードを無効化して並列呼び出しをそのまま許可する
             （config.ini の [graph].max_parallel 由来）。
+        script_background_max_runtime_seconds: run_script_background で
+            起動したプロセスを強制終了するまでの上限秒数（config.ini の
+            [scripts].background_max_runtime_seconds 由来）。
+        script_background_job_retention_seconds: run_script_background の
+            ジョブが終了後、check_script_job で一度も取得されないまま
+            registry に残ってよい秒数（config.ini の
+            [scripts].background_job_retention_seconds 由来）。
 
     Returns:
         None。副作用としてモジュール globals を更新するのみ。
     """
     global _SKILLS_ROOTS, _SCRIPT_PYTHON, _SCRIPT_TIMEOUT
     global _CODE_EXEC_ENABLED
+    global _SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS, _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS
     global _DEFAULT_WORKDIR, _LLM_CONFIG, _AGENT_TYPES, _SUBAGENT_MAX_ITERATIONS
     global _MEMORY_ROOT
     global _HELP_PATH
@@ -301,6 +314,8 @@ def init_tools(
     _SCRIPT_PYTHON = script_python
     _SCRIPT_TIMEOUT = script_timeout
     _CODE_EXEC_ENABLED = code_exec_enabled
+    _SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS = script_background_max_runtime_seconds
+    _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS = script_background_job_retention_seconds
     _DEFAULT_WORKDIR = Path(default_workdir).resolve()
     _LLM_CONFIG = llm_config
     _AGENT_TYPES = _resolve_agent_types(agent_type_defs)
@@ -596,7 +611,7 @@ def _safe_path(relative: str) -> Path:
     is_relative_to() により境界を検証するため、skills ルート外への
     アクセスは常に拒否される。
 
-    _SKILLS_ROOTS は複数ディレクトリを保持しうる（例: [locohane_skills_dir,
+    _SKILLS_ROOTS は複数ディレクトリを保持しうる（例: [*locohane_skills_dirs,
     skills_dir]）。前方から順に候補を解決し、実在する最初の候補を返す。
     どのルートにも実在しない場合は先頭ルート基準の候補を返す（呼び出し側の
     「見つかりません」エラーへ自然に流すため）。
@@ -1130,7 +1145,9 @@ async def run_script(
     作業ディレクトリは、Chainlit の ChatSettings（歯車アイコン）でユーザーが
     セッションに設定していればそのディレクトリ、未設定なら config.ini の
     [paths].default_workdir を使う（_resolve_workdir 参照）。
-    タイムアウトは設定値（既定 60 秒）。
+    タイムアウトは設定値（既定 60 秒）。完了までこのツール呼び出し自体が
+    ブロックされるため、タイムアウトに近い長時間の実行が見込まれるスクリプトは
+    このツールではなく run_script_background を使うこと。
     .py スクリプトは設定された Python 実行ファイルで起動する。
     Agent Skills 標準の progressive disclosure における第3段階（Execute）に相当する。
     書き込み系ツールのため、create_plan/approve_plan で計画が承認済み
@@ -1374,18 +1391,19 @@ def list_path_memory() -> str:
     return json.dumps({"entries": entries}, ensure_ascii=False)
 
 
-async def _run_script_impl(
+def _prepare_script_execution(
     skill_name: str, script_filename: str, script_args: list[str] | None = None
-) -> str:
-    """run_script の実行本体。
+) -> tuple[list[str], Path] | str:
+    """run_script / run_script_background 共通の前処理。
 
-    公開ツールの引数名は "args" ではなく "script_args"（"args"/"kwargs" は
-    pydantic の ValidatedFunction が *args/**kwargs 用プレースホルダとして
-    予約している名前と衝突し、生成されるスキーマのフィールド名が
-    "v__args" に化けて run_script() 呼び出しが TypeError になるため使えない）。
-
+    引数のパスメモリー解決 → スクリプトパス解決 → 作業ディレクトリ解決 →
+    計画承認チェック → 実行コマンド組み立て、までを行う。
     (skill_name, script_filename) が _PLAN_APPROVAL_EXEMPT_SCRIPTS に
     登録されている場合は計画未承認でも実行できる。
+
+    Returns:
+        検証に成功すれば (cmd, workdir) のタプル。失敗すれば
+        「エラー: ...」形式の文字列（呼び出し側はそのまま返せばよい）。
     """
     args = script_args or []
     # args 内の各要素で `@N`（パスメモリー参照）を実パスへ解決する。
@@ -1420,6 +1438,23 @@ async def _run_script_impl(
         cmd = [_SCRIPT_PYTHON, str(script_path), *args]
     else:
         cmd = [str(script_path), *args]
+    return cmd, workdir
+
+
+async def _run_script_impl(
+    skill_name: str, script_filename: str, script_args: list[str] | None = None
+) -> str:
+    """run_script の実行本体。
+
+    公開ツールの引数名は "args" ではなく "script_args"（"args"/"kwargs" は
+    pydantic の ValidatedFunction が *args/**kwargs 用プレースホルダとして
+    予約している名前と衝突し、生成されるスキーマのフィールド名が
+    "v__args" に化けて run_script() 呼び出しが TypeError になるため使えない）。
+    """
+    prepared = _prepare_script_execution(skill_name, script_filename, script_args)
+    if isinstance(prepared, str):
+        return prepared
+    cmd, workdir = prepared
 
     logger.info("run_script: %s %s cwd=%s", skill_name, script_filename, workdir)
     try:
@@ -1451,6 +1486,276 @@ async def _run_script_impl(
     if warning:
         parts.append(warning)
     return "\n".join(parts)
+
+
+@dataclass
+class _BackgroundJob:
+    """run_script_background で起動したジョブの状態。
+
+    モジュールレベルの _BACKGROUND_JOBS に job_id をキーとして保持する。
+    """
+
+    process: asyncio.subprocess.Process
+    thread_id: str
+    skill_name: str
+    script_filename: str
+    started_at: float
+    stdout_chunks: list[str]
+    stderr_chunks: list[str]
+    status: str  # "running" | "completed" | "failed" | "timeout" | "killed" | "error"
+    returncode: int | None
+    error_message: str | None
+    runner_task: "asyncio.Task | None" = None
+
+
+# run_script_background のジョブレジストリ。プロセス内メモリのみで永続化は
+# しない（アプリ再起動でジョブは失われるが、そもそも実行中プロセスも
+# 再起動で失われるため実害はない）。
+_BACKGROUND_JOBS: dict[str, _BackgroundJob] = {}
+
+# check_script_job が「実行中」ステータスで返す標準出力/標準エラーの末尾の
+# 最大文字数（全量を返すとコンテキストを圧迫するため切り詰める）。
+_JOB_OUTPUT_TAIL_CHARS = 4000
+
+
+async def _read_stream_into(stream: "asyncio.StreamReader | None", chunks: list[str]) -> None:
+    """サブプロセスの stdout/stderr を EOF まで読み、行単位で chunks に追記する。"""
+    if stream is None:
+        return
+    while True:
+        line = await stream.readline()
+        if not line:
+            break
+        chunks.append(line.decode("utf-8", errors="replace"))
+
+
+async def _run_background_job(job: "_BackgroundJob") -> None:
+    """バックグラウンドジョブのランナータスク本体。
+
+    stdout/stderr の読み取りと終了コード取得を並行して行い、
+    background_max_runtime_seconds を超えたら強制終了する。
+    stop_script_job が先に status を "killed" にしていた場合はそれを
+    上書きしない。
+    """
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(
+                _read_stream_into(job.process.stdout, job.stdout_chunks),
+                _read_stream_into(job.process.stderr, job.stderr_chunks),
+                job.process.wait(),
+            ),
+            timeout=_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        job.process.kill()
+        await job.process.wait()
+        if job.status != "killed":
+            job.status = "timeout"
+        job.returncode = job.process.returncode
+        return
+    except Exception as e:  # noqa: BLE001 - ストリーム読み取り自体の異常はエラー扱いで返す
+        if job.status != "killed":
+            job.status = "error"
+            job.error_message = str(e)
+        return
+
+    job.returncode = job.process.returncode
+    if job.status == "killed":
+        return
+    job.status = "completed" if job.returncode == 0 else "failed"
+
+
+def _purge_stale_background_jobs() -> None:
+    """完了済みのまま check_script_job で回収されなかったジョブを掃除する。
+
+    専用のクリーンアップループは持たず、run_script_background の呼び出しの
+    度に opportunistic に走らせる。
+    """
+    now = time.monotonic()
+    stale = [
+        job_id
+        for job_id, job in _BACKGROUND_JOBS.items()
+        if job.status != "running" and now - job.started_at > _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS
+    ]
+    for job_id in stale:
+        _BACKGROUND_JOBS.pop(job_id, None)
+
+
+def _format_job_result(job: "_BackgroundJob") -> str:
+    """終了済みジョブの結果を run_script と同じ表示形式に整形する。"""
+    returncode_label = job.returncode if job.returncode is not None else "不明"
+    parts = [f"[終了コード] {returncode_label}"]
+    stdout = "".join(job.stdout_chunks).rstrip()
+    stderr = "".join(job.stderr_chunks).rstrip()
+    if stdout:
+        parts.append(f"[標準出力]\n{stdout}")
+    if stderr:
+        parts.append(f"[標準エラー]\n{stderr}")
+    return "\n".join(parts)
+
+
+def _resolve_job(job_id: str) -> "_BackgroundJob | str":
+    """job_id を現在のセッション所有のジョブへ解決する（他セッションは拒否）。"""
+    job = _BACKGROUND_JOBS.get(job_id)
+    if job is None:
+        return f"エラー: job_id '{job_id}' は見つかりません（既に取得済みか、無効なIDです）。"
+    thread_id = cl.user_session.get("thread_id") or ""
+    if job.thread_id != thread_id:
+        return f"エラー: job_id '{job_id}' は現在のセッションのものではありません。"
+    return job
+
+
+@tool
+async def run_script_background(
+    skill_name: str, script_filename: str, script_args: list[str] | None = None
+) -> str:
+    """スキルの scripts/ 配下のスクリプトをバックグラウンドで起動し、即座に job_id を返す。
+
+    処理時間が長くなることが見込まれるスクリプト向け。run_script と異なり
+    完了を待たずに制御を返すため、長時間スクリプトを実行してもエージェントの
+    ターンをブロックしない。完了確認・結果取得には check_script_job を、
+    途中で打ち切りたい場合は stop_script_job を使う。
+    引数解決・作業ディレクトリ解決・計画承認チェックは run_script と同じ
+    （_PLAN_APPROVAL_EXEMPT_SCRIPTS による免除も同様）。
+    バックグラウンドジョブを強制終了するまでの上限は config.ini の
+    [scripts].background_max_runtime_seconds（既定3600秒）。
+
+    Args:
+        skill_name: スクリプトを持つスキルのフォルダ名。
+        script_filename: 実行したいスクリプトのファイル名（例: "count.py"）。
+        script_args: スクリプトへ渡す追加引数のリスト（省略可）。
+
+    Returns:
+        起動に成功すれば job_id を含む案内文字列。引数不正・スクリプトが
+        見つからない・計画未承認・起動自体に失敗した場合は run_script 同様
+        「エラー: ...」形式の文字列を返す。
+    """
+    prepared = _prepare_script_execution(skill_name, script_filename, script_args)
+    if isinstance(prepared, str):
+        return prepared
+    cmd, workdir = prepared
+
+    _purge_stale_background_jobs()
+
+    logger.info("run_script_background: %s %s cwd=%s", skill_name, script_filename, workdir)
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(workdir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_subprocess_env(),
+        )
+    except OSError as e:
+        return f"エラー: スクリプトを起動できませんでした: {e}"
+
+    job_id = uuid.uuid4().hex[:12]
+    job = _BackgroundJob(
+        process=process,
+        thread_id=cl.user_session.get("thread_id") or "",
+        skill_name=skill_name,
+        script_filename=script_filename,
+        started_at=time.monotonic(),
+        stdout_chunks=[],
+        stderr_chunks=[],
+        status="running",
+        returncode=None,
+        error_message=None,
+    )
+    job.runner_task = asyncio.create_task(_run_background_job(job))
+    _BACKGROUND_JOBS[job_id] = job
+    return (
+        f"バックグラウンドで起動しました。job_id={job_id}\n"
+        "完了確認・結果取得には check_script_job（job_id指定）を、途中で打ち切る"
+        "場合は stop_script_job（job_id指定）を使ってください。"
+    )
+
+
+@tool
+async def check_script_job(job_id: str) -> str:
+    """run_script_background で起動したジョブの状況・結果を確認する。
+
+    実行中であれば経過秒数と、現時点までの標準出力・標準エラーの末尾
+    （最大4000文字）を返す。完了・失敗・タイムアウト・強制終了のいずれかで
+    終わっていれば、run_script と同じ形式
+    （"[終了コード] N" に続けて "[標準出力]"/"[標準エラー]"）で最終結果を返し、
+    以降は同じ job_id を指定できなくなる（登録から削除される）。
+    他セッションが起動した job_id は参照できない。
+
+    Args:
+        job_id: run_script_background の戻り値に含まれるID。
+
+    Returns:
+        状況または最終結果を表す文字列。job_id が不明・他セッションのもので
+        ある場合は「エラー: ...」形式の文字列。
+    """
+    resolved = _resolve_job(job_id)
+    if isinstance(resolved, str):
+        return resolved
+    job = resolved
+
+    if job.status == "running":
+        elapsed = int(time.monotonic() - job.started_at)
+        stdout_tail = "".join(job.stdout_chunks)[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
+        stderr_tail = "".join(job.stderr_chunks)[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
+        parts = [f"実行中です（経過 {elapsed} 秒）。"]
+        if stdout_tail:
+            parts.append(f"[標準出力（末尾）]\n{stdout_tail}")
+        if stderr_tail:
+            parts.append(f"[標準エラー（末尾）]\n{stderr_tail}")
+        return "\n".join(parts)
+
+    result = _format_job_result(job)
+    if job.status == "timeout":
+        result = (
+            f"エラー: バックグラウンド実行が {_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS} "
+            f"秒の上限に達したため強制終了しました。\n{result}"
+        )
+    elif job.status == "killed":
+        result = f"stop_script_job により強制終了されました。\n{result}"
+    elif job.status == "error":
+        result = f"エラー: バックグラウンド実行中に問題が発生しました: {job.error_message}"
+    _BACKGROUND_JOBS.pop(job_id, None)
+    return result
+
+
+@tool
+async def stop_script_job(job_id: str) -> str:
+    """run_script_background で起動したジョブを強制終了する。
+
+    長時間実行を途中で打ち切りたい場合に使う。強制終了時点までの
+    標準出力・標準エラーを添えて結果を返し、登録から削除する。
+    他セッションが起動した job_id は操作できない。
+
+    Args:
+        job_id: run_script_background の戻り値に含まれるID。
+
+    Returns:
+        強制終了結果を表す文字列。job_id が不明・他セッションのものである、
+        または既に終了済みの場合は「エラー: ...」形式の文字列。
+    """
+    resolved = _resolve_job(job_id)
+    if isinstance(resolved, str):
+        return resolved
+    job = resolved
+
+    if job.status != "running":
+        return (
+            f"エラー: job_id '{job_id}' は既に終了しています（status={job.status}）。"
+            "check_script_job で結果を取得してください。"
+        )
+
+    job.status = "killed"
+    try:
+        job.process.kill()
+    except ProcessLookupError:
+        pass
+    if job.runner_task is not None:
+        await job.runner_task
+
+    result = _format_job_result(job)
+    _BACKGROUND_JOBS.pop(job_id, None)
+    return f"強制終了しました。\n{result}"
 
 
 def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float]) -> str:
@@ -2146,6 +2451,9 @@ _SUBAGENT_TOOLS: list = [
     provide_download,
     show_image,
     run_script,
+    run_script_background,
+    check_script_job,
+    stop_script_job,
     execute_python_code,
     get_tool_source,
     check_work_dir_status,
@@ -2501,6 +2809,9 @@ _BASE_TOOLS: list[BaseTool] = [
     provide_download,
     show_image,
     run_script,
+    run_script_background,
+    check_script_job,
+    stop_script_job,
     execute_python_code,
     get_tool_source,
     check_work_dir_status,

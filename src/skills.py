@@ -170,7 +170,7 @@ def scan_skills(skills_dirs: Path | str | Sequence[Path | str]) -> list[Skill]:
 
     複数ディレクトリを渡した場合は渡した順に走査し、name をキーにマージする。
     同名スキルが複数ディレクトリに存在する場合は、後から走査したディレクトリの
-    定義で上書きする（例: [skills_dir, locohane_skills_dir] の順で渡すと
+    定義で上書きする（例: [skills_dir, *locohane_skills_dirs] の順で渡すと
     .locohane 側が優先される）。
 
     Args:

@@ -85,22 +85,29 @@ class Config:
             ClaudeCode の .claude/agents/*.md 相当）を格納するディレクトリの
             絶対パス。*.md 1ファイル = 1種別、frontmatterで name/
             description/tools（省略時は既定ツール一式を継承）を指定する。
-        locohane_skills_dir: skills_dir に追加でマージ走査するディレクトリの
-            絶対パス（既定 .locohane/skills）。同名スキルが両方に存在する
-            場合はこちらが優先される（scan_skills() 参照）。
-        locohane_agents_dir: agents_dir に追加でマージ走査するディレクトリの
-            絶対パス（既定 .locohane/agents）。同名定義が両方に存在する
-            場合はこちらが優先される（scan_agent_types() 参照）。
+        project_locohane_dirs: プロジェクト固有の拡張ディレクトリ（ClaudeCode の
+            .claude/ 相当）の絶対パスのリスト。既定 [.locohane]。複数パスは
+            nudge_messages と同じJSON/Python風リスト形式（角カッコ＋改行複数行
+            OK）で指定できる。この配下の skills/・agents/・LOCOHANE.md から
+            locohane_skills_dirs/locohane_agents_dirs/project_instructions_paths
+            を導出する（load_config() 参照）。
+        locohane_skills_dirs: skills_dir に追加でマージ走査するディレクトリの
+            絶対パスのリスト（project_locohane_dirs の各要素 / "skills"）。
+            同名スキルが両方に存在する場合は後方（.locohane側）が優先される
+            （scan_skills() 参照）。
+        locohane_agents_dirs: agents_dir に追加でマージ走査するディレクトリの
+            絶対パスのリスト（project_locohane_dirs の各要素 / "agents"）。
+            同名定義が両方に存在する場合は後方（.locohane側）が優先される
+            （scan_agent_types() 参照）。
         system_prompt_path: システムプロンプトのテンプレートファイル
             （{{skills}} にスキル一覧を差し込む）の絶対パス。
         project_instructions_paths: プロジェクト固有の追加指示ファイル
-            （ClaudeCode の CLAUDE.md 相当）の絶対パスのリスト。既定
-            [.locohane/LOCOHANE.md]。1つも存在しなくてもエラーにはならず、
-            システムプロンプトの {{project_instructions}} には
-            「（プロジェクト固有の指示はありません）」が差し込まれる
-            （render_project_instructions_block() 参照）。複数パスは
-            nudge_messages と同じJSON/Python風リスト形式（角カッコ＋
-            改行複数行OK）で指定できる。
+            （ClaudeCode の CLAUDE.md 相当）の絶対パスのリスト
+            （project_locohane_dirs の各要素 / "LOCOHANE.md"）。1つも
+            存在しなくてもエラーにはならず、システムプロンプトの
+            {{project_instructions}} には「（プロジェクト固有の指示は
+            ありません）」が差し込まれる（render_project_instructions_block()
+            参照）。
         checkpoint_db: LangGraph の会話状態を永続化する SQLite ファイルの絶対パス。
         upload_dir: ユーザーがアップロードしたファイルの保存先絶対パス。
         log_dir: アプリケーションログの出力先絶対パス。
@@ -168,6 +175,13 @@ class Config:
             Pythonコードをその場で実行する）の有効/無効。False の場合、
             ツールは呼び出されてもエラー文字列を返すのみでコードは
             実行されない。
+        script_background_max_runtime_seconds: run_script_background で
+            起動したプロセスを強制終了するまでの上限秒数（script_timeout とは
+            別軸。同期版 run_script より長時間の実行を想定した上限）。
+        script_background_job_retention_seconds: run_script_background の
+            ジョブが完了・失敗・タイムアウト等で終了した後、check_script_job で
+            一度も取得されないまま registry に残ってよい秒数。超過分は次回の
+            run_script_background 呼び出し時に破棄される。
         file_tools_duplicate_guard_enabled: 読み取り専用の Read/Glob/Grep/
             json_query ツールを同一引数で繰り返し呼び出すのを防ぐガード機能の
             有効/無効。
@@ -318,8 +332,9 @@ class Config:
     # --- 保存先パス（すべて絶対パス） ---
     skills_dir: Path
     agents_dir: Path
-    locohane_skills_dir: Path
-    locohane_agents_dir: Path
+    project_locohane_dirs: list[Path]
+    locohane_skills_dirs: list[Path]
+    locohane_agents_dirs: list[Path]
     system_prompt_path: Path
     project_instructions_paths: list[Path]
     checkpoint_db: Path
@@ -358,6 +373,10 @@ class Config:
     script_timeout: int
     script_python: str
     code_exec_enabled: bool
+
+    # --- run_script_background 用設定 ---
+    script_background_max_runtime_seconds: int
+    script_background_job_retention_seconds: int
 
     # --- Read/Glob/Grep/json_query 重複呼び出しガード（src/tools.py の _check_file_tools_duplicate） ---
     file_tools_duplicate_guard_enabled: bool
@@ -611,7 +630,7 @@ def load_config(config_path: Path | None = None) -> Config:
       LLM_TOP_P / LLM_TOP_K / LLM_REPEAT_PENALTY / LLM_FREQUENCY_PENALTY / LLM_PRESENCE_PENALTY / LLM_MAX_TOKENS
       LLM_DRY_MULTIPLIER / LLM_DRY_BASE / LLM_DRY_ALLOWED_LENGTH / LLM_DRY_PENALTY_LAST_N / LLM_DRY_SEQUENCE_BREAKERS
       LLM_TRACK_TOKEN_USAGE
-      SKILLS_DIR / AGENTS_DIR / LOCOHANE_SKILLS_DIR / LOCOHANE_AGENTS_DIR / SYSTEM_PROMPT_PATH / PROJECT_INSTRUCTIONS_PATH / CHECKPOINT_DB / UPLOAD_DIR / LOG_DIR / LOG_LEVEL / LOG_CLEAR_ON_STARTUP / DEFAULT_WORKDIR / MEMORY_DIR / HELP_PATH
+      SKILLS_DIR / AGENTS_DIR / PROJECT_LOCOHANE_DIR / SYSTEM_PROMPT_PATH / CHECKPOINT_DB / UPLOAD_DIR / LOG_DIR / LOG_LEVEL / LOG_CLEAR_ON_STARTUP / DEFAULT_WORKDIR / MEMORY_DIR / HELP_PATH
       UPLOAD_RETENTION_DAYS / UPLOAD_CLEANUP_INTERVAL_HOURS
       PATH_MEMORY_DIR / PATH_MEMORY_RETENTION_DAYS / PATH_MEMORY_CLEANUP_INTERVAL_HOURS / PATH_MEMORY_MAX_ENTRIES
       SCRIPT_TIMEOUT / SCRIPT_PYTHON / SCRIPT_REQUIRE_APPROVAL
@@ -690,6 +709,11 @@ def load_config(config_path: Path | None = None) -> Config:
     mcp = parser["mcp"] if parser.has_section("mcp") else {}
     checkpointer = parser["checkpointer"] if parser.has_section("checkpointer") else {}
 
+    project_locohane_dirs = _as_path_list(
+        os.getenv("PROJECT_LOCOHANE_DIR", paths.get("project_locohane_dir", "./.locohane")),
+        PROJECT_ROOT,
+    )
+
     cfg = Config(
         base_url=os.getenv("LLM_BASE_URL", llm.get("base_url", "http://localhost:8080/v1")),
         api_key=os.getenv("LLM_API_KEY", llm.get("api_key", "dummy-not-used")),
@@ -722,19 +746,11 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         skills_dir=_resolve(PROJECT_ROOT, os.getenv("SKILLS_DIR", paths.get("skills_dir", "./skills"))),
         agents_dir=_resolve(PROJECT_ROOT, os.getenv("AGENTS_DIR", paths.get("agents_dir", "./agents"))),
-        locohane_skills_dir=_resolve(
-            PROJECT_ROOT, os.getenv("LOCOHANE_SKILLS_DIR", paths.get("locohane_skills_dir", "./.locohane/skills"))
-        ),
-        locohane_agents_dir=_resolve(
-            PROJECT_ROOT, os.getenv("LOCOHANE_AGENTS_DIR", paths.get("locohane_agents_dir", "./.locohane/agents"))
-        ),
+        project_locohane_dirs=project_locohane_dirs,
+        locohane_skills_dirs=[d / "skills" for d in project_locohane_dirs],
+        locohane_agents_dirs=[d / "agents" for d in project_locohane_dirs],
         system_prompt_path=_resolve(PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", paths.get("system_prompt_path", "./system_prompt/system_prompt.md"))),
-        project_instructions_paths=_as_path_list(
-            os.getenv(
-                "PROJECT_INSTRUCTIONS_PATH", paths.get("project_instructions_path", "./.locohane/LOCOHANE.md")
-            ),
-            PROJECT_ROOT,
-        ),
+        project_instructions_paths=[d / "LOCOHANE.md" for d in project_locohane_dirs],
         checkpoint_db=_resolve(PROJECT_ROOT, os.getenv("CHECKPOINT_DB", paths.get("checkpoint_db", "./data/checkpoints.sqlite"))),
         upload_dir=_resolve(PROJECT_ROOT, os.getenv("UPLOAD_DIR", paths.get("upload_dir", "./data/uploads"))),
         log_dir=_resolve(PROJECT_ROOT, os.getenv("LOG_DIR", paths.get("log_dir", "./data/logs"))),
@@ -766,6 +782,18 @@ def load_config(config_path: Path | None = None) -> Config:
         script_python=os.getenv("SCRIPT_PYTHON", scripts.get("python", "python")),
         code_exec_enabled=_as_bool(
             os.getenv("CODE_EXECUTION_ENABLED", scripts.get("code_execution_enabled", True))
+        ),
+        script_background_max_runtime_seconds=int(
+            os.getenv(
+                "SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS",
+                scripts.get("background_max_runtime_seconds", 3600),
+            )
+        ),
+        script_background_job_retention_seconds=int(
+            os.getenv(
+                "SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS",
+                scripts.get("background_job_retention_seconds", 1800),
+            )
         ),
         file_tools_duplicate_guard_enabled=_as_bool(
             os.getenv(

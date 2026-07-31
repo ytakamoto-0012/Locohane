@@ -4,8 +4,9 @@
 {{project_instructions}} へ差し込む。ファイルが無くてもエラーにはならず、
 プレースホルダーテキストが差し込まれるだけ（CLAUDE.mdと同じ仕様）。
 
-config.ini の project_instructions_path で複数ファイルを指定できる（各ファイルを
-そのまま読み込んで連結するだけで、マージ・階層探索・重複排除などは行わない）。
+config.ini の project_locohane_dir で複数ディレクトリを指定できる（各ディレクトリ
+配下の LOCOHANE.md をそのまま読み込んで連結するだけで、マージ・重複排除などは
+行わない）。
 """
 
 from __future__ import annotations

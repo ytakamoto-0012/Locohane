@@ -279,12 +279,12 @@ async def _run(case: EvalCase) -> dict:
                 ),
             }
 
-        skills = scan_skills([config.skills_dir, config.locohane_skills_dir])
+        skills = scan_skills([config.skills_dir, *config.locohane_skills_dirs])
         system_prompt = build_system_prompt(skills, config.system_prompt_path)
         # app.py の _setup() と同じ手順で agent_type_defs を構築し、
         # {{agent_types}}/{{memory}} プレースホルダーを置換する
         # （本番と同じシステムプロンプトで評価するため）。
-        agent_type_defs = scan_agent_types([config.agents_dir, config.locohane_agents_dir])
+        agent_type_defs = scan_agent_types([config.agents_dir, *config.locohane_agents_dirs])
         skills_block = render_skills_block(skills)
         agent_type_defs = [
             replace(a, system_prompt=a.system_prompt.replace("{{skills}}", skills_block))
@@ -312,7 +312,7 @@ async def _run(case: EvalCase) -> dict:
         # キーワード引数で渡す（init_tools は開発中でシグネチャが変わりうるため、
         # 位置引数だとズレて誤った型を渡してしまう事故が起きやすい）。
         init_tools(
-            skills_root=[config.locohane_skills_dir, config.skills_dir],
+            skills_root=[*config.locohane_skills_dirs, config.skills_dir],
             script_python=config.script_python,
             script_timeout=config.script_timeout,
             llm_config=config,
@@ -328,6 +328,8 @@ async def _run(case: EvalCase) -> dict:
             ask_user_question_timeout_seconds=config.ask_user_question_timeout_seconds,
             ask_user_choice_timeout_seconds=config.ask_user_choice_timeout_seconds,
             dispatch_agent_max_parallel=config.subagent_max_parallel,
+            script_background_max_runtime_seconds=config.script_background_max_runtime_seconds,
+            script_background_job_retention_seconds=config.script_background_job_retention_seconds,
         )
 
         thread_id = str(uuid.uuid4())

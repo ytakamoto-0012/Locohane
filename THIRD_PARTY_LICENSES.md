@@ -195,3 +195,24 @@ python tools/gen_licenses.py
 | xxhash | 3.8.1 | BSD-2-Clause | https://github.com/ifduyue/python-xxhash |
 | yarl | 1.24.2 | Apache-2.0 | https://github.com/aio-libs/yarl |
 | zstandard | 0.25.0 | BSD-3-Clause | https://github.com/indygreg/python-zstandard |
+
+## pip依存以外の同梱物（手動記載）
+
+> **注意**: 上記「パッケージ一覧」は `tools/gen_licenses.py` が `requirements.txt`
+> の依存のみを対象に自動生成しています。本セクションは手動追記のため、
+> `tools/gen_licenses.py` を再実行すると消えます。**再生成後はこのセクションを
+> 手動で復元してください。**
+
+| 名称 | バージョン | ライセンス | URL | 備考 |
+|---|---|---|---|---|
+| OfficeCLI | v1.0.143 | Apache License 2.0 | https://github.com/iOfficeAI/OfficeCLI | 単一バイナリ。`.officecli/` に任意導入（README.md「OfficeCLI の導入（任意）」参照）。`.gitignore` 対象のため本リポジトリには同梱されない |
+
+OfficeCLI バイナリ自体が内包する第三者コンポーネント（`.officecli/THIRD-PARTY-NOTICES.txt` より、いずれも導入した場合のみ関係する）:
+
+| 名称 | バージョン | ライセンス | URL |
+|---|---|---|---|
+| DocumentFormat.OpenXml | 3.4.1 | MIT License | https://github.com/dotnet/Open-XML-SDK |
+| System.CommandLine | 3.0.0-preview.2.26159.112 | MIT License | https://github.com/dotnet/command-line-api |
+| .NET Runtime | （self-contained publishに同梱） | MIT License | https://github.com/dotnet/runtime |
+
+いずれも寛容ライセンス（Apache 2.0 / MIT）であり、GPL / AGPL / LGPL は含まれません。
