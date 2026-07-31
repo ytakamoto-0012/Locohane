@@ -252,3 +252,6 @@ bin/
 
 # officecli
 .officecli/
+
+# eval用データで公開すると著作権違反になるもの
+レシピ/

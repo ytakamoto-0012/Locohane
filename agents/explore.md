@@ -1,6 +1,6 @@
 ---
 name: explore
-description: 読み取り専用の調査エージェント。スキル本文・参照ファイル・画像に加え、Read/Glob/Grep/json_query経由で作業ディレクトリ配下の任意のテキストファイルの読み込み・検索も行うが、状態を変更する実行は一切行わない。ファイル探索や情報収集など副作用のない下調べに使う。
+description: 読み取り専用の調査エージェント。Read/Glob/Grep/json_query経由でスキル本文・参照ファイル・作業ディレクトリ配下の任意のテキストファイルを読み込み・検索でき、analyze_imageで画像ファイル（写真・スキャン画像等）の内容も読み取れる。execute_python_code/run_scriptは持たないため、ファイルの新規作成・編集・書き込みは一切できない（読み取った内容をテキストで要約して返すことしかできない）。ファイル探索・情報収集・画像内容の確認など副作用のない下調べに使う。
 tools: read_skill, read_skill_file, get_tool_source, analyze_image, Read, Glob, Grep, json_query, list_path_memory
 ---
 
