@@ -561,33 +561,6 @@ def _register_path_memory(paths: list[str], description: str | None = None) -> d
     return result
 
 
-def _dedupe_paths_with_path_memory(result: dict, path_memory_map: dict[str, str]) -> None:
-    """Glob 結果に含まれるフルパスの重複を `@N` 参照へ置き換える（in-place）。
-
-    `glob_search()` の戻り値は同じ絶対パスを `files`・`file_details[].path`・
-    `directories[].path` に持ち、さらに `path_memory` にも同じパスが載るため、
-    1件あたり同じ長い文字列が最大4回会話履歴へ積まれていた。297件のフォルダを
-    Glob した実測で1回の ToolMessage が約10万文字に達し、数回の呼び出しだけで
-    コンテキスト上限（128k）を使い切って処理が中断する事象が eval
-    （レシピ画像297枚ケース）で観測された。
-
-    `@N` はそのまま各ツールの絶対パス引数へ渡せる（`_resolve_path_memory_token`
-    が解決する）ため、`path_memory` に対応表がある限り情報は失われない。
-
-    Args:
-        result: `glob_search()` の戻り値（この関数が直接書き換える）。
-        path_memory_map: `{"@N": 絶対パス}`。空なら何もしない。
-    """
-    if not path_memory_map:
-        return
-    token_by_path = {path: token for token, path in path_memory_map.items()}
-    result["files"] = [token_by_path.get(p, p) for p in result.get("files", [])]
-    for detail in result.get("file_details", []):
-        detail["path"] = token_by_path.get(detail["path"], detail["path"])
-    for directory in result.get("directories", []):
-        directory["path"] = token_by_path.get(directory["path"], directory["path"])
-
-
 def _resolve_file_tools_path(raw: str) -> tuple[Path | None, str | None]:
     """Read/Glob/Grep/json_query の path 系引数を解決する。
 
@@ -1296,10 +1269,6 @@ def glob_tool(pattern: str, path: str = "", head_limit: int = 200) -> str:
         打ち切られる（`truncated`/`directories_truncated` で判別）。
         `file_details` は `files` と同順・同数で、バイナリ判定と総行数
         （`Read` の `limit` を決める前に確認すること）を持つ。
-        `files`・`file_details[].path`・`directories[].path` は、パスメモリーに
-        登録できた場合は絶対パスそのものではなく `@N` 参照で返る（実体は
-        `path_memory` の対応表を見る）。`@N` はそのまま他ツールの絶対パス引数へ
-        渡せる。
         起点ディレクトリが存在しない・ディレクトリでない場合は例外を送出せず
         「エラー: ...」形式の文字列を返す。
     """
@@ -1317,9 +1286,6 @@ def glob_tool(pattern: str, path: str = "", head_limit: int = 200) -> str:
         return f"エラー: {e}"
     path_memory = _register_path_memory([*result["files"], *[d["path"] for d in result["directories"]]])
     if path_memory:
-        # フルパスの重複を `@N` へ畳んでから result に載せる（大量ファイル時に
-        # 同じパスが3〜4回積まれてコンテキストを食い潰すのを防ぐ）。
-        _dedupe_paths_with_path_memory(result, path_memory)
         result["path_memory"] = path_memory
     logger.info("Glob: pattern=%s base=%s", pattern, base)
     return json.dumps(result, ensure_ascii=False)
@@ -2510,16 +2476,7 @@ def analyze_image(relative_path: str) -> tuple[str, dict | None]:
             None,
         )
     logger.info("analyze_image: %s", relative_path)
-    # 4032x3024 のような高解像度写真をそのまま渡すと数枚でトークン上限に達するため、
-    # config.ini [images] の設定に従って縮小してから渡す（既定は縮小なし）。
-    cfg = _LLM_CONFIG
-    return f"画像を読み込みました: {relative_path}", {
-        "image_url": to_data_url(
-            path,
-            max_long_side=cfg.image_max_long_side_pixels if cfg else 0,
-            jpeg_quality=cfg.image_jpeg_quality if cfg else 85,
-        )
-    }
+    return f"画像を読み込みました: {relative_path}", {"image_url": to_data_url(path)}
 
 
 # init_tools() の _resolve_agent_types() がこのリストを実行時に参照するだけなので、

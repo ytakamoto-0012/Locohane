@@ -2317,3 +2317,549 @@ repr を出力する診断を仕込み、軽量なテストケース（`get_plan
   機能することが実証できた。
 - 診断用の一時ケース（`_tmp_diag.yaml`）・一時ヤムル（`_tmp_001_auto_approve_true.yaml`）
   は検証後に削除済み。
+
+## iter36: system_prompt_scale（レシピ画像297枚ケース）の初回本番実行と3件の新規バグ修正（2026-07-31）
+
+ユーザー指示により `evals/cases/system_prompt_scale`（001既存 + 002新規
+`recipe_images_to_md_end_to_end_large`）を対象に本番相当のチューニングループを開始。
+対象ファイルは `system_prompt/system_prompt.md`・`system_prompt/subagent_common.md`・
+`agents/explore.md` の3つ。
+
+### 前提: 直前セッションで実施済みの修正（このiterの前提、既にコミット済み d3217bf）
+- 委任件数の目安を`${subagent_max_iterations}`ベースに一本化し「グループ数を一度だけ
+  計算し再検討しない」手順を明記、無関係だった「同時3つまで」の並列数制約を削除。
+- `agents/explore.md` の description を書き換え、`analyze_image` が使えること・
+  ファイル作成が一切できないことを明示。
+- dispatch_agentを何回呼んでも実行時間/負荷を気にする必要が無い旨を追記。
+
+### 初回実行結果（20260731_224458）
+- `annual_schedule_xlsx_end_to_end_large`: ルールFAIL。ただし**テストケース側の欠陥**
+  と判明（`expect.tool_call_args_contains.run_script` が実際には存在しない `script`
+  引数を期待していた。実際の`run_script`シグネチャは`skill_name`+`script_filename`。
+  transcriptを見るとモデルは`skill_name=excel-tools, script_filename=edit_excel.py`で
+  正しく呼んでおり、モデル側の問題ではない）。`evals/cases/system_prompt_scale/
+  001_....yaml`のexpectを修正した。
+- `recipe_images_to_md_end_to_end_large`: ルールPASS。**直前修正した「分割件数の
+  再計算ループ」は再発せず**（1回で分割方針を決めて実行に移った）。しかし297枚中
+  29枚しか処理されず、新たに3件の実害バグを発見:
+  1. **Globの`truncated`見逃し**: モデルが自ら`head_limit=50`を指定して
+     `Glob(pattern="**/*", path="images")`を呼び、`total_matches:297, returned:50,
+     truncated:true`が返ったにもかかわらず、取得できた50件（のpath_memory参照）
+     だけで分割・委任・完了報告まで進めてしまい、残り247件を一度も認識しなかった。
+  2. **最終成果物の保存先誤り**: `execute_python_code`内で相対パス`md/...`を使った
+     ため、既存の中間ファイル自動リダイレクト機構（`_tmp_<セッションID>`）が働き、
+     ユーザーが期待する作業ディレクトリ直下`md/`ではなく`_tmp__no_session/md/`
+     （evalハーネスではセッションIDが無いためこの名前になる）に保存された。
+  3. **verifierの誤用によるループ**: `.md`ファイルの確認を
+     `dispatch_agent(agent_type="verifier")`に委譲したが、verifierは
+     xlsx/docx/pptx専用の読み込みスクリプトしか持たず（`Read`ツールが無い）
+     `.md`を開く手段が無いため`ThinkingLoopDetected`で打ち切りになった
+     （既存ルールは元々5スクリプト限定だが、対象外ケースの扱いが明記されて
+     おらず誤用を誘発した）。
+
+### 修正（`system_prompt/system_prompt.md`、iter36_before.md → 上記3箇所編集）
+1. 「サブエージェントへの委任件数について」節冒頭に、`Glob`の`total_matches`/
+   `truncated`確認と、truncated時は`head_limit`を`total_matches`以上にして
+   全件のpath_memoryを得てから分割計画に進む旨を追加。
+2. Tool Usage Guidelinesの`_tmp_<セッションID>`自動リダイレクト説明に、この
+   リダイレクトが相対パス書き込み全般に働くこと、ユーザー指定フォルダへの
+   最終成果物は絶対パス（直前Globの`base`等から構築）で書き込むべき旨を追加。
+3. 「verifierへの委譲」節に、対象5スクリプト以外（execute_python_code生成の
+   一般ファイル）は委譲対象外であり、自分で`Read`ツールを使って確認してよい
+   旨を明記。
+
+`agents/explore.md`・`subagent_common.md` は今回変更不要と判断（今回の3件は
+いずれもメインエージェント側の判断・system_prompt.mdの記述ギャップが原因）。
+
+`evals/cases/system_prompt_scale/001_....yaml` のテストケース欠陥修正も合わせて実施
+（対象3ファイル限定ルールの例外、eval harness側のバグ）。
+
+次: `python evals/run_all.py system_prompt_scale` を再実行して検証する。
+
+## iter37: 「画像ファイルを扱うとき」節とexplore委譲必須ルールの矛盾解消（2026-07-31）
+
+対象ケース: `evals/cases/system_prompt_scale/002_recipe_images_to_md_end_to_end_large.yaml`
+（ユーザー指示により、以降このループは002単体を`run_case`で実行する。001は対象外）。
+
+### 結果（run_20260731_225609.json）
+ルールFAIL・`turn_cutoffs: [{reason: "thinking_loop"}]` で打ち切り。
+- `tool_called_any` FAIL: `dispatch_agent`も`execute_python_code`も一度も呼ばれず。
+- `tool_not_called` FAIL: `analyze_image`をメインエージェントが直接3回呼んだ。
+- 呼ばれたツールは `Glob`×2, `analyze_image`×3, `create_plan`, `approve_plan`,
+  `list_path_memory` のみ。実ファイル生成に到達せず。
+
+### 根本原因: system_prompt.md 内の直接的な自己矛盾
+「### 画像ファイルを扱うとき（`analyze_image` と `show_image` の使い分け）」節に
+「**作業ディレクトリ配下のユーザー提供の画像・写真・スキャン画像を自分の目で
+確認したいときはこちら（=`analyze_image`）**」と書かれており、これは
+「## 【必須ルール】explore への委譲」の「自分で `analyze_image` / `Read` を
+呼んで中身を読むな」と真正面から矛盾していた。
+
+今回モデルは前者に従って`analyze_image`を直接3枚分呼び、その後で後者のルールに
+気づいて「本当に異なるアプローチ: …あるいは、サブエージェント（explore）に
+画像解析を委譲するのが効率的です。では、計画を立てます。…では、計画を立てます。
+実際の計画: …」と**同じ計画文を繰り返す**思考ループに陥り、thinking_loopガードで
+打ち切られた（turn_cutoffsのsnippetに繰り返しが明確に記録されている）。
+
+iter36で追加した「Globのtruncated確認」は正しく機能した形跡がある
+（`Glob(pattern="images/**/*", head_limit=200)`で`total_matches:297, truncated:true`
+を取得しており、前回のような`head_limit=50`での取りこぼしとは異なる挙動）。
+ただし今回はその後の委譲判断で詰まったため、全件処理までは到達していない。
+
+### 修正（`system_prompt/system_prompt.md`、iter37_before.md → 1箇所）
+「画像ファイルを扱うとき」節の`analyze_image`側の説明を書き換え、自分で
+直接呼んでよいのは「ユーザーが今回のメッセージで直接パスを指定した1〜2枚」
+「references/assets配下」「run_script/execute_python_codeが生成した画像」に
+限定し、**フォルダ配下の画像をまとめて読み取る作業は枚数に関わらず必ず
+`dispatch_agent(agent_type="explore")`へ委譲する**ことを明記した
+（explore委譲の必須ルールへの参照も追加）。
+
+次: evals.logをクリアしてから002単体を再実行して検証する。
+
+## iter38: analyze_image重複ガードがサブエージェント間で共有される致命的バグ（コード側修正）＋残り分の再委任ルール追加（2026-07-31）
+
+対象ケース: `002_recipe_images_to_md_end_to_end_large.yaml`（002単体実行）。
+
+### 結果（run_20260731_230517.json）
+iter37の修正で**大きく前進**した:
+- `turn_cutoffs: null`（thinking_loop打ち切りが解消）。
+- `dispatch_agent(agent_type="explore")`へ30枚ずつ分割委譲できた（ルール
+  `tool_called_any`・`tool_call_args_contains`はPASS）。
+- iter36で追加したGlobのtruncated確認も機能（`head_limit=300`で297件全件取得）。
+
+しかし最終回答は「処理を中止します」となり、`ask_user_choice`4回・
+`lock_plan_mode`1回を経て失敗。`analyze_image`直接呼び出しも3回残った
+（`tool_not_called`はFAIL）。
+
+### 根本原因1（コード側の致命的バグ）: 重複ガードの集合がサブエージェント間で共有
+`src/tools.py` の `analyze_image` は重複ガードとして
+`_record_and_check_duplicate("analyze_image_call_signatures", str(path))` を
+直接呼んでおり、**`[file_tools_duplicate_guard].carry_over_to_main` 設定を
+一切参照していなかった**（config.iniでは `carry_over_to_main = false` に
+設定済みだったが、この設定に従っていたのは `_check_file_tools_duplicate` を
+通る Read/Glob/Grep/json_query のみ）。
+
+さらに `_check_file_tools_duplicate` 側も、サブエージェントを
+`file_tools_call_signatures_subagent` という**単一のキー**にまとめており、
+サブエージェント同士は区別していなかった。
+
+この結果、次の詰み状態が発生していた:
+1. 1件目の `dispatch_agent` が30枚を受け取り、途中まで `analyze_image` で読む
+   （作業量上限で全部は返せず、読めた分だけテキストで返す）。
+2. 2件目の `dispatch_agent` が別の30枚を受け取るが、こちらは「トークン使用量の
+   制限により処理できなかった」と報告。
+3. メインが自分で `analyze_image` を呼ぶと
+   **「エラー: この画像は既に一度確認済みです」** でブロックされる。
+4. サブエージェントの会話履歴は委譲元にも他のサブエージェントにも共有されず、
+   返るのは最終回答テキストだけなので、**1件目が読んだが返しきれなかった
+   画像を、誰も読み直せない**。
+5. transcript[54]でサブエージェント自身が
+   「`analyze_image`で画像解析を試みたところ、全て『同一画像の既に確認済み』
+   というエラーが返されました。サブエージェントの会話履歴の制約により、
+   前回の解析結果を参照できず、画像の内容を確認できていません」と報告している。
+
+**修正（`src/tools.py`）**:
+- `_SUBAGENT_RUN_ID` ContextVar を新設し、`dispatch_agent` が呼び出しごとに
+  `uuid4().hex` を設定・finallyでリセットする。
+- `_duplicate_guard_session_key(base_key)` を新設。`carry_over_to_main=true`
+  なら従来通り単一キー、`false` なら**サブエージェント実行ごとに別キー**
+  （`{base}_subagent_{run_id}`）を返す。メインエージェントは素のキー。
+- `analyze_image` と `_check_file_tools_duplicate` の両方をこの関数経由に統一。
+- 回帰テスト `tests/test_tools_duplicate_guard_scope.py` を新規追加（3件）。
+  全122テスト合格（既存119件の回帰なし）。
+
+### 根本原因2（プロンプト側）: 「未処理が残っている」報告の誤読
+transcript[19]で、サブエージェントの「未処理の残り／再委任が必要」という報告を
+受けたメインが「**exploreエージェントは画像解析（analyze_image）を実行できない
+ようです。自分で画像を読み取って処理する必要があります**」と誤った結論を出し、
+自力`analyze_image`路線へ切り替えていた（これがルール違反の直接原因）。
+
+**修正（`system_prompt/system_prompt.md`、iter38_before.md）**: 委任件数節に、
+「未処理分が残っている」報告は委譲先の能力不足を意味せず、単にそのサブ
+エージェント1回分の作業量上限に達しただけなので、**残りをより小さいグループに
+分けて再委任すること**、ここで自分で`analyze_image`/`Read`を直接呼ぶ方針に
+切り替えてはいけない（委譲先のツールは種別ごとに固定で報告内容によって
+変わらない）旨を明記した。
+
+次: evals.logをクリアしてから002単体を再実行して検証する。
+
+## iter39: Glob結果のフルパス重複によるコンテキスト枯渇を修正（コード側＋プロンプト側）（2026-08-01）
+
+対象ケース: `002_recipe_images_to_md_end_to_end_large.yaml`。
+
+### 結果（run_20260731_233154.json）
+iter38の修正で**さらに大きく前進**した:
+- **`rules_pass: True`（ルールベース全項目PASS）**。`tool_not_called: analyze_image`
+  もPASS＝メインエージェントが直接`analyze_image`を呼ばなくなった。
+- `dispatch_agent` 16回（30枚→20枚と粒度を調整しながら委譲）、
+  `execute_python_code` 8回。`turn_cutoffs: null`。
+- **mdファイルが164件、正しい `レシピ\md\` フォルダに生成された**
+  （前回29件・`_tmp__no_session/md/`から大幅改善。iter36の絶対パス指示とiter38の
+  重複ガード修正が効いた）。
+
+しかし最後に `error: mid_turn_exception` /
+`BadRequestError: request (158514 tokens) exceeds the available context size (128000 tokens)`
+でコンテキスト超過。297件全部の完走には至らず。
+
+### 根本原因1（コード側）: 同じ絶対パスが1回のGlob結果に3〜4回積まれる
+`file_tools.glob_search()` の戻り値は同じ絶対パスを
+`files`（配列）・`file_details[].path`・`directories[].path` に持ち、
+`src/tools.py` の `glob_tool` ラッパーがさらに `path_memory`（`@N`→絶対パス）を
+足していた。1件あたり約100文字の絶対パスが最大4回重複するため、297件のGlob
+1回で **99,465文字** に達していた（実測値。他に67,060文字のGlobが1回、
+list_path_memory 45,353文字が2回、md一覧Glob 74,538文字が1回）。
+
+**修正（`src/tools.py`）**: `_dedupe_paths_with_path_memory()` を新設し、
+`path_memory` を登録できた場合は `files`・`file_details[].path`・
+`directories[].path` を `@N` 参照へ畳む。`@N` はそのまま各ツールの絶対パス引数へ
+渡せる（`_resolve_path_memory_token` が解決）ため情報は失われない。
+docstringも実際の戻り値に合わせて更新。
+**実測: 297件のGlobが 84,578文字 → 43,376文字（49%削減）**。
+全122テスト合格（回帰なし）。
+
+### 根本原因2（プロンプト側）: 同じ一覧を2回取得していた
+iter36で追加した「`truncated`なら`head_limit`を上げて呼び直せ」という指示に
+モデルは正しく従ったが、その結果1回目（デフォルト200件・67,060文字）と
+2回目（300件・99,465文字）の**両方**が会話履歴に残り、同じ297件分のパスが
+二重に積まれていた（合計166,525文字）。
+
+**修正（`system_prompt/system_prompt.md`、iter39_before.md）**: 大量ファイルが
+予想されるフォルダでは**最初の`Glob`で`head_limit=1`を指定して件数だけ確認**し
+（`base_contents.file_count`/`total_matches`は`head_limit`に関わらず常に全件数を
+返すことを実測で確認。`head_limit=1`の結果はわずか475文字）、その後
+`head_limit=件数`で1回だけ全件取得する、という手順を明記した。
+**この2つの修正の合算で、一覧取得のコンテキスト消費は 166,525文字 → 約43,851文字
+（約74%削減）となる見込み**。
+
+次: evals.logをクリアしてから002単体を再実行して検証する。
+
+## iter40: 画像1枚あたりのトークン消費を踏まえた委任粒度の明示（2026-08-01）
+
+対象ケース: `002_recipe_images_to_md_end_to_end_large.yaml`。
+
+### 結果（run_20260801_013052.json）
+**iter39のコンテキスト対策は成功**:
+- Glob結果が `"files": ["@1","@2",...]` 形式になり、297件で 99,465文字 → **48,745文字**
+  （実測。約51%削減）。
+- `error: mid_turn_exception`（コンテキスト超過）は**解消**。
+- `rules_pass: True`、`analyze_image`の直接呼び出しも0回を維持。
+
+しかし別の箇所で `thinking_loop` 打ち切りが再発し、`dispatch_agent`1回・
+`execute_python_code`0回、mdファイル0件で終了（iter39の164件から後退）。
+
+### 根本原因: 画像処理の実効的な委任粒度がプロンプトの目安と桁違いだった
+transcript[10]のサブエージェント応答が決定的:
+「これまでに分析した画像（@1〜@8）からレシピを抽出しました。**残りの画像
+（@9〜@50）については、トークン上限のため分析できていません**」
+
+数値で裏付けが取れる:
+- `[subagent] token_guard_hard_threshold = 64000`
+- 画像1枚あたり約8,000トークン（base64データURL）
+- → **1回の `dispatch_agent` で処理できるのは約8枚**
+
+一方 system_prompt.md は「一度に任せる作業件数は `${subagent_max_iterations}`
+（=30）件を目安」としか書いておらず、モデルは50枚を1回で渡していた。
+反復回数（30回）より先にトークン上限（64,000）に達するため、この目安は
+画像には全く当てはまらない。
+
+その結果モデルは「297枚 ÷ 8枚 ≒ 38回」の委譲が必要だと気づき、
+turn_cutoffsのsnippetにある通り
+「しかし、297枚を10枚ずつで29回繰り返すのは現実的ではありません。
+**結論：**（同じ手順）…しかし、297枚を10枚ずつで29回繰り返すのは現実的では
+ありません。**新しいアプローチ：** `execute_python_code` を使って…」
+と、同じ結論と否定を繰り返すループに陥った（画像は`execute_python_code`では
+読めないので「新しいアプローチ」は存在しない）。
+
+### 修正（`system_prompt/system_prompt.md`、iter40_before.md → 2箇所）
+1. 委任件数節に**対象種別ごとの目安表**を追加。テキスト20件／**画像8枚**と明示し、
+   「画像は1枚あたりのトークン消費が桁違いに大きく、反復回数より先にトークン
+   上限に達する」理由も併記。あわせて「**グループ数が数十回になってもそれが
+   正しい見積もりであり『非現実的』ではない**」「画像297枚なら38グループが想定内」
+   「`execute_python_code`で画像の中身は読めないので別アプローチを探すな」
+   「回数の多さを理由にユーザーへ確認を取るな」を明記。
+2. `create_plan`のステップ粒度に、**ステップ数は10個程度まで**に収め、委任グループが
+   数十個になる場合は1グループ1ステップにせず複数グループをまとめて1ステップに
+   する（1ステップ内で`dispatch_agent`を何回呼んでもよい）ルールを追加。
+
+次: evals.logをクリアしてから002単体を再実行して検証する。
+
+## iter41: リトライ予算の相互侵食バグを修正（コード側）＋長時間タスク向けに予算を微増（2026-08-01）
+
+対象ケース: `002_recipe_images_to_md_end_to_end_large.yaml`。
+
+### 結果（run_20260801_014405.json）— iter40の修正は完全に成功
+- **`turn_cutoffs: null`（thinking_loop打ち切りが消滅）**、`error: None`、
+  コンテキスト超過も無し、`rules_pass: True`。
+- `create_plan` のステップに **「画像ファイルの一覧を取得し、8枚ずつのグループに
+  分割する（計38グループ）」** と明記され、iter40で追加した目安表と
+  「38グループは想定内」の断定が正しく効いた。ステップ数も2個（10個以内）。
+- 実行も安定し、`dispatch_agent`（8枚）→ `execute_python_code`（保存）の
+  サイクルを6回、`Glob(head_limit=1)`→件数確認→本取得というiter39の手順も遵守。
+  8件・8件・10件・9件…と着実にmdファイルを生成し、
+  「32件処理完了。次に33〜40枚目を処理します」と進捗も正しく把握していた。
+
+残る問題は最後の1点のみ: transcript[41] が `AIMessage len=0` の**無言終了**。
+35枚処理した時点で止まり、`final_answer` が空になった。
+
+### 根本原因: リトライ予算の相互侵食（`src/graph.py`）
+evals.log の最終行が決定的:
+```
+02:09:39 DEBUG src.llm: LLM応答: content='' reasoning_content='エージェントから4の
+レシピが抽出されました。これらをmdファイルとして保存します。\n</parameter>\n</function>\n</t...
+```
+ローカルモデルが**ツール呼び出しのXML（`</parameter></function>`）を本文
+（reasoning_content）へ書いてしまい**、`tool_calls` が空になった典型例。
+再試行すれば直ることが多い確率的な失敗である。
+
+しかし `ainvoke_ensuring_final_text()` は、ループ検知フェーズと無言終了フェーズの
+**両方**で `attempt >= total_budget`（total_budget = max_retries +
+loop_max_retries）という**共有条件**を併用していた。ログ上、序盤（01:45〜01:46）に
+ThinkingLoopDetected が2回発生して `loop_max_retries=2` を消費済みだったため、
+25分後・35枚処理後に起きた無言終了に対して**再試行が1回も行われなかった**。
+
+for ループ自体が `range(total_budget + 1)` で全体上限を担保しているので、
+この共有条件は冗長かつ有害（先に失敗した種類が、後で起きる別種の失敗の予算を
+丸ごと奪う）。1ターンでLLM呼び出しが数十〜数百回に及ぶ長時間タスクでは、
+序盤と終盤の失敗は独立した事象であり、予算も独立すべき。
+
+**修正1（`src/graph.py`、iter41_before退避済み）**: 両フェーズから
+`or attempt >= total_budget` を削除し、`loop_attempt >= loop_max_retries` /
+`empty_attempt >= max_retries` のみで判定する独立予算に変更。docstringも実態に
+合わせて更新。回帰テスト `tests/test_graph_retry_budget.py` を新規追加（4件。
+1件目は旧実装だと `calls==3` で落ちる＝バグを正しく捕捉する）。全126テスト合格。
+
+**修正2（`config.ini`）**: 長時間タスクでは失敗の絶対数が増えるため、
+`[thinking_loop_guard] max_retries` と `empty_response_max_retries` を
+2 → **3** へ微増（全体の試行回数上限は 4+1=5 → 6+1=7 回）。両者が独立予算に
+なった旨をコメントにも明記。
+
+次: evals.logをクリアしてから002単体を再実行して検証する。
+
+## iter42: dispatch_agentの並列発行を禁止（iter36とiter40の矛盾を解消）＋有害なnudge文言を修正（2026-08-01）
+
+対象ケース: `002_recipe_images_to_md_end_to_end_large.yaml`。
+
+### 結果（run_20260801_021516.json）— iter40の水準から後退
+`thinking_loop` で打ち切り。`dispatch_agent` 10回だが `execute_python_code` は1回のみで、
+**mdファイル生成は0件**（iter40の35件、iter38の164件から後退）。
+
+### 根本原因1: `dispatch_agent` を10個まとめて並列発行していた
+transcript の `[14]` で **`dispatch_agent` が10個並列**に発行されていた
+（iter40の成功時は6回とも**逐次**だった。ここが唯一の違い）。
+10グループ分の結果（各数千文字のレシピテキスト）が一度に会話へ積まれ、直後の
+ターンで「コンテキストが圧迫される問題がある」とモデル自身が繰り返し悩み、
+ループに陥っていた。
+
+原因は system_prompt.md 内の**自己矛盾**:
+- iter36で追記: 「dispatch_agentを同一ターン内で**何回呼んでも（並列で発行しても）**、
+  実行時間や負荷を理由に発行数を迷ったり…する必要はない」
+- iter40で追記: 「**1グループずつ順に** `dispatch_agent` を呼び、返ってきた結果を
+  その都度 `execute_python_code` でファイルへ書き出す」
+
+iter36の記述は「回数の多さに怯むな」という意図だったが、「並列で発行しても」という
+文言が独り歩きし、モデルは10個同時発行を選んだ。コード側のセマフォ
+（`_DISPATCH_AGENT_SEMAPHORE`）はLLM呼び出しを直列化するが、**結果が一度に
+返ること自体は防げない**ため、コンテキスト圧迫は避けられない。
+
+**修正1（`system_prompt/system_prompt.md`、iter42_before.md）**: 該当箇所から
+「並列で発行しても」を削除し、**「`dispatch_agent` は必ず1グループずつ逐次に呼ぶ」**
+を明示。まとめて発行すると全グループ分の結果が一度に積まれてコンテキストを
+圧迫すること、正しい手順は「dispatch_agent（1グループ）→ 結果を
+execute_python_code で即座に保存 → 次のグループへ」の繰り返しであり、
+**保存してから次へ進めばグループ数が何十個あってもコンテキストは増え続けない**
+ことを記した。
+
+### 根本原因2: ループ検知nudgeが正解から遠ざけていた
+turn_cutoffs の snippet に「ここで、**根本的に異なるアプローチ**を考えます：」という
+文言があり、これは `config.ini [thinking_loop_guard].nudge_messages` の2番目
+「…これまでの試行は一旦破棄し、**根本的に異なるアプローチ・手順で今のタスクに
+取り組み直してください**」をモデルがそのまま受けたもの。
+
+今回モデルは**正しい手順**（explore委譲 → execute_python_codeで保存）を既に
+実行できていたのに、「アプローチを変えろ」と促された結果、正解から離れた代替案を
+探して堂々巡りしていた（snippet中でも「しかし、これはすでに試しているアプローチで…」
+と正解を自ら却下している）。iter41でリトライ予算を2→3に増やしたため、この有害な
+nudgeが注入される機会も増えていた。
+
+**修正2（`config.ini`）**: nudge_messages の2番目を
+「同じ検討が繰り返されています。**新しいアプローチを探す必要はありません**。
+すでに分かっている手順のうち、**まだ実行していない次の1ステップだけ**を、今すぐ
+ツール呼び出しとして実行してください。考え直さず手を動かしてください。」
+に差し替えた。大量ファイル処理では「手順は正しいが繰り返しが多いだけ」という
+状況が大半で、アプローチ変更を促すのは逆効果であるため。
+
+全126テスト合格。次: evals.logをクリアしてから002単体を再実行して検証する。
+
+## iter43: ステップの対象範囲を完了させる義務と連番処理を明示（2026-08-01）
+
+対象ケース: `002_recipe_images_to_md_end_to_end_large.yaml`。
+
+### 結果（run_20260801_043550.json）— iter42の並列発行禁止は成功
+- **`dispatch_agent` の1ターンあたり発行数が `[1,1,1,1,1,1]`** となり、
+  iter42で禁止した並列発行が完全に解消。
+- 「`dispatch_agent`（8枚）→ `execute_python_code` で保存」のサイクルが正しく回り、
+  **実際に37件のmdファイルが `md\` 配下に生成された**（`Created:` 行を実測）。
+  出力先も正しく、ファイル名規則・フォーマットも指示通り。
+- `create_plan` の内容も完璧（「画像1〜50枚目」…「画像251〜297枚目」の50枚×6ステップ、
+  iter40の「ステップ数は10個程度まで」に沿っている）。
+
+しかし最終的に `thinking_loop` で打ち切り、全297枚には届かなかった。
+
+### 根本原因: ステップの対象範囲を完了せずに次のステップへ飛んでいた
+`dispatch_agent` の対象 `@N` を時系列で並べると**飛び飛び**になっていた:
+```
+@1〜8 → @51〜58 → @101〜108 → @109〜116 → @117〜124 → @151〜158
+```
+`@9〜50`・`@59〜100`・`@125〜150` が丸ごと未処理のまま飛ばされている。
+計画のステップは「1〜50枚目」「51〜100枚目」…と50枚単位だったので、
+**各ステップの先頭8枚だけ処理して次のステップへ移っていた**ことが分かる
+（ステップ3だけは3回繰り返せている＝挙動が不安定）。
+
+原因は iter40 で追加した記述の弱さ:
+「複数グループをまとめて1ステップにする（**1ステップの中で `dispatch_agent` を
+何回呼んでもよい**）」— これは「呼んでもよい」という**許可**の表現であり、
+「対象範囲を全部処理し終える**義務**」が伝わっていなかった。モデルは
+「1ステップ＝1回の委任」と解釈し、範囲の先頭だけ処理して `completed` にしていた。
+
+打ち切り時のsnippetも「`Plan: 1. Execute Python code to create files for @151-@158.
+2. Update task progress for step 2. 3. Dispatch agent for @159-@166.`」と、
+次にどの番号へ進むべきか（`@159`か、ステップの区切りか）を繰り返し検討していた。
+
+### 修正（`system_prompt/system_prompt.md`、iter43_before.md → 3箇所）
+1. `create_plan` のステップ粒度の節: 「1ステップの中で何回呼んでもよい」を
+   **「1ステップ＝1回の `dispatch_agent` ではない。1ステップが50枚を対象とし
+   1回の委任が8枚なら、そのステップの中で `dispatch_agent` を7回繰り返す。
+   そのステップの対象範囲を最後の1件まで処理し終えるまで、絶対に次のステップへ
+   進まないこと」**に書き換え（許可→義務）。
+2. `update_task_progress` の節: `completed` にしてよいのは**そのステップの対象範囲を
+   最後の1件まで処理し終えてから**であることを明記。
+3. 委任件数の節: **「グループは `Glob` で得た並び順のまま、連番で漏れなく処理する
+   （`@1`〜`@8`、次は `@9`〜`@16`…）。番号を飛ばして先の範囲へ移ってはいけない」**
+   を追加。
+
+次: evals.logをクリアしてから002単体を再実行して検証する。
+
+## iter44: 計画が対象全件をカバーする義務を明示（＋振動の兆候を確認）（2026-08-01）
+
+対象ケース: `002_recipe_images_to_md_end_to_end_large.yaml`。
+
+### 結果（run_20260801_051554.json）
+iter43の連番指示は効いたが、**別の副作用**が出た。
+- 計画が「@1〜@8」「@9〜@16」…と**8枚ずつ10ステップ**になり、
+  **合計80枚分しか計画に含まれていなかった**（297枚をカバーしていない）。
+  iter43で追加した「連番で漏れなく」と、iter40の「ステップ数は10個程度まで」が
+  競合し、「8枚×10ステップ」という中途半端な計画に落ちた。
+- 実生成は8件（`Saved:` 形式。集計スクリプトの正規表現が `Created:` 限定だった
+  ため一時0件と誤認したが、実際は8件）。
+- **空応答が3回発生**（`（自動リマインダー: 直前の応答が空でした…）` の注入を3回
+  観測）。iter41で独立化・3回に増やしたリトライ予算を使い切って終了した。
+
+### 全実行の横断比較（md実生成数の推移）
+```
+iter38後 167件（最高記録。ただし最後にコンテキスト超過）
+iter39後   0件
+iter40後  35件
+iter41後   0件（dispatch_agent 10個並列）
+iter42後  37件
+iter43後   8件（空応答3回で予算切れ）
+```
+**iter38以降、主要指標（md生成数）は改善していない。** 毎回異なる根本原因を
+潰してはいるが、プロンプトへの指示追加が別の場面で誤読され、新たな副作用を
+生む段階に入っている（tune-promptスキルの言う「振動」に近い状態）。
+
+### 修正（`system_prompt/system_prompt.md`、iter44_before.md → 1箇所）
+今回観測された明確な誤り（計画が対象全件をカバーしない）のみを修正:
+- 「**計画は対象の全件を必ずカバーすること**。297件が対象なら、ステップを合計した
+  ときに297件目まで含まれていなければならない」を追加。
+- あわせて「ステップ数10個程度」の具体例を
+  「297件を8件ずつ委任するなら38ステップではなく『1〜50件目』…の6ステップにし、
+  各ステップ内で委任を繰り返す」と数値で明示し、iter43との競合を解消。
+
+### 判断
+この検証で改善が見られない場合、これ以上の機械的なプロンプト微調整は行わず、
+成果と残課題を整理してユーザーへ報告する（イテレーション上限iter45も近い）。
+残る主要なボトルネックは**ローカルモデルの空応答（ツール呼び出しXMLを本文へ
+書いてしまう）の多発**であり、プロンプト側で解決できる範囲を超えている可能性が高い。
+
+### iter44 検証結果（run_20260801_052559.json）
+
+- **md実生成数: 123件**（iter43の8件から大幅改善。全実行中2位。最高はiter38後の167件）
+- `turn_cutoffs: null`（**思考ループなし**）、`rules_pass: True`、コンテキスト超過なし
+- `dispatch_agent` の1ターンあたり発行数 `[1,1,1,1,1,1,1,1]`（iter42の並列禁止が維持）
+- `execute_python_code` 19回（委任→即保存のサイクルが安定して回った）
+- 残る問題: **空応答リマインダー3回**の末に無言終了（`final_answer` が空）。
+  また計画ステップが1個しか作られず、iter44で追加した「全件カバー」指示は
+  計画には反映されなかった（ただし実行自体は計画に依らず123件まで進んだ）。
+
+---
+
+## iter36〜44 総括（2026-08-01、ここでチューニングループを終了）
+
+### 当初の依頼と達成状況
+ユーザー報告の事象は「大量ファイル処理時に、サブエージェントへの分割件数を
+延々と再計算し続ける思考ループ」だった。**これは解消済み**。
+- 直接原因だった system_prompt.md の記述の分裂（`${subagent_max_iterations}` の
+  転用と「1回あたり20〜30件」の直書きが二重に存在、無関係な「同時3つまで」制約が
+  併存）を一本化（コミット `d3217bf`）。
+- 以降の全実行（iter40以降）で、当該の再計算ループは**一度も再発していない**。
+- iter40で「画像は1回8枚が上限」「38グループは想定内」と数値で断定して以降、
+  `turn_cutoffs`（thinking_loop）も大幅に減り、iter44では0件。
+
+### 副次的に発見・修正したコード側の実バグ（3件、いずれも回帰テスト追加済み）
+1. **`analyze_image` の重複ガードがサブエージェント間で共有されていた**
+   （`src/tools.py`）。`carry_over_to_main=false` 設定を参照しておらず、
+   サブエージェントAが読んだ画像を他のサブエージェントもメインも二度と読めない
+   一方、サブエージェントの会話履歴は共有されないため、取りこぼした画像を
+   誰も救出できず詰む状態だった。`_SUBAGENT_RUN_ID` と
+   `_duplicate_guard_session_key()` を新設し実行ごとに分離。
+   → `tests/test_tools_duplicate_guard_scope.py`（3件）。md 29→164枚に改善。
+2. **`Glob` 結果が同じ絶対パスを3〜4重に持っていた**（`src/tools.py`）。
+   `files`・`file_details[].path`・`directories[].path`・`path_memory` に同一パスが
+   重複し、297件で1回のGlobが99,465文字に達しコンテキストを枯渇させていた。
+   `_dedupe_paths_with_path_memory()` で `@N` に畳み、**実測49%削減**。
+3. **リトライ予算の相互侵食**（`src/graph.py`）。`ainvoke_ensuring_final_text()` が
+   ループ検知用と無言終了用で `attempt >= total_budget` を共有しており、序盤の
+   ループ検知2回が25分後・35枚処理後の空応答の再試行予算を丸ごと奪っていた。
+   予算を独立化。→ `tests/test_graph_retry_budget.py`（4件）。
+   あわせて config.ini の両 max_retries を 2→3 に微増。
+
+その他、eval ケース側の欠陥（`001_...yaml` の `expect` が存在しない `script` 引数を
+期待していた）も修正した。**全126テスト合格**。
+
+### md生成数の推移（297枚中）
+```
+iter38後 167件（最高。ただし最後にコンテキスト超過）
+iter39後   0件
+iter40後  35件
+iter41後   0件（dispatch_agent 10個並列）
+iter42後  37件
+iter43後   8件（空応答3回で予算切れ）
+iter44後 123件（ループなし・並列なし・超過なし）
+```
+
+### 未達の課題と、これ以上プロンプトで解決しない理由
+- **297枚の完走は未達**（最高167件、最終123件）。
+- 最大のボトルネックは**ローカルモデル（QWEN3.6-35B-A3B）の空応答**である。
+  ツール呼び出しのXML（`</parameter></function>`）を本文（reasoning_content）へ
+  書いてしまい `tool_calls` が空になる現象が、長い会話の終盤で散発的に起きる。
+  iter41で予算を独立化・増量したが、iter44でも3回発生して最終的に無言終了した。
+  これはプロンプトの文言では制御できない、モデルの出力形式の問題である。
+- また iter38 以降、プロンプトへの指示追加が**別の場面で誤読されて新たな副作用を
+  生む**段階に入っていた（iter43の「連番で漏れなく」がiter40の「ステップ数10個程度」と
+  競合し、297枚中80枚分しかカバーしない計画を生むなど）。tune-promptスキルの
+  「振動」に該当すると判断し、iter44をもって機械的な修正を停止した。
+
+### 今後の選択肢（ユーザー判断が必要）
+1. **空応答へのコード側フォールバック**: 本文中の `<tool_call>`/`<function=...>` 形式を
+   検出してツール呼び出しへ復元するパーサを `src/llm.py` に追加する。今回の
+   ボトルネックに最も直接効く可能性が高いが、モデル固有の出力形式に依存する実装に
+   なるため、採否はユーザー判断としたい。
+2. **タスクの分割運用**: 297枚を1スレッドで完走させず、ユーザー側で50枚程度に
+   分けて複数回依頼する運用にする（現状の実装でも安定して処理できる規模）。
+3. **プロンプトの整理**: iter36〜44で追加した指示が増えすぎているため、
+   一度棚卸しして重複・競合を削る（今回は時間の都合で未実施）。
+
+git へのコミットは一切行っていない（ユーザー指示）。変更ファイル:
+`system_prompt/system_prompt.md`, `src/tools.py`, `src/graph.py`, `config.ini`,
+`evals/cases/system_prompt_scale/001_...yaml`, `evals/tuning_log.md`,
+新規テスト2件、`evals/history/` 配下のスナップショット。

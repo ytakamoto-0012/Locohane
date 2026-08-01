@@ -15,17 +15,14 @@ from __future__ import annotations
 import logging
 import uuid
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from .config import Config
 from .context_trim import trim_old_tool_messages
 
 logger = logging.getLogger(__name__)
 
-_SUMMARY_HEADER = (
-    "[自動要約: コンテキスト圧縮のため、以前の会話の一部を要約しました。"
-    "この内容を踏まえて続きの作業を行ってください]\n"
-)
+_SUMMARY_HEADER = "[自動要約: コンテキスト圧縮のため、以前の会話の一部を要約しました。" "この内容を踏まえて続きの作業を行ってください]\n"
 
 
 def should_compact(usage: dict | None, message_count: int, config: Config) -> bool:
@@ -52,26 +49,85 @@ def should_compact(usage: dict | None, message_count: int, config: Config) -> bo
 
 
 def _find_cut_index(messages: list[BaseMessage], keep_recent_turns: int) -> int | None:
-    """末尾から keep_recent_turns 個目の HumanMessage のインデックスを返す。
+    """安全な切断点のうち、末尾から keep_recent_turns 個目のユーザーターン
+    の直前の切断点（スライス境界）を返す。
 
-    このインデックスより前（cut_index未満）が要約対象、以降がそのまま保持する
-    直近ターン。tool_calls を持つ AIMessage と対応する ToolMessage は常に
-    HumanMessage をまたがない（HumanMessage は直前のAIターンが完結した直後
-    にしか現れない）ため、この境界で切れば tool_calls⇔ToolMessage の対応
-    関係を壊さない。
+    旧実装は HumanMessage の個数で判定していたが、analyze_image の画像
+    フォローアップ（_with_image_followups）とループガードの nudge は
+    ツール往復の途中に HumanMessage を挿入する。LangGraph は tool_call を
+    1件ずつ tools ノードへ渡すため、ToolMessage(a) → HumanMessage(画像) →
+    ToolMessage(b) という並びが起こりうる。HumanMessage の位置で切ると
+    ToolMessage(b) だけが対応する AIMessage を失い、OpenAI 互換 API が
+    エラーを返す。
+
+    そこで以下の方式へ置き換える:
+
+    1. 先頭から走査し、各インデックス i で「発行済み tool_call id の集合」と
+       「返却済み ToolMessage id の集合」が一致している（＝未処理のツール
+       呼び出しが無い）状態になった時点の**スライス境界 i+1**を「安全な
+       切断点」として列挙する（`messages[0:境界]` が自己完結することを
+       意味する。境界を message[i] の直後、つまり i+1 にするのが重要で、
+       安全になった直後の message[i] 自身（多くの場合は直前の ToolMessage）
+       を境界にそのまま使うと、その ToolMessage だけが `messages[:境界]`
+       から漏れて対応する AIMessage.tool_calls だけが残る、という壊れ方を
+       する）。先頭（境界0、何も含まない）も自明に安全なため常に候補へ含める。
+    2. ユーザーターン境界（HumanMessage）が keep_recent_turns 個より
+       十分にあれば、それを優先して境界を選ぶ。
+    3. ユーザーターンが keep_recent_turns 個に満たない場合（1ターン内で
+       LLM呼び出しを何十回も繰り返す長時間タスク等）は、HumanMessage境界
+       だけでは圧縮の機会が一度も来ない。この場合はツール往復の境界
+       （安全な切断点そのもの）を「直近何回ぶんを残すか」の単位として使う。
+
+    これによりターン途中でも安全に切り分けられる。
 
     Args:
         messages: 現在の会話履歴全体。
-        keep_recent_turns: 丸ごと保持する直近のユーザーターン数。
+        keep_recent_turns: 丸ごと保持する直近のユーザーターン数
+            （ユーザーターンが不足する場合は、直近何回ぶんのツール往復を
+            残すかの単位として使う）。
 
     Returns:
-        カット位置のインデックス。HumanMessage の件数が keep_recent_turns
-        以下（＝圧縮しても縮まらない）なら None。
+        `messages[:戻り値]` が要約対象、それ以降が保持対象になる境界値。
+        圧縮しても縮まらない・安全な境界が無い場合は None。
     """
+    # --- 1. 安全な切断点（スライス境界）を列挙 ---
+    issued_ids: set[str] = set()
+    done_ids: set[str] = set()
+    safe_cut_points: list[int] = [0]  # 境界0（何も含まない）は常に自明に安全
+
+    for i, m in enumerate(messages):
+        # ToolMessage が返ってきた → 対応する tool_call が完了
+        if isinstance(m, ToolMessage):
+            done_ids.add(m.tool_call_id)
+        # AIMessage が tool_calls を発行 → 未完了としてマーク
+        if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
+            for tc in m.tool_calls:
+                issued_ids.add(tc.get("id", ""))
+        # 現在の位置で未処理の tool_call が無い → message[i] を含めた境界 i+1 が安全
+        if issued_ids == done_ids:
+            safe_cut_points.append(i + 1)
+
+    # --- 2. 末尾から keep_recent_turns 個目のユーザーターンの直前を選ぶ ---
     human_indices = [i for i, m in enumerate(messages) if isinstance(m, HumanMessage)]
-    if len(human_indices) <= keep_recent_turns:
+    total_users = len(human_indices)
+    target_idx = total_users - keep_recent_turns  # 切るべきユーザーのインデックス
+    if target_idx >= 0:
+        target_human_index = human_indices[target_idx]
+        cut_index = None
+        for boundary in safe_cut_points:
+            if boundary > target_human_index:
+                break
+            cut_index = boundary
+        return cut_index if cut_index else None
+
+    # --- 3. ユーザーターンが不足する場合は、安全な切断点の個数を単位にする ---
+    # safe_cut_points には常に境界0（何も進んでいない状態）が含まれるため、
+    # 実質的に使える切断点数は1個少ない。
+    usable_points = len(safe_cut_points) - 1
+    if usable_points <= keep_recent_turns:
         return None
-    return human_indices[-keep_recent_turns]
+    cut_index = safe_cut_points[-(keep_recent_turns + 1)]
+    return cut_index if cut_index else None
 
 
 def _messages_to_text(messages: list[BaseMessage]) -> str:
@@ -141,23 +197,17 @@ async def maybe_compact(
     try:
         prompt = config.context_compaction_prompt_path.read_text(encoding="utf-8")
     except OSError:
-        logger.exception(
-            "要約プロンプトの読み込みに失敗しました: %s", config.context_compaction_prompt_path
-        )
+        logger.exception("要約プロンプトの読み込みに失敗しました: %s", config.context_compaction_prompt_path)
         return None
 
     try:
-        response = await model.ainvoke(
-            [HumanMessage(content=prompt + "\n\n---\n\n# 要約対象の会話履歴\n\n" + text)]
-        )
+        response = await model.ainvoke([HumanMessage(content=prompt + "\n\n---\n\n# 要約対象の会話履歴\n\n" + text)])
     except Exception:
         # 要約自体の失敗で本編の会話を壊さないよう、失敗時は元の履歴のまま続行する。
         logger.exception("会話履歴の自動要約に失敗しました。今回は圧縮をスキップします")
         return None
 
-    summary_text = (
-        response.content if isinstance(response.content, str) else str(response.content)
-    )
+    summary_text = response.content if isinstance(response.content, str) else str(response.content)
     if not summary_text.strip():
         logger.warning("会話履歴の自動要約結果が空だったため、今回は圧縮をスキップします")
         return None

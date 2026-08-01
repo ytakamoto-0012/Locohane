@@ -968,7 +968,14 @@ def _build_human_message(user_text: str, saved_paths: list[str]) -> HumanMessage
 
     content: list[dict] = [{"type": "text", "text": text}]
     for p in image_paths:
-        content.append({"type": "image_url", "image_url": {"url": to_data_url(p)}})
+        # analyze_image と同じく config.ini [images] の設定に従って縮小する
+        # （高解像度の写真をそのまま積むとコンテキストを大きく圧迫するため）。
+        url = to_data_url(
+            p,
+            max_long_side=_config.image_max_long_side_pixels,
+            jpeg_quality=_config.image_jpeg_quality,
+        )
+        content.append({"type": "image_url", "image_url": {"url": url}})
     return HumanMessage(content=content)
 
 

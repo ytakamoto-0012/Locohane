@@ -2510,16 +2510,7 @@ def analyze_image(relative_path: str) -> tuple[str, dict | None]:
             None,
         )
     logger.info("analyze_image: %s", relative_path)
-    # 4032x3024 のような高解像度写真をそのまま渡すと数枚でトークン上限に達するため、
-    # config.ini [images] の設定に従って縮小してから渡す（既定は縮小なし）。
-    cfg = _LLM_CONFIG
-    return f"画像を読み込みました: {relative_path}", {
-        "image_url": to_data_url(
-            path,
-            max_long_side=cfg.image_max_long_side_pixels if cfg else 0,
-            jpeg_quality=cfg.image_jpeg_quality if cfg else 85,
-        )
-    }
+    return f"画像を読み込みました: {relative_path}", {"image_url": to_data_url(path)}
 
 
 # init_tools() の _resolve_agent_types() がこのリストを実行時に参照するだけなので、

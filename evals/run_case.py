@@ -122,6 +122,48 @@ def _sum_usage(transcript: list[dict]) -> dict:
     return total
 
 
+# 低パラメータモデルで安定して処理を継続できる、1リクエストあたりのトークン数の上限。
+# 累計ではなくリクエスト単位で見る必要がある（累計が何百万になっても、1回ずつが
+# 小さければ処理は続けられる。逆に累計が小さくても1回がこの値を超えると詰まる）。
+_PER_CALL_TOKEN_CEILING = 64000
+
+
+def _max_usage_per_call(transcript: list[dict]) -> dict:
+    """メインエージェントのLLM呼び出し1回あたりの最大トークン数を求める。
+
+    _sum_usage() が返す累計だけでは「1リクエストあたりが上限を超えていないか」を
+    判定できない。実際に大量ファイル処理が停止した事例では、累計277万トークンの
+    うち34回中23回が1回あたり64000を超えており、最後はコンテキスト上限に張り付いて
+    いた。この退行を結果JSONだけで検知できるようにするための集計。
+
+    Args:
+        transcript: _serialize_messages() が返した会話全体。
+
+    Returns:
+        {"input_tokens", "output_tokens", "total_tokens"} それぞれの最大値と、
+        "calls"（usage を取得できた呼び出し回数）、
+        "calls_over_ceiling"（total_tokens が _PER_CALL_TOKEN_CEILING 以上だった回数）。
+    """
+    result = dict.fromkeys(_USAGE_TOTAL_KEYS, 0)
+    calls = 0
+    calls_over_ceiling = 0
+    for entry in transcript:
+        usage = entry.get("usage_metadata")
+        if not isinstance(usage, dict):
+            continue
+        calls += 1
+        for key in _USAGE_TOTAL_KEYS:
+            result[key] = max(result[key], usage.get(key, 0) or 0)
+        if (usage.get("total_tokens", 0) or 0) >= _PER_CALL_TOKEN_CEILING:
+            calls_over_ceiling += 1
+    return {
+        **result,
+        "calls": calls,
+        "calls_over_ceiling": calls_over_ceiling,
+        "ceiling": _PER_CALL_TOKEN_CEILING,
+    }
+
+
 def _evaluate_expect(expect: Expect, transcript: list[dict], final_answer: str) -> dict:
     """Expect のルールを transcript / final_answer に照らして判定する。
 
@@ -417,6 +459,7 @@ async def _run(case: EvalCase) -> dict:
             messages = result["messages"] if result else []
             transcript = _serialize_messages(messages)
             token_usage_total = _sum_usage(transcript)
+            token_usage_max_per_call = _max_usage_per_call(transcript)
 
             final_answer = ""
             for entry in reversed(transcript):
@@ -439,6 +482,7 @@ async def _run(case: EvalCase) -> dict:
                 "judge": case.judge,
                 "token_usage_by_turn": token_usage_by_turn,
                 "token_usage_total": token_usage_total,
+                "token_usage_max_per_call": token_usage_max_per_call,
                 "turn_timings": turn_timings,
             }
             if turn_cutoffs:

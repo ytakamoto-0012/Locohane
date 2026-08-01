@@ -147,20 +147,6 @@ retention_days = 7
 # 自動削除チェックの実行間隔（時間）。起動時にも1回チェックを実行する。
 cleanup_interval_hours = 1
 
-[images]
-# 画像をLLMへ渡す前に縮小する際の、長辺のピクセル数の上限
-# （analyze_image ツールと、ユーザーがアップロードした画像の両方に効く）。
-# 「DPI」ではなく長辺ピクセル数で指定しているのは、スマホ撮影のJPEGはDPI
-# メタデータを持たない/当てにならない一方、Visionモデルが消費するトークン量は
-# 画素数でほぼ決まるため。値を下げるほど1回のサブエージェント委任で扱える
-# 枚数が増えるが、写真に写り込んだ細かい文字は読み取りにくくなる。
-# 0 を指定すると縮小しない（元の解像度をそのまま送る）。
-# 画像の長辺が既にこの値以下の場合は再エンコードせず元データをそのまま使う。
-max_long_side_pixels = 2048
-# 縮小後に再エンコードするJPEGの品質(1-95)。文字が写り込んだ画像を読み取らせる
-# 用途では下げすぎると判読できなくなるので85以上を推奨。
-jpeg_quality = 85
-
 [default_workdir]
 # default_workdir（[paths]セクション）直下に溜まり続けるファイルの保持日数。
 # この日数を過ぎた（更新日時が古い）ファイルは自動削除する。0 以下を指定すると
@@ -275,37 +261,10 @@ recursion_limit = 500
 # 0以下: ガードを無効化し、並列呼び出しをそのまま許可する。
 max_parallel = 1
 
-# --- メインエージェントのトークンガード ---
-# メインエージェントの直近1回のLLM応答の total_tokens が閾値に達したら、次の
-# モデル呼び出しの入力へ handoff_prompt_path の文言を差し込み、「ユーザーへの
-# 状況報告」と「新しいチャットで再開するための引継ぎプロンプト」を出力させて
-# 安全に終える（src/main_token_guard.py 参照）。サブエージェント側の
-# [subagent].token_guard_* のメインエージェント版。LLM自身は自分のトークン
-# 使用量を認識できないため、コード側で判定する。track_token_usage=false の
-# 場合は usage_metadata が取得できず実質発火しない。
-token_guard_enabled = true
-# 低パラメータモデルでは1リクエストあたりのトークン数が一定を超えると処理を
-# 続けられなくなる。その実効上限（例: 64000）から、ツール結果1往復ぶんの
-# 増加量の余裕を引いた値にすること。
-# （実測: この仕組みが無い状態では1リクエストあたり24,833→128,000まで単調に
-# 増加し、コンテキスト上限に張り付いて処理が停止した）
-token_guard_soft_threshold = 49152
-# 上記で差し込む文言（新しいチャットへの引継ぎ手順）のMarkdownファイル。
-handoff_prompt_path = ./system_prompt/handoff_prompt.md
-
 [subagent]
 # dispatch_agent ツールが内部で回す ReAct ループの最大反復回数（agent→tools 遷移の回数）。
 # 超過した場合は打ち切り、その時点までに集められたツール結果を要約して返す
 # （変更経緯は evals/tuning_log.md 参照）。
-#
-# この値は system_prompt.md から ${subagent_max_iterations} として参照され、
-# 「1回の dispatch_agent に渡すファイル件数の目安（バッチサイズ）」としても使う。
-# 本来の意味（反復回数）とは別用途だが、プロンプト側に根拠の無い数値を直書きする
-# のを避けるため、出典をこの1箇所に集約している。
-# 補足: サブエージェントは複数のツール呼び出しを同一ターンで並列発行するため、
-# 実測では反復回数は2回程度で頭打ちになり、この値が反復側の制約になることは
-# ほぼ無い。実質的な上限は下の token_guard_* 側である。したがってバッチサイズを
-# 増減したい場合、この値を変えるだけでは足りず token_guard_* も併せて見ること。
 max_iterations = 30
 
 # --- 並列数ガード ---
@@ -436,18 +395,8 @@ empty_response_max_retries = 3
 enabled = true
 # 全文保持する直近 ToolMessage の件数。これより古い ToolMessage のみ切り詰め対象。
 keep_recent_tool_messages = 5
-# 切り詰め対象 ToolMessage / AIMessage の content を、先頭何文字まで残すか
-# （超過分はマーカー文言に置換）。
+# 切り詰め対象 ToolMessage の content を、先頭何文字まで残すか（超過分はマーカー文言に置換）。
 truncated_max_chars = 2000
-# ToolMessage だけでなく AIMessage（モデル自身の思考本文と tool_calls の引数）も
-# 切り詰めるか。execute_python_code の code 引数へファイル本文を書き写すような
-# 使い方をすると、ToolMessage 側だけを絞っても1リクエストあたりの入力が膨らみ
-# 続けてコンテキスト上限に張り付くため、既定で有効
-# （変更経緯は evals/tuning_log.md 参照）。tool_calls の id/name と件数は
-# 変更しないため、ToolMessage との対応関係は壊れない。
-trim_ai_messages = true
-# 全文保持する直近 AIMessage の件数。これより古い AIMessage のみ切り詰め対象。
-keep_recent_ai_messages = 3
 
 [context_compaction]
 # ClaudeCodeのcompact相当。リクエスト（LLM呼び出し）1回あたりのトークン数が
@@ -458,13 +407,13 @@ keep_recent_ai_messages = 3
 # トークン量への恒久対策になる。
 # この機能はメインエージェントのみに適用され、サブエージェントは適用されない。
 enabled = true
-# 直近1回のLLM呼び出しの total_tokens がこの値を超えたら圧縮する。
-# 低パラメータモデルでは1リクエストあたり64000未満に収める必要があるため、
-# ツール結果1往復分の余裕を見てそれより低い値にすること。
-token_threshold = 49152
-# 圧縮時に丸ごと保持する直近のユーザーターン数。
-# 構造ベース（発行済み tool_call id と返却済み ToolMessage id の一致）で
-# 安全な切断点を探し、その位置で古い側を要約対象として切り離す。
+# 直近1回のLLM呼び出しの total_tokens がこの値を超えたら圧縮を検討する。
+# 目安として、llama-server起動時のコンテキストサイズ（-c）の6〜7割程度に
+# 設定すること。track_token_usage=false の場合は判定材料が無いため実質発火しない。
+token_threshold = 81920
+# 圧縮時に丸ごと保持する直近のユーザーターン数（HumanMessage単位）。
+# tool_calls とそれに対応する ToolMessage の対応関係を壊さないよう、
+# 直近N個目のHumanMessage直前でのみ古い側を要約対象として切り離す。
 keep_recent_turns = 2
 # 会話全体のメッセージ数がこの件数未満なら、閾値を超えていても圧縮しない
 # （短い会話で無駄に要約を走らせない安全弁）。

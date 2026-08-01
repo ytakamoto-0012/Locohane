@@ -154,6 +154,10 @@ class Config:
             過ぎた（更新日時が古い）ファイルは自動削除する。0以下で無効化。
         upload_cleanup_interval_hours: アップロードファイル自動削除の
             チェック間隔（時間）。起動時にも1回チェックする。
+        image_max_long_side_pixels: 画像をLLMへ渡す前に縮小する際の、長辺の
+            ピクセル数の上限。0以下、または画像の長辺が既にこの値以下の
+            場合は縮小しない（src/images.py の to_data_url 参照）。
+        image_jpeg_quality: 上記の縮小時に再エンコードするJPEG品質（1-95）。
         default_workdir_retention_days: default_workdir 直下に溜まり続ける
             ファイルの保持日数。この日数を過ぎた（更新日時が古い）ファイルは
             自動削除する。0以下で無効化。ユーザーが ChatSettings で指定した
@@ -207,6 +211,14 @@ class Config:
             と同じ理由づけのメインエージェント版）。1以上は
             asyncio.Semaphore(N)でその値までにガードし（既定1＝完全直列化）、
             0以下はガードを無効化して並列呼び出しをそのまま許可する。
+        graph_token_guard_enabled: メインエージェントの1リクエストあたりの
+            トークン量を監視し、上限が近づいたら引継ぎプロンプトの生成を
+            促す機能の有効/無効（src.main_token_guard 参照）。
+        graph_token_guard_soft_threshold: 直近1回のLLM応答の total_tokens が
+            この値以上になったら、次のモデル呼び出しの入力へ
+            graph_handoff_prompt_path の文言を差し込む。
+        graph_handoff_prompt_path: 上記で差し込む文言（新しいチャットへの
+            引継ぎ手順）のMarkdownファイルの絶対パス。
         subagent_max_iterations: dispatch_agent が内部で回す ReAct
             ループの最大反復回数（agent→tools 遷移の回数）。
         subagent_max_parallel: dispatch_agent ツールの実LLM呼び出しを同時に
@@ -279,8 +291,13 @@ class Config:
             LLMへの入力を抑える機能の有効/無効（src.context_trim 参照）。
         context_trim_keep_recent_tool_messages: 全文保持する直近 ToolMessage
             の件数。これより古い ToolMessage のみ切り詰め対象にする。
-        context_trim_truncated_max_chars: 切り詰め対象 ToolMessage の
-            content を、先頭何文字まで残すか（超過分はマーカー文言に置換）。
+        context_trim_truncated_max_chars: 切り詰め対象 ToolMessage /
+            AIMessage の content を、先頭何文字まで残すか
+            （超過分はマーカー文言に置換）。
+        context_trim_ai_messages: ToolMessage だけでなく AIMessage
+            （モデル自身の思考本文と tool_calls の引数）も切り詰めるか。
+        context_trim_keep_recent_ai_messages: 全文保持する直近 AIMessage
+            の件数。これより古い AIMessage のみ切り詰め対象にする。
         context_compaction_enabled: リクエスト（LLM呼び出し）1回あたりの
             トークン数が閾値を超えたら会話履歴を要約して圧縮する機能の
             有効/無効（src.context_compaction 参照）。context_trim と異なり
@@ -350,6 +367,10 @@ class Config:
     upload_retention_days: int
     upload_cleanup_interval_hours: float
 
+    # --- 画像をLLMへ渡す前の縮小 ---
+    image_max_long_side_pixels: int
+    image_jpeg_quality: int
+
     # --- default_workdir 直下のファイルの自動削除 ---
     default_workdir_retention_days: int
     default_workdir_cleanup_interval_hours: float
@@ -387,6 +408,9 @@ class Config:
     graph_impl: str
     graph_recursion_limit: int
     graph_tool_max_parallel: int
+    graph_token_guard_enabled: bool
+    graph_token_guard_soft_threshold: int
+    graph_handoff_prompt_path: Path
 
     # --- サブエージェント（dispatch_agent）設定 ---
     subagent_max_iterations: int
@@ -419,6 +443,8 @@ class Config:
     context_trim_enabled: bool
     context_trim_keep_recent_tool_messages: int
     context_trim_truncated_max_chars: int
+    context_trim_ai_messages: bool
+    context_trim_keep_recent_ai_messages: int
 
     # --- 会話履歴の自動要約・圧縮（src/context_compaction.py） ---
     context_compaction_enabled: bool
@@ -684,6 +710,7 @@ def load_config(config_path: Path | None = None) -> Config:
     llm = parser["llm"] if parser.has_section("llm") else {}
     paths = parser["paths"] if parser.has_section("paths") else {}
     uploads = parser["uploads"] if parser.has_section("uploads") else {}
+    images_section = parser["images"] if parser.has_section("images") else {}
     default_workdir_section = parser["default_workdir"] if parser.has_section("default_workdir") else {}
     path_memory = parser["path_memory"] if parser.has_section("path_memory") else {}
     log_section = parser["log"] if parser.has_section("log") else {}
@@ -763,6 +790,10 @@ def load_config(config_path: Path | None = None) -> Config:
         help_path=_resolve(PROJECT_ROOT, os.getenv("HELP_PATH", paths.get("help_path", "./system_prompt/help.md"))),
         upload_retention_days=int(os.getenv("UPLOAD_RETENTION_DAYS", uploads.get("retention_days", 7))),
         upload_cleanup_interval_hours=float(os.getenv("UPLOAD_CLEANUP_INTERVAL_HOURS", uploads.get("cleanup_interval_hours", 1))),
+        image_max_long_side_pixels=int(
+            os.getenv("IMAGE_MAX_LONG_SIDE_PIXELS", images_section.get("max_long_side_pixels", 0))
+        ),
+        image_jpeg_quality=int(os.getenv("IMAGE_JPEG_QUALITY", images_section.get("jpeg_quality", 85))),
         default_workdir_retention_days=int(os.getenv("DEFAULT_WORKDIR_RETENTION_DAYS", default_workdir_section.get("retention_days", 7))),
         default_workdir_cleanup_interval_hours=float(os.getenv("DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS", default_workdir_section.get("cleanup_interval_hours", 1))),
         path_memory_dir=_resolve(PROJECT_ROOT, os.getenv("PATH_MEMORY_DIR", path_memory.get("dir", "./data/path_memory"))),
@@ -817,6 +848,22 @@ def load_config(config_path: Path | None = None) -> Config:
         graph_recursion_limit=int(os.getenv("GRAPH_RECURSION_LIMIT", graph.get("recursion_limit", 50))),
         graph_tool_max_parallel=int(
             os.getenv("GRAPH_TOOL_MAX_PARALLEL", graph.get("max_parallel", 1))
+        ),
+        graph_token_guard_enabled=_as_bool(
+            os.getenv("GRAPH_TOKEN_GUARD_ENABLED", graph.get("token_guard_enabled", True))
+        ),
+        graph_token_guard_soft_threshold=int(
+            os.getenv(
+                "GRAPH_TOKEN_GUARD_SOFT_THRESHOLD",
+                graph.get("token_guard_soft_threshold", 49152),
+            )
+        ),
+        graph_handoff_prompt_path=_resolve(
+            PROJECT_ROOT,
+            os.getenv(
+                "GRAPH_HANDOFF_PROMPT_PATH",
+                graph.get("handoff_prompt_path", "./system_prompt/handoff_prompt.md"),
+            ),
         ),
         subagent_max_iterations=int(os.getenv("SUBAGENT_MAX_ITERATIONS", subagent.get("max_iterations", 6))),
         subagent_max_parallel=int(
@@ -923,6 +970,15 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "CONTEXT_TRIM_TRUNCATED_MAX_CHARS",
                 context_trim.get("truncated_max_chars", 2000),
+            )
+        ),
+        context_trim_ai_messages=_as_bool(
+            os.getenv("CONTEXT_TRIM_AI_MESSAGES", context_trim.get("trim_ai_messages", True))
+        ),
+        context_trim_keep_recent_ai_messages=int(
+            os.getenv(
+                "CONTEXT_TRIM_KEEP_RECENT_AI_MESSAGES",
+                context_trim.get("keep_recent_ai_messages", 3),
             )
         ),
         context_compaction_enabled=_as_bool(

@@ -14,7 +14,7 @@ turns:
 expect:
   tool_called_any: [run_script]
   tool_call_args_contains:
-    run_script: {script: "scripts/edit_excel.py"}
+    run_script: {skill_name: "excel-tools", script_filename: "edit_excel.py"}
   response_not_contains: ["申し訳ありません", "できません", "機能がありません"]
 auto_approve: true
 judge: |
