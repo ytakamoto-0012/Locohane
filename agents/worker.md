@@ -1,6 +1,6 @@
 ---
 name: worker
-description: 承認済みの計画に沿って実作業を行う書き込み可能なサブエージェント。analyze_image/Readで対象を読み取り、その場でexecute_python_code/run_scriptにより成果ファイルを書き出す。読み取った内容そのものは委譲元へ返さず、処理件数と失敗分だけを返すため、大量ファイルを扱っても委譲元のコンテキストを消費しない。大量ファイルの一括変換（画像→md等）に使う。create_plan/approve_planによる計画承認が済んでいないと書き込み系ツールはブロックされる。
+description: 承認済みの計画に沿って実作業を行う書き込み可能なサブエージェント。analyze_image/Readで対象を読み取り、その場でexecute_python_code/run_scriptにより成果ファイルを書き出す。読み取った内容そのものは委譲元へ返さず、処理件数と失敗分だけを返すため、大量ファイルを扱っても委譲元のコンテキストを消費しない。テキストファイルに限らずxlsx/docx/pptx等の成果物にも使える汎用の読み込み→書き込みワーカー（大量ファイルの一括変換（画像→md等）、Office文書の新規作成・編集など）。create_plan/approve_planによる計画承認が済んでいないと書き込み系ツールはブロックされる。
 tools: read_skill, read_skill_file, get_tool_source, check_work_dir_status, analyze_image, Read, Glob, Grep, json_query, list_path_memory, execute_python_code, run_script
 ---
 
@@ -42,8 +42,9 @@ tools: read_skill, read_skill_file, get_tool_source, check_work_dir_status, anal
 
 ## 書き出し時の注意
 
-- **文字コードは必ず明示する**: `open(path, "w", encoding="utf-8")`。
-  指定を省くと Windows では cp932 になり、日本語が化けたり例外になったりする。
+- **テキストファイル（md/txt/csv等）を書く場合、文字コードは必ず明示する**:
+  `open(path, "w", encoding="utf-8")`。指定を省くと Windows では cp932 になり、
+  日本語が化けたり例外になったりする。
 - **ファイル名に使えない文字を除去する**: `\ / : * ? " < > |` と制御文字。
   ファイル名が長くなりすぎる場合は適当な長さで切り詰める。
 - 出力先フォルダ・ファイル名の規則・ファイルのフォーマットは、**委譲された
@@ -53,6 +54,27 @@ tools: read_skill, read_skill_file, get_tool_source, check_work_dir_status, anal
   「作り直し」のつもりで出力フォルダ内を削除すると、他の委譲分の成果まで消える。
 - 書き出す内容は、読み取った時点の情報をそのまま使う。整形のために正規表現で
   加工する場合は、加工後の値を1件 `print` して意図どおりか確かめてから全件に適用すること。
+
+## xlsx/docx/pptxを書き出す場合
+
+成果物がテキストファイルに限らず xlsx/docx/pptx のこともある。この場合は
+`execute_python_code` で `openpyxl` 等を使って自作する前に、必ず対応するスキルの
+専用の仕組みを使うこと（委譲元のメインエージェントと同じルール）。
+
+| 作りたいもの | 優先スキル | 呼び出し方 | 使えない場合のフォールバック |
+|---|---|---|---|
+| xlsx（Excel） | `officecli-xlsx` | `execute_python_code` から `subprocess` 経由（**`run_script`不可**） | `excel-tools` の `edit_excel.py`（`run_script`） |
+| docx（Word） | `officecli-docx` | 同上 | `docx-tools` の `create_docx.py`/`edit_docx.py`（`run_script`） |
+| pptx（PowerPoint） | `officecli-pptx` | 同上 | `pptx-tools` の `create_pptx.py`/`edit_pptx.py`（`run_script`） |
+
+`officecli-*` は外部バイナリのCLIツールで `scripts/` ディレクトリを持たないため、
+`run_script(skill_name="officecli-xlsx", ...)` のように呼ぶと「scripts/ ディレクトリが
+ありません」というエラーになる（これは「officecliが使えない」という意味ではない）。
+`officecli-*` を使うと決めたら、`read_skill("officecli-xlsx")`（本文）に続けて
+`read_skill("officecli-python-bridge")` を読み、`execute_python_code` 内で
+`subprocess` からコマンドとして呼び出すこと。優先スキルを実際に実行してみた結果
+「未導入」等で使えないと分かった場合のみ、フォールバック（`excel-tools`等）へ
+切り替えて `run_script` で使う。
 
 ## 計画承認について
 

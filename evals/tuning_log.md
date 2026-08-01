@@ -2952,3 +2952,122 @@ worker導入に合わせて更新した上で全件パス。
 
 引き続き 002ケースを再実行し、10分おきにログを監視して問題があれば追加でチューニング
 する自律ループを継続する（cronジョブで実施）。
+
+## 2026-08-01 追記: 001（xlsx生成）でofficecliが呼ばれず自作openpyxlに流れる問題
+
+worker導入・トークンガード導入後、002ケースは100枚版・297枚版とも完走を確認した
+（前セクション参照）。続けて001ケースを再実行したところ、`token_usage_max_per_call`
+は全31回中0回が64,000超（最大47,614）で改善したが、別の問題が発覚した。
+
+**症状**: `read_skill("officecli-xlsx")` を優先順位通り最初に読んだにもかかわらず、
+実際の書き込みは `execute_python_code` 内で `openpyxl` を使った自作コードで行われ、
+`officecli` コマンドは一度も呼ばれなかった（`excel-tools` の `edit_excel.py` も未使用）。
+system_prompt.md の「スキルの専用スクリプトを最優先する」ルール違反。
+
+**原因分析**:
+- Locohaneのコード実行手段は `execute_python_code`／`run_script` の**Pythonのみ**で、
+  bash/zsh/PowerShell等のシェルを直接実行するツールが存在しない。
+- `officecli-xlsx`／`officecli-docx`／`officecli-pptx` のSKILL.md本文は
+  bash/zsh前提の記法（`cat <<'EOF' | officecli batch "$FILE" ... EOF` のようなheredoc、
+  `$FILE`変数展開、`for`ループ、`grep`/`wc`/`jq`パイプ）で埋め尽くされており、
+  そのままでは `execute_python_code` で実行できない。モデルは「officecliの使い方は
+  わかったが、シェルなしでどう呼べばいいかわからない」状態になり、使い慣れたopenpyxlの
+  自作コードへ逃げたと推測される。
+- 技術的な障壁は無い。`execute_python_code` は生成コードに一切の制限をかけておらず
+  `subprocess` は自由に使え、`_subprocess_env()` が `config.ini [paths] bin_path` を
+  PATHへ既に注入しているため `subprocess.run(["officecli", ...])` は素のコマンド名で
+  解決できる。officecliの `batch` コマンドも `--commands '<json>'` / `--input <file>` /
+  stdinの3通りの入力手段を持ち、heredoc無しで呼べる（README_ja.md・公式SKILL.md確認済み）。
+- 副次的に判明した事実: `.officecli/skills/officecli/SKILL.md`（officecliの共通ルール
+  本体）が、Windows上でシンボリックリンクがテキスト化けし14バイトの残骸になっていた。
+  `.officecli/` は公式リポジトリの `skills/` ディレクトリのみをコピーしたものだが、
+  公式リポジトリでは `skills/officecli/SKILL.md` はリポジトリルート直下の `SKILL.md`
+  （約400行、共通ルール本体）へのシンボリックリンクであり、`skills/` だけをコピーすると
+  欠落する。これはofficecli配布物側の欠落であり、公式リポジトリの `SKILL.md` を取得して
+  実体で置き換えて復旧した（officecli自体の内容は改変していない。復旧手順は
+  `.officecli/HOW_TO_SETUP.md` に記載）。
+
+**対応**:
+1. `.officecli/skills/officecli/SKILL.md` を公式リポジトリのルート `SKILL.md` で復旧。
+   再発防止のため `.officecli/HOW_TO_SETUP.md` を新規作成（セットアップ手順・罠の説明）。
+2. 新規スキル `.locohane/skills/officecli-python-bridge/SKILL.md` を追加。officecliの
+   bash例をPythonの `subprocess` 呼び出しへ変換する対応表と、batchをheredoc無しで
+   呼ぶコード例（`--commands`/`--input`）を掲載。
+3. system_prompt.md のofficecli優先ルール節に「`officecli-*` を使うと決めたら、コードを
+   書く前に `read_skill("officecli-python-bridge")` も読むこと」という誘導を2〜3行追記。
+
+**呼び出し方式の検討**: [iOfficeAI/OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) 公式リポジトリを
+調査し、単発コマンドを `subprocess` から都度呼ぶ方式は公式にも「今も標準として文書化
+されている」ことを確認した。`pip install officecli-sdk` という常駐（resident）モード用の
+Python SDKも存在するが、同一ファイルを開いたまま連続編集する場合の低遅延最適化に過ぎず、
+新規pip依存と常駐プロセスの起動・終了管理が追加で必要になるため、今回は不採用とし、
+新規依存なしの `subprocess.run(["officecli", ...])` 直接呼び出し方式を採用した。
+
+橋渡しスキルは system_prompt本文には埋め込まず独立スキルとした。理由: 変換対応表は
+分量があり、全リクエストに乗る system_prompt本文へ直接書くと「1リクエストあたりの
+トークンを抑える」という本セッション全体の方針と矛盾するため（Agent Skillsの
+progressive disclosureに従い、必要な時だけ `read_skill` で読む設計とした）。
+
+対応後、001ケースを再実行して検証する（次のログ追記で結果を記載）。
+
+### 追記: officecli-python-bridge導入後の再検証で新たに判明した問題（resident mode）
+
+`officecli-python-bridge`導入後の001再実行で、モデルは正しく
+`read_skill("officecli-python-bridge")` → `read_skill("officecli-xlsx")` の順で読み、
+`execute_python_code` 内で `subprocess` 経由の officecli 呼び出しに切り替わった
+（`run_script`誤用も解消）。ここまでは意図通り改善。
+
+しかし新たな問題が発生: モデルが officecli-xlsx のSKILL.md本文にある
+「Performance: Resident Mode」を自発的に採用し、`cli("open", file)` で常駐モードに
+入ったが、**`close`を一度も呼ばなかった**。結果、シート名などの構造変更はディスクへ
+反映されたが、`batch`で書き込んだセルデータは反映されず、`dispatch_agent(verifier)`が
+「シートは存在するが中身が空（total_rows=0）」を正しく検出した。モデルはこれを
+「officecliのbatch処理が壊れている」と誤解し、ファイルを削除して作り直す動作に入った
+（同じ`open`だけ・`close`忘れのパターンを繰り返すおそれがあった）。
+
+`officecli-python-bridge`は単発コマンド方式の変換例しか書いておらず、
+`open`/`close`のresidentモードについて何も注意していなかったことが原因。
+モデルがofficecli-xlsx本文から独自にresidentモードを見つけて使ってしまった。
+
+**対応**: `officecli-python-bridge`に以下を追記。
+- 基本方針として `open`/`close` は使わず単発コマンド方式を使うこと。
+- `open`を使う場合は必ず`close`を`finally`で保証すること（`close`を呼ばないと
+  編集内容がディスクに反映されない場合がある、という実際に確認された事象を明記）。
+
+なお、副次的にverifierへの委譲でも問題が見つかった: モデルは
+`execute_python_code`が返した`path_memory`参照（`@63`）を使わず、
+生成先パスを推測でハードコードして`dispatch_agent(verifier)`に渡し、
+一度「ファイルが見つからない」という誤検証を招いた（`Glob`で実際のパスを
+再確認し自己回復）。これは`execute_python_code`の仕様
+（相対パスは`_tmp_<thread_id>`サブディレクトリに書き出される）に起因する
+既存の設計であり、今回のofficecli対応固有の問題ではないが、officecliの
+`create`が bare filename（相対パス）を取る書き方のため顕在化しやすい。
+今回は追加対応せず、次回以降の傾向を見て要否を判断する。
+
+修正後、再度001ケースを実行して検証する。
+
+### 追記: officecli-python-bridgeを「よくある間違いチェックリスト」形式に再構成
+
+001の複数回の再検証を通じて、officecliの使い方に関する失敗が都度後追いで見つかる
+状態が続いていた（run_script誤用→open/close忘れ→今回のファイルパス不整合、と
+1回ごとに新しい落とし穴が出てくる）。個別に追記し続けるのではなく、判明した分を
+まとめて棚卸しし、`officecli-python-bridge`冒頭に「よくある間違い（チェックリスト）」
+として体系化した（v1.0→v2.0）。
+
+今回追加で判明した、これまでで最も影響の大きい落とし穴:
+**ファイルパスの不整合**。`execute_python_code`の実行ディレクトリは
+`_tmp_<セッションID>`のサンドボックス配下であり、相対パス（`"annual_schedule.xlsx"`等）
+で`officecli create`すると、そのサンドボックス内に作られる。別の`execute_python_code`
+呼び出しで今度は作業ディレクトリ直下の絶対パスを使って同じファイルのつもりで操作すると、
+officecliから見ると別ファイルになる。この結果「シートが見つからない」「queryが空を返す」
+「ファイルがロックされている」という一見バラバラな症状が同時に現れ、モデルは
+「officecliのbatch処理・addコマンドが壊れている」と誤解し、openpyxlへの切り替えや
+ファイル削除・作り直しを検討し始めた（実際には毎回同じ絶対パス変数を使い続ければ
+起きない問題だった）。verifierへの委譲時に誤ったパスを推測で渡していた問題（run5で発見）
+も同じ根っこの症状の一つとして整理した。
+
+チェックリストは5項目: (1) run_scriptでは呼べない (2) ファイルパスは最初から最後まで
+同じ絶対パス変数を使う (3) open/closeはペアで (4) batch --commandsのコマンド長上限
+(5) 検証・報告には実際に使った絶対パス/path_memoryをそのまま使い推測しない。
+
+次回以降の実行で、これらの落とし穴が実際に回避されるかを確認する。

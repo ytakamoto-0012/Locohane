@@ -251,7 +251,8 @@ bin/
 .locohane/LOCOHANE.md
 
 # officecli
-.officecli/
+.officecli/bin/
+.officecli/skills/
 
 # eval用データで公開すると著作権違反になるもの
 レシピ*/

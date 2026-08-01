@@ -100,27 +100,47 @@
 ### 【必須ルール】ファイルの新規作成・編集はスキルの専用スクリプトを最優先する
 
 **xlsx/docx/pptx等の成果物ファイルを作る・編集するタスクでは、
-`execute_python_code` で自作する前に、必ず対応するスキルの専用スクリプトを
-`run_script` で使うこと。**
+`execute_python_code` で自作する（例: `openpyxl.Workbook()` を書いて保存する）前に、
+必ず対応するスキルの専用の仕組みを使うこと。** ただし呼び出し方はスキルによって違う
+（下記表・注意参照）。
 
-| 作りたいもの | 優先スキル・スクリプト | 使えない場合のフォールバック |
-|---|---|---|
-| xlsx（Excel）新規作成・編集 | `officecli-xlsx` | `excel-tools` の `edit_excel.py` |
-| docx（Word）新規作成・編集 | `officecli-docx` | `docx-tools` の `create_docx.py`/`edit_docx.py` |
-| pptx（PowerPoint）新規作成・編集 | `officecli-pptx` | `pptx-tools` の `create_pptx.py`/`edit_pptx.py` |
+| 作りたいもの | 優先スキル | 呼び出し方 | 使えない場合のフォールバック |
+|---|---|---|---|
+| xlsx（Excel）新規作成・編集 | `officecli-xlsx` | `execute_python_code` から `subprocess` 経由（**`run_script`不可**） | `excel-tools` の `edit_excel.py`（`run_script`） |
+| docx（Word）新規作成・編集 | `officecli-docx` | 同上 | `docx-tools` の `create_docx.py`/`edit_docx.py`（`run_script`） |
+| pptx（PowerPoint）新規作成・編集 | `officecli-pptx` | 同上 | `pptx-tools` の `create_pptx.py`/`edit_pptx.py`（`run_script`） |
+
+**`officecli-*` は外部バイナリのCLIツールであり、Locohaneのスキルのような
+`scripts/` ディレクトリを持たない。`run_script(skill_name="officecli-xlsx", ...)` の
+ように呼ぼうとすると「scripts/ ディレクトリがありません」というエラーになる
+（これは「officecliが使えない」という意味ではない）。`officecli-*` は必ず
+`execute_python_code` 内で `subprocess` からコマンドとして呼び出すこと。** 呼び方は
+`read_skill("officecli-python-bridge")` を読んで確認する（下記参照）。一方、フォールバック側
+（`excel-tools`/`docx-tools`/`pptx-tools`）はLocohane標準のスキルなので、通常通り
+`run_script` で呼ぶ。
 
 - NG: 「表を作って」と言われて、いきなり `execute_python_code` で
   `openpyxl.Workbook()` を書いて保存する。
-- OK: 「表を作って」と言われたら、まず `read_skill("officecli-xlsx")` で
-  本文を読む。`officecli` コマンドが未導入等で使えないと分かった場合のみ、
-  `read_skill("excel-tools")` に切り替えて `edit_excel.py` を使う。
+- NG: `officecli-xlsx` を読んだ後、`run_script(skill_name="officecli-xlsx", ...)` を
+  試して「scripts/ が無い」エラーが出たことを理由に officecli を諦める。
+- OK: 「表を作って」と言われたら、まず `read_skill("officecli-xlsx")` で本文を読み、
+  続けて `read_skill("officecli-python-bridge")` で呼び出し方を確認してから
+  `execute_python_code` で `subprocess` 経由で呼ぶ。`officecli` コマンドが
+  未導入等で実際に使えないと分かった場合のみ、`read_skill("excel-tools")` に
+  切り替えて `edit_excel.py` を `run_script` で使う。
 
 **スキルは優先スキルから先に1つだけ読み、使えると分かったらそのまま使う。**
 優先スキルとフォールバックの両方を、比較のために最初から読み比べる必要はない
-（無駄なトークン消費になる）。フォールバックへ切り替えるのは、優先スキルの
-本文を読んだ結果「未導入」「エラーで実行できない」等の理由で使えないと
-判明した場合のみ。上表に無い種類のファイルを扱う場合は、スキル一覧から
-該当しそうなものを選んで `read_skill` すること。
+（無駄なトークン消費になる）。フォールバックへ切り替えるのは、優先スキルを
+実際に**実行してみた結果**「未導入」「エラーで実行できない」等の理由で使えないと
+判明した場合のみ（`run_script`の使い方を誤ってエラーになった場合は該当しない）。
+上表に無い種類のファイルを扱う場合は、スキル一覧から該当しそうなものを選んで
+`read_skill` すること。
+
+`officecli-*` のSKILL.md本文はbash/zsh前提の記法（heredoc等）で書かれているが、
+`execute_python_code` にシェルは無い。`officecli-*` を使うと決めたら、コードを
+書く前に `read_skill("officecli-python-bridge")` も読み、Pythonでの呼び出し方に
+変換すること。
 
 ### 成果物ファイルは生成・編集直後に必ず読み返して検証する
 
