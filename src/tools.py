@@ -70,7 +70,7 @@ from . import file_tools, memory, path_memory
 from .agent_types import AgentType
 from .config import Config, expand_config_vars
 from .images import image_followup_message, is_image_file, to_data_url
-from .subagent import run_subagent
+from .subagent import is_truncated_result, run_subagent
 
 logger = logging.getLogger(__name__)
 
@@ -1106,6 +1106,59 @@ def _resolve_exec_workdir() -> tuple[Path, bool]:
         return fallback_d, True
 
 
+def _scratch_notes_path() -> Path:
+    """write_scratch_note が書き込むスクラッチファイルの絶対パスを決める。
+
+    _resolve_exec_workdir() と同じ `_tmp_<thread_id>` 配下に、現在の
+    dispatch_agent 実行（_SUBAGENT_RUN_ID）ごとの専用ファイルを1つ割り当てる。
+    サブエージェント外（run_id が無い状態）で呼ばれた場合は "_main" を使う。
+    ファイル名はこの関数が決め打ちするため、呼び出し側が任意パスを
+    指定することはできない。
+    """
+    workdir, _ = _resolve_exec_workdir()
+    run_id = _SUBAGENT_RUN_ID.get() or "_main"
+    return workdir / f"_scratch_notes_{run_id}.md"
+
+
+@tool
+def write_scratch_note(content: str) -> str:
+    """調査中に分かった内容を、その場でスクラッチファイルへ追記する。
+
+    大量のファイルを読み進めながら1つの成果物（要約・抽出データ等）に
+    まとめていくような調査タスクで使う。ある程度読み進めるたびにこの
+    ツールで分かったことを書き残しておくと、万一このサブエージェント自身が
+    トークン上限に達して打ち切られても、ここまでの内容は消えずに残る
+    （打ち切り時、委譲元にはこのファイルのパスが案内され、そこから
+    続きを判断できる）。
+
+    execute_python_code/run_script と異なり、計画（create_plan/approve_plan）が
+    未承認でも常に呼べる（調査は通常 create_plan より前に行うため）。書き込み先の
+    ファイル名はこのツール自身が決めるため任意パスへは書き込めず、ユーザーの
+    作業ディレクトリや出力先には一切触れない（execute_python_code の中間生成物と
+    同じスクラッチ領域を使う）。
+
+    Args:
+        content: 追記する内容（Markdown・JSON文字列など自由形式）。
+            これまでの内容は消さず、末尾に追記される。
+
+    Returns:
+        書き込み先の絶対パスと、追記後の累計文字数。content が空、または
+        書き込みに失敗した場合は例外を送出せず「エラー: ...」形式で返す。
+    """
+    if not content.strip():
+        return "エラー: content が空です。"
+    path = _scratch_notes_path()
+    try:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(content)
+            if not content.endswith("\n"):
+                f.write("\n")
+        total_chars = len(path.read_text(encoding="utf-8"))
+    except OSError as e:
+        return f"エラー: スクラッチファイルへの書き込みに失敗しました: {e}"
+    return f"書き込みました: {path}（累計 {total_chars} 文字）"
+
+
 def _resolve_analyze_image_path(raw: str) -> Path:
     """analyze_image 専用のパス解決。読み込み系のためパスの制限は行わない。
 
@@ -2057,26 +2110,50 @@ async def dispatch_agent(task: str, agent_type: str) -> str:
             if _DISPATCH_AGENT_SEMAPHORE.locked():
                 logger.info("dispatch_agent: 空きスロットが無いため待機します task=%r", task)
             async with _DISPATCH_AGENT_SEMAPHORE:
-                return await run_subagent(
+                result = await run_subagent(
                     task,
                     resolved.tools,
                     resolved.system_prompt,
                     _LLM_CONFIG,
                     _SUBAGENT_MAX_ITERATIONS,
                 )
-        return await run_subagent(
-            task,
-            resolved.tools,
-            resolved.system_prompt,
-            _LLM_CONFIG,
-            _SUBAGENT_MAX_ITERATIONS,
-        )
+        else:
+            result = await run_subagent(
+                task,
+                resolved.tools,
+                resolved.system_prompt,
+                _LLM_CONFIG,
+                _SUBAGENT_MAX_ITERATIONS,
+            )
+        return _append_scratch_note_hint(result)
     except Exception as e:  # noqa: BLE001 - 致命的エラーもエラー文字列化して返す
         logger.exception("dispatch_agent 失敗")
         return f"エラー: サブエージェントの実行に失敗しました: {e}"
     finally:
         _IN_SUBAGENT.reset(token)
         _SUBAGENT_RUN_ID.reset(run_id_token)
+
+
+def _append_scratch_note_hint(result: str) -> str:
+    """打ち切られたサブエージェントの結果に、スクラッチノートの案内を追記する。
+
+    write_scratch_note で途中経過が書き残されていれば、そのパスを案内する。
+    委譲元はそちらを Read すれば、打ち切りにより未整理のまま返ってくる
+    ツール結果の生データより、サブエージェント自身が構造化して書き残した
+    内容を優先して参照できる。呼び出し時点で _SUBAGENT_RUN_ID がまだ
+    現在の実行を指している必要があるため、dispatch_agent の finally で
+    リセットする前に呼ぶこと。
+    """
+    if not is_truncated_result(result):
+        return result
+    path = _scratch_notes_path()
+    if not path.is_file():
+        return result
+    return (
+        f"{result}\n\n[このサブエージェントは write_scratch_note で途中経過を"
+        f"書き残しています。Read で {path} を確認すると、打ち切り前に整理された"
+        "内容が得られます。]"
+    )
 
 
 _VALID_TASK_STATUSES = ("pending", "in_progress", "completed")
@@ -2556,6 +2633,7 @@ _SUBAGENT_TOOLS: list = [
     grep_tool,
     json_query,
     list_path_memory,
+    write_scratch_note,
 ]
 
 

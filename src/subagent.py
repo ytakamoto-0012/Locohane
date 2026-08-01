@@ -406,6 +406,12 @@ async def run_subagent(
 
 
 _TOOL_RESULT_SNIPPET_LIMIT = 1500
+# snippets 全体（結合後）の上限文字数。大量ファイルの調査中に打ち切られた
+# 場合、個々のスニペットを1500字に切り詰めても件数が多ければ合計は
+# 際限なく増える（実例: 30件超のファイルを読んだ後に打ち切られ、合計
+# 数万字が呼び出し元へ返り、呼び出し元自身のトークン上限を圧迫した）。
+# 委譲による分離効果を保つため、直近の結果を優先して全体もここで切る。
+_TOOL_RESULT_TOTAL_LIMIT = 6000
 
 
 def _collect_tool_results_summary(messages: list) -> str:
@@ -416,7 +422,9 @@ def _collect_tool_results_summary(messages: list) -> str:
     破棄される事象が確認された（tune-prompt調査、2026-07-18）。ここでは
     完全な集約ロジックは持たず、各 ToolMessage の内容を一定文字数で
     切り詰めて列挙するだけに留める（呼び出し元の会話がさらに肥大化し
-    すぎないようにするため）。
+    すぎないようにするため）。結合後の合計も _TOOL_RESULT_TOTAL_LIMIT で
+    切り詰め、直近の結果（打ち切り直前の状況に近く、続きの判断に有用）を
+    優先して残す。
 
     view_image の ToolMessage.content は「画像を読み込みました: <path>」
     という固定文言のみで、画像から実際に読み取った内容は、その直後に
@@ -467,4 +475,10 @@ def _collect_tool_results_summary(messages: list) -> str:
                         ai_content = ai_content[:_TOOL_RESULT_SNIPPET_LIMIT] + "...(以下省略)"
                     snippets.append(f"  → モデルの解釈: {ai_content}")
                 break
-    return "\n".join(snippets)
+    joined = "\n".join(snippets)
+    if len(joined) > _TOOL_RESULT_TOTAL_LIMIT:
+        joined = (
+            "(件数が多いため前半の結果は省略。直近の実行結果のみ表示)\n...\n"
+            + joined[-_TOOL_RESULT_TOTAL_LIMIT:]
+        )
+    return joined

@@ -12,7 +12,9 @@ turns:
     ベースには準備、段取り、片付け、打ち合わせ時期などもわかるようにしてください。
     
 expect:
-  tool_called_any: [run_script, execute_python_code]
+  tool_call_args_contains:
+    dispatch_agent:
+      agent_type: worker
   response_not_contains: ["申し訳ありません", "できません", "機能がありません"]
 auto_approve: true
 judge: |
@@ -75,3 +77,16 @@ notes: >-
   2026-08-01: officecli優先化に伴い expect.tool_call_args_contains を撤去し
   （officecli呼び出しはexecute_python_codeのcode引数がランダムな内容になり
   完全一致判定に馴染まないため）、判定をjudge（自由記述）へ移した。
+  2026-08-01（同日追記）: system_prompt.md に「officecliでの生成・編集作業は
+  自分（メインエージェント）で直接行わず worker へ丸ごと委譲する」ルールを
+  追加した結果、正しく振る舞うほど execute_python_code/run_script が
+  トップレベルtranscriptには一切現れなくなった（すべて dispatch_agent 内部で
+  実行され、委譲元には結果しか返らないため）。これにより
+  expect.tool_called_any: [run_script, execute_python_code] が常に不合格に
+  なる状態になった（run9で確認: token_usage_max_per_call は上限64,000に対し
+  最大47,474・超過ゼロ、worker委譲によるxlsx作成もverifierによる検証も
+  正常完了していたにもかかわらず、この機械ルールのみが不合格の原因だった）。
+  worker委譲が新しい正しい経路になったため、tool_called_any を廃止し
+  tool_call_args_contains: {dispatch_agent: {agent_type: worker}} に置き換えた
+  （「実際に書き込み権限を持つworkerへ委譲したか」を確認する、より設計に
+  即した機械チェック）。
