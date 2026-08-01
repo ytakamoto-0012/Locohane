@@ -2871,12 +2871,39 @@ def _log_tool_calls_debug(input) -> None:  # noqa: A002
     )
 
 
+def _contains_error(content: str) -> bool:
+    """文字列にエラーを示すキーワードが含まれるかを判定する。
+
+    日本語「エラー」、英語「error」(大文字小文字区別なし)、全角カタカナ
+    「ｴﾗｰ」に対応する。
+    """
+    content_lower = content.lower()
+    return (
+        "エラー" in content or
+        "error" in content_lower or
+        "ｴﾗｰ" in content
+    )
+
+
 def _log_tool_results_debug(result: dict) -> None:
-    """メイングラフのツール呼び出し結果を DEBUG レベルで記録する（全文、未省略）。"""
-    if not logger.isEnabledFor(logging.DEBUG):
-        return
+    """メイングラフのツール呼び出し結果を DEBUG レベルで記録する（全文、未省略）。
+
+    execute_python_* 系ツールは成功時も WARNING（スキル開発アイデアの
+    シグナルとして記録。代替スキルが作られれば LLM は呼ばなくなる）。
+    エラーキーワードを含むメッセージも WARNING。
+    """
     for msg in result.get("messages", []):
-        logger.debug("tool_result: name=%s content=%r", getattr(msg, "name", None), msg.content)
+        name = getattr(msg, "name", None) or ""
+        content = msg.content or ""
+        is_execute_python = name.startswith("execute_python_")
+        has_error = _contains_error(content)
+
+        if is_execute_python or has_error:
+            logger.warning(
+                "tool_result: name=%s content=%r", name, content[:500]
+            )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("tool_result: name=%s content=%r", name, content)
 
 
 _ALLOWED_WHILE_AWAITING_APPROVAL = {"approve_plan", "get_plan_status", "lock_plan_mode"}

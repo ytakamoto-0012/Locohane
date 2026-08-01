@@ -28,6 +28,20 @@ import httpx
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+
+def _contains_error(content: str) -> bool:
+    """文字列にエラーを示すキーワードが含まれるかを判定する。
+
+    日本語「エラー」、英語「error」(大文字小文字区別なし)、全角カタカナ
+    「ｴﾗｰ」に対応する。
+    """
+    content_lower = content.lower()
+    return (
+        "エラー" in content or
+        "error" in content_lower or
+        "ｴﾗｰ" in content
+    )
+
 from .config import Config
 from .images import image_followup_message
 from .llm import (
@@ -74,12 +88,26 @@ async def _run_one_tool_call(call: dict, tools_by_name: dict[str, BaseTool]) -> 
                 content=f"エラー: ツール実行に失敗しました: {e}",
                 tool_call_id=call["id"],
             )
-    logger.info(
-        "subagent tool=%s args=%s -> %s",
-        call["name"],
-        call["args"],
-        str(tool_message.content)[:500],
-    )
+    # execute_python_*系ツールは成功時もWARNING（スキル開発アイデアのシグナルとして記録）
+    # それ以外でエラーメッセージが含まれる場合もWARNING
+    content = str(tool_message.content)
+    is_execute_python = call["name"].startswith("execute_python_")
+    has_error = _contains_error(content)
+
+    if is_execute_python or has_error:
+        logger.warning(
+            "subagent tool=%s args=%s -> %s",
+            call["name"],
+            call["args"],
+            content[:500],
+        )
+    else:
+        logger.info(
+            "subagent tool=%s args=%s -> %s",
+            call["name"],
+            call["args"],
+            content[:500],
+        )
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("subagent tool=%s args=%r -> %r", call["name"], call["args"], tool_message.content)
     followup = image_followup_message(getattr(tool_message, "artifact", None))
