@@ -5,7 +5,9 @@ _is_subagent_call() は、event["parent_ids"] に現在開いている（steps�
 （サブエージェント）由来のイベントかを判定する。
 """
 
-from app import _format_token_usage, _is_subagent_call
+import json
+
+from app import TOKEN_USAGE_PREFIX, _format_token_usage, _is_subagent_call
 
 
 class _FakeStep:
@@ -40,9 +42,13 @@ def test_format_token_usage_includes_all_three_tiers() -> None:
 
     text = _format_token_usage(call, cumulative_main, cumulative)
 
-    assert "リクエスト1回あたり" in text
-    assert "メインエージェント累計" in text
-    assert "会話累計" in text
-    assert "入力: 1 " in text
-    assert "入力: 10 " in text
-    assert "入力: 100 " in text
+    assert text.startswith(TOKEN_USAGE_PREFIX)
+    payload = json.loads(text[len(TOKEN_USAGE_PREFIX) :])
+    rows = {row["label"]: row for row in payload["rows"]}
+
+    assert rows["リクエスト1回あたり"] == {"label": "リクエスト1回あたり", **call}
+    assert rows["メインエージェント累計"] == {"label": "メインエージェント累計", **cumulative_main}
+    assert rows["会話累計（サブエージェント含む）"] == {
+        "label": "会話累計（サブエージェント含む）",
+        **cumulative,
+    }

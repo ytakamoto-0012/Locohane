@@ -6,7 +6,8 @@ import type { IStep } from '@chainlit/react-client';
 // メインカラム(会話のみ)とサイドパネル(Step群)へ振り分けるため、
 // ルート配列を全ノード分再帰的に平坦化してから type で分類する。
 
-export const TOKEN_USAGE_PREFIX = '🔢 トークン使用量';
+/** app.py の TOKEN_USAGE_PREFIX と一致させる（トークン使用量のサイドパネル表示）。 */
+export const TOKEN_USAGE_PREFIX = '🔢 トークン使用量\n';
 /** app.py の WORK_DIR_PREFIX と一致させる（作業ディレクトリ状態のサイドパネル表示）。 */
 export const WORK_DIR_PREFIX = '📁 作業ディレクトリ';
 /** src/tools.py の PLAN_PREFIX と一致させる（実行計画のサイドパネル表示）。 */

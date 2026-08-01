@@ -31,6 +31,7 @@ SPAの `public/build/` とは別経路なので、フロントエンドの再ビ
 | `--message-bubble-max-width` | `560px` | メッセージ吹き出し（`.message-bubble`）の最大幅 |
 | `--header-icon-size` | `22px` | ヘッダー左アイコン（`.app-header-icon`）の幅・高さ |
 | `--header-title-font-size` | `14px` | ヘッダータイトル文字列（`.app-header-title`）のフォントサイズ |
+| `--plan-card-max-height` | `260px` | サイドパネルの実行計画カード（`.plan-card-list`）の最大高さ。項目数がこれを超えるとパネル内スクロールになる |
 
 編集後はブラウザをリロードするだけで反映される（Chainlitサーバー再起動・`npm run build` は不要）。
 

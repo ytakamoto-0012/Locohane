@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 import os
 import shutil
@@ -348,24 +349,27 @@ def _accumulate_usage(totals: dict, usage: dict) -> None:
         totals[key] += usage.get(src_key, 0) or 0
 
 
+# frontend/src/utils/messageTree.ts の TOKEN_USAGE_PREFIX と一致させる
+# （サイドパネルのトークン使用量カード用マーカー。PLAN_PREFIX/WORK_DIR_PREFIX と同じ方式）。
+TOKEN_USAGE_PREFIX = "🔢 トークン使用量\n"
+
+
 def _format_token_usage(call: dict, cumulative_main: dict, cumulative: dict) -> str:
     """直近のリクエスト1回分・メインエージェント累計・会話累計（メイン+サブ合算）を、
-    サイドパネルで読みやすい複数行にまとめる。
+    サイドパネルの TokenUsageCard（表形式）表示用に JSON 化する。
 
     cumulative_main はサブエージェント（dispatch_agent）内部の呼び出しを含まない、
     メインエージェント自身のLLM呼び出しのみの累計。委譲がどれだけ会話コンテキストの
     節約に寄与しているかを、cumulative（合算値）との差でユーザーが確認できる。
     """
-    return (
-        f"🔢 トークン使用量\n\n"
-        f"リクエスト1回あたり\n"
-        f"入力: {call['input']:,} / 出力: {call['output']:,} / 合計: {call['total']:,}\n\n"
-        f"メインエージェント累計\n"
-        f"入力: {cumulative_main['input']:,} / 出力: {cumulative_main['output']:,} / "
-        f"合計: {cumulative_main['total']:,}\n\n"
-        f"会話累計（サブエージェント含む）\n"
-        f"入力: {cumulative['input']:,} / 出力: {cumulative['output']:,} / 合計: {cumulative['total']:,}"
-    )
+    payload = {
+        "rows": [
+            {"label": "リクエスト1回あたり", **call},
+            {"label": "メインエージェント累計", **cumulative_main},
+            {"label": "会話累計（サブエージェント含む）", **cumulative},
+        ]
+    }
+    return TOKEN_USAGE_PREFIX + json.dumps(payload, ensure_ascii=False)
 
 
 # トークン使用量表示（🔢 プレフィックス）と同じ仕組みで、作業ディレクトリの状態を
