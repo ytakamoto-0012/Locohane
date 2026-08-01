@@ -12,6 +12,8 @@ import asyncio
 import contextvars
 import logging
 import random
+import threading
+import time
 import weakref
 from difflib import SequenceMatcher
 from typing import Any
@@ -74,7 +76,7 @@ def recent_cancel_scope_breakage(within_seconds: float = 60.0) -> int:
     app.py の for ループ先頭（新しい astream_events 開始時）で呼び、
     リトライ経路で何が起きたかを診断する。
     """
-    now = __import__("time").time()
+    now = time.time()
     return sum(1 for t in _cancel_scope_watcher._hits if now - t < within_seconds)
 
 
@@ -414,26 +416,26 @@ def describe_current_task(now: float | None = None) -> str:
     孤立キャンセルの直接証拠になりうる）, cancelled() 等を出力する。
     呼び出し元は末尾に [diag] task=... の形でログに付加する。
 
-    イベントループが未起動の同期コンテキストでは "task=NONE" を返す。
+    イベントループが未起動の同期コンテキストでは "task=NONE thread=<id>"
+    を返す。threading.get_ident() を付加することで、同期経路のログでも
+    どのスレッド由来か事后に相関を取れるようにする。
 
     Args:
         now: 経過ms計算用の基準時刻（None なら time.time() を使う）。
 
     Returns:
         "name=<name> id=<id> cancelling=<n> must_cancel=<mc> cancelled=<c>"
-        形式の文字列。task が None の場合は "task=NONE"。
+        形式の文字列。task が None の場合は "task=NONE thread=<id>"。
     """
-    import time as _time
-
     if now is None:
-        now = _time.time()
+        now = time.time()
     try:
         task = asyncio.current_task()
     except RuntimeError:
         # イベントループ未起動（同期コンテキスト）
-        return "task=NONE"
+        return f"task=NONE thread={threading.get_ident()}"
     if task is None:
-        return "task=NONE"
+        return f"task=NONE thread={threading.get_ident()}"
     parts = [
         f"name={task.get_name()!r}",
         f"id={id(task)}",
@@ -449,6 +451,38 @@ def describe_current_task(now: float | None = None) -> str:
     elapsed = now - getattr(task, "_started_at", now)
     parts.append(f"elapsed_ms={elapsed * 1000:.0f}")
     return " ".join(parts)
+
+
+def _log_first_chunk_latency(elapsed_seconds: float, *, sync: bool, never_received: bool = False) -> None:
+    """ストリーム開始から初回チャンク受信までの経過時間を DEBUG ログで記録する。
+
+    常に DEBUG レベルのみで出力する（WARNING 閾値はここに持たせない）。
+    正常に初回チャンクを受信した場合は "初回チャンクまで%dms" を出す。
+    ストリーム終了までに一度もチャンクを受信しなかった場合は
+    "初回チャンクを一度も受信せずストリーム終了" を出す。
+
+    WARNING 閾値ベースの異常判定は、リトライ文脈を知っている app.py 側
+    で行う（通常の初回リクエストの長い prefill との誤検知を避けるため）。
+
+    Args:
+        elapsed_seconds: ストリーム開始から現在までの経過秒数。
+        sync: True なら同期経路(_stream)、False なら非同期経路(_astream)。
+        never_received: True の場合、初回チャンク未受信であることを示すログを出力。
+    """
+    elapsed_ms = elapsed_seconds * 1000
+    path = "sync" if sync else "async"
+    if never_received:
+        logger.debug(
+            "初回チャンクを一度も受信せずストリーム終了 [%s, elapsed_ms=%.0f]",
+            path,
+            elapsed_ms,
+        )
+    else:
+        logger.debug(
+            "初回チャンクまで%.0fms [%s]",
+            elapsed_ms,
+            path,
+        )
 
 
 class ChatLlamaCpp(ChatOpenAI):
@@ -503,15 +537,28 @@ class ChatLlamaCpp(ChatOpenAI):
             yield from super()._stream(*args, **kwargs)
             return
         detector = self._make_loop_detector()
-        for chunk in super()._stream(*args, **kwargs):
-            if detector.feed(_chunk_delta_text(chunk)):
-                snippet = detector.snippet()
-                logger.warning(
-                    "LLM応答のループを検知したため生成を打ち切ります（直近テキスト: %r）",
-                    snippet,
-                )
-                raise ThinkingLoopDetected("LLM応答が反復ループに陥ったため打ち切りました", snippet=snippet)
-            yield chunk
+        inner = super()._stream(*args, **kwargs)
+        first_chunk_seen = False
+        try:
+            for chunk in inner:
+                if detector.feed(_chunk_delta_text(chunk)):
+                    snippet = detector.snippet()
+                    logger.warning(
+                        "LLM応答のループを検知したため生成を打ち切ります（直近テキスト: %r）",
+                        snippet,
+                    )
+                    raise ThinkingLoopDetected("LLM応答が反復ループに陥ったため打ち切りました", snippet=snippet)
+                if not first_chunk_seen:
+                    first_chunk_seen = True
+                    _log_first_chunk_latency(time.time(), sync=True)
+                yield chunk
+        finally:
+            try:
+                inner.close()
+            except Exception:  # noqa: BLE001 - 過剰ログを避ける
+                logger.debug("ストリームの後始末(close)中に例外が発生しました", exc_info=True)
+            if not first_chunk_seen:
+                _log_first_chunk_latency(time.time(), sync=True, never_received=True)
 
     async def _astream(self, *args: Any, **kwargs: Any) -> Any:
         if not self.loop_guard_enabled:
@@ -526,6 +573,8 @@ class ChatLlamaCpp(ChatOpenAI):
         # 標準の手段が無いため、参照を生かしておく必要がある）。
         loop_exc: ThinkingLoopDetected | None = None
         diag_start = None
+        first_chunk_seen = False
+        first_chunk_at: float | None = None
         try:
             async for chunk in agen:
                 if detector.feed(_chunk_delta_text(chunk)):
@@ -538,6 +587,9 @@ class ChatLlamaCpp(ChatOpenAI):
                     )
                     loop_exc = ThinkingLoopDetected("LLM応答が反復ループに陥ったため打ち切りました", snippet=snippet)
                     raise loop_exc
+                if not first_chunk_seen:
+                    first_chunk_seen = True
+                    first_chunk_at = time.time()
                 yield chunk
                 # detector.feed()は同期的でCPUバウンドな処理（difflibでの
                 # 文字列比較）を含む。Chainlitは単一プロセス・単一イベント
@@ -546,6 +598,11 @@ class ChatLlamaCpp(ChatOpenAI):
                 # クリック等）の処理が後回しにされ得る。
                 await asyncio.sleep(0)
         finally:
+            # 初回チャンク受信までの待ち時間を記録（acloseより前）。
+            if first_chunk_at is not None:
+                _log_first_chunk_latency(time.time() - first_chunk_at, sync=False)
+            elif not first_chunk_seen:
+                _log_first_chunk_latency(0.0, sync=False, never_received=True)
             try:
                 # 停止ボタン等でこの _astream 自体が既にキャンセル済みの
                 # タスク内にいる場合、ここでの await も即座に再キャンセル
@@ -560,17 +617,17 @@ class ChatLlamaCpp(ChatOpenAI):
                 # 制約を持つ）。asyncio.timeout() は現在のtaskに直接
                 # タイムアウトキャンセルを注入し、新規taskを生成しないため、
                 # 同一task制約を破らずにタイムアウトを維持できる。
-                diag_start = __import__("time").time()
+                diag_start = time.time()
                 async with asyncio.timeout(5.0):
                     await agen.aclose()
-                diag_elapsed = (__import__("time").time() - diag_start) * 1000
+                diag_elapsed = (time.time() - diag_start) * 1000
                 logger.debug(
                     "ストリームの後始末(aclose)完了 [%s, elapsed_ms=%.0f]",
                     describe_current_task(diag_start),
                     diag_elapsed,
                 )
             except TimeoutError:
-                diag_elapsed = (__import__("time").time() - diag_start) * 1000
+                diag_elapsed = (time.time() - diag_start) * 1000
                 if loop_exc is not None:
                     loop_exc.client_broken = True
                     logger.warning(
@@ -588,7 +645,7 @@ class ChatLlamaCpp(ChatOpenAI):
                         diag_elapsed,
                     )
             except Exception:
-                diag_elapsed = (__import__("time").time() - diag_start) * 1000
+                diag_elapsed = (time.time() - diag_start) * 1000
                 if loop_exc is not None:
                     loop_exc.client_broken = True
                     logger.warning(

@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import shutil
+import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -1166,6 +1167,12 @@ async def on_message(message: cl.Message) -> None:
         steps: dict[str, cl.Step] = {}  # run_id -> Step（ツール開始/終了を対応付け）
 
         event_stream = graph.astream_events(inputs, config=config, version="v2")
+        # リトライ経路（attempt>0）での初回チャンク受信までの待ち時間を計測。
+        # llama-server 側で旧リクエストの生成が続きスロットが埋まっている場合、
+        # この値が異常に大きくなる（クライアント側後始末では対処不能）。
+        retry_first_chunk_start: float | None = None
+        if attempt > 0:
+            retry_first_chunk_start = time.time()
         # P1: リトライ経路（attempt>0）でのみ、どのタスクで新リクエストが始まったか、
         # cancel scope breakage の結果をログする。
         if attempt > 0:
@@ -1208,6 +1215,21 @@ async def on_message(message: cl.Message) -> None:
                         await thinking.stream_token(reasoning)
 
                     if chunk.content:
+                        # リトライ後の初回チャンク受信までの待ち時間を記録。
+                        # 通常の初回リクエストでは retry_first_chunk_start は
+                        # None なのでここは通らない。閾値は暫定10秒（実測で
+                        # 調整済み）。
+                        if retry_first_chunk_start is not None:
+                            elapsed_s = time.time() - retry_first_chunk_start
+                            # reasoning_content が先に来る場合、content は後。
+                            # 両方合わせて「LLM応答の初回チャンク」とみなす。
+                            if elapsed_s > 10.0:
+                                logging.getLogger(__name__).warning(
+                                    "リトライ後の初回チャンク受信まで%.0f秒（異常遅延）" " [%s] — llama-server スロット詰まりの疑い",
+                                    elapsed_s,
+                                    describe_current_task(),
+                                )
+                            retry_first_chunk_start = None  # 2回目以降は計測しない
                         if thinking is not None:
                             # 思考が終わり本回答が始まったのでStepを確定させる。
                             thinking.end = utc_now()
@@ -1566,24 +1588,16 @@ async def on_message(message: cl.Message) -> None:
         # 直接原因（後始末が別タスクに漏れたこと）を悪化させるだけなので採用しない。
         if loop_exc is not None:
             if loop_attempt < loop_max_retries:
-                if loop_exc.client_broken:
-                    # ストリームの後始末（_astreamのfinally節でのagen.aclose()）
-                    # が失敗し、httpx.AsyncClientの内部状態が壊れている
-                    # 可能性が高い（ThinkingLoopDetected.client_brokenの
-                    # docstring参照）。_rebuild_graphは新しいクライアントを
-                    # 用意するだけで、壊れた旧クライアントの根底のTCP接続を
-                    # 明示的には切断しないため、そのままだとllama-server側に
-                    # 旧ストリームが残り続け、次のリトライが応答ヘッダー
-                    # 待ちで恒久的にハングしうる（本番incident・2026-07-20:
-                    # 7分11秒間ハング。2026-07-31: 同型の事象が再発し、
-                    # ユーザーが手動キャンセルするまで復帰しなかった）。
-                    # on_stopのaclose_active_llm_clientsと同じ処理を、
-                    # ここでもリトライ前に呼んで旧接続を強制クローズする。
-                    await aclose_active_llm_clients(thread_id)
+                # ThinkingLoopDetected 発生時は常に旧接続を強制クローズする。
+                # llama-server側で旧ストリームが残ったままになると、
+                # 新しいクライアントを使っても次のリトライが応答ヘッダー
+                # 待ちでハングしうる（本番incident・2026-07-20:
+                # 7分11秒間ハング。2026-07-31: 同型の事象が再発し、
+                # ユーザーが手動キャンセルするまで復帰しなかった）。
+                await aclose_active_llm_clients(thread_id)
                 graph = _rebuild_graph(thread_id)
                 logging.getLogger(__name__).warning(
-                    "ThinkingLoopDetected: リトライ前にLLMグラフを再構築しました " "(client_broken=%s) [%s]",
-                    loop_exc.client_broken,
+                    "ThinkingLoopDetected: リトライ前にLLMグラフを再構築しました [%s]",
                     describe_current_task(),
                 )
                 nudge_id = str(uuid.uuid4())
