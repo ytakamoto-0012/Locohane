@@ -76,7 +76,7 @@ LLMがどのスキルを読むか・どのスクリプトを叩くかは**すべ
 - **テキストのみ**。`encoding="utf-8", errors="replace"` でデコードされるため、バイナリ・画像等をそのまま `run_script` の戻り値として返す経路はない。生成物を見せたい場合はファイルに保存し、そのパスを stdout に含めて後続手順で扱わせる — **画像ファイルであれば `view_image` ツールでLLMへ視覚情報として渡せる**（`references/`/`assets/`配下の既存画像だけでなく、`run_script` がその場で生成した画像ファイルも同じ経路で見せられる。対応拡張子: png/jpg/jpeg/gif/webp/bmp）。ただしこれはVision対応モデルが前提であり、テキスト専用モデルでは画像部分は無視される点に注意。
 - **タイムアウトあり**（既定60秒、`config.ini` の `script_timeout` で変更可）。超過時は `run_script` が「エラー: スクリプトが N 秒でタイムアウトしました。」を返し、スクリプト側の出力は破棄される。
 - **`.py` は設定された Python 実行ファイルで起動**（`config.ini` の `script_python`）。それ以外の拡張子はOSに実行を委ねる（Windowsネイティブ環境のため、shebang行は解釈されない点に注意。`.py` 以外のスクリプトを置く場合は `.bat`/`.exe`等、Windowsで直接実行可能な形式にすること）。
-- **作業ディレクトリはスキルフォルダ**（`skills/<skill-name>/`）に固定される。
+- **作業ディレクトリ（cwd）はスキルフォルダではなく、ユーザーの作業ディレクトリ**（`tools.py` の `_resolve_workdir()`。Chainlit設定の `work_dir`、未設定時は `config.ini` の `default_workdir`）になる。スキル自身のファイル（`scripts/`内の補助モジュール等）を参照する場合は `Path(__file__).resolve().parent` を使い、cwd起点の相対パスに依存しないこと。生成物をスキル実行のたびに使い捨てたいだけなら、cwd配下のセッション専用一時フォルダ `_tmp_<thread_id>/`（環境変数 `AGENT_THREAD_ID` で取得、会話終了時に自動削除される。`pdf-tools` の `render_pdf_pages.py` 参照）に書くと、スキル本体のディレクトリを汚さず済む。
 - 呼び出し側は `skill_name` とスクリプトのファイル名（`script_filename`）のみを渡す。`_resolve_script_filename()` が `skill_name/scripts/` 配下（`_safe_path()` により `skills/` ルート配下に強制、ディレクトリトラバーサル対策）を再帰探索して解決するため、`scripts/` プレフィックスや絶対パスを書く必要はない。見つからない場合・`scripts/` ディレクトリ自体が無い場合は実行前にエラーを返す。
 
 ### 4-3. 推奨する値渡しの規約（コード非強制・慣例）

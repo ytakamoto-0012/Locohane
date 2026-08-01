@@ -13,8 +13,6 @@ evals/results/
 # chainlit.md
 .files/
 
-# pdf-tools スキルが render_pdf_pages.py で生成するPDFページ画像キャッシュ
-.locohane/skills/pdf-tools/rendered/
 
 # 独自Reactフロントエンド（frontend/）のビルド生成物・依存パッケージ。
 # ビルド出力自体は public/build/ にコピーされそちらはgit管理下に置く

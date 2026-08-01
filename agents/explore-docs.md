@@ -32,7 +32,7 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
    データ・スライドのテキストや発表者ノート・PDFの抽出テキストなど）を取得する。
 4. `read_pdf.py` で抽出したテキストが空、またはレイアウト・図表・スキャン内容を
    直接確認したい場合は `render_pdf_pages.py` でページを画像化し、返ってきた
-   `relative_path` を `analyze_image` にそのまま渡してページ内容を確認する。
+   `image_path` を `analyze_image` にそのまま渡してページ内容を確認する。
 5. 委譲元のtask文で求められている情報（要約・特定の値・件数・見出し・図表の内容など）
    を、取得した実データに基づいてまとめる。推測や一般論で埋めない。
 

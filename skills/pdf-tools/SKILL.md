@@ -70,17 +70,18 @@ offset/limitと同じ考え方のページ版です）。
 ```json
 {"path": "C:\\foo\\report.pdf", "total_pages": 42, "start_page": 1, "end_page": 3, "dpi": 150,
  "images": [
-   {"page": 1, "relative_path": "pdf-tools/rendered/1a2b3c4d_p1.png"},
-   {"page": 2, "relative_path": "pdf-tools/rendered/1a2b3c4d_p2.png"},
-   {"page": 3, "relative_path": "pdf-tools/rendered/1a2b3c4d_p3.png"}
+   {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\pdf_rendered\\1a2b3c4d_p1.png"},
+   {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\pdf_rendered\\1a2b3c4d_p2.png"},
+   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\pdf_rendered\\1a2b3c4d_p3.png"}
  ]}
 ```
 
 **重要（2段階手順）**: このスクリプト自体はPNGファイルを保存してパスをJSONで
 返すだけで、LLMへ画像を見せるところまでは行いません。`images` の各要素の
-`relative_path` を、続けて `analyze_image` ツール（このスキル専用ではなく共通ツール）
-の `relative_path` 引数にそのまま渡して呼び出してください。1回の `analyze_image` 呼び出しで
-1ページ分が見えるので、複数ページある場合はページ数分 `analyze_image` を呼びます。
+`image_path`（絶対パス）を、続けて `analyze_image` ツール（このスキル専用ではなく
+共通ツール）の `relative_path` 引数にそのまま渡して呼び出してください（`analyze_image`
+は絶対パスもそのまま読める）。1回の `analyze_image` 呼び出しで1ページ分が見えるので、
+複数ページある場合はページ数分 `analyze_image` を呼びます。
 
 エッジケース:
 - ファイル不在・ディレクトリ指定・壊れたPDF/暗号化PDFはエラー終了します。
@@ -88,8 +89,9 @@ offset/limitと同じ考え方のページ版です）。
   終了コード0で返します。
 - `max_pages` は5にクランプされます。総ページ数が多い文書を広く画像化したい場合は
   `--start-page` を変えて複数回に分けて呼び出してください（コスト抑制のため）。
-- 生成されるPNGは `.locohane/skills/pdf-tools/rendered/` に保存されます（同一PDF・同一ページの
-  再実行時は上書きされるキャッシュ的な挙動で、git管理対象外です）。
+- 生成されるPNGは作業ディレクトリ配下のセッション専用一時フォルダ
+  （`_tmp_<thread_id>/pdf_rendered/`）に保存されます。同一PDF・同一ページの
+  再実行時は上書きされ、会話終了時に自動的に削除されます。
 
 ## 3. create_pdf.py — テキストからPDF生成
 
