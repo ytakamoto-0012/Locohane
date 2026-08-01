@@ -1638,6 +1638,12 @@ class _BackgroundJob:
     returncode: int | None
     error_message: str | None
     runner_task: "asyncio.Task | None" = None
+    # execute_python_code_background 由来のジョブのみ設定される
+    # （run_script_background 由来のジョブでは None のまま）。
+    tmp_path: "Path | None" = None
+    workdir: "Path | None" = None
+    before_snapshot: "dict[Path, float] | None" = None
+    fell_back: bool = False
 
 
 # run_script_background のジョブレジストリ。プロセス内メモリのみで永続化は
@@ -1670,31 +1676,37 @@ async def _run_background_job(job: "_BackgroundJob") -> None:
     上書きしない。
     """
     try:
-        await asyncio.wait_for(
-            asyncio.gather(
-                _read_stream_into(job.process.stdout, job.stdout_chunks),
-                _read_stream_into(job.process.stderr, job.stderr_chunks),
-                job.process.wait(),
-            ),
-            timeout=_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        job.process.kill()
-        await job.process.wait()
-        if job.status != "killed":
-            job.status = "timeout"
-        job.returncode = job.process.returncode
-        return
-    except Exception as e:  # noqa: BLE001 - ストリーム読み取り自体の異常はエラー扱いで返す
-        if job.status != "killed":
-            job.status = "error"
-            job.error_message = str(e)
-        return
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    _read_stream_into(job.process.stdout, job.stdout_chunks),
+                    _read_stream_into(job.process.stderr, job.stderr_chunks),
+                    job.process.wait(),
+                ),
+                timeout=_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            job.process.kill()
+            await job.process.wait()
+            if job.status != "killed":
+                job.status = "timeout"
+            job.returncode = job.process.returncode
+            return
+        except Exception as e:  # noqa: BLE001 - ストリーム読み取り自体の異常はエラー扱いで返す
+            if job.status != "killed":
+                job.status = "error"
+                job.error_message = str(e)
+            return
 
-    job.returncode = job.process.returncode
-    if job.status == "killed":
-        return
-    job.status = "completed" if job.returncode == 0 else "failed"
+        job.returncode = job.process.returncode
+        if job.status == "killed":
+            return
+        job.status = "completed" if job.returncode == 0 else "failed"
+    finally:
+        # execute_python_code_background が書き出した一時 .py ファイルの後始末。
+        # run_script_background 由来のジョブでは tmp_path が None のため何もしない。
+        if job.tmp_path is not None:
+            job.tmp_path.unlink(missing_ok=True)
 
 
 def _purge_stale_background_jobs() -> None:
@@ -1723,7 +1735,33 @@ def _format_job_result(job: "_BackgroundJob") -> str:
         parts.append(f"[標準出力]\n{stdout}")
     if stderr:
         parts.append(f"[標準エラー]\n{stderr}")
+    # execute_python_code_background 由来のジョブのみ workdir/before_snapshot が
+    # 設定されている（run_script_background 由来では None のためスキップされる）。
+    if job.workdir is not None and job.before_snapshot is not None:
+        path_memory_note = _register_exec_output_files(job.workdir, job.before_snapshot, job.thread_id)
+        if path_memory_note:
+            parts.append(path_memory_note)
+    if job.fell_back:
+        parts.append(_mark_workdir_not_writable())
     return "\n".join(parts)
+
+
+def _background_job_started_message(job_id: str) -> str:
+    """バックグラウンドジョブ起動直後にLLMへ返す案内文。
+
+    以前は「途中で打ち切る場合は stop_script_job を使ってください」という
+    表現だけだったが、これが「長時間かかる処理は打ち切るべきもの」という
+    誤読を誘発し、ユーザーが完走を求めているのにモデルが自発的に
+    stop_script_job を呼んで途中終了させてしまう事例が確認された。
+    処理時間の長さ自体は打ち切る理由にならないことを明記する。
+    """
+    return (
+        f"バックグラウンドで起動しました。job_id={job_id}\n"
+        "完了確認・結果取得には check_script_job（job_id指定）を使うこと。"
+        "処理に時間がかかっていること自体は打ち切る理由にはならない。"
+        "ユーザーから明示的に中断・キャンセルを指示された場合にのみ"
+        "stop_script_job（job_id指定）を使うこと。"
+    )
 
 
 def _resolve_job(job_id: str) -> "_BackgroundJob | str":
@@ -1745,8 +1783,9 @@ async def run_script_background(
 
     処理時間が長くなることが見込まれるスクリプト向け。run_script と異なり
     完了を待たずに制御を返すため、長時間スクリプトを実行してもエージェントの
-    ターンをブロックしない。完了確認・結果取得には check_script_job を、
-    途中で打ち切りたい場合は stop_script_job を使う。
+    ターンをブロックしない。完了確認・結果取得には check_script_job を使う。
+    処理に時間がかかっていること自体は打ち切る理由にならない。ユーザーから
+    明示的に中断を指示された場合にのみ stop_script_job を使う。
     引数解決・作業ディレクトリ解決・計画承認チェックは run_script と同じ
     （_PLAN_APPROVAL_EXEMPT_SCRIPTS による免除も同様）。
     バックグラウンドジョブを強制終了するまでの上限は config.ini の
@@ -1796,11 +1835,7 @@ async def run_script_background(
     )
     job.runner_task = asyncio.create_task(_run_background_job(job))
     _BACKGROUND_JOBS[job_id] = job
-    return (
-        f"バックグラウンドで起動しました。job_id={job_id}\n"
-        "完了確認・結果取得には check_script_job（job_id指定）を、途中で打ち切る"
-        "場合は stop_script_job（job_id指定）を使ってください。"
-    )
+    return _background_job_started_message(job_id)
 
 
 @tool
@@ -1813,6 +1848,12 @@ async def check_script_job(job_id: str) -> str:
     （"[終了コード] N" に続けて "[標準出力]"/"[標準エラー]"）で最終結果を返し、
     以降は同じ job_id を指定できなくなる（登録から削除される）。
     他セッションが起動した job_id は参照できない。
+
+    実行中（"実行中です（経過 N 秒）。"）が返ってきた場合、数秒間隔で連続
+    して呼び直さないこと。経過をユーザーへ一言伝えたらそのターンを終えて
+    次のユーザー発言を待つか、十分な間隔（数十秒〜）を空けてから改めて
+    呼ぶこと。処理に時間がかかっていること自体は異常でも打ち切る理由でも
+    ない（強制終了までの上限は background_max_runtime_seconds が別途管理する）。
 
     Args:
         job_id: run_script_background の戻り値に含まれるID。
@@ -1855,9 +1896,11 @@ async def check_script_job(job_id: str) -> str:
 async def stop_script_job(job_id: str) -> str:
     """run_script_background で起動したジョブを強制終了する。
 
-    長時間実行を途中で打ち切りたい場合に使う。強制終了時点までの
-    標準出力・標準エラーを添えて結果を返し、登録から削除する。
-    他セッションが起動した job_id は操作できない。
+    ユーザーから明示的に中断・キャンセル・停止を指示された場合にのみ使う
+    こと。処理に時間がかかっていること自体（check_script_job が実行中を
+    返し続けること）は、自分の判断で打ち切ってよい理由にはならない。
+    強制終了時点までの標準出力・標準エラーを添えて結果を返し、登録から
+    削除する。他セッションが起動した job_id は操作できない。
 
     Args:
         job_id: run_script_background の戻り値に含まれるID。
@@ -1890,7 +1933,9 @@ async def stop_script_job(job_id: str) -> str:
     return f"強制終了しました。\n{result}"
 
 
-def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float]) -> str:
+def _register_exec_output_files(
+    workdir: Path, before_snapshot: dict[Path, float], thread_id: str
+) -> str:
     """execute_python_code の実行前後で workdir 直下のファイル差分を検知し、
     新規作成/更新されたファイルを path_memory へ自動登録する。
 
@@ -1903,6 +1948,10 @@ def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float
         workdir: execute_python_code が使った実行用ディレクトリ
             （_resolve_exec_workdir() の戻り値）。
         before_snapshot: 実行前に取得した {ファイルパス: mtime} のスナップショット。
+        thread_id: path_memory への登録に使うセッションID。
+            execute_python_code_background 経由の呼び出しでは
+            check_script_job 呼び出し時の cl.user_session とジョブ起動時の
+            セッションが一致する保証に頼らず、job.thread_id を明示的に渡す。
 
     Returns:
         新規作成/更新ファイルがあれば「[生成/更新ファイル]」見出し付きの
@@ -1929,7 +1978,6 @@ def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float
     if not changed:
         return ""
 
-    thread_id = cl.user_session.get("thread_id") or "_no_session"
     lines = []
     for p, kind in changed:
         index = None
@@ -2051,7 +2099,9 @@ async def execute_python_code(code: str) -> str:
     if proc.stderr:
         parts.append(f"[標準エラー]\n{proc.stderr.rstrip()}")
 
-    path_memory_note = _register_exec_output_files(workdir, before_snapshot)
+    path_memory_note = _register_exec_output_files(
+        workdir, before_snapshot, cl.user_session.get("thread_id") or "_no_session"
+    )
     if path_memory_note:
         parts.append(path_memory_note)
 
@@ -2063,6 +2113,118 @@ async def execute_python_code(code: str) -> str:
     if fell_back:
         parts.append(_mark_workdir_not_writable())
     return "\n".join(parts)
+
+
+@tool
+async def execute_python_code_background(code: str) -> str:
+    """LLMが生成したPythonコードをバックグラウンドで実行し、即座に job_id を返す。
+
+    処理時間が長くなることが見込まれるコード向け。execute_python_code と
+    異なり完了を待たずに制御を返すため、長時間コードを実行してもエージェントの
+    ターンをブロックしない。完了確認・結果取得には check_script_job を使う。
+    処理に時間がかかっていること自体は打ち切る理由にならない。ユーザーから
+    明示的に中断を指示された場合にのみ stop_script_job を使う
+    （run_script_background のジョブと共通のレジストリ・ツールで扱われる）。
+
+    引数チェック・作業ディレクトリ解決（_resolve_exec_workdir()）・
+    計画承認チェック（免除なし、常に create_plan/approve_plan による承認が
+    必要）・code_execution_enabled チェックは execute_python_code と同じ。
+    生成・更新されたファイルは完了時に自動検知して path_memory（`@N`）へ
+    登録し、check_script_job の戻り値に含める。バックグラウンドジョブを
+    強制終了するまでの上限は config.ini の
+    [scripts].background_max_runtime_seconds（既定3600秒）。
+
+    Args:
+        code: 実行する Python コード全文。
+
+    Returns:
+        起動に成功すれば job_id を含む案内文字列。code が空・実行が
+        config.ini で無効化されている・計画未承認・一時ファイル作成や
+        起動自体に失敗した場合は execute_python_code 同様「エラー: ...」
+        形式の文字列を返す。
+    """
+    if not code.strip():
+        return "エラー: code が空です。"
+    if not _CODE_EXEC_ENABLED:
+        return (
+            "エラー: LLMが生成したPythonコードの実行はconfig.iniで無効化されています"
+            "（[scripts] code_execution_enabled=false）。"
+        )
+    workdir, fell_back = _resolve_exec_workdir()
+
+    if not cl.user_session.get("plan_approved"):
+        logger.info("execute_python_code_background: 計画未承認のためブロック")
+        return (
+            "エラー: 計画が未承認のため実行できません。"
+            "create_plan で計画を作成し、approve_plan でユーザーの承認を得てから"
+            "実行してください。"
+        )
+
+    try:
+        before_snapshot = {p: p.stat().st_mtime for p in workdir.iterdir() if p.is_file()}
+    except OSError:
+        before_snapshot = {}
+
+    try:
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8"
+        )
+        tmp.write(code)
+        tmp.close()
+        tmp_path = Path(tmp.name)
+    except OSError:
+        # work_dir_access のキャッシュが古く、_resolve_exec_workdir の事前
+        # フォールバックが効かなかった場合の保険（例: mkdir後に権限が変わった等）。
+        thread_id = cl.user_session.get("thread_id") or "_no_session"
+        workdir = _DEFAULT_WORKDIR / f"_tmp_{thread_id}"
+        workdir.mkdir(parents=True, exist_ok=True)
+        fell_back = True
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8"
+            )
+            tmp.write(code)
+            tmp.close()
+            tmp_path = Path(tmp.name)
+        except OSError as e2:
+            return f"エラー: 一時ファイルを作成できませんでした（既定フォルダでも失敗）: {e2}"
+
+    _purge_stale_background_jobs()
+
+    logger.info("execute_python_code_background: cwd=%s", workdir)
+    try:
+        process = await asyncio.create_subprocess_exec(
+            _SCRIPT_PYTHON,
+            str(tmp_path),
+            cwd=str(workdir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_subprocess_env(),
+        )
+    except OSError as e:
+        tmp_path.unlink(missing_ok=True)
+        return f"エラー: コードを起動できませんでした: {e}"
+
+    job_id = uuid.uuid4().hex[:12]
+    job = _BackgroundJob(
+        process=process,
+        thread_id=cl.user_session.get("thread_id") or "",
+        skill_name="",
+        script_filename=tmp_path.name,
+        started_at=time.monotonic(),
+        stdout_chunks=[],
+        stderr_chunks=[],
+        status="running",
+        returncode=None,
+        error_message=None,
+        tmp_path=tmp_path,
+        workdir=workdir,
+        before_snapshot=before_snapshot,
+        fell_back=fell_back,
+    )
+    job.runner_task = asyncio.create_task(_run_background_job(job))
+    _BACKGROUND_JOBS[job_id] = job
+    return _background_job_started_message(job_id)
 
 
 @tool
@@ -2210,10 +2372,17 @@ def _render_plan_payload(plan: list[dict], *, finished: bool = False, approved: 
 async def create_plan(steps: list[dict[str, str]]) -> str:
     """複数ステップの実行計画を作成し、ユーザーへチェックリストとして表示する。
 
-    書き込み系ツール（run_script、execute_python_code）を1回でも使うタスクに
-    着手する前に、まずこのツールで
-    ステップ一覧を提示する。作成しただけでは書き込み系ツールのブロックは
-    解除されない。承認を得るには続けて approve_plan を呼ぶこと。
+    書き込み系ツール（run_script、run_script_background、execute_python_code、
+    execute_python_code_background）を1回でも使うタスクに着手する前に、まず
+    このツールでステップ一覧を提示する。作成しただけでは書き込み系ツールの
+    ブロックは解除されない。承認を得るには続けて approve_plan を呼ぶこと。
+
+    run_script_background/execute_python_code_background でバックグラウンド
+    ジョブを扱う場合、「起動」と「完了確認」を同じステップにまとめないこと。
+    ジョブを起動しただけではまだ処理は終わっていないため、起動ステップを
+    completed にしてよいのは check_script_job で最終結果（running 以外の
+    状態）を取得できてから。起動ステップとは別に「結果を確認する」ステップを
+    設けること。
 
     Args:
         steps: 実行計画の各ステップを表す辞書のリスト（1件以上、実行順）。
@@ -2254,9 +2423,9 @@ async def approve_plan() -> str:
     """作成済みの実行計画についてユーザーの承認を得る。
 
     cl.AskActionMessage パターンで計画内容を提示し、承認/拒否を選ばせる。
-    承認されると、以後 run_script/execute_python_code の
-    ハードブロックが解除され実行できるようになる
-    （cl.user_session["plan_approved"] を参照）。タイムアウト
+    承認されると、以後 run_script/run_script_background/execute_python_code/
+    execute_python_code_background のハードブロックが解除され実行できるように
+    なる（cl.user_session["plan_approved"] を参照）。タイムアウト
     （未応答）は安全側に倒して未承認扱いにするが、ユーザーが明示的に却下した
     場合とは返り値のテキストで区別する（無応答は単に手が離せないだけの
     可能性が高く、計画自体を作り直す必要はないため）。
@@ -2322,6 +2491,14 @@ async def update_task_progress(step_index: int, status: str) -> str:
     ものとみなし、plan_approved を False に戻す（承認は作成済み計画の実行に
     限定したスコープのため、完了後の無関係な run_script/execute_python_code は
     再びブロックされる）。
+
+    run_script_background/execute_python_code_background に対応するステップは、
+    ジョブを起動しただけの時点では completed にしないこと。check_script_job
+    自体は読み取り専用でいつでも呼べるが、起動直後に completed にすると
+    plan_approved が戻り Plan Mode 表示になるため、まだジョブが実行中なのに
+    「計画をやり直す必要がある」と誤解し、不要な create_plan/approve_plan を
+    繰り返す原因になる。check_script_job で最終結果（running 以外の状態）を
+    確認できてから completed にすること。
 
     Args:
         step_index: create_plan で渡した steps のインデックス（0始まり）。
@@ -2625,6 +2802,7 @@ _SUBAGENT_TOOLS: list = [
     check_script_job,
     stop_script_job,
     execute_python_code,
+    execute_python_code_background,
     get_tool_source,
     check_work_dir_status,
     analyze_image,
@@ -2984,6 +3162,7 @@ _BASE_TOOLS: list[BaseTool] = [
     check_script_job,
     stop_script_job,
     execute_python_code,
+    execute_python_code_background,
     get_tool_source,
     check_work_dir_status,
     analyze_image,

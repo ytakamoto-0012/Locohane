@@ -180,7 +180,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 スキルの frontmatter（name/description）だけはこれとは別に、`src/skills.py` が
 起動時にシステムプロンプトへテキスト注入する（Discovery 段階、こちらはプロンプトベース）。
 
-上記3段階に加えて、スキルの読み込みとは独立したツールが以下の32個ある（いずれも `src/tools.py`）。
+上記3段階に加えて、スキルの読み込みとは独立したツールが以下の33個ある（いずれも `src/tools.py`）。
 
 | ツール | 役割 |
 |--------|------|
@@ -190,7 +190,8 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `run_script_background` | `run_script` と同じスクリプトをバックグラウンドで起動し、即座に `job_id` を返す（要承認は同様）。完了を待たずエージェントのターンを解放する |
 | `check_script_job` | `run_script_background` のジョブの状況（実行中の経過秒数・途中出力）または最終結果を取得する |
 | `stop_script_job` | `run_script_background` のジョブを強制終了する |
-| `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可） |
+| `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `execute_python_code_background` を使う |
+| `execute_python_code_background` | `execute_python_code` と同じコードをバックグラウンドで起動し、即座に `job_id` を返す（要承認・`config.ini` での無効化は同様）。完了を待たずエージェントのターンを解放し、状況確認・停止は `run_script_background` と共通の `check_script_job`/`stop_script_job` を使う |
 | `get_tool_source` | `run_script` がエラーになった際、原因調査用にスクリプトの絶対パスを返す（中身は返さない） |
 | `check_work_dir_status` | 現在の作業ディレクトリの実際のアクセス状況を確認する |
 | `Read` / `Glob` / `Grep` | ローカルファイルシステム上の任意の絶対パスに対する読込・ファイル名検索・全文検索（ClaudeCode の同名ツールに合わせた名前。読み取り専用のため計画未承認でも常に呼べる。ロジックは `src/file_tools.py`） |
@@ -206,11 +207,13 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `create_memory` / `update_memory` / `delete_memory` / `read_memory` / `search_memory` / `list_memories` | スレッドをまたぐ永続メモリー（`src/memory.py`）の保存・更新・削除・全文読込・検索・一覧。主エージェントのみに公開し `dispatch_agent` のサブエージェントには渡さない |
 | `help` | ユーザー向けヘルプ本文（`system_prompt/help.md`）をそのまま返す |
 
-`run_script`（`run_script_background` 含む）と `execute_python_code` は書き込み系ツールのため、
-`create_plan`/`approve_plan` で計画がユーザー承認済み（`cl.user_session["plan_approved"]` が True）でない限り実行できず、
+`run_script`（`run_script_background` 含む）と `execute_python_code`（`execute_python_code_background`
+含む）は書き込み系ツールのため、`create_plan`/`approve_plan` で計画がユーザー承認済み
+（`cl.user_session["plan_approved"]` が True）でない限り実行できず、
 未承認の場合はエラーを返す（Plan Mode）。承認自体は `cl.AskActionMessage` による
-✅承認/🚫拒否ボタンで行い、タイムアウト時は安全側（拒否）に倒す。`execute_python_code` は
-`config.ini` の `[scripts] code_execution_enabled` でツール自体を無効化できる。
+✅承認/🚫拒否ボタンで行い、タイムアウト時は安全側（拒否）に倒す。`execute_python_code`
+（`execute_python_code_background` 含む）は `config.ini` の `[scripts] code_execution_enabled`
+でツール自体を無効化できる。
 
 ---
 
