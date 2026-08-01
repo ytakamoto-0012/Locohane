@@ -80,5 +80,5 @@ officecli のバージョンを更新する際は、`skills/` 配下の子スキ
 ## 関連ドキュメント
 
 - `execute_python_code`（Pythonのみ、bash/シェルが無い）から officecli を呼び出す具体的な方法は、
-  Locohane側の独自スキル `officecli-python-bridge`（`.locohane/skills/officecli-python-bridge/SKILL.md`）
+  Locohane側の独自スキル `officecli-python-bridge`（`skills/officecli-python-bridge/SKILL.md`）
   にまとめてある。officecli-* スキルを使う際はこちらも参照すること。

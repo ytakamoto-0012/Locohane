@@ -867,7 +867,7 @@ MCPサーバー機能（`.locohane/settings.json`、上記「MCPサーバー接�
 `OFFICECLI_SKIP_UPDATE=1` を設定してください。導入しない場合はこの通信も発生しません。
 
 `web-search` スキル（Tavily APIによるWeb検索）は、スキル専用の
-`.locohane/skills/web-search/scripts/.env` に `TAVILY_API_KEY` を設定した場合のみ、
+`skills/web-search/scripts/.env` に `TAVILY_API_KEY` を設定した場合のみ、
 ユーザーがこのスキルを実行した時に限り `https://api.tavily.com` へ通信します。
 未設定（`.env` 自体が無い、または空）の場合は一切通信せず、設定手順を示す
 エラーメッセージを返すだけです。
