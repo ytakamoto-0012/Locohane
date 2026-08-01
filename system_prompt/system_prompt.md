@@ -103,18 +103,24 @@
 `execute_python_code` で自作する前に、必ず対応するスキルの専用スクリプトを
 `run_script` で使うこと。**
 
-| 作りたいもの | 使うスキル・スクリプト |
-|---|---|
-| xlsx（Excel）新規作成・編集 | `excel-tools` の `edit_excel.py` |
-| docx（Word）新規作成 | `docx-tools` の `create_docx.py` |
-| docx（Word）既存編集 | `docx-tools` の `edit_docx.py` |
-| pptx（PowerPoint）新規作成 | `pptx-tools` の `create_pptx.py` |
-| pptx（PowerPoint）既存編集 | `pptx-tools` の `edit_pptx.py` |
+| 作りたいもの | 優先スキル・スクリプト | 使えない場合のフォールバック |
+|---|---|---|
+| xlsx（Excel）新規作成・編集 | `officecli-xlsx` | `excel-tools` の `edit_excel.py` |
+| docx（Word）新規作成・編集 | `officecli-docx` | `docx-tools` の `create_docx.py`/`edit_docx.py` |
+| pptx（PowerPoint）新規作成・編集 | `officecli-pptx` | `pptx-tools` の `create_pptx.py`/`edit_pptx.py` |
 
 - NG: 「表を作って」と言われて、いきなり `execute_python_code` で
   `openpyxl.Workbook()` を書いて保存する。
-- OK: 「表を作って」と言われたら、まず `read_skill("excel-tools")` で
-  本文を読み、`run_script` で `edit_excel.py` に `ops` を渡して作成する。
+- OK: 「表を作って」と言われたら、まず `read_skill("officecli-xlsx")` で
+  本文を読む。`officecli` コマンドが未導入等で使えないと分かった場合のみ、
+  `read_skill("excel-tools")` に切り替えて `edit_excel.py` を使う。
+
+**スキルは優先スキルから先に1つだけ読み、使えると分かったらそのまま使う。**
+優先スキルとフォールバックの両方を、比較のために最初から読み比べる必要はない
+（無駄なトークン消費になる）。フォールバックへ切り替えるのは、優先スキルの
+本文を読んだ結果「未導入」「エラーで実行できない」等の理由で使えないと
+判明した場合のみ。上表に無い種類のファイルを扱う場合は、スキル一覧から
+該当しそうなものを選んで `read_skill` すること。
 
 ### 成果物ファイルは生成・編集直後に必ず読み返して検証する
 

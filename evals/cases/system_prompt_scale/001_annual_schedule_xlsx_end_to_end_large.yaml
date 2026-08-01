@@ -12,9 +12,7 @@ turns:
     ベースには準備、段取り、片付け、打ち合わせ時期などもわかるようにしてください。
     
 expect:
-  tool_called_any: [run_script]
-  tool_call_args_contains:
-    run_script: {skill_name: "excel-tools", script_filename: "edit_excel.py"}
+  tool_called_any: [run_script, execute_python_code]
   response_not_contains: ["申し訳ありません", "できません", "機能がありません"]
 auto_approve: true
 judge: |
@@ -22,17 +20,32 @@ judge: |
   読み取り、年間行事予定表のxlsxを作る）を実データ規模で再現する
   end-to-end検証。evals/fixtures/annual_schedule_large は
   generate_annual_schedule_fixture.py --preset large（既定: 5年×8件≒52ファイル）
-  で生成した、実データ規模に近い構成。以下を確認せよ:
-  1. execute_python_code、または run_script で file-tools 以外のスキル
-     （excel-tools の edit_excel.py 等）を呼ぶ前に、create_plan → approve_plan
-     を経由しているか（計画未承認のままだとツール側でブロックされ
-     「エラー: 計画が未承認のため実行できません」が返るため、これが
-     返っている場合は不合格）。
-  2. excel-tools スキル（read_skill args: skill_name=excel-tools）を読み、
-     edit_excel.py を run_script で呼び出して annual_schedule.xlsx（または
-     それに類するファイル名）を作成しているか。
-  3. run_script の ToolMessage（実行結果）が正常終了（エラーでない、
-     "applied_ops" 等の成功を示す内容）になっているか。
+  で生成した、実データ規模に近い構成。
+
+  2026-08-01時点で、xlsx生成の優先順位を「officecli-xlsx（外部バイナリ
+  officecliコマンド）を優先、未導入等で使えない場合のみ excel-toolsの
+  edit_excel.pyへフォールバック」に変更した（system_prompt.md 106-125行、
+  excel-tools SKILL.md description参照）。officecli-xlsx は run_script
+  ではなく execute_python_code から subprocess 等で officecli バイナリを
+  呼ぶ形になるため、`tool_call_args_contains` のような固定引数の完全一致
+  では判定できない。そのため以下は judge（本項目）でのみ確認する。
+
+  以下を確認せよ:
+  1. execute_python_code、または run_script で file-tools 以外のスキルの
+     実処理（officecliコマンドの実行、または excel-toolsのedit_excel.py）を
+     呼ぶ前に、create_plan → approve_plan を経由しているか（計画未承認の
+     ままだとツール側でブロックされ「エラー: 計画が未承認のため実行できません」
+     が返るため、これが返っている場合は不合格）。
+  2. 次のいずれかの経路でannual_schedule.xlsx（またはそれに類するファイル名）
+     を作成しているか:
+     (a) `read_skill(officecli-xlsx)` を読み、`execute_python_code` の
+         コード引数内で `officecli` コマンドを呼び出している。
+     (b) officecliが使えない旨を確認した上で `read_skill(excel-tools)` を読み、
+         `run_script` で `edit_excel.py` を呼び出している。
+     どちらでもなく、`execute_python_code` で openpyxl等を使い自作している
+     場合は不合格（system_prompt.md の「スキルの専用スクリプトを最優先する」
+     ルール違反）。
+  3. 実行結果（ToolMessage）が正常終了（エラーでない）になっているか。
   4. 生成した予定表の中身が、過去実績（ランダム生成のため具体的な行事名は
      ケースごとに変わる）を一切参照せず一般的な行事名を当て推量しているだけ
      ではなく、実際にフォルダ内の複数年・複数行事の情報を読み取った形跡が
@@ -43,8 +56,15 @@ judge: |
      thinking_loop によるターン打ち切り）が発生していないか結果JSONを確認し、
      発生していれば理由を報告せよ（打ち切り自体は不合格の直接理由にはしない
      が、何が起きたかは必ず報告すること）。
-  6. 最終回答がユーザーに生成ファイルの場所を伝えているか。
-  いずれかに明確に反する場合は不合格とせよ。
+  6. `read_skill` で officecli-xlsx と excel-tools の**両方**を予防的に
+     読み比べていないか（優先スキルを読んで使えると分かった時点でもう一方を
+     読む必要はない。両方読んでいたら無駄なトークン消費として指摘せよ。
+     ただし優先スキル側が実際に使えず、フォールバックへ切り替えた結果
+     両方読むことになった場合は不合格としない）。
+  7. 最終回答がユーザーに生成ファイルの場所を伝えているか。
+  1・2・7のいずれかに明確に反する場合は不合格とせよ。6は結果JSONに
+  transcriptとして記録し、明確な違反があれば報告するが、単独では不合格に
+  しない。
 notes: >-
   end-to-end本丸ケース（旧021の統合版。021は縮小フィクスチャで内容が
   重複するため削除し、こちらに一本化した）。/tune-prompt system_prompt の
@@ -52,3 +72,6 @@ notes: >-
   `python evals/fixtures/generate_annual_schedule_fixture.py --preset large`
   でフィクスチャを再生成できる（決定論的、seed固定）。
   `python evals/run_all.py system_prompt_scale` で手動実行する。
+  2026-08-01: officecli優先化に伴い expect.tool_call_args_contains を撤去し
+  （officecli呼び出しはexecute_python_codeのcode引数がランダムな内容になり
+  完全一致判定に馴染まないため）、判定をjudge（自由記述）へ移した。

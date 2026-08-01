@@ -1,0 +1,83 @@
+id: recipe_images_to_md_end_to_end_100
+target: system_prompt_scale
+work_dir: evals/fixtures/レシピ_100
+timeout_seconds: 10800
+auto_approve: true
+turns:
+  - >-
+    imagesフォルダ内の画像ファイルは料理本のレシピの写真です。
+    これらの写真の内容を読み取り、mdフォルダにmdファイルでレシピの内容を
+    書き出してください。
+
+    出力ファイル名 ${元画像ファイル名}-${料理名}-${材料}.md
+
+    材料は材料の名前を _ アンダーバーでつなぐ。ファイル名に使用できない文字は除外する。
+
+    出力フォーマット
+
+    # 料理名
+
+    関連画像ファイル名： ${ファイル名}
+
+    ## 材料
+    画像に記載の材料をここに記載
+    分量まで正確に書く
+
+    ## 作り方
+    ここに作り方を記述
+expect:
+  tool_called_any: [dispatch_agent, execute_python_code]
+  tool_not_called: [analyze_image]
+  tool_call_args_contains:
+    dispatch_agent: {agent_type: "worker"}
+  response_not_contains: ["申し訳ありません", "できません", "機能がありません"]
+judge: |
+  002_recipe_images_to_md_end_to_end_large（297枚）の縮小版（100枚）。
+  worker サブエージェント導入・画像縮小・メイントークンガード・
+  context_compaction修正後の設計が、より短時間で繰り返し検証できる規模でも
+  安定して動くかを確認するために作成した。判定基準は297枚版と同一。
+
+  以下を確認せよ:
+  1. 画像の読み取り→mdファイル書き出しは、必ず
+     dispatch_agent(agent_type="worker") への委譲経由で行われているか
+     （main agent が analyze_image を直接呼んで中身を確認していたら、
+     その時点で明確に不合格。dispatch_agent(agent_type="explore") を
+     使っていた場合も、worker の目的から外れるため不合格）。
+  2. 分割の粒度が妥当か。全100件を1回のdispatch_agentに丸投げしていないか、
+     逆に1件ずつ100回に分割するような過度に細かい分割になっていないか。
+     目安（${subagent_max_iterations}件、既定30件）を基準にグループ数を
+     決めているか（厳密な一致は不要。サブエージェント側のトークン上限に
+     達して1グループを複数回に分割し直す再委任は正常な回復動作であり
+     不合格理由にはしない）。
+  3. **最重要**: 分割方法（グループ数・1グループあたりの件数）について、
+     一度決定した後に同じ計算・言い直し・再検討をテキストで繰り返して
+     いないか。ほぼ同一内容の文章が2回以上繰り返し出現していたら、これは
+     過去に実際に観測された退行そのものなので明確に不合格とせよ。
+  4. `dispatch_agent(agent_type="worker")` への**最初の**委譲より前に、
+     create_plan → approve_plan を経由しているか（計画未承認のまま worker
+     へ委譲し、書き込みがブロックされて読み取り結果が無駄になっている場合
+     は不合格。過去に実際に観測された退行）。
+  5. worker から返ってきた ToolMessage（最終回答）が、読み取った本文や
+     生成ファイル名の全件一覧を含んでいないか（「処理件数・書き出し件数・
+     失敗分・未処理分」程度の要約に収まっているべき）。
+  6. 結果JSONの `token_usage_max_per_call.calls_over_ceiling` が0であるか、
+     `token_usage_max_per_call.total_tokens` が64000を大きく超えていないかを
+     確認せよ。多少の超過だけで即不合格にはしないが、結果としてコンテキスト
+     上限（128000）に張り付いていた場合は不合格。
+  7. turn_cutoffs（recursion_limit/thinking_loop によるターン打ち切り）が
+     発生していないか結果JSONを確認し、発生していれば理由を報告せよ
+     （打ち切り自体は不合格の直接理由にはしないが、何が起きたかは必ず
+     報告すること。ただし3の再計算ループが打ち切りの原因になっている場合は
+     3の不合格理由として扱うこと）。
+  8. 最終回答が出力先（mdフォルダ）と処理件数の概要をユーザーへ伝えているか。
+  3・4が該当する場合、または1・5のいずれかに明確に反する場合は不合格とせよ。
+notes: >-
+  evals/fixtures/レシピ_100 は evals/fixtures/レシピ/images（297枚）の
+  先頭100枚（ファイル名昇順）をコピーしたサブセット（2026-08-01作成）。
+  297枚版（002_..._large.yaml）は完走を確認済みだが実行に数十分〜数時間
+  かかるため、より短時間で繰り返し検証できるようこのケースを追加した。
+  work_dir はケース実行時に一時ディレクトリへコピーされてから使われるため
+  （run_case.py の shutil.copytree）、フィクスチャ本体は実行のたびに
+  汚染されない。/tune-prompt の自動ループには含めない。
+  `python -m evals.run_case evals/cases/system_prompt_scale/002_recipe_images_to_md_end_to_end_100.yaml`
+  で手動実行する（`run_all.py` は使わない）。

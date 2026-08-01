@@ -653,12 +653,25 @@ def _subprocess_env() -> dict[str, str]:
     AGENT_PATH_MEMORY_MAX_ENTRIES を注入する。run_script 経由で実行される
     スキルのスクリプトは、これらを `path_memory.env_params()` で読み、
     自分が出力するパスをレジストリへ登録できる。
+
+    config.ini `[paths].bin_path`（既定 `./.officecli/bin`）に列挙された
+    ディレクトリを PATH の先頭へ追加する。officecli-xlsx 等のスキルは
+    コマンド名（`officecli ...`）を素の状態で叩くため、事前にユーザーが
+    OS側のPATH環境変数へ手動登録していないと「コマンドが見つからない」で
+    失敗する。config.ini に配置先を明示しておけば、evals・app.py実行時の
+    どちらでも追加の手動設定なしで呼び出せる（事故: PATH未登録のまま
+    officecli-xlsx を優先させる設計へ変更したことで発覚）。
     """
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     env["AGENT_THREAD_ID"] = cl.user_session.get("thread_id") or "_no_session"
     if _PATH_MEMORY_DIR is not None:
         env["AGENT_PATH_MEMORY_DIR"] = str(_PATH_MEMORY_DIR)
     env["AGENT_PATH_MEMORY_MAX_ENTRIES"] = str(_PATH_MEMORY_MAX_ENTRIES)
+    cfg = _LLM_CONFIG
+    if cfg is not None:
+        bin_dirs = [d for d in cfg.bin_path if d.is_dir()]
+        if bin_dirs:
+            env["PATH"] = os.pathsep.join([*(str(d) for d in bin_dirs), env.get("PATH", "")])
     return env
 
 

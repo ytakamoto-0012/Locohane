@@ -99,6 +99,12 @@ class Config:
             絶対パスのリスト（project_locohane_dirs の各要素 / "agents"）。
             同名定義が両方に存在する場合は後方（.locohane側）が優先される
             （scan_agent_types() 参照）。
+        bin_path: run_script/execute_python_code のサブプロセスへ渡す PATH の
+            先頭に追加するディレクトリの絶対パスのリスト（既定
+            [./.officecli/bin]）。officecli 等、コマンド名を素の状態で叩く
+            前提の外部バイナリをOS側のPATH登録なしで呼び出せるようにする
+            （src/tools.py の _subprocess_env() 参照）。存在しないディレクトリは
+            無視される。
         system_prompt_path: システムプロンプトのテンプレートファイル
             （{{skills}} にスキル一覧を差し込む）の絶対パス。
         project_instructions_paths: プロジェクト固有の追加指示ファイル
@@ -352,6 +358,7 @@ class Config:
     project_locohane_dirs: list[Path]
     locohane_skills_dirs: list[Path]
     locohane_agents_dirs: list[Path]
+    bin_path: list[Path]
     system_prompt_path: Path
     project_instructions_paths: list[Path]
     checkpoint_db: Path
@@ -740,6 +747,10 @@ def load_config(config_path: Path | None = None) -> Config:
         os.getenv("PROJECT_LOCOHANE_DIR", paths.get("project_locohane_dir", "./.locohane")),
         PROJECT_ROOT,
     )
+    bin_path = _as_path_list(
+        os.getenv("BIN_PATH", paths.get("bin_path", "./.officecli/bin")),
+        PROJECT_ROOT,
+    )
 
     cfg = Config(
         base_url=os.getenv("LLM_BASE_URL", llm.get("base_url", "http://localhost:8080/v1")),
@@ -776,6 +787,7 @@ def load_config(config_path: Path | None = None) -> Config:
         project_locohane_dirs=project_locohane_dirs,
         locohane_skills_dirs=[d / "skills" for d in project_locohane_dirs],
         locohane_agents_dirs=[d / "agents" for d in project_locohane_dirs],
+        bin_path=bin_path,
         system_prompt_path=_resolve(PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", paths.get("system_prompt_path", "./system_prompt/system_prompt.md"))),
         project_instructions_paths=[d / "LOCOHANE.md" for d in project_locohane_dirs],
         checkpoint_db=_resolve(PROJECT_ROOT, os.getenv("CHECKPOINT_DB", paths.get("checkpoint_db", "./data/checkpoints.sqlite"))),
