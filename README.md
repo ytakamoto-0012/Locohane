@@ -499,6 +499,7 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 | `docx-tools` | `.locohane/skills/` | スクリプト実行を伴う | Word文書の読込・生成・編集（検索置換、Track Changes/変更履歴の付与・確定・却下を含む）。 |
 | `excel-tools` | `.locohane/skills/` | スクリプト実行を伴う | xlsx/xls/xlsmの読込・編集（グラフ・条件付き書式・データ検証を含む）・数式再計算・VBAマクロコードの読み込み/追加/上書き/削除・実行。 |
 | `pptx-tools` | `.locohane/skills/` | スクリプト実行を伴う | PowerPointの読込・生成（16:9テンプレート方式）・既存テンプレートの部分編集（デザインを保った差し替え・複製・削除・並び替え）。 |
+| `web-search` | `.locohane/skills/` | スクリプト実行を伴う | Tavily APIによるWeb検索。スキル専用の`scripts/.env`にTAVILY_API_KEY設定時のみ動作（既定では通信なし）。 |
 
 スキル開発の詳細な手順・規約は [`skills/SKILLS_README.md`](skills/SKILLS_README.md) を参照。
 
@@ -864,6 +865,12 @@ MCPサーバー機能（`.locohane/settings.json`、上記「MCPサーバー接�
 （本プロジェクトのコードが行うものではありません）。完全オフライン運用したい場合は、
 `officecli config autoUpdate false` で恒久的に無効化するか、実行のたびに環境変数
 `OFFICECLI_SKIP_UPDATE=1` を設定してください。導入しない場合はこの通信も発生しません。
+
+`web-search` スキル（Tavily APIによるWeb検索）は、スキル専用の
+`.locohane/skills/web-search/scripts/.env` に `TAVILY_API_KEY` を設定した場合のみ、
+ユーザーがこのスキルを実行した時に限り `https://api.tavily.com` へ通信します。
+未設定（`.env` 自体が無い、または空）の場合は一切通信せず、設定手順を示す
+エラーメッセージを返すだけです。
 
 ### 商用利用時のチェックリスト
 
