@@ -80,6 +80,33 @@ developer はこれまで `issue.md`（単一ファイル）に「症状／発�
 区分は原則「改善点」とする（要約結果が空でリトライ不能だった等、実害が
 出ている場合のみ「バグ」を検討する）。
 
+**`execute_python_*` 系ツールのWARNING**: `src.tools` / `src.subagent` loggerの
+`tool_result` / `subagent tool=execute_python_code` 警告は、LLMが生成した
+Pythonコードの実行結果を記録するためのWARNINGであり、**成功・失敗を問わず
+必ず発生する**。これらはバグではなく「今後の機能開発のアイデア」として扱う。
+- **成功時**: ツールが正常に終了し、結果を返している場合 → 区分「改善点」
+- **失敗時**: ツールがエラーメッセージを返している場合 → 区分「問題点」
+- 区分の判定は、ログのcontentフィールドにエラー文言（「エラー:」や
+  「Exception」等）が含まれるかで判断する。正常な出力（終了コード0、
+  処理結果の列挙等）が含まれる場合は成功とみなす。
+
+**`execute_python_code` のコード記載**: `execute_python_code` のWARNINGログには
+LLMが生成したPythonコード（`code`）が含まれている。ログフォーマットは以下の2種類。
+- **subagent経由**: `WARNING src.subagent: subagent tool=execute_python_code args={'code': '...'} -> [content]`
+- **メイングラフ経由（修正後）**: `WARNING src.tools: tool_result: name=execute_python_code args_code='...' content='...'`
+
+issue起票時には、該当ログから `code` フィールドを抽出し、ログ引用セクションの
+後に以下の節を追加して記載する。
+
+\`\`\`
+## 実行コード
+
+\`\`\`python
+（codeフィールドの内容をそのまま記載。500文字を超える場合は省略しない。
+末尾の改行は除去する）
+\`\`\`
+\`\`\`
+
 ### 5. 重複チェックと起票／追記
 
 1. 各候補について `issue/*.md` を Grep し、同一原因を示す既存ファイルが

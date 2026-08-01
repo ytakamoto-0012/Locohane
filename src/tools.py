@@ -120,6 +120,7 @@ def _duplicate_guard_session_key(base_key: str) -> str:
         return base_key
     return f"{base_key}_subagent_{run_id}"
 
+
 # dispatch_agent の実際のLLM呼び出しの同時実行数をガードするセマフォ。
 # ToolNode は同一AIMessage内の複数tool_callsを並列実行するため、モデルが
 # dispatch_agent を1ターンで複数回呼ぶと、単一インスタンスのllama-server
@@ -2885,12 +2886,14 @@ def _contains_error(content: str) -> bool:
     )
 
 
-def _log_tool_results_debug(result: dict) -> None:
+def _log_tool_results_debug(result: dict, call_args: dict | None = None) -> None:
     """メイングラフのツール呼び出し結果を DEBUG レベルで記録する（全文、未省略）。
 
     execute_python_* 系ツールは成功時も WARNING（スキル開発アイデアの
     シグナルとして記録。代替スキルが作られれば LLM は呼ばなくなる）。
     エラーキーワードを含むメッセージも WARNING。
+    execute_python_code の場合は call_args に code が含まれるため、
+    WARNINGログにも含める（monitor-app-log スキルでissue起票可能にする）。
     """
     for msg in result.get("messages", []):
         name = getattr(msg, "name", None) or ""
@@ -2899,9 +2902,17 @@ def _log_tool_results_debug(result: dict) -> None:
         has_error = _contains_error(content)
 
         if is_execute_python or has_error:
-            logger.warning(
-                "tool_result: name=%s content=%r", name, content[:500]
-            )
+            if is_execute_python and call_args and "code" in call_args:
+                logger.warning(
+                    "tool_result: name=%s args_code=%r content=%r",
+                    name,
+                    call_args["code"][:1000],
+                    content[:500],
+                )
+            else:
+                logger.warning(
+                    "tool_result: name=%s content=%r", name, content[:500]
+                )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("tool_result: name=%s content=%r", name, content)
 
@@ -2985,22 +2996,28 @@ class ImageAwareToolNode(ToolNode):
 
     def invoke(self, input, config=None, **kwargs):  # noqa: A002
         _log_tool_calls_debug(input)
+        call_args = _extract_tool_call_from_node_input(input)
+        if call_args:
+            call_args = call_args.get("args", {})
         blocked = _guard_awaiting_approve_plan(input)
         if blocked is not None:
-            _log_tool_results_debug(blocked)
+            _log_tool_results_debug(blocked, call_args)
             return _with_image_followups(blocked)
         result = super().invoke(input, config, **kwargs)
-        _log_tool_results_debug(result)
+        _log_tool_results_debug(result, call_args)
         return _with_image_followups(result)
 
     async def ainvoke(self, input, config=None, **kwargs):  # noqa: A002
         _log_tool_calls_debug(input)
+        call_args = _extract_tool_call_from_node_input(input)
+        if call_args:
+            call_args = call_args.get("args", {})
         blocked = _guard_awaiting_approve_plan(input)
         if blocked is not None:
-            _log_tool_results_debug(blocked)
+            _log_tool_results_debug(blocked, call_args)
             return _with_image_followups(blocked)
         result = await super().ainvoke(input, config, **kwargs)
-        _log_tool_results_debug(result)
+        _log_tool_results_debug(result, call_args)
         return _with_image_followups(result)
 
 
