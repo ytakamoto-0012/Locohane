@@ -36,6 +36,15 @@
 リトライ2回目自体がなぜ発生したか（何が1回目を失敗させたか）は
 このログ範囲からは特定できていない。
 
+## 追記（2026-08-02 09:32）
+
+リトライ後の初回チャンク受信まで24秒の遅延が再発。前回の126秒より大幅に改善したが、閾値（10秒）を超えている。
+
+```
+2026-08-02 09:31:51,168 WARNING app.py: on_message: リトライ2回目開始 [name='Task-1892' id=1773157096208 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-02 09:32:14,788 WARNING app.py: リトライ後の初回チャンク受信まで24秒（異常遅延） [name='Task-1892' id=1773157096208 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+```
+
 ## 追記（YYYY-MM-DD HH:MM）
 
 （同一原因の問題が再検知されるたびに、ここに追記を積み重ねていく）
