@@ -24,14 +24,19 @@ from __future__ import annotations
 import logging
 import uuid
 
-from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+)
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import create_react_agent
 
 from .config import Config
 from .context_trim import trim_old_ai_messages, trim_old_tool_messages
-from .main_token_guard import maybe_append_token_guard
 from .llm import ThinkingLoopDetected, build_model, pick_loop_nudge_message
+from .main_token_guard import maybe_append_token_guard
 from .tools import ImageAwareToolNode, get_all_tools
 
 logger = logging.getLogger(__name__)
@@ -65,7 +70,7 @@ def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
     """
     model = build_model(config).bind_tools(get_all_tools())
 
-    def call_model(state: MessagesState) -> dict:
+    async def call_model(state: MessagesState) -> dict:
         """agent ノード: システムプロンプトを先頭に付けてモデルを呼ぶ。
 
         Args:
@@ -101,7 +106,7 @@ def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
         # 引継ぎプロンプトを出させて安全に終えるよう促す（src/main_token_guard.py）。
         history = maybe_append_token_guard(history, config)
         messages = [SystemMessage(content=system_prompt), *history]
-        response = model.invoke(messages)
+        response = await model.ainvoke(messages)
         return {"messages": [response]}
 
     def should_continue(state: MessagesState) -> str:
@@ -185,11 +190,7 @@ def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer):
         prompt=system_prompt,
         # トリミングとトークンガードのどちらかが有効ならフックが必要
         # （片方だけを見て None にすると、もう片方が黙って効かなくなる）。
-        pre_model_hook=(
-            pre_model_hook
-            if (config.context_trim_enabled or config.graph_token_guard_enabled)
-            else None
-        ),
+        pre_model_hook=(pre_model_hook if (config.context_trim_enabled or config.graph_token_guard_enabled) else None),
         checkpointer=checkpointer,
     )
 
@@ -318,9 +319,7 @@ async def ainvoke_ensuring_final_text(
         except ThinkingLoopDetected as exc:
             if loop_attempt >= loop_max_retries:
                 if remove_ids:
-                    await graph.aupdate_state(
-                        run_config, {"messages": [RemoveMessage(id=i) for i in remove_ids]}
-                    )
+                    await graph.aupdate_state(run_config, {"messages": [RemoveMessage(id=i) for i in remove_ids]})
                 raise
             logger.warning(
                 "LLM応答のループを検知（%d回目の再試行）: 直近テキスト=%r",
@@ -351,7 +350,5 @@ async def ainvoke_ensuring_final_text(
         # つながりうる）。thinking_loopのnudgeは元々ここで除去していたが、
         # 無言終了のnudgeは対象外になっていた非対称性を解消する
         # （tune-prompt iter22の長時間会話コンテキスト肥大化調査で発見）。
-        await graph.aupdate_state(
-            run_config, {"messages": [RemoveMessage(id=i) for i in remove_ids]}
-        )
+        await graph.aupdate_state(run_config, {"messages": [RemoveMessage(id=i) for i in remove_ids]})
     return result

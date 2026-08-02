@@ -2,166 +2,116 @@
 
 ---
 
-## [2026-08-01] Plan Mode の承認判断でエージェントがreasoning loopに陥る
+## ISSUE-004: 画像レシピ抽出バッチ（297枚）がThinkingLoopGuard発火で途中停止（未完遂）
 
-**症状**
+- **状態**: 調査中
+- **報告日**: 2026-08-03
+- **優先度**: 高
 
-`run_script_background` の動作テスト中（一時追加した `time-counter-test` スキルを
-`run_script_background` で実行するよう依頼）に、`run_script_background` 自体は
-正常に呼び出されて完了しているにもかかわらず、その後のモデルの思考ステップで
-「`create_plan` → `approve_plan` を呼ぶべきか」「`approve_plan` はユーザーへの
-承認ダイアログを内包しているのでそのまま呼んでよいはずだが、ユーザーに手間を
-かけるのは避けたい」という同じ内容の自問自答をほぼ一字一句そのまま何度も
-繰り返し、ツール呼び出しに進まないまま「思考中」ステップが止まらなくなった。
-UI上は「思考中」が停止可能な状態のまま長時間継続する。
+### 現象
 
-**発生条件**
+`E:\akiyo\レシピ\images` 内の画像297枚からレシピ情報を抽出しmdファイル化するバッチタスクにおいて、全体約30ステップ中ステップ11（画像111〜120件目）で処理が停止。「生成がループし、3回リトライしましたが改善しなかったため停止しました。」という自動停止メッセージで終了し、タスクは未完遂（進捗は全体の3分の1程度）。
 
-- モデル: `QWEN3.6_35B-A3B`（config.ini `[llm].model`）
-- `run_script_background` など書き込み系ツールの実行前に必要な
-  `plan_approved` 承認ゲート（`src\tools.py` `_prepare_script_execution`）に
-  最初弾かれ（計画未承認エラー）、その後の再判断で発生
+関連ログ: `data/logs/app_20260803_00_1.log`, `app_20260803_00_2.log`, `app_20260803_01.log`, `app_20260803_01_1.log`, `app_20260803_01_2.log`
 
-**推定原因（未検証）**
+関連する自動起票issue:
+- `issue/20260803_004600_thinking_loop_dispatch_agent_recipes.md`
+- `issue/20260803_004600_cancellederror_and_slot_congestion.md`
+- `issue/20260803_004600_execute_python_code_plan_approval_required.md`
 
-`create_plan`/`approve_plan` ツールの説明文（system_prompt.md 等）で、
-「`approve_plan` はユーザー確認ダイアログを内包するので自分の判断で続けて
-呼んでよい」という指示と、「ユーザーに手間をかけるべきでない」という
-一般的な配慮のどちらを優先すべきかの記述が曖昧／競合しており、モデルが
-判断を確定できず同じ結論の再検証を繰り返している可能性がある。
+### 原因（調査済み・複合要因）
 
-**副次的に見つかった問題**
+1. **一次原因（モデルの指示追従失敗・既知パターンへの回帰）**
+   `system_prompt/system_prompt.md:274-336` には「1回のdispatch_agentには`${subagent_max_iterations}`(=10)件を目安にする」「回数が数十回になっても非現実的と判断してはいけない」という、まさにこの障害を狙い撃ちした明文ルールが既に存在する（2026-07-31の同一失敗パターンへの対策として追記済み、`evals/tuning_log.md:2565-2577`参照）。
+   にもかかわらず、画像111〜120件目という深い段階でモデルがこのルールを適用できず、1件=1委譲換算で「258回」を算出し、「258回も呼ぶのは非現実的」と自己否定→別案検討→同じ結論、という段落単位の反復を生成した（`src/llm.py:282-372` の `_ThinkingLoopDetector` が1回の生成内の文字列反復として検知、`match_ratio_threshold=0.4`超過が2回連続で確定）。
 
-Chainlitサーバーのコンソールログで以下の `UnicodeEncodeError` が発生：
+2. **二次原因（構造的な誘因）**
+   `analyze_image`（`src/tools.py:2687-2754`）の結果は `ToolMessage.content` には入らず、次のAIMessageにしか現れない設計。かつメインエージェント自身は `analyze_image` を持てない設計（`system_prompt.md:334-335`）。このためモデルは「execute_python_codeからanalyze_imageを呼べない」という制約に繰り返し直面し、そのたびにジレンマを再言語化してループの燃料にしていた。
 
-```
-UnicodeEncodeError: 'cp932' codec can't encode character '—' in position ...: illegal multibyte sequence
-```
+3. **増幅要因（計画承認フローの実害）**
+   `create_plan` を誤って再度呼ぶと `plan_approved` がリセットされる（`src/tools.py:2406`）。混乱したモデルが計画を作り直そうとするたびに `execute_python_code`/`Glob` がブロックされ続け、同一夜間に7回連続でエラーが発生（`issue/20260803_004600_execute_python_code_plan_approval_required.md` 参照）。
 
-モデル出力に含まれる em-dash（`—`）等の文字を、cp932コンソールへログ出力
-しようとして例外（`--- Logging error ---`）になる。処理自体は継続するが、
-該当ログ行は欠落する。ロガーのハンドラでUTF-8出力や `errors="backslashreplace"`
-等の指定がされていない可能性がある。
+4. **リトライ機構の限界**
+   `ThinkingLoopDetector`（`src/llm.py:282-372`）は1回の生成内の文字列反復しか検知できず、複数ターンにまたがる「同じ結論への収束」は検知対象外。リトライ経路（`src/graph.py` の `ainvoke_ensuring_final_text`、`src/subagent.py` の `_invoke_with_loop_retry`）は汎用nudge注入とLLMグラフ再構築のみを行い、誤った計画方針そのものは訂正しないため、同日中に4回検知されるも根治しなかった。
 
-**影響**
+5. **並行して観測された別系統の不具合（cancel scope RuntimeError）**
+   `langchain_openai` の `_astream_with_chunk_timeout`（`_client_utils.py:650`）が `asyncio.wait_for()` でストリーム取得を別タスク化しており、httpx/httpcore/anyioが開く`CancelScope`の「開いたタスクでしか閉じられない」制約に抵触して `RuntimeError: Attempted to exit cancel scope in a different task than it was entered in` が発生（`Exception ignored in`ログとして観測）。`config.ini` に既にこの現象への仮説と実験計画（`stream_chunk_timeout_seconds=0`にすると再現しなくなるか検証する）が記載されているが未実施。この事象自体はタスク停止の直接原因ではなく、並行して発生していたllama-serverスロット競合（初回チャンク遅延最大242秒）の周辺症状。
 
-単純な1ステップのタスクでも、書き込み系ツールを伴うと計画承認フローで
-思考ループに陥り、実質的にタスクが完了しなくなるケースがある。
+### 関連ファイル
 
-**追記（同日、再現テストで判明）**
+- `system_prompt/system_prompt.md:274-336` — グループ化ルールの明文規定
+- `src/llm.py:282-372` — `_ThinkingLoopDetector`実装
+- `src/llm.py:600-705` — `_astream_guarded`（ストリーミング・cancel処理）
+- `src/graph.py:249-354` — `ainvoke_ensuring_final_text`（リトライ経路）
+- `src/subagent.py:117-208` — `_invoke_with_loop_retry`
+- `src/tools.py:2406` — `create_plan`再呼び出し時の`plan_approved`リセット
+- `src/tools.py:2687-2754` — `analyze_image`実装
+- `config.ini` [llm] `stream_chunk_timeout_seconds`（63-78行目付近）
+- `config.ini` [llm] `max_concurrent_requests`（未コミットで追加実装中、`src/llm.py`の`_LLM_REQUEST_SEMAPHORE`）
 
-Locohane側には既に `ThinkingLoopDetected`（`app.py`、思考ループを検知して
-LLMクライアント接続をクローズしグラフを再構築し自動リトライする機構）が
-実装されており、今回のケースでもログ上は作動していた
-（`20:28:31 - WARNING - app.py - ThinkingLoopDetected: ...リトライ2回目開始`）。
-しかしこの自動リトライでは思考ループが解消されず、最終的にユーザーが
-手動でセッション停止（`on_stop`）し、新規チャットで最初からやり直すことで
-回避した。同一スレッド内での自動リトライだけでは不十分な可能性がある。
+### 修正案
 
-なお再試行後は `create_plan` → `approve_plan` → `run_script_background`
-→（約5分37秒、LLMへのリクエストなしで待機）→ `update_task_progress: completed`
-と正常に完了しており、`run_script_background` 自体（[scripts].timeoutの
-300秒を超えるジョブでもタイムアウトしない挙動）は問題なく動作することを確認済み。
+1. `create_plan`の再呼び出しガード — 既に承認済みで内容が実質同一の場合は`plan_approved`をリセットしない、または再呼び出し前に警告を返す（`src/tools.py:2406`周辺）
+2. グループ分割をLLMの暗算に委ねない — `${subagent_max_iterations}`件ごとの分割案（開始/終了番号のリスト）をツール側で機械的に提示する
+3. `ThinkingLoopDetector`に軽量な意味的パターン検知を追加 — 「現実的ではない」等の停滞フレーズを検知し、より具体的なnudge（例:「create_planは既に承認済みです」「1件ずつではなく${subagent_max_iterations}件ずつグループ化してください」）を注入する
+4. リトライ経路で直近のツール結果（計画未承認エラーの連続など）を検査し、単なるnudgeでは解決しない構造的な行き詰まりには強い介入を入れる
+5. `stream_chunk_timeout_seconds=0`の実験を本番反映し、cancel scope RuntimeErrorが再現しなくなるか確認する（config.ini記載の未実施実験）
 
-**追記2（同日、execute_python_code_background の動作テストで再発）**
+### 検証方法
 
-`execute_python_code_background`（新規実装）の動作テスト中にも同じ
-`ThinkingLoopDetected` が再発した。今回は `21:01:28` に3回目のリトライが
-開始した後、`21:05:11` にユーザーが手動でセッション停止（`on_stop`）する
-まで**3分半以上応答なしでフリーズ**しており、`run_script_background` の
-時より深刻だった。自動リトライ機構が働いても複数回（2回・3回）失敗し続け、
-最終的に人間の介入なしには回復しないケースがあることを再確認した。
-
-このテストでは思考ループとは別に、モデルの判断そのものに起因する
-2種類の失敗パターンも観測された（`execute_python_code_background` 自体の
-バグではなく、エージェントの振る舞いの問題）:
-
-1. ジョブ起動後、`check_script_job` を1〜7秒間隔で連投し、19秒経過時点で
-   「330秒は長いから」と自発的に `stop_script_job` で打ち切ってしまった
-   （ユーザーは完走を求めていたが、モデルが勝手に判断して打ち切った）
-2. `create_plan` を「ジョブ起動」のみの1ステップで作成し、起動直後に
-   `update_task_progress` で該当ステップを `completed` にしてしまった結果、
-   ジョブ完了を待たずに `plan_approved` がリセットされて Plan Mode に
-   戻ってしまった（バックグラウンドジョブの「起動」と「完了待ち・結果確認」
-   を別ステップに分けるという設計判断をモデルがしなかった）
-
-**推定原因2（未検証）**
-
-`run_script_background`/`execute_python_code_background` の戻り値
-（`src\tools.py` 該当ツール末尾）に含まれる
-「途中で打ち切る場合は `stop_script_job` を使ってください」という一文が、
-「長時間かかる処理は打ち切るべきもの」という誤読を誘発している可能性がある。
-また `check_script_job` の docstring には「短い間隔で連投しない」
-「処理時間の長さ自体は打ち切る理由にならない」という振る舞い面のガイダンスが
-無く、`create_plan` にも「バックグラウンドジョブは起動ステップと完了確認
-ステップを分けること」という誘導が無い。これらのdocstring改善で
-成功率が上がる可能性があるが、`run_script_background` は同じ文言でも
-1回目失敗・2回目成功だったため、モデルのサンプリングの非決定性による
-振れ幅の影響も否定できず、docstring修正だけで再現しなくなるとは限らない。
-
-**追記3（同日、原因調査・部分対応）**
-
-サブエージェントによる調査と、実際の思考ループログ（スクリーンショット）の
-精読の結果、当初の「推定原因（未検証）」（承認ダイアログ許可と手間への配慮の
-競合）は誤りと判明した。実際のログでは、モデルは毎回「`create_plan` →
-`approve_plan` を呼ぶ」という結論に到達し、計画の中身（ステップ・activeForm）
-まで具体的に生成していたにもかかわらず、そこから実際のツール呼び出しに移行
-せず「いや、待てよ」「よく考えたら」で振り出しに戻る、という**結論後も同じ
-検証を再生成し続ける自己回帰的な反復**だった。
-
-原因は `system_prompt.md` の「Plan & Progress」節（ステップ1）にある
-「`create_plan` を呼ぶ直前の自己チェック」（自問すること）および「NG例」
-（自分の判断を疑うこと）という、行動直前に必ず自己懐疑させる指示が、
-本来ステップ1（調査十分性の確認）限定であるにもかかわらず、モデルの
-振る舞いパターンとして汎化し、明示的な自問指示の無いステップ3
-（`approve_plan` を呼ぶ）にまで漏れ出していたと推定される。ステップ3
-自体は「自分の判断でそのまま呼んでよい」と既に明記されていたが、この
-許可文言を読んでは疑い、また読んでは疑う、を繰り返す状態に陥っていた。
-
-なお config.ini 側のサンプリングパラメータ（`repeat_penalty`/`dry_*`等）は
-過去に検証済みでこれ以上の調整余地は無いことを確認済み。
-
-**対応**
-
-- `system_prompt.md` のステップ3冒頭に「ここでは自問・再検証は不要」
-  「ステップ1の自問指示はステップ3には適用されない」「再検討し始めたら
-  直ちに中断してそのまま approve_plan を呼ぶ」旨を明記する一文を追加済み。
-  効果は再現テストで要確認。
-- `UnicodeEncodeError`（cp932）については、`evals/run_case.py`・
-  `evals/run_all.py` には `sys.stdout.reconfigure(encoding="utf-8")` による
-  対策が既にあるが、`app.py`（Chainlitサーバー本体）には同様の対策が
-  無いことを確認した。リポジトリ内に `StreamHandler` は存在せず、コンソール
-  出力は `chainlit run` がパッケージ内部で独自に `logging.basicConfig()` する
-  ため cp932依存になっている。`app.py` 起動時にも同様の `reconfigure` を
-  追加すれば解消する見込みだが、未対応。
-- `ThinkingLoopDetected` の自動リトライが複数回失敗する件について、
-  `_rebuild_graph`/`on_stop` はいずれも LangGraph の checkpointer を
-  使い回す実装であり、**ループを引き起こした直前のAIMessage・ツール呼び出し
-  履歴はクリアされず、nudgeメッセージ1件が追記されるだけで同じ文脈のまま
-  再送される**ことを確認した。これが「リトライしても解消しない」ことの
-  構造的原因と考えられる。ユーザーが「新規チャットで回避できた」のは
-  `on_stop` 自体ではなく、新しい `thread_id`（新しいチェックポイント系列）を
-  発行する `on_chat_start` によるものだった。リトライ時にループ原因となった
-  直近メッセージをcheckpointerから除去する等の対応は未実施。
-- `check_script_job`/`stop_script_job`/`run_script_background`/
-  `execute_python_code_background` の戻り値・docstring改善は対応済み
-  （`src\tools.py`）。
-  - 起動直後の案内文を `_background_job_started_message()` に共通化し、
-    「途中で打ち切る場合は stop_script_job を使ってください」という
-    誤読を招く表現をやめ、「処理に時間がかかっていること自体は打ち切る
-    理由にならない。ユーザーから明示的に中断を指示された場合にのみ使う」
-    と明記。
-  - `check_script_job` に「実行中が返ってきても数秒間隔で連投せず、経過を
-    伝えたらターンを終えるか十分な間隔を空けて呼び直す」旨を追記。
-  - `stop_script_job` に「ユーザーの明示的な指示がある場合のみ使う」旨を追記。
-  - `create_plan`/`update_task_progress` に「run_script_background/
-    execute_python_code_background は『起動』と『完了確認』を別ステップに
-    分け、起動しただけの時点では completed にしない」旨を追記（1ステップの
-    計画を作って起動直後に completed → plan_approved リセット →
-    不要な計画やり直しループ、という今回の失敗パターンへの対策）。
-  - `approve_plan`/`create_plan` の「書き込み系ツール」列挙に
-    `run_script_background`/`execute_python_code_background` が抜けていた
-    点も追記して補完。
-  - 再現テストによる効果検証は未実施。
+1. 297枚規模の画像バッチ処理を再実行し、ステップ11相当（100件超）まで到達してもThinkingLoopGuardが発火しないことを確認
+2. `create_plan`を意図的に複数回呼び出しても`execute_python_code`がブロックされないことを確認
+3. `stream_chunk_timeout_seconds=0`設定下で長時間実行し、`Attempted to exit cancel scope`エラーが再発しないことを確認
 
 ---
+
+## ISSUE-003: approve_planでブラウザ再フォーカス時に承認ボタンが消える + 次回整合性エラー
+
+- **状態**: 調査中
+- **報告日**: 2026-08-02
+- **優先度**: 中
+
+### 現象
+
+1. `approve_plan`ツールでユーザーに計画の承認/拒否を促す承認ボタンが表示される
+2. ユーザーがブラウザのタブを再フォーカス（WindowsのIME切り替え等）すると、**ボタンが一瞬で消える**
+3. 次回メッセージ送信時に以下のエラーが発生する:
+   ```
+   ValueError: Found AIMessages with tool_calls that do not have a
+   corresponding ToolMessage. Here are the first few of those tool calls:
+   [{'name': 'approve_plan', 'args': {}, ...}]
+   ```
+
+### 原因
+
+1. `approve_plan`は`cl.AskActionMessage.send()`でユーザー応答待ちの**ブロッキング状態**にある
+2. ブラウザ再フォーカス（WindowsのIME切り替え等）でWebSocketが切断 → `send()`が`CancelledError`
+3. `app.py`の`CancelledError`ハンドリング（行1473-1521）でToolMessage補完を試みるが、`graph.aupdate_state()`が`_CheckpointerTimeout`で失敗
+4. 補完がスキップされたままチェックポイントが更新される
+5. 次回メッセージ送信時にチェックポイント履歴読み込み段階で「tool_callsに対応するToolMessageが無い」エラー
+
+### 関連ファイル
+
+- `app.py`:
+  - 行2441: `approve_plan`の`AskActionMessage.send()`呼び出し
+  - 行1473-1521: `CancelledError`ハンドリングとToolMessage補完処理
+  - 行1503-1517: `graph.aupdate_state()`による補完コミット
+  - 行1093-1107: `_find_orphaned_tool_calls()`関数
+  - 行660-670: `_rebuild_graph()`関数
+- `src/tools.py` 行2416-2467: `approve_plan`ツール実装
+
+### 修正案
+
+**案1: `_rebuild_graph()`の冒頭に整合性修復処理を追加**
+
+`_rebuild_graph()`でチェックポイント再構築後、`_find_orphaned_tool_calls()`で孤立したtool_callsを検出し、`aput_writes()`で補完ToolMessageを書き込む。既存の`app.py`行1503-1517のロジックを流用。
+
+**案2: `approve_plan`に`asyncio.wait_for`によるタイムアウトラップ**
+
+`cl.AskActionMessage.send()`を`asyncio.wait_for`で囲み、ブラウザの再フォーカスによる一時的WebSocket切断をタイムアウトで許容する。タイムアウト発生時は既存のタイムアウト処理経路（`res is None`）へ流す。
+
+### 検証方法
+
+1. `approve_plan`を実行 → 承認ボタンを表示
+2. ブラウザのタブを再フォーカス（WindowsのIME切り替え等でWebSocketが切断される操作）
+3. ボタンが消えない、または消えても次回メッセージ送信時に整合性エラーが出ないことを確認

@@ -59,6 +59,24 @@ class _CancelScopeBreakageWatcher(logging.Filter):
 
 _cancel_scope_watcher = _CancelScopeBreakageWatcher()
 
+# --- LLM 同時実行数ガード ---
+# llama-server への実 HTTP リクエスト総数をガードするセマフォ。
+# [llm].max_concurrent_requests に応じて init_llm_concurrency() が
+# 再設定する。None はガード無効（無制限）を表す。既定 Semaphore(1) は
+# init_llm_concurrency() 未実行時（テスト等）の安全側フォールバック。
+_LLM_REQUEST_SEMAPHORE: "asyncio.Semaphore | None" = asyncio.Semaphore(1)
+
+
+def init_llm_concurrency(max_concurrent_requests: int) -> None:
+    """llama-server への同時リクエスト数上限を初期化する。
+
+    Args:
+        max_concurrent_requests: 同時実行数上限。1 以上: Semaphore(N) で
+            ガードする。0 以下: ガードを無効化（None に設定）する。
+    """
+    global _LLM_REQUEST_SEMAPHORE
+    _LLM_REQUEST_SEMAPHORE = asyncio.Semaphore(max_concurrent_requests) if max_concurrent_requests > 0 else None
+
 
 def _register_cancel_scope_watcher() -> None:
     """httpcore ロガーに cancel scope breakage フィルタを登録する（冪等）。
@@ -533,6 +551,8 @@ class ChatLlamaCpp(ChatOpenAI):
         )
 
     def _stream(self, *args: Any, **kwargs: Any) -> Any:
+        if _LLM_REQUEST_SEMAPHORE is not None:
+            logger.warning("同期ストリームパス (_stream) が呼ばれました。この経路はセマフォでガードされません。")
         if not self.loop_guard_enabled:
             yield from super()._stream(*args, **kwargs)
             return
@@ -561,6 +581,27 @@ class ChatLlamaCpp(ChatOpenAI):
                 _log_first_chunk_latency(time.time(), sync=True, never_received=True)
 
     async def _astream(self, *args: Any, **kwargs: Any) -> Any:
+        """llama-server への HTTP リクエストを _LLM_REQUEST_SEMAPHORE でガードする。
+
+        本体処理（ループ検知・finally節）は _astream_guarded に分離し、
+        この関数自体はセマフォ取得の薄いラッパーとして振る舞う。
+        """
+        sem = _LLM_REQUEST_SEMAPHORE
+        if sem is None:
+            async for chunk in self._astream_guarded(*args, **kwargs):
+                yield chunk
+            return
+        if sem.locked():
+            logger.debug("空きスロットが無いため待機します（llm concurrent guard）")
+        async with sem:
+            async for chunk in self._astream_guarded(*args, **kwargs):
+                yield chunk
+
+    async def _astream_guarded(self, *args: Any, **kwargs: Any) -> Any:
+        """_astream の本体（ループ検知・finally節）。
+
+        _astream からセマフォの内側で呼ばれる。
+        """
         if not self.loop_guard_enabled:
             async for chunk in super()._astream(*args, **kwargs):
                 yield chunk
@@ -662,6 +703,30 @@ class ChatLlamaCpp(ChatOpenAI):
                         describe_current_task(diag_start),
                         diag_elapsed,
                     )
+
+    async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
+        """llama-server への HTTP リクエストを _LLM_REQUEST_SEMAPHORE でガードする。
+
+        現状は stream=True 常に設定されているため到達しないが、将来
+        stream=False が明示指定された場合の保険として追加する。
+        """
+        sem = _LLM_REQUEST_SEMAPHORE
+        if sem is None:
+            return await super()._agenerate(*args, **kwargs)
+        if sem.locked():
+            logger.debug("空きスロットが無いため待機します（llm concurrent guard）")
+        async with sem:
+            return await super()._agenerate(*args, **kwargs)
+
+    def _generate(self, *args: Any, **kwargs: Any) -> Any:
+        """同期生成パスはセマフォ二重管理を行わず、警告ログのみ出力する。
+
+        項目2の修正後は呼び出し箇所がなくなるため、想定外に到達した場合に
+        気づけるよう警告ログを出力して親の処理をそのまま返す。
+        """
+        if _LLM_REQUEST_SEMAPHORE is not None:
+            logger.warning("同期生成パス (_generate) が呼ばれました。" "この経路はセマフォでガードされません。")
+        return super()._generate(*args, **kwargs)
 
 
 def build_model(config: Config) -> ChatOpenAI:

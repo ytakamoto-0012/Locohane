@@ -351,6 +351,7 @@ class Config:
     track_token_usage: bool
     request_timeout_seconds: float
     stream_chunk_timeout_seconds: float
+    llm_max_concurrent_requests: int
 
     # --- 保存先パス（すべて絶対パス） ---
     skills_dir: Path
@@ -589,9 +590,7 @@ def _as_message_list(value: str | None) -> list[str]:
     try:
         parsed = ast.literal_eval(text)
     except (ValueError, SyntaxError) as e:
-        raise ValueError(
-            f"config.ini の値はJSON/Pythonのリスト（配列）形式で指定してください: {text!r}"
-        ) from e
+        raise ValueError(f"config.ini の値はJSON/Pythonのリスト（配列）形式で指定してください: {text!r}") from e
     if not isinstance(parsed, list):
         raise ValueError(f"config.ini の値はリスト（配列）形式で指定してください: {text!r}")
     return [str(item) for item in parsed if str(item).strip()]
@@ -648,9 +647,7 @@ def _parse_auth_users(value: str | None) -> dict[str, str]:
     users: dict[str, str] = {}
     for item in parsed:
         if not (isinstance(item, (list, tuple)) and len(item) == 2):
-            raise ValueError(
-                f"AUTH_USERS の各要素は [ユーザー名, パスワード] の2要素にしてください: {item!r}"
-            )
+            raise ValueError(f"AUTH_USERS の各要素は [ユーザー名, パスワード] の2要素にしてください: {item!r}")
         users[str(item[0])] = str(item[1])
     return users
 
@@ -723,22 +720,14 @@ def load_config(config_path: Path | None = None) -> Config:
     log_section = parser["log"] if parser.has_section("log") else {}
     chat_log = parser["chat_log"] if parser.has_section("chat_log") else {}
     scripts = parser["scripts"] if parser.has_section("scripts") else {}
-    file_tools_duplicate_guard = (
-        parser["file_tools_duplicate_guard"]
-        if parser.has_section("file_tools_duplicate_guard")
-        else {}
-    )
+    file_tools_duplicate_guard = parser["file_tools_duplicate_guard"] if parser.has_section("file_tools_duplicate_guard") else {}
     graph = parser["graph"] if parser.has_section("graph") else {}
     subagent = parser["subagent"] if parser.has_section("subagent") else {}
     timeouts = parser["timeouts"] if parser.has_section("timeouts") else {}
     plan_section = parser["plan"] if parser.has_section("plan") else {}
-    thinking_loop_guard = (
-        parser["thinking_loop_guard"] if parser.has_section("thinking_loop_guard") else {}
-    )
+    thinking_loop_guard = parser["thinking_loop_guard"] if parser.has_section("thinking_loop_guard") else {}
     context_trim = parser["context_trim"] if parser.has_section("context_trim") else {}
-    context_compaction = (
-        parser["context_compaction"] if parser.has_section("context_compaction") else {}
-    )
+    context_compaction = parser["context_compaction"] if parser.has_section("context_compaction") else {}
     auth = parser["auth"] if parser.has_section("auth") else {}
     mcp = parser["mcp"] if parser.has_section("mcp") else {}
     checkpointer = parser["checkpointer"] if parser.has_section("checkpointer") else {}
@@ -767,19 +756,19 @@ def load_config(config_path: Path | None = None) -> Config:
         dry_base=_as_optional_float(os.getenv("LLM_DRY_BASE", llm.get("dry_base", ""))),
         dry_allowed_length=_as_optional_int(os.getenv("LLM_DRY_ALLOWED_LENGTH", llm.get("dry_allowed_length", ""))),
         dry_penalty_last_n=_as_optional_int(os.getenv("LLM_DRY_PENALTY_LAST_N", llm.get("dry_penalty_last_n", ""))),
-        dry_sequence_breakers=_as_optional_str_list(
-            os.getenv("LLM_DRY_SEQUENCE_BREAKERS", llm.get("dry_sequence_breakers", ""))
-        ),
-        track_token_usage=_as_bool(
-            os.getenv("LLM_TRACK_TOKEN_USAGE", llm.get("track_token_usage", True))
-        ),
-        request_timeout_seconds=float(
-            os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", llm.get("request_timeout_seconds", 300))
-        ),
+        dry_sequence_breakers=_as_optional_str_list(os.getenv("LLM_DRY_SEQUENCE_BREAKERS", llm.get("dry_sequence_breakers", ""))),
+        track_token_usage=_as_bool(os.getenv("LLM_TRACK_TOKEN_USAGE", llm.get("track_token_usage", True))),
+        request_timeout_seconds=float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", llm.get("request_timeout_seconds", 300))),
         stream_chunk_timeout_seconds=float(
             os.getenv(
                 "LLM_STREAM_CHUNK_TIMEOUT_SECONDS",
                 llm.get("stream_chunk_timeout_seconds", 120),
+            )
+        ),
+        llm_max_concurrent_requests=int(
+            os.getenv(
+                "LLM_MAX_CONCURRENT_REQUESTS",
+                llm.get("max_concurrent_requests", 1),
             )
         ),
         skills_dir=_resolve(PROJECT_ROOT, os.getenv("SKILLS_DIR", paths.get("skills_dir", "./skills"))),
@@ -788,44 +777,38 @@ def load_config(config_path: Path | None = None) -> Config:
         locohane_skills_dirs=[d / "skills" for d in project_locohane_dirs],
         locohane_agents_dirs=[d / "agents" for d in project_locohane_dirs],
         bin_path=bin_path,
-        system_prompt_path=_resolve(PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", paths.get("system_prompt_path", "./system_prompt/system_prompt.md"))),
+        system_prompt_path=_resolve(
+            PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", paths.get("system_prompt_path", "./system_prompt/system_prompt.md"))
+        ),
         project_instructions_paths=[d / "LOCOHANE.md" for d in project_locohane_dirs],
         checkpoint_db=_resolve(PROJECT_ROOT, os.getenv("CHECKPOINT_DB", paths.get("checkpoint_db", "./data/checkpoints.sqlite"))),
         upload_dir=_resolve(PROJECT_ROOT, os.getenv("UPLOAD_DIR", paths.get("upload_dir", "./data/uploads"))),
         log_dir=_resolve(PROJECT_ROOT, os.getenv("LOG_DIR", paths.get("log_dir", "./data/logs"))),
         log_level=os.getenv("LOG_LEVEL", paths.get("log_level", "info")).strip().lower(),
-        log_clear_on_startup=_as_bool(
-            os.getenv("LOG_CLEAR_ON_STARTUP", paths.get("log_clear_on_startup", False))
-        ),
+        log_clear_on_startup=_as_bool(os.getenv("LOG_CLEAR_ON_STARTUP", paths.get("log_clear_on_startup", False))),
         default_workdir=_resolve(PROJECT_ROOT, os.getenv("DEFAULT_WORKDIR", paths.get("default_workdir", "./"))),
         memory_dir=_resolve(PROJECT_ROOT, os.getenv("MEMORY_DIR", paths.get("memory_dir", "./data/memory"))),
         help_path=_resolve(PROJECT_ROOT, os.getenv("HELP_PATH", paths.get("help_path", "./system_prompt/help.md"))),
         upload_retention_days=int(os.getenv("UPLOAD_RETENTION_DAYS", uploads.get("retention_days", 7))),
         upload_cleanup_interval_hours=float(os.getenv("UPLOAD_CLEANUP_INTERVAL_HOURS", uploads.get("cleanup_interval_hours", 1))),
-        image_max_long_side_pixels=int(
-            os.getenv("IMAGE_MAX_LONG_SIDE_PIXELS", images_section.get("max_long_side_pixels", 0))
-        ),
+        image_max_long_side_pixels=int(os.getenv("IMAGE_MAX_LONG_SIDE_PIXELS", images_section.get("max_long_side_pixels", 0))),
         image_jpeg_quality=int(os.getenv("IMAGE_JPEG_QUALITY", images_section.get("jpeg_quality", 85))),
         default_workdir_retention_days=int(os.getenv("DEFAULT_WORKDIR_RETENTION_DAYS", default_workdir_section.get("retention_days", 7))),
-        default_workdir_cleanup_interval_hours=float(os.getenv("DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS", default_workdir_section.get("cleanup_interval_hours", 1))),
+        default_workdir_cleanup_interval_hours=float(
+            os.getenv("DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS", default_workdir_section.get("cleanup_interval_hours", 1))
+        ),
         path_memory_dir=_resolve(PROJECT_ROOT, os.getenv("PATH_MEMORY_DIR", path_memory.get("dir", "./data/path_memory"))),
         path_memory_retention_days=int(os.getenv("PATH_MEMORY_RETENTION_DAYS", path_memory.get("retention_days", 1))),
         path_memory_cleanup_interval_hours=float(os.getenv("PATH_MEMORY_CLEANUP_INTERVAL_HOURS", path_memory.get("cleanup_interval_hours", 1))),
         path_memory_max_entries=int(os.getenv("PATH_MEMORY_MAX_ENTRIES", path_memory.get("max_entries", 500))),
         log_max_lines=int(os.getenv("LOG_MAX_LINES", log_section.get("max_lines", 5000))),
         log_retention_days=int(os.getenv("LOG_RETENTION_DAYS", log_section.get("retention_days", 7))),
-        log_cleanup_interval_hours=float(
-            os.getenv("LOG_CLEANUP_INTERVAL_HOURS", log_section.get("cleanup_interval_hours", 1))
-        ),
+        log_cleanup_interval_hours=float(os.getenv("LOG_CLEANUP_INTERVAL_HOURS", log_section.get("cleanup_interval_hours", 1))),
         chat_log_enabled=_as_bool(os.getenv("CHAT_LOG_ENABLED", chat_log.get("enabled", False))),
-        chat_log_dir=_resolve(
-            PROJECT_ROOT, os.getenv("CHAT_LOG_DIR", chat_log.get("dir", "./data/logs_chat"))
-        ),
+        chat_log_dir=_resolve(PROJECT_ROOT, os.getenv("CHAT_LOG_DIR", chat_log.get("dir", "./data/logs_chat"))),
         script_timeout=int(os.getenv("SCRIPT_TIMEOUT", scripts.get("timeout", 60))),
         script_python=os.getenv("SCRIPT_PYTHON", scripts.get("python", "python")),
-        code_exec_enabled=_as_bool(
-            os.getenv("CODE_EXECUTION_ENABLED", scripts.get("code_execution_enabled", True))
-        ),
+        code_exec_enabled=_as_bool(os.getenv("CODE_EXECUTION_ENABLED", scripts.get("code_execution_enabled", True))),
         script_background_max_runtime_seconds=int(
             os.getenv(
                 "SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS",
@@ -858,12 +841,8 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         graph_impl=os.getenv("GRAPH_IMPL", graph.get("implementation", "handwritten")),
         graph_recursion_limit=int(os.getenv("GRAPH_RECURSION_LIMIT", graph.get("recursion_limit", 50))),
-        graph_tool_max_parallel=int(
-            os.getenv("GRAPH_TOOL_MAX_PARALLEL", graph.get("max_parallel", 1))
-        ),
-        graph_token_guard_enabled=_as_bool(
-            os.getenv("GRAPH_TOKEN_GUARD_ENABLED", graph.get("token_guard_enabled", True))
-        ),
+        graph_tool_max_parallel=int(os.getenv("GRAPH_TOOL_MAX_PARALLEL", graph.get("max_parallel", 1))),
+        graph_token_guard_enabled=_as_bool(os.getenv("GRAPH_TOKEN_GUARD_ENABLED", graph.get("token_guard_enabled", True))),
         graph_token_guard_soft_threshold=int(
             os.getenv(
                 "GRAPH_TOKEN_GUARD_SOFT_THRESHOLD",
@@ -878,14 +857,8 @@ def load_config(config_path: Path | None = None) -> Config:
             ),
         ),
         subagent_max_iterations=int(os.getenv("SUBAGENT_MAX_ITERATIONS", subagent.get("max_iterations", 6))),
-        subagent_max_parallel=int(
-            os.getenv("SUBAGENT_MAX_PARALLEL", subagent.get("max_parallel", 1))
-        ),
-        subagent_token_guard_enabled=_as_bool(
-            os.getenv(
-                "SUBAGENT_TOKEN_GUARD_ENABLED", subagent.get("token_guard_enabled", True)
-            )
-        ),
+        subagent_max_parallel=int(os.getenv("SUBAGENT_MAX_PARALLEL", subagent.get("max_parallel", 1))),
+        subagent_token_guard_enabled=_as_bool(os.getenv("SUBAGENT_TOKEN_GUARD_ENABLED", subagent.get("token_guard_enabled", True))),
         subagent_token_guard_soft_threshold=int(
             os.getenv(
                 "SUBAGENT_TOKEN_GUARD_SOFT_THRESHOLD",
@@ -904,43 +877,19 @@ def load_config(config_path: Path | None = None) -> Config:
                 subagent.get("empty_response_max_retries", 2),
             )
         ),
-        approval_timeout_seconds=int(
-            os.getenv("APPROVAL_TIMEOUT_SECONDS", timeouts.get("approval_seconds", 300))
-        ),
-        ask_user_question_timeout_seconds=int(
-            os.getenv(
-                "ASK_USER_QUESTION_TIMEOUT_SECONDS", timeouts.get("ask_user_question_seconds", 60)
-            )
-        ),
-        ask_user_choice_timeout_seconds=int(
-            os.getenv(
-                "ASK_USER_CHOICE_TIMEOUT_SECONDS", timeouts.get("ask_user_choice_seconds", 90)
-            )
-        ),
-        plan_badge_allow_unlock=_as_bool(
-            os.getenv("PLAN_BADGE_ALLOW_UNLOCK", plan_section.get("allow_badge_unlock", True))
-        ),
-        thinking_loop_guard_enabled=_as_bool(
-            os.getenv(
-                "THINKING_LOOP_GUARD_ENABLED", thinking_loop_guard.get("enabled", True)
-            )
-        ),
-        thinking_loop_guard_window_chars=int(
-            os.getenv(
-                "THINKING_LOOP_GUARD_WINDOW_CHARS", thinking_loop_guard.get("window_chars", 600)
-            )
-        ),
+        approval_timeout_seconds=int(os.getenv("APPROVAL_TIMEOUT_SECONDS", timeouts.get("approval_seconds", 300))),
+        ask_user_question_timeout_seconds=int(os.getenv("ASK_USER_QUESTION_TIMEOUT_SECONDS", timeouts.get("ask_user_question_seconds", 60))),
+        ask_user_choice_timeout_seconds=int(os.getenv("ASK_USER_CHOICE_TIMEOUT_SECONDS", timeouts.get("ask_user_choice_seconds", 90))),
+        plan_badge_allow_unlock=_as_bool(os.getenv("PLAN_BADGE_ALLOW_UNLOCK", plan_section.get("allow_badge_unlock", True))),
+        thinking_loop_guard_enabled=_as_bool(os.getenv("THINKING_LOOP_GUARD_ENABLED", thinking_loop_guard.get("enabled", True))),
+        thinking_loop_guard_window_chars=int(os.getenv("THINKING_LOOP_GUARD_WINDOW_CHARS", thinking_loop_guard.get("window_chars", 600))),
         thinking_loop_guard_check_interval_chars=int(
             os.getenv(
                 "THINKING_LOOP_GUARD_CHECK_INTERVAL_CHARS",
                 thinking_loop_guard.get("check_interval_chars", 150),
             )
         ),
-        thinking_loop_guard_confirm_count=int(
-            os.getenv(
-                "THINKING_LOOP_GUARD_CONFIRM_COUNT", thinking_loop_guard.get("confirm_count", 2)
-            )
-        ),
+        thinking_loop_guard_confirm_count=int(os.getenv("THINKING_LOOP_GUARD_CONFIRM_COUNT", thinking_loop_guard.get("confirm_count", 2))),
         thinking_loop_guard_max_history_chars=int(
             os.getenv(
                 "THINKING_LOOP_GUARD_MAX_HISTORY_CHARS",
@@ -953,15 +902,9 @@ def load_config(config_path: Path | None = None) -> Config:
                 thinking_loop_guard.get("match_ratio_threshold", 0.2),
             )
         ),
-        thinking_loop_guard_max_retries=int(
-            os.getenv(
-                "THINKING_LOOP_GUARD_MAX_RETRIES", thinking_loop_guard.get("max_retries", 2)
-            )
-        ),
+        thinking_loop_guard_max_retries=int(os.getenv("THINKING_LOOP_GUARD_MAX_RETRIES", thinking_loop_guard.get("max_retries", 2))),
         thinking_loop_guard_nudge_messages=_as_message_list(
-            os.getenv(
-                "THINKING_LOOP_GUARD_NUDGE_MESSAGES", thinking_loop_guard.get("nudge_messages", "")
-            )
+            os.getenv("THINKING_LOOP_GUARD_NUDGE_MESSAGES", thinking_loop_guard.get("nudge_messages", ""))
         ),
         thinking_loop_guard_empty_response_max_retries=int(
             os.getenv(
@@ -969,9 +912,7 @@ def load_config(config_path: Path | None = None) -> Config:
                 thinking_loop_guard.get("empty_response_max_retries", 2),
             )
         ),
-        context_trim_enabled=_as_bool(
-            os.getenv("CONTEXT_TRIM_ENABLED", context_trim.get("enabled", True))
-        ),
+        context_trim_enabled=_as_bool(os.getenv("CONTEXT_TRIM_ENABLED", context_trim.get("enabled", True))),
         context_trim_keep_recent_tool_messages=int(
             os.getenv(
                 "CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES",
@@ -984,18 +925,14 @@ def load_config(config_path: Path | None = None) -> Config:
                 context_trim.get("truncated_max_chars", 2000),
             )
         ),
-        context_trim_ai_messages=_as_bool(
-            os.getenv("CONTEXT_TRIM_AI_MESSAGES", context_trim.get("trim_ai_messages", True))
-        ),
+        context_trim_ai_messages=_as_bool(os.getenv("CONTEXT_TRIM_AI_MESSAGES", context_trim.get("trim_ai_messages", True))),
         context_trim_keep_recent_ai_messages=int(
             os.getenv(
                 "CONTEXT_TRIM_KEEP_RECENT_AI_MESSAGES",
                 context_trim.get("keep_recent_ai_messages", 3),
             )
         ),
-        context_compaction_enabled=_as_bool(
-            os.getenv("CONTEXT_COMPACTION_ENABLED", context_compaction.get("enabled", True))
-        ),
+        context_compaction_enabled=_as_bool(os.getenv("CONTEXT_COMPACTION_ENABLED", context_compaction.get("enabled", True))),
         context_compaction_token_threshold=int(
             os.getenv(
                 "CONTEXT_COMPACTION_TOKEN_THRESHOLD",
@@ -1018,27 +955,19 @@ def load_config(config_path: Path | None = None) -> Config:
             PROJECT_ROOT,
             os.getenv(
                 "CONTEXT_COMPACTION_PROMPT_PATH",
-                context_compaction.get(
-                    "compaction_prompt_path", "./system_prompt/compaction_prompt.md"
-                ),
+                context_compaction.get("compaction_prompt_path", "./system_prompt/compaction_prompt.md"),
             ),
         ),
         auth_enabled=_as_bool(os.getenv("AUTH_ENABLED", auth.get("enabled", False))),
-        auth_require_password=_as_bool(
-            os.getenv("AUTH_REQUIRE_PASSWORD", auth.get("require_password", True))
-        ),
+        auth_require_password=_as_bool(os.getenv("AUTH_REQUIRE_PASSWORD", auth.get("require_password", True))),
         auth_users=_parse_auth_users(os.getenv("AUTH_USERS", "")),
         mcp_enabled=_as_bool(os.getenv("MCP_ENABLED", mcp.get("enabled", True))),
         mcp_settings_path=_resolve(
             PROJECT_ROOT,
             os.getenv("MCP_SETTINGS_PATH", mcp.get("settings_path", "./.locohane/settings.json")),
         ),
-        mcp_connect_timeout_seconds=float(
-            os.getenv("MCP_CONNECT_TIMEOUT_SECONDS", mcp.get("connect_timeout_seconds", 15))
-        ),
-        mcp_call_timeout_seconds=float(
-            os.getenv("MCP_CALL_TIMEOUT_SECONDS", mcp.get("call_timeout_seconds", 60))
-        ),
+        mcp_connect_timeout_seconds=float(os.getenv("MCP_CONNECT_TIMEOUT_SECONDS", mcp.get("connect_timeout_seconds", 15))),
+        mcp_call_timeout_seconds=float(os.getenv("MCP_CALL_TIMEOUT_SECONDS", mcp.get("call_timeout_seconds", 60))),
         checkpointer_op_timeout_seconds=float(
             os.getenv(
                 "CHECKPOINTER_OP_TIMEOUT_SECONDS",
@@ -1069,12 +998,8 @@ def load_config(config_path: Path | None = None) -> Config:
         cfg = replace(
             cfg,
             mcp_enabled=_as_bool(mcp_overrides.get("enabled", cfg.mcp_enabled)),
-            mcp_connect_timeout_seconds=float(
-                mcp_overrides.get("connectTimeoutSeconds", cfg.mcp_connect_timeout_seconds)
-            ),
-            mcp_call_timeout_seconds=float(
-                mcp_overrides.get("callTimeoutSeconds", cfg.mcp_call_timeout_seconds)
-            ),
+            mcp_connect_timeout_seconds=float(mcp_overrides.get("connectTimeoutSeconds", cfg.mcp_connect_timeout_seconds)),
+            mcp_call_timeout_seconds=float(mcp_overrides.get("callTimeoutSeconds", cfg.mcp_call_timeout_seconds)),
         )
 
     # data 配下のディレクトリを確実に用意する（checkpoint_db は親ディレクトリを作る）。

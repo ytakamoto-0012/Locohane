@@ -75,6 +75,7 @@ from src.llm import (
     build_model,
     describe_current_task,
     forget_session,
+    init_llm_concurrency,
     pick_loop_nudge_message,
     recent_cancel_scope_breakage,
     set_current_session,
@@ -631,6 +632,9 @@ async def _setup() -> None:
     # P0-3: httpcore の cancel scope breakage 検知フィルタを登録する。
     # _setup() は一度だけ呼ばれるため、ここで登録すれば十分（冪等処理あり）。
     _register_cancel_scope_watcher()
+
+    # LLM 同時実行数ガードを初期化する。
+    init_llm_concurrency(_config.llm_max_concurrent_requests)
 
 
 def _rebuild_graph(thread_id: str):

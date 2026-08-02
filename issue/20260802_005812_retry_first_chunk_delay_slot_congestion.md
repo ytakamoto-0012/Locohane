@@ -56,6 +56,19 @@
 2026-08-02 10:38:44,092 WARNING app.py: リトライ後の初回チャンク受信まで575秒（異常遅延） [name='Task-65' id=2511301068112 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
 ```
 
+## 追記（2026-08-02 12:27）
+
+リトライ後の初回チャンク受信まで22秒、16秒の遅延が2回連続で発生。
+画像ファイルの一括処理（306件）中にllama-serverのスロットが
+圧迫された可能性。
+
+```
+2026-08-02 12:27:05,879 WARNING app.py: on_message: リトライ2回目開始 [name='Task-93' id=2933086050384 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-02 12:27:27,397 WARNING app.py: リトライ後の初回チャンク受信まで22秒（異常遅延） [name='Task-93' id=2933086050384 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+2026-08-02 12:29:18,749 WARNING app.py: on_message: リトライ3回目開始 [name='Task-93' id=2933086050384 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-02 12:29:34,836 WARNING app.py: リトライ後の初回チャンク受信まで16秒（異常遅延） [name='Task-93' id=2933086050384 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+```
+
 ## ユーザー回答
 
 2026-08-02 修正実施済み。`ThinkingLoopDetected` 発生時は常に
