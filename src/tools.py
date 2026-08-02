@@ -81,9 +81,7 @@ logger = logging.getLogger(__name__)
 # 参照できる（_check_file_tools_duplicate の重複ガードが、
 # [file_tools_duplicate_guard].carry_over_to_main=false のときに
 # メインエージェント/サブエージェントの呼び出し履歴を分けるために使う）。
-_IN_SUBAGENT: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "_in_subagent", default=False
-)
+_IN_SUBAGENT: contextvars.ContextVar[bool] = contextvars.ContextVar("_in_subagent", default=False)
 
 # 現在の dispatch_agent 呼び出しを一意に識別するID（サブエージェント外では None）。
 # 重複ガードの集合をサブエージェント実行ごとに分けるために使う。サブエージェントの
@@ -91,9 +89,7 @@ _IN_SUBAGENT: contextvars.ContextVar[bool] = contextvars.ContextVar(
 # だけなので、あるサブエージェントが読んだ画像・ファイルを別のサブエージェントや
 # メインが読み直すのは重複ではなく正当な再取得である（同一集合で数えると、
 # 1件目のサブエージェントが読んで返しきれなかった画像を誰も読み直せなくなる）。
-_SUBAGENT_RUN_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "_subagent_run_id", default=None
-)
+_SUBAGENT_RUN_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("_subagent_run_id", default=None)
 
 
 def _duplicate_guard_session_key(base_key: str) -> str:
@@ -192,6 +188,7 @@ _MEMORY_ROOT: Path | None = None
 _HELP_PATH: Path | None = None
 _PATH_MEMORY_DIR: Path | None = None
 _PATH_MEMORY_MAX_ENTRIES: int = 500
+_SRC_DIR: Path = Path(__file__).parent  # src/ディレクトリ（path_memory.py 等がある）
 _APPROVAL_TIMEOUT_SECONDS: int = 300
 _ASK_USER_QUESTION_TIMEOUT_SECONDS: int = 60
 _ASK_USER_CHOICE_TIMEOUT_SECONDS: int = 90
@@ -365,12 +362,8 @@ def init_tools(
     _ASK_USER_QUESTION_TIMEOUT_SECONDS = ask_user_question_timeout_seconds
     _ASK_USER_CHOICE_TIMEOUT_SECONDS = ask_user_choice_timeout_seconds
     _PLAN_BADGE_ALLOW_UNLOCK = plan_badge_allow_unlock
-    _DISPATCH_AGENT_SEMAPHORE = (
-        asyncio.Semaphore(dispatch_agent_max_parallel) if dispatch_agent_max_parallel > 0 else None
-    )
-    _TOOL_CALL_SEMAPHORE = (
-        asyncio.Semaphore(graph_tool_max_parallel) if graph_tool_max_parallel > 0 else None
-    )
+    _DISPATCH_AGENT_SEMAPHORE = asyncio.Semaphore(dispatch_agent_max_parallel) if dispatch_agent_max_parallel > 0 else None
+    _TOOL_CALL_SEMAPHORE = asyncio.Semaphore(graph_tool_max_parallel) if graph_tool_max_parallel > 0 else None
     # 各ツールの description（LLMに見えるツールスキーマ説明）内の ${変数名} を
     # config.ini の実値へ展開する。@tool デコレータが docstring から description を
     # 設定するのは import 時の一度きりなので、ここで書き換えないと LLM には
@@ -454,10 +447,7 @@ def _resolve_path_memory_token(value: str) -> tuple[str, str | None]:
     thread_id = cl.user_session.get("thread_id") or "_no_session"
     resolved = path_memory.resolve(thread_id, value, _PATH_MEMORY_DIR)
     if resolved is None:
-        return value, (
-            f"パスメモリー {value} は登録されていません。"
-            "list_path_memory ツールで現在の登録内容を確認してください。"
-        )
+        return value, (f"パスメモリー {value} は登録されていません。" "list_path_memory ツールで現在の登録内容を確認してください。")
     return resolved, None
 
 
@@ -554,9 +544,7 @@ def _register_path_memory(paths: list[str], description: str | None = None) -> d
     thread_id = cl.user_session.get("thread_id") or "_no_session"
     result: dict[str, str] = {}
     for path in paths:
-        index = path_memory.register(
-            thread_id, path, _PATH_MEMORY_DIR, _PATH_MEMORY_MAX_ENTRIES, description=description
-        )
+        index = path_memory.register(thread_id, path, _PATH_MEMORY_DIR, _PATH_MEMORY_MAX_ENTRIES, description=description)
         if index is not None:
             result[f"@{index}"] = path
     return result
@@ -654,6 +642,8 @@ def _subprocess_env() -> dict[str, str]:
     AGENT_PATH_MEMORY_MAX_ENTRIES を注入する。run_script 経由で実行される
     スキルのスクリプトは、これらを `path_memory.env_params()` で読み、
     自分が出力するパスをレジストリへ登録できる。
+    AGENT_SRC_DIR は execute_python_code のサブプロセスが
+    `src/path_memory.py` をインポートするために使う。
 
     config.ini `[paths].bin_path`（既定 `./.officecli/bin`）に列挙された
     ディレクトリを PATH の先頭へ追加する。officecli-xlsx 等のスキルは
@@ -668,6 +658,7 @@ def _subprocess_env() -> dict[str, str]:
     if _PATH_MEMORY_DIR is not None:
         env["AGENT_PATH_MEMORY_DIR"] = str(_PATH_MEMORY_DIR)
     env["AGENT_PATH_MEMORY_MAX_ENTRIES"] = str(_PATH_MEMORY_MAX_ENTRIES)
+    env["AGENT_SRC_DIR"] = str(_SRC_DIR)
     cfg = _LLM_CONFIG
     if cfg is not None:
         bin_dirs = [d for d in cfg.bin_path if d.is_dir()]
@@ -1059,9 +1050,7 @@ def check_work_dir_status() -> str:
     if status.error:
         lines.append(f"詳細: {status.error}")
     if not status.exists or not status.readable:
-        lines.append(
-            f"影響: 読み取り・書き込みとも既定フォルダ（{_DEFAULT_WORKDIR}）を自動的に使用します。"
-        )
+        lines.append(f"影響: 読み取り・書き込みとも既定フォルダ（{_DEFAULT_WORKDIR}）を自動的に使用します。")
     elif not status.writable:
         lines.append(
             f"影響: 書き込みが必要な処理（execute_python_code, run_script の出力生成）は"
@@ -1263,9 +1252,7 @@ def _track_failure_streak(session_key: str, failed: bool, tool_label: str) -> st
 
 
 @tool
-async def run_script(
-    skill_name: str, script_filename: str, script_args: list[str] | None = None
-) -> str:
+async def run_script(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> str:
     """スキルの scripts/ 配下のスクリプトを実行し、標準出力/標準エラーを返す。
 
     作業ディレクトリは、Chainlit の ChatSettings（歯車アイコン）でユーザーが
@@ -1373,9 +1360,7 @@ def glob_tool(pattern: str, path: str = "", head_limit: int = 200) -> str:
     base, error = _resolve_file_tools_path(path)
     if error:
         return f"エラー: {error}"
-    dup_error = _check_file_tools_duplicate(
-        "Glob", f"Glob\x00{pattern}\x00{base}\x00{head_limit}"
-    )
+    dup_error = _check_file_tools_duplicate("Glob", f"Glob\x00{pattern}\x00{base}\x00{head_limit}")
     if dup_error:
         return dup_error
     try:
@@ -1426,10 +1411,7 @@ def grep_tool(
     base, error = _resolve_file_tools_path(path)
     if error:
         return f"エラー: {error}"
-    signature = (
-        f"Grep\x00{pattern}\x00{base}\x00{glob}\x00{output_mode}\x00"
-        f"{case_insensitive}\x00{context}\x00{head_limit}"
-    )
+    signature = f"Grep\x00{pattern}\x00{base}\x00{glob}\x00{output_mode}\x00" f"{case_insensitive}\x00{context}\x00{head_limit}"
     dup_error = _check_file_tools_duplicate("Grep", signature)
     if dup_error:
         return dup_error
@@ -1494,9 +1476,7 @@ def json_query(query: str, file_path: str = "", json_text: str = "") -> str:
     if dup_error:
         return dup_error
     try:
-        result = file_tools.query_json(
-            query, file_path=resolved_path, json_text=json_text or None
-        )
+        result = file_tools.query_json(query, file_path=resolved_path, json_text=json_text or None)
     except ValueError as e:
         return f"エラー: {e}"
     logger.info("json_query: %s", query)
@@ -1524,9 +1504,7 @@ def list_path_memory() -> str:
     return json.dumps({"entries": entries}, ensure_ascii=False)
 
 
-def _prepare_script_execution(
-    skill_name: str, script_filename: str, script_args: list[str] | None = None
-) -> tuple[list[str], Path] | str:
+def _prepare_script_execution(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> tuple[list[str], Path] | str:
     """run_script / run_script_background 共通の前処理。
 
     引数のパスメモリー解決 → スクリプトパス解決 → 作業ディレクトリ解決 →
@@ -1556,9 +1534,7 @@ def _prepare_script_execution(
 
     is_plan_exempt = (skill_name, script_filename) in _PLAN_APPROVAL_EXEMPT_SCRIPTS
     if not is_plan_exempt and not cl.user_session.get("plan_approved"):
-        logger.info(
-            "run_script: 計画未承認のためブロック skill=%s script=%s", skill_name, script_filename
-        )
+        logger.info("run_script: 計画未承認のためブロック skill=%s script=%s", skill_name, script_filename)
         return (
             "エラー: 計画が未承認のため実行できません"
             f"（skill={skill_name}, script={script_filename}）。"
@@ -1574,9 +1550,7 @@ def _prepare_script_execution(
     return cmd, workdir
 
 
-async def _run_script_impl(
-    skill_name: str, script_filename: str, script_args: list[str] | None = None
-) -> str:
+async def _run_script_impl(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> str:
     """run_script の実行本体。
 
     公開ツールの引数名は "args" ではなく "script_args"（"args"/"kwargs" は
@@ -1777,9 +1751,7 @@ def _resolve_job(job_id: str) -> "_BackgroundJob | str":
 
 
 @tool
-async def run_script_background(
-    skill_name: str, script_filename: str, script_args: list[str] | None = None
-) -> str:
+async def run_script_background(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> str:
     """スキルの scripts/ 配下のスクリプトをバックグラウンドで起動し、即座に job_id を返す。
 
     処理時間が長くなることが見込まれるスクリプト向け。run_script と異なり
@@ -1881,10 +1853,7 @@ async def check_script_job(job_id: str) -> str:
 
     result = _format_job_result(job)
     if job.status == "timeout":
-        result = (
-            f"エラー: バックグラウンド実行が {_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS} "
-            f"秒の上限に達したため強制終了しました。\n{result}"
-        )
+        result = f"エラー: バックグラウンド実行が {_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS} " f"秒の上限に達したため強制終了しました。\n{result}"
     elif job.status == "killed":
         result = f"stop_script_job により強制終了されました。\n{result}"
     elif job.status == "error":
@@ -1916,10 +1885,7 @@ async def stop_script_job(job_id: str) -> str:
     job = resolved
 
     if job.status != "running":
-        return (
-            f"エラー: job_id '{job_id}' は既に終了しています（status={job.status}）。"
-            "check_script_job で結果を取得してください。"
-        )
+        return f"エラー: job_id '{job_id}' は既に終了しています（status={job.status}）。" "check_script_job で結果を取得してください。"
 
     job.status = "killed"
     try:
@@ -1934,9 +1900,7 @@ async def stop_script_job(job_id: str) -> str:
     return f"強制終了しました。\n{result}"
 
 
-def _register_exec_output_files(
-    workdir: Path, before_snapshot: dict[Path, float], thread_id: str
-) -> str:
+def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float], thread_id: str) -> str:
     """execute_python_code の実行前後で workdir 直下のファイル差分を検知し、
     新規作成/更新されたファイルを path_memory へ自動登録する。
 
@@ -2017,8 +1981,40 @@ async def execute_python_code(code: str) -> str:
     タイムアウトや Python 実行ファイルは run_script と共通の設定
     （[scripts].timeout / [scripts].python）を流用する。
 
+    **重要: パスメモリ(@N)の活用**
+    Globや他のツールで取得したファイルパス（@0, @1, @2…）を、このツールの
+    code引数で使う場合、code内で `path_memory.resolve()` を呼び出して
+    実パスへ展開する必要があります。環境変数 `AGENT_SRC_DIR` で `src/`
+    ディレクトリが利用可能なので、以下のようにインポート・展開できます:
+
+      import os, sys
+      sys.path.insert(0, os.environ.get("AGENT_SRC_DIR", ""))
+      import path_memory
+      thread_id = os.environ.get("AGENT_THREAD_ID", "_no_session")
+      pm_dir = os.environ.get("AGENT_PATH_MEMORY_DIR", "")
+      if pm_dir:
+          resolved = path_memory.resolve(thread_id, "@0", Path(pm_dir))
+          print(open(resolved).read()[:500])
+
+    ファイル一覧をcode内にリテラルリストとして書き写す必要は絶対にない。
+
+    **重要: ファイル数上限**
+    code引数内へファイル名をリテラルとしてリスト化する場合、**30件を超えると**
+    トークン爆発（会話履歴の肥大化）を引き起こす。ファイルが30件を超す場合は
+    code内にリスト化せず、globやpathlibでディレクトリ探索を行うか、
+    run_script で既存スクリプトを呼び出す方式を優先すること。
+
+    **重要: 委譲の原則**
+    ファイル調査・比較・集計等の処理は、可能な限り既存のスキルや
+    run_script で実装されたスクリプトへ委譲すること。execute_python_codeは
+    簡易なスクリプト実行やプロトタイピングに限定し、複雑なデータ処理や
+    大規模なファイル操作は避ける。
+
     Args:
-        code: 実行する Python コード全文。
+        code: 実行する Python コード全文。path_memory の @N トークン
+            （例: @0, @1）を含める場合、code内で `path_memory.resolve()`
+            を呼び出して実パスへ展開する必要がある（上記「パスメモリの活用」
+            参照）。
 
     Returns:
         「[終了コード] N」に続けて、標準出力・標準エラー、生成/更新
@@ -2030,19 +2026,12 @@ async def execute_python_code(code: str) -> str:
     if not code.strip():
         return "エラー: code が空です。"
     if not _CODE_EXEC_ENABLED:
-        return (
-            "エラー: LLMが生成したPythonコードの実行はconfig.iniで無効化されています"
-            "（[scripts] code_execution_enabled=false）。"
-        )
+        return "エラー: LLMが生成したPythonコードの実行はconfig.iniで無効化されています" "（[scripts] code_execution_enabled=false）。"
     workdir, fell_back = _resolve_exec_workdir()
 
     if not cl.user_session.get("plan_approved"):
         logger.info("execute_python_code: 計画未承認のためブロック")
-        return (
-            "エラー: 計画が未承認のため実行できません。"
-            "create_plan で計画を作成し、approve_plan でユーザーの承認を得てから"
-            "実行してください。"
-        )
+        return "エラー: 計画が未承認のため実行できません。" "create_plan で計画を作成し、approve_plan でユーザーの承認を得てから" "実行してください。"
 
     try:
         before_snapshot = {p: p.stat().st_mtime for p in workdir.iterdir() if p.is_file()}
@@ -2050,9 +2039,7 @@ async def execute_python_code(code: str) -> str:
         before_snapshot = {}
 
     try:
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8"
-        )
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(code)
         tmp.close()
         tmp_path = Path(tmp.name)
@@ -2064,9 +2051,7 @@ async def execute_python_code(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8"
-            )
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
             tmp.write(code)
             tmp.close()
             tmp_path = Path(tmp.name)
@@ -2100,15 +2085,11 @@ async def execute_python_code(code: str) -> str:
     if proc.stderr:
         parts.append(f"[標準エラー]\n{proc.stderr.rstrip()}")
 
-    path_memory_note = _register_exec_output_files(
-        workdir, before_snapshot, cl.user_session.get("thread_id") or "_no_session"
-    )
+    path_memory_note = _register_exec_output_files(workdir, before_snapshot, cl.user_session.get("thread_id") or "_no_session")
     if path_memory_note:
         parts.append(path_memory_note)
 
-    warning = _track_failure_streak(
-        "execute_python_code_failure_streak", proc.returncode != 0, "execute_python_code"
-    )
+    warning = _track_failure_streak("execute_python_code_failure_streak", proc.returncode != 0, "execute_python_code")
     if warning:
         parts.append(warning)
     if fell_back:
@@ -2135,6 +2116,35 @@ async def execute_python_code_background(code: str) -> str:
     強制終了するまでの上限は config.ini の
     [scripts].background_max_runtime_seconds（既定3600秒）。
 
+    **重要: パスメモリ(@N)の活用**
+    Globや他のツールで取得したファイルパス（@0, @1, @2…）を、このツールの
+    code引数で使う場合、code内で `path_memory.resolve()` を呼び出して
+    実パスへ展開する必要があります。環境変数 `AGENT_SRC_DIR` で `src/`
+    ディレクトリが利用可能なので、以下のようにインポート・展開できます:
+
+      import os, sys
+      sys.path.insert(0, os.environ.get("AGENT_SRC_DIR", ""))
+      import path_memory
+      thread_id = os.environ.get("AGENT_THREAD_ID", "_no_session")
+      pm_dir = os.environ.get("AGENT_PATH_MEMORY_DIR", "")
+      if pm_dir:
+          resolved = path_memory.resolve(thread_id, "@0", Path(pm_dir))
+          print(open(resolved).read()[:500])
+
+    ファイル一覧をcode内にリテラルリストとして書き写す必要は絶対にない。
+
+    **重要: ファイル数上限**
+    code引数内へファイル名をリテラルとしてリスト化する場合、**30件を超えると**
+    トークン爆発（会話履歴の肥大化）を引き起こす。ファイルが30件を超す場合は
+    code内にリスト化せず、globやpathlibでディレクトリ探索を行うか、
+    run_script で既存スクリプトを呼び出す方式を優先すること。
+
+    **重要: 委譲の原則**
+    ファイル調査・比較・集計等の処理は、可能な限り既存のスキルや
+    run_script で実装されたスクリプトへ委譲すること。execute_python_codeは
+    簡易なスクリプト実行やプロトタイピングに限定し、複雑なデータ処理や
+    大規模なファイル操作は避ける。
+
     Args:
         code: 実行する Python コード全文。
 
@@ -2147,19 +2157,12 @@ async def execute_python_code_background(code: str) -> str:
     if not code.strip():
         return "エラー: code が空です。"
     if not _CODE_EXEC_ENABLED:
-        return (
-            "エラー: LLMが生成したPythonコードの実行はconfig.iniで無効化されています"
-            "（[scripts] code_execution_enabled=false）。"
-        )
+        return "エラー: LLMが生成したPythonコードの実行はconfig.iniで無効化されています" "（[scripts] code_execution_enabled=false）。"
     workdir, fell_back = _resolve_exec_workdir()
 
     if not cl.user_session.get("plan_approved"):
         logger.info("execute_python_code_background: 計画未承認のためブロック")
-        return (
-            "エラー: 計画が未承認のため実行できません。"
-            "create_plan で計画を作成し、approve_plan でユーザーの承認を得てから"
-            "実行してください。"
-        )
+        return "エラー: 計画が未承認のため実行できません。" "create_plan で計画を作成し、approve_plan でユーザーの承認を得てから" "実行してください。"
 
     try:
         before_snapshot = {p: p.stat().st_mtime for p in workdir.iterdir() if p.is_file()}
@@ -2167,9 +2170,7 @@ async def execute_python_code_background(code: str) -> str:
         before_snapshot = {}
 
     try:
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8"
-        )
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(code)
         tmp.close()
         tmp_path = Path(tmp.name)
@@ -2181,9 +2182,7 @@ async def execute_python_code_background(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8"
-            )
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
             tmp.write(code)
             tmp.close()
             tmp_path = Path(tmp.name)
@@ -2401,14 +2400,8 @@ async def create_plan(steps: list[dict[str, str]]) -> str:
         return "エラー: steps が空です。1件以上のステップを指定してください。"
     for i, s in enumerate(steps):
         if not isinstance(s, dict) or not s.get("content") or not s.get("activeForm"):
-            return (
-                f"エラー: steps[{i}] には content と activeForm の両方を"
-                f"文字列で指定してください: {s!r}"
-            )
-    plan = [
-        {"content": s["content"], "activeForm": s["activeForm"], "status": "pending"}
-        for s in steps
-    ]
+            return f"エラー: steps[{i}] には content と activeForm の両方を" f"文字列で指定してください: {s!r}"
+    plan = [{"content": s["content"], "activeForm": s["activeForm"], "status": "pending"} for s in steps]
     cl.user_session.set("plan", plan)
     cl.user_session.set("plan_approved", False)
     cl.user_session.set("awaiting_approve_plan_call", True)
@@ -2439,17 +2432,14 @@ async def approve_plan() -> str:
     if not plan:
         return "エラー: 計画がありません。先に create_plan を呼んでください。"
     content = (
-        _render_plan(plan)
-        + "\n\nこの計画を承認しますか？承認後は各ステップの書き込み系ツール"
+        _render_plan(plan) + "\n\nこの計画を承認しますか？承認後は各ステップの書き込み系ツール"
         "（run_script/execute_python_code）が実行できるようになります。"
     )
     actions = [
         cl.Action(name="approve", payload={"value": "approve"}, label="✅ 計画を承認"),
         cl.Action(name="deny", payload={"value": "deny"}, label="🚫 却下"),
     ]
-    res = await cl.AskActionMessage(
-        content=content, actions=actions, timeout=_resolve_ask_timeout(_APPROVAL_TIMEOUT_SECONDS)
-    ).send()
+    res = await cl.AskActionMessage(content=content, actions=actions, timeout=_resolve_ask_timeout(_APPROVAL_TIMEOUT_SECONDS)).send()
     approved = res is not None and res["payload"].get("value") == "approve"
     cl.user_session.set("plan_approved", approved)
     # 前回却下時に立てたフラグが誤って残らないよう、承認・タイムアウト時は
@@ -2475,10 +2465,7 @@ async def approve_plan() -> str:
     # このターンの処理を強制的に打ち切る（LLMが「計画を微修正して続行しよう」
     # と自己判断してしまうのを、プロンプト指示だけに頼らずコード側で確実に防ぐため）。
     cl.user_session.set("plan_denied_just_now", True)
-    return (
-        "ユーザーが計画を却下しました。これ以上ツールを呼ばず、"
-        "却下された旨を最終回答として述べて処理を終了してください。"
-    )
+    return "ユーザーが計画を却下しました。これ以上ツールを呼ばず、" "却下された旨を最終回答として述べて処理を終了してください。"
 
 
 @tool
@@ -2525,9 +2512,7 @@ async def update_task_progress(step_index: int, status: str) -> str:
 
     message: cl.Message | None = cl.user_session.get("plan_message")
     if message is not None:
-        message.content = _render_plan_payload(
-            plan, finished=finished, approved=cl.user_session.get("plan_approved", False)
-        )
+        message.content = _render_plan_payload(plan, finished=finished, approved=cl.user_session.get("plan_approved", False))
         await message.update()
 
     logger.info("update_task_progress: step=%d status=%s finished=%s", step_index, status, finished)
@@ -2577,15 +2562,10 @@ async def lock_plan_mode() -> str:
         finished = all(s["status"] == "completed" for s in plan)
         message.content = _render_plan_payload(plan, finished=finished, approved=False)
         await message.update()
-    logger.info(
-        "lock_plan_mode: 呼び出し（元の状態: %s）", "approved" if was_approved else "not approved"
-    )
+    logger.info("lock_plan_mode: 呼び出し（元の状態: %s）", "approved" if was_approved else "not approved")
     if not was_approved:
         return "既に Plan Mode です（変更なし）。"
-    return (
-        "Plan Mode へ戻しました。書き込み系ツールは再びブロックされます。"
-        "再開するには approve_plan で改めて承認を得てください。"
-    )
+    return "Plan Mode へ戻しました。書き込み系ツールは再びブロックされます。" "再開するには approve_plan で改めて承認を得てください。"
 
 
 async def toggle_plan_mode_from_ui() -> None:
@@ -2603,10 +2583,7 @@ async def toggle_plan_mode_from_ui() -> None:
         return
     currently_approved = bool(cl.user_session.get("plan_approved"))
     if not currently_approved and not _PLAN_BADGE_ALLOW_UNLOCK:
-        logger.info(
-            "toggle_plan_mode_from_ui: allow_badge_unlock=False のため"
-            "ロック解除方向のクリックを無視しました"
-        )
+        logger.info("toggle_plan_mode_from_ui: allow_badge_unlock=False のため" "ロック解除方向のクリックを無視しました")
         return
     approved = not currently_approved
     cl.user_session.set("plan_approved", approved)
@@ -2656,9 +2633,7 @@ async def ask_user_question(question: str, labels: list[str] | None = None) -> s
             return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
         return res.get("output", "")
     logger.info("ask_user_question: %s labels=%s", question, labels)
-    element = cl.CustomElement(
-        name="MultiTextForm", props={"question": question, "labels": labels}
-    )
+    element = cl.CustomElement(name="MultiTextForm", props={"question": question, "labels": labels})
     res = await cl.AskElementMessage(content=question, element=element, timeout=timeout).send()
     if res is None:
         return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
@@ -2667,9 +2642,7 @@ async def ask_user_question(question: str, labels: list[str] | None = None) -> s
 
 
 @tool
-async def ask_user_choice(
-    question: str, choices: list[str], multi_select: bool = False
-) -> str:
+async def ask_user_choice(question: str, choices: list[str], multi_select: bool = False) -> str:
     """会話を続けるために必要な選択を、ユーザーに選択肢形式で質問する。
 
     複数の進め方・方針からユーザーに1つ（または複数）選んでもらいたい場合に使う。
@@ -2694,23 +2667,16 @@ async def ask_user_choice(
     """
     if not choices:
         return "エラー: choices が空です。1件以上の選択肢を指定してください。"
-    logger.info(
-        "ask_user_choice: %s choices=%s multi_select=%s", question, choices, multi_select
-    )
+    logger.info("ask_user_choice: %s choices=%s multi_select=%s", question, choices, multi_select)
     timeout = _resolve_ask_timeout(_ASK_USER_CHOICE_TIMEOUT_SECONDS)
     if multi_select:
-        element = cl.CustomElement(
-            name="MultiChoiceForm", props={"question": question, "choices": choices}
-        )
+        element = cl.CustomElement(name="MultiChoiceForm", props={"question": question, "choices": choices})
         res = await cl.AskElementMessage(content=question, element=element, timeout=timeout).send()
         if res is None:
             return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
         selected = res.get("values") or []
         return "、".join(selected) if selected else "(選択なし)"
-    actions = [
-        cl.Action(name=f"choice_{i}", payload={"value": c}, label=c)
-        for i, c in enumerate(choices)
-    ]
+    actions = [cl.Action(name=f"choice_{i}", payload={"value": c}, label=c) for i, c in enumerate(choices)]
     res = await cl.AskActionMessage(content=question, actions=actions, timeout=timeout).send()
     if res is None:
         return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
@@ -2768,9 +2734,7 @@ def analyze_image(relative_path: str) -> tuple[str, dict | None]:
     # コンテキストを大きく圧迫するため、2回目以降はテキストのみ返し
     # artifactを積まない）。解決済みの絶対パスをキーにするため、`@N`や相対/絶対
     # パスなど表記が違っても同一ファイルなら重複として検知できる。
-    if _record_and_check_duplicate(
-        _duplicate_guard_session_key("analyze_image_call_signatures"), str(path)
-    ):
+    if _record_and_check_duplicate(_duplicate_guard_session_key("analyze_image_call_signatures"), str(path)):
         return (
             f"エラー: この画像は既に一度確認済みです: {relative_path}。"
             "同一画像の再表示は省略しました。会話履歴にある前回の説明を参照するか、"
@@ -2830,11 +2794,7 @@ def _with_image_followups(result: dict) -> dict:
         無ければ result をそのまま返す。
     """
     messages = result.get("messages", [])
-    extra = [
-        followup
-        for msg in messages
-        if (followup := image_followup_message(getattr(msg, "artifact", None))) is not None
-    ]
+    extra = [followup for msg in messages if (followup := image_followup_message(getattr(msg, "artifact", None))) is not None]
     if not extra:
         return result
     return {**result, "messages": [*messages, *extra]}
@@ -2867,9 +2827,7 @@ def _log_tool_calls_debug(input) -> None:  # noqa: A002
     call = _extract_tool_call_from_node_input(input)
     if not call:
         return
-    logger.debug(
-        "tool_call: name=%s args=%r id=%s", call.get("name"), call.get("args"), call.get("id")
-    )
+    logger.debug("tool_call: name=%s args=%r id=%s", call.get("name"), call.get("args"), call.get("id"))
 
 
 def _contains_error(content: str) -> bool:
@@ -2879,11 +2837,7 @@ def _contains_error(content: str) -> bool:
     「ｴﾗｰ」に対応する。
     """
     content_lower = content.lower()
-    return (
-        "エラー" in content or
-        "error" in content_lower or
-        "ｴﾗｰ" in content
-    )
+    return "エラー" in content or "error" in content_lower or "ｴﾗｰ" in content
 
 
 def _log_tool_results_debug(result: dict, call_args: dict | None = None) -> None:
@@ -2910,9 +2864,7 @@ def _log_tool_results_debug(result: dict, call_args: dict | None = None) -> None
                     content[:500],
                 )
             else:
-                logger.warning(
-                    "tool_result: name=%s content=%r", name, content[:500]
-                )
+                logger.warning("tool_result: name=%s content=%r", name, content[:500])
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("tool_result: name=%s content=%r", name, content)
 
@@ -2961,10 +2913,7 @@ def _guard_awaiting_approve_plan(input):  # noqa: A002
     return {
         "messages": [
             ToolMessage(
-                content=(
-                    "エラー: create_planの直後はapprove_planを呼んでください"
-                    "（他のツールは実行されませんでした）。"
-                ),
+                content=("エラー: create_planの直後はapprove_planを呼んでください" "（他のツールは実行されませんでした）。"),
                 name=name,
                 tool_call_id=call.get("id"),
                 status="error",
