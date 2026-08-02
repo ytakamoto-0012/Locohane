@@ -487,6 +487,21 @@ async def _setup() -> None:
             clear_on_startup=_config.log_clear_on_startup,
         )
         file_handler.setFormatter(formatter)
+        # chainlit run が basicConfig() で仕込んだコンソール用ハンドラを全て除去。
+        # root logger が DEBUG レベルのとき、openai/httpx/httpcore/aiosqlite などの
+        # サードパーティ製ロガーが DEBUG ログ（HTTP リクエスト/レスポンス本文を含む）
+        # をコンソールへ直接出力すると、Windows コンソール（QuickEdit Mode 有効時に
+        # WriteConsole がブロックされる）のブロックがイベントループ全体を止め、
+        # アプリがフリーズしたように見える。これを防ぐため、レベル制限ではなく
+        # ハンドラ自体を完全に削除する（config.ini での切り替えは設けず常時無効化）。
+        for h in list(root_logger.handlers):
+            root_logger.removeHandler(h)
+        # サードパーティ製ロガーの DEBUG ログを抑制し、ログファイルの肥大化も解消。
+        # root logger 自体は log_level=debug のとき DEBUG のまま維持し、
+        # src.llm / src.tools / src.subagent などの自アプリロガーは
+        # file_handler を通じて DEBUG で記録され続ける。
+        for lib in ("openai", "httpx", "httpcore", "aiosqlite", "asyncio"):
+            logging.getLogger(lib).setLevel(logging.WARNING)
         root_logger.addHandler(file_handler)
 
     # 第1段階 Discovery: スキルを走査して name+description をシステムプロンプトへ。
