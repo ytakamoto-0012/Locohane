@@ -27,9 +27,20 @@ LLMが `create_plan` の後、`approve_plan` でユーザー承認を得る前�
 `execute_python_code` を実行しようとした。`create_plan` → `approve_plan`
 → 実際のツール実行、という順序を守る必要があり、この順序が守られなかった。
 
-## 追記（YYYY-MM-DD HH:MM）
+## 追記（2026-08-02 10:37）
 
-（同一原因の問題が再検知されるたびに、ここに追記を積み重ねていく）
+同一パターン（execute_python_code で計画未承認エラー）が再発。
+今回は画像ファイルの一覧をPythonコードでリスト化しようとした際、
+approve_plan を飛ばして execute_python_code を実行していた。
+
+```
+2026-08-02 10:37:03,709 WARNING src.tools: tool_result: name=execute_python_code args_code='import os\n\n# Image files\njpg_files = [\n    "IMG_2197.JPG", "IMG_2214.JPG", ...' content='エラー: 計画が未承認のため実行できません。create_plan で計画を作成し、approve_plan でユーザーの承認を得てから実行してください。'
+```
+
+前2回（02:49）との違い: 前回は `args_code` 内にPythonコードの断片が
+省略されていたが、今回は画像ファイル名の一覧が実際にコードとして
+記載されていた。LLMが画像ファイル名を直接コード中に列挙しようとする
+挙動が確認できる。
 
 ## ユーザー回答
 

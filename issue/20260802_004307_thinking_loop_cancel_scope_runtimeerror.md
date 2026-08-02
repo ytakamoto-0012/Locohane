@@ -92,6 +92,25 @@ it was entered in')`）が再発した。ただし反復パターンが前例と
 - 1回目の再試行時にも即座に同じパターンでループ検知（`consecutive_hits=2`）
 - `client_broken` フラグの表示有無が前回と異なる（今回は未表示）
 
+## 追記（2026-08-02 10:40）
+
+同一事案（LLM応答のループ検知 → `ThinkingLoopDetected`リトライ →
+`RuntimeError('Attempted to exit cancel scope in a different task than
+it was entered in')`）が再発した。ただし反復パターンが前例と異なり、
+**ファイルパス列挙と照合の検討ループ**だった（対象ログ:
+`data/logs/app_20260802_10.log`）。
+
+```
+2026-08-02 10:40:12,812 WARNING src.llm: LLM応答のループを検知したため生成を打ち切ります（直近テキスト: '内のJPG/PNG/HEIC画像からレシピ情報を抽出し、WEBで栄養調査を行った後、`E:\\akiyo\\レシピ\\md`にmdファイルとして出力する。...'） [name='Task-89355' id=2511404871568 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0]
+```
+
+前3回（画像ファイル名列挙、番号付きリスト）との違い:
+- 反復テキストがファイル名列挙ではなく「ファイルパス列挙＋照合検討」の
+  thinking内容の反復
+- `consecutive_hits` が表示されず、`match_ratio` の値も記録なし
+- `RuntimeError` の発生は今回ログ範囲では未確認
+- `Task-89355`（id=2511404871568）で発生
+
 ## ユーザー回答
 
 2026-08-02 修正実施済み。`ThinkingLoopDetected` 発生時は常に

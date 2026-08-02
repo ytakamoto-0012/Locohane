@@ -45,9 +45,16 @@
 2026-08-02 09:32:14,788 WARNING app.py: リトライ後の初回チャンク受信まで24秒（異常遅延） [name='Task-1892' id=1773157096208 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
 ```
 
-## 追記（YYYY-MM-DD HH:MM）
+## 追記（2026-08-02 10:38）
 
-（同一原因の問題が再検知されるたびに、ここに追記を積み重ねていく）
+リトライ後の初回チャンク受信まで575秒（約9分35秒）という極端な遅延が
+再発。前回の24秒、126秒を大幅に超える異常値。`app.py` 側が
+「llama-server スロット詰まりの疑い」としてWARNINGを出力した。
+
+```
+2026-08-02 10:29:09,023 WARNING app.py: on_message: リトライ2回目開始 [name='Task-65' id=2511301068112 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-02 10:38:44,092 WARNING app.py: リトライ後の初回チャンク受信まで575秒（異常遅延） [name='Task-65' id=2511301068112 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+```
 
 ## ユーザー回答
 
