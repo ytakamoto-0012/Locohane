@@ -24,7 +24,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import backup_before_overwrite, setup_utf8_stdio
 from _ops import apply_op
 
 
@@ -110,6 +110,7 @@ def main() -> int:
         op_results.append(result or {"op": op.get("op")})
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_before_overwrite(output_path)
     try:
         doc.save(str(output_path))
     except OSError as e:
@@ -118,6 +119,7 @@ def main() -> int:
 
     result = {
         "path": str(output_path),
+        "backup_path": str(backup_path) if backup_path else None,
         "paragraph_count": len(doc.paragraphs),
         "table_count": len(doc.tables),
         "applied_ops": len(ops),

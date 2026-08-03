@@ -6,7 +6,10 @@ scripts/ 配下の各スクリプトが同一ディレクトリから import し
 
 from __future__ import annotations
 
+import shutil
 import sys
+from datetime import datetime
+from pathlib import Path
 
 
 def setup_utf8_stdio() -> None:
@@ -19,3 +22,20 @@ def setup_utf8_stdio() -> None:
     """
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
+
+
+def backup_before_overwrite(path: Path) -> Path | None:
+    """path が既に存在する場合、上書き直前に同じフォルダへタイムスタンプ付きで
+    コピーしてバックアップを作成する。存在しなければ何もせず None を返す
+    （新規作成時はバックアップ不要）。
+    """
+    if not path.exists():
+        return None
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = path.with_name(f"{path.stem}.bak_{timestamp}{path.suffix}")
+    suffix_n = 2
+    while backup_path.exists():
+        backup_path = path.with_name(f"{path.stem}.bak_{timestamp}_{suffix_n}{path.suffix}")
+        suffix_n += 1
+    shutil.copy2(path, backup_path)
+    return backup_path

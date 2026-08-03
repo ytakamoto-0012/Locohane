@@ -23,7 +23,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import backup_before_overwrite, setup_utf8_stdio
 from _ops import apply_op
 
 
@@ -107,13 +107,19 @@ def main() -> int:
         return 1
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_before_overwrite(output_path)
     try:
         wb.save(str(output_path))
     except OSError as e:
         print(f"ファイルの保存に失敗しました: {e}", file=sys.stderr)
         return 1
 
-    print(json.dumps({"path": str(output_path), "sheets": wb.sheetnames, "applied_ops": len(ops)}, ensure_ascii=False))
+    print(json.dumps({
+        "path": str(output_path),
+        "backup_path": str(backup_path) if backup_path else None,
+        "sheets": wb.sheetnames,
+        "applied_ops": len(ops),
+    }, ensure_ascii=False))
     return 0
 
 

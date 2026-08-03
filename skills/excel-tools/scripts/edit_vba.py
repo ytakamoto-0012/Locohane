@@ -31,7 +31,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import backup_before_overwrite, setup_utf8_stdio
 from _vba_ops import apply_op
 
 _XL_OPEN_XML_WORKBOOK_MACRO_ENABLED = 52
@@ -105,12 +105,19 @@ def _edit_vba(path: Path, output_path: Path, ops: list, is_new: bool, overwrite:
             if result is not None:
                 results.append(result)
 
+        backup_path = backup_before_overwrite(output_path)
+
         if is_new or output_path != path:
             workbook.SaveAs(str(output_path), FileFormat=_XL_OPEN_XML_WORKBOOK_MACRO_ENABLED)
         else:
             workbook.Save()
 
-        return {"path": str(output_path), "applied_ops": len(ops), "results": results}
+        return {
+            "path": str(output_path),
+            "backup_path": str(backup_path) if backup_path else None,
+            "applied_ops": len(ops),
+            "results": results,
+        }
     finally:
         if workbook is not None:
             try:

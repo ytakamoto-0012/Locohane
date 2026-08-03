@@ -23,7 +23,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import backup_before_overwrite, setup_utf8_stdio
 
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -346,6 +346,7 @@ def main() -> int:
             return 1
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_before_overwrite(output_path)
     try:
         prs.save(str(output_path))
     except OSError as e:
@@ -354,6 +355,7 @@ def main() -> int:
 
     result = {
         "output_path": str(output_path),
+        "backup_path": str(backup_path) if backup_path else None,
         "total_slides": len(prs.slides),
         "size_bytes": output_path.stat().st_size,
         "applied_operations": len(operations),
