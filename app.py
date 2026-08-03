@@ -1174,7 +1174,7 @@ async def on_message(message: cl.Message) -> None:
     # 2つのリトライ要因（無言終了・反復ループ）で試行回数の予算を共有する。
     total_retries = max_empty_retries + loop_max_retries
     # 直近1回分のLLM呼び出しの usage_metadata。ターン終了後、コンテキスト
-    # 圧縮（src/context_compaction.py）の閾値判定に使う。
+    # 圧縮（src/context_compaction.py）の単発リクエスト閾値判定に使う。
     last_usage: dict | None = None
 
     loop_exc: ThinkingLoopDetected | None = None
@@ -1696,7 +1696,8 @@ async def on_message(message: cl.Message) -> None:
             token_usage_cumulative=cl.user_session.get("token_usage_cumulative"),
         )
 
-    if should_compact(last_usage, len(messages), _config):
+    cumulative_main = cl.user_session.get("token_usage_cumulative_main")
+    if should_compact(cumulative_main, last_usage, len(messages), _config):
         summary_model = build_model(_config)
         new_messages = await maybe_compact(messages, summary_model, _config)
         if new_messages is not None:
@@ -1704,3 +1705,7 @@ async def on_message(message: cl.Message) -> None:
                 config,
                 {"messages": [RemoveMessage(id=m.id) for m in messages] + new_messages},
             )
+            # 圧縮により古い履歴が要約へ置き換わったため、次にまた同じ閾値で
+            # 即座に発火し続けないよう、メインエージェントの累積トークン数を
+            # リセットする。
+            cl.user_session.set("token_usage_cumulative_main", _new_usage_totals())

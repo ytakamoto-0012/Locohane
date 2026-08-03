@@ -747,7 +747,7 @@ def build_model(config: Config) -> ChatOpenAI:
         config: base_url / api_key / model / temperature / top_p / top_k /
             repeat_penalty / frequency_penalty / presence_penalty /
             max_tokens / dry_multiplier / dry_base / dry_allowed_length /
-            dry_penalty_last_n / dry_sequence_breakers / track_token_usage /
+            dry_penalty_last_n / dry_sequence_breakers / enable_thinking / track_token_usage /
             request_timeout_seconds / thinking_loop_guard_* を含むアプリ設定。
             未指定（None）の項目はリクエストに含めず llama-server 側の
             デフォルトに委ねる。thinking_loop_guard_* は ChatLlamaCpp の
@@ -782,6 +782,8 @@ def build_model(config: Config) -> ChatOpenAI:
         extra_body["dry_penalty_last_n"] = config.dry_penalty_last_n
     if config.dry_sequence_breakers is not None:
         extra_body["dry_sequence_breakers"] = config.dry_sequence_breakers
+    if config.enable_thinking is not None:
+        extra_body["chat_template_kwargs"] = {"enable_thinking": config.enable_thinking}
 
     # keep-alive接続を無効化する: 思考ループ検知時にストリームを正しく
     # クローズできなかった場合（cancel scopeのtask不一致等）、壊れた接続が

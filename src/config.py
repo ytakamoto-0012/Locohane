@@ -60,6 +60,10 @@ class Config:
             （-1 でコンテキスト全体）。None なら未指定。
         dry_sequence_breakers: DRY サンプラーが反復検出をリセットする区切り
             文字列のリスト。None なら未指定（llama-server既定に委ねる）。
+        enable_thinking: Qwen3系モデルの thinking（reasoning、<think>ブロック）
+            モードのON/OFF（llama.cpp拡張、extra_body の chat_template_kwargs
+            経由）。None なら未指定でモデル・llama-server既定に委ねる。
+            False にすると reasoning をオフにする。
         track_token_usage: LLM応答のトークン使用量（入力/出力/合計）を
             取得するかどうか。True の場合 build_model（src/llm.py）が
             ChatOpenAI の stream_usage=True を有効化し、app.py・eval側で
@@ -304,13 +308,26 @@ class Config:
             （モデル自身の思考本文と tool_calls の引数）も切り詰めるか。
         context_trim_keep_recent_ai_messages: 全文保持する直近 AIMessage
             の件数。これより古い AIMessage のみ切り詰め対象にする。
-        context_compaction_enabled: リクエスト（LLM呼び出し）1回あたりの
-            トークン数が閾値を超えたら会話履歴を要約して圧縮する機能の
-            有効/無効（src.context_compaction 参照）。context_trim と異なり
-            永続履歴（checkpointer上のメッセージ）自体を書き換える。
-        context_compaction_token_threshold: 圧縮を発火させるトークン数の
-            閾値（直近1回のLLM呼び出しの total_tokens で判定）。
-            track_token_usage=False の場合は判定材料が無いため実質発火しない。
+        context_compaction_enabled: メインエージェントの累積トークン数、または
+            直近1回のLLM呼び出しのトークン数が閾値を超えたら会話履歴を要約して
+            圧縮する機能の有効/無効（src.context_compaction 参照）。context_trim
+            と異なり永続履歴（checkpointer上のメッセージ）自体を書き換える。
+        context_compaction_token_threshold: 圧縮を発火させる、メインエージェントの
+            累積 total_tokens（token_usage_cumulative_main、圧縮発火のたびに
+            リセットされる）の閾値。直近1回のLLM呼び出し分だけで判定すると、
+            context_trim による送信ペイロード削減の影響で閾値未満に収まり
+            続け、圧縮が発火しないまま永続履歴だけが肥大化しうるため、
+            累積値でも判定する（context_compaction_single_request_token_threshold
+            とのOR判定）。track_token_usage=False の場合は判定材料が無いため
+            この条件は実質発火しない。
+        context_compaction_single_request_token_threshold: 圧縮を発火させる、
+            直近1回のLLM呼び出しの total_tokens の閾値。会話全体の累積は
+            低くても、1ターンで巨大なツール結果やファイル内容を一気に積む
+            などして単発のリクエストがモデルのcontext window上限に迫る
+            ケースを検知するためのもの。低パラメータモデルでは1リクエスト
+            あたりcontext window未満に収める必要があるため、ツール結果1往復分
+            の余裕を見てそれより低い値にすること。track_token_usage=False の
+            場合は判定材料が無いためこの条件は実質発火しない。
         context_compaction_keep_recent_turns: 圧縮時に丸ごと保持する直近の
             ユーザーターン数（HumanMessage単位）。tool_calls とそれに
             対応する ToolMessage の対応関係を壊さないよう、この境界
@@ -348,6 +365,7 @@ class Config:
     dry_allowed_length: int | None
     dry_penalty_last_n: int | None
     dry_sequence_breakers: list[str] | None
+    enable_thinking: bool | None
     track_token_usage: bool
     request_timeout_seconds: float
     stream_chunk_timeout_seconds: float
@@ -457,6 +475,7 @@ class Config:
     # --- 会話履歴の自動要約・圧縮（src/context_compaction.py） ---
     context_compaction_enabled: bool
     context_compaction_token_threshold: int
+    context_compaction_single_request_token_threshold: int
     context_compaction_keep_recent_turns: int
     context_compaction_min_messages_to_compact: int
     context_compaction_prompt_path: Path
@@ -544,6 +563,24 @@ def _as_optional_int(value: int | str | None) -> int | None:
         return value
     text = str(value).strip()
     return int(text) if text else None
+
+
+def _as_optional_bool(value: bool | str | None) -> bool | None:
+    """config.ini の空欄、または環境変数の空文字列を None（未指定）として扱う。
+
+    Args:
+        value: config.ini から得た値、または環境変数から得た文字列。
+
+    Returns:
+        空欄・None なら None、bool ならそのまま、それ以外は _as_bool と同じ
+        規則（"0"/"false"/"no" を False、それ以外を True）で変換した値。
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip()
+    return _as_bool(text) if text else None
 
 
 def _as_optional_str_list(value: str | None) -> list[str] | None:
@@ -659,7 +696,7 @@ def load_config(config_path: Path | None = None) -> Config:
       LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_TEMPERATURE
       LLM_TOP_P / LLM_TOP_K / LLM_REPEAT_PENALTY / LLM_FREQUENCY_PENALTY / LLM_PRESENCE_PENALTY / LLM_MAX_TOKENS
       LLM_DRY_MULTIPLIER / LLM_DRY_BASE / LLM_DRY_ALLOWED_LENGTH / LLM_DRY_PENALTY_LAST_N / LLM_DRY_SEQUENCE_BREAKERS
-      LLM_TRACK_TOKEN_USAGE
+      LLM_ENABLE_THINKING / LLM_TRACK_TOKEN_USAGE
       SKILLS_DIR / AGENTS_DIR / PROJECT_LOCOHANE_DIR / SYSTEM_PROMPT_PATH / CHECKPOINT_DB / UPLOAD_DIR / LOG_DIR / LOG_LEVEL / LOG_CLEAR_ON_STARTUP / DEFAULT_WORKDIR / MEMORY_DIR / HELP_PATH
       UPLOAD_RETENTION_DAYS / UPLOAD_CLEANUP_INTERVAL_HOURS
       PATH_MEMORY_DIR / PATH_MEMORY_RETENTION_DAYS / PATH_MEMORY_CLEANUP_INTERVAL_HOURS / PATH_MEMORY_MAX_ENTRIES
@@ -757,6 +794,7 @@ def load_config(config_path: Path | None = None) -> Config:
         dry_allowed_length=_as_optional_int(os.getenv("LLM_DRY_ALLOWED_LENGTH", llm.get("dry_allowed_length", ""))),
         dry_penalty_last_n=_as_optional_int(os.getenv("LLM_DRY_PENALTY_LAST_N", llm.get("dry_penalty_last_n", ""))),
         dry_sequence_breakers=_as_optional_str_list(os.getenv("LLM_DRY_SEQUENCE_BREAKERS", llm.get("dry_sequence_breakers", ""))),
+        enable_thinking=_as_optional_bool(os.getenv("LLM_ENABLE_THINKING", llm.get("enable_thinking", ""))),
         track_token_usage=_as_bool(os.getenv("LLM_TRACK_TOKEN_USAGE", llm.get("track_token_usage", True))),
         request_timeout_seconds=float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", llm.get("request_timeout_seconds", 300))),
         stream_chunk_timeout_seconds=float(
@@ -937,6 +975,12 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "CONTEXT_COMPACTION_TOKEN_THRESHOLD",
                 context_compaction.get("token_threshold", 60000),
+            )
+        ),
+        context_compaction_single_request_token_threshold=int(
+            os.getenv(
+                "CONTEXT_COMPACTION_SINGLE_REQUEST_TOKEN_THRESHOLD",
+                context_compaction.get("single_request_token_threshold", 60000),
             )
         ),
         context_compaction_keep_recent_turns=int(

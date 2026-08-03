@@ -25,13 +25,32 @@ logger = logging.getLogger(__name__)
 _SUMMARY_HEADER = "[自動要約: コンテキスト圧縮のため、以前の会話の一部を要約しました。" "この内容を踏まえて続きの作業を行ってください]\n"
 
 
-def should_compact(usage: dict | None, message_count: int, config: Config) -> bool:
-    """直近のLLM呼び出しの usage とメッセージ数から、圧縮を検討すべきか判定する。
+def should_compact(
+    cumulative_usage: dict | None,
+    last_usage: dict | None,
+    message_count: int,
+    config: Config,
+) -> bool:
+    """メインエージェントの累積トークン使用量と直近1回分の使用量から、圧縮を検討すべきか判定する。
+
+    2つの独立した条件のOR判定になっている:
+
+    1. 累積条件: 直近1回のLLM呼び出し分だけで判定すると、context_trim による
+       送信ペイロード削減の影響で閾値未満に収まり続け、圧縮が長期間発火しない
+       まま永続履歴（state["messages"]）だけが肥大化しうる。そのため、会話
+       全体を通じたメインエージェントの累積トークン量（サブエージェント呼び出し
+       分は含まない）でも判定する。
+    2. 単発条件: 会話全体の累積は低くても、1ターンで巨大なツール結果や
+       ファイル内容を一気に積むなどして、単発のリクエストがモデルの
+       context window上限に迫るケースがある。これは累積条件では捉えられない
+       ため、直近1回の total_tokens も別途見る。
 
     Args:
-        usage: on_chat_model_end で得た直近1回分の usage_metadata
-            （"total_tokens" キーを持つ dict）。track_token_usage=false 等で
-            取得できなかった場合は None。
+        cumulative_usage: app.py が保持する token_usage_cumulative_main
+            （{"input","output","total"} を持つ累積集計辞書）。track_token_usage=false
+            等で一度も集計されていない場合は None。
+        last_usage: on_chat_model_end で得た直近1回分の usage_metadata
+            （"total_tokens" キーを持つ dict）。取得できなかった場合は None。
         message_count: 現在の会話履歴（state["messages"]）の件数。
         config: context_compaction_* 設定を含むアプリ設定。
 
@@ -40,12 +59,13 @@ def should_compact(usage: dict | None, message_count: int, config: Config) -> bo
     """
     if not config.context_compaction_enabled:
         return False
-    if usage is None:
-        return False
     if message_count < config.context_compaction_min_messages_to_compact:
         return False
-    total = usage.get("total_tokens", 0) or 0
-    return total >= config.context_compaction_token_threshold
+    cumulative_total = (cumulative_usage or {}).get("total", 0) or 0
+    if cumulative_total >= config.context_compaction_token_threshold:
+        return True
+    last_total = (last_usage or {}).get("total_tokens", 0) or 0
+    return last_total >= config.context_compaction_single_request_token_threshold
 
 
 def _find_cut_index(messages: list[BaseMessage], keep_recent_turns: int) -> int | None:
