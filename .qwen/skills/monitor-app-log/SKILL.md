@@ -18,7 +18,7 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 
 ## 状態ファイル
 
-`.qwen/skills/monitor-app-log/state.json`（このSKILL.mdと同じディレクトリ）:
+`data/temp/state.json`:
 
 ```json
 {"last_checked": "2026-08-01T22:50:00", "cron_job_id": "xxxxx"}
