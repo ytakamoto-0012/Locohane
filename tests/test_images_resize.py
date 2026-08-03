@@ -9,15 +9,24 @@
 import base64
 import io
 
+import pillow_heif
 from PIL import Image, ImageOps
 
-from src.images import to_data_url
+from src.images import is_image_file, to_data_url
 
 
 def _make_png_bytes(size: tuple[int, int], mode: str = "RGB", color=(200, 50, 50)) -> bytes:
     img = Image.new(mode, size, color)
     buffer = io.BytesIO()
     img.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _make_heic_bytes(size: tuple[int, int], color=(200, 50, 50)) -> bytes:
+    img = Image.new("RGB", size, color)
+    heif_file = pillow_heif.from_pillow(img)
+    buffer = io.BytesIO()
+    heif_file.save(buffer, format="HEIF")
     return buffer.getvalue()
 
 
@@ -99,3 +108,39 @@ def test_rgba_png_converts_to_jpeg_without_error(tmp_path) -> None:
     with Image.open(io.BytesIO(decoded)) as img:
         assert img.mode == "RGB"
         assert max(img.size) == 500
+
+
+def test_heic_extension_is_recognized_as_image_file(tmp_path) -> None:
+    path = tmp_path / "photo.heic"
+    path.write_bytes(b"")
+
+    assert is_image_file(path)
+
+
+def test_heic_is_always_converted_to_jpeg_even_within_limit(tmp_path) -> None:
+    # HEIC/HEIFはVision APIのdata URLとして解釈できないため、
+    # max_long_side=0（縮小オフ）でも必ずJPEGへ変換されなければならない。
+    data = _make_heic_bytes((800, 600))
+    path = tmp_path / "photo.heic"
+    path.write_bytes(data)
+
+    url = to_data_url(path, max_long_side=0)
+    mime, decoded = _decode(url)
+
+    assert mime == "image/jpeg"
+    with Image.open(io.BytesIO(decoded)) as img:
+        assert img.format == "JPEG"
+        assert img.size == (800, 600)
+
+
+def test_heic_is_resized_when_exceeding_limit(tmp_path) -> None:
+    data = _make_heic_bytes((4032, 3024))
+    path = tmp_path / "photo.heic"
+    path.write_bytes(data)
+
+    url = to_data_url(path, max_long_side=1024, jpeg_quality=85)
+    mime, decoded = _decode(url)
+
+    assert mime == "image/jpeg"
+    with Image.open(io.BytesIO(decoded)) as img:
+        assert max(img.size) == 1024

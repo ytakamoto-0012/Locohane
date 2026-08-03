@@ -19,8 +19,12 @@ import io
 import logging
 from pathlib import Path
 
+import pillow_heif
 from langchain_core.messages import HumanMessage
 from PIL import Image, ImageOps
+
+# HEIC/HEIFはPillow標準では開けないため、Image.open()に渡す前にオープナー登録が必要。
+pillow_heif.register_heif_opener()
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +36,23 @@ _MIME_BY_EXT = {
     ".gif": "image/gif",
     ".webp": "image/webp",
     ".bmp": "image/bmp",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
 }
+
+# Vision APIのdata URLとして解釈できないため、サイズに関わらず必ずJPEGへ変換するMIME。
+_ALWAYS_CONVERT_MIMES = {"image/heic", "image/heif"}
 
 
 def is_image_file(path: str | Path) -> bool:
-    """拡張子が対応画像形式（png/jpg/jpeg/gif/webp/bmp）かどうかを返す。"""
+    """拡張子が対応画像形式（png/jpg/jpeg/gif/webp/bmp/heic/heif）かどうかを返す。"""
     return Path(path).suffix.lower() in _MIME_BY_EXT
 
 
-def _downscale_to_jpeg(data: bytes, max_long_side: int, jpeg_quality: int) -> bytes | None:
-    """長辺が max_long_side を超える画像だけを縮小し、JPEGバイト列として返す。
+def _downscale_to_jpeg(
+    data: bytes, max_long_side: int, jpeg_quality: int, *, force: bool = False
+) -> bytes | None:
+    """長辺が max_long_side を超える画像を縮小し、JPEGバイト列として返す。
 
     Vision モデルが1枚の画像に費やすトークン量は画素数でほぼ決まるため、
     スマホ撮影のような 4032x3024 の画像をそのまま渡すと、数枚でサブエージェントの
@@ -49,11 +60,14 @@ def _downscale_to_jpeg(data: bytes, max_long_side: int, jpeg_quality: int) -> by
 
     Args:
         data: 元画像のバイト列。
-        max_long_side: 縮小後の長辺のピクセル数。
+        max_long_side: 縮小後の長辺のピクセル数。0以下ならリサイズはしない。
         jpeg_quality: 再エンコード時のJPEG品質（1-95）。
+        force: True の場合、リサイズが不要でも必ずJPEGへ再エンコードする。
+            HEIC/HEIFはVision APIのdata URLとして解釈できない形式のため、
+            サイズ変更の要否に関わらず変換が必須（呼び出し元が指定する）。
 
     Returns:
-        縮小したJPEGのバイト列。縮小が不要（既に長辺が上限以下）だった場合と、
+        変換後のJPEGバイト列。force=Falseでリサイズも不要だった場合と、
         画像として読めなかった場合は None（呼び出し元は元のバイト列をそのまま使う）。
     """
     try:
@@ -63,11 +77,13 @@ def _downscale_to_jpeg(data: bytes, max_long_side: int, jpeg_quality: int) -> by
             # 横倒しの写真をモデルに読ませることになる。
             img = ImageOps.exif_transpose(img)
             long_side = max(img.size)
-            if long_side <= max_long_side:
+            needs_resize = max_long_side > 0 and long_side > max_long_side
+            if not needs_resize and not force:
                 return None
-            scale = max_long_side / long_side
-            new_size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
-            img = img.resize(new_size, Image.LANCZOS)
+            if needs_resize:
+                scale = max_long_side / long_side
+                new_size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+                img = img.resize(new_size, Image.LANCZOS)
             if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
                 # JPEGは透過を持てない。そのまま変換すると透過部分が黒く潰れて
                 # 文字が読めなくなるため、白背景へ合成してから変換する。
@@ -100,11 +116,13 @@ def to_data_url(
         max_long_side: 縮小後の長辺のピクセル数の上限（config.ini
             [images].max_long_side_pixels）。0以下、または画像の長辺が既に
             この値以下の場合は**再エンコードせず元のバイト列をそのまま使う**
-            （劣化もPillowのコストも発生しない）。
-        jpeg_quality: 縮小時のJPEG品質（config.ini [images].jpeg_quality）。
+            （劣化もPillowのコストも発生しない）。ただしHEIC/HEIFは
+            Vision APIのdata URLとして解釈できないため、この設定に関わらず
+            必ずJPEGへ変換する。
+        jpeg_quality: 縮小・変換時のJPEG品質（config.ini [images].jpeg_quality）。
 
     Returns:
-        "data:<mime>;base64,<...>" 形式の文字列。縮小した場合の mime は
+        "data:<mime>;base64,<...>" 形式の文字列。縮小・変換した場合の mime は
         常に image/jpeg になる。
 
     Raises:
@@ -113,10 +131,11 @@ def to_data_url(
     p = Path(path)
     mime = _MIME_BY_EXT[p.suffix.lower()]
     data = p.read_bytes()
-    if max_long_side > 0:
-        downscaled = _downscale_to_jpeg(data, max_long_side, jpeg_quality)
-        if downscaled is not None:
-            data = downscaled
+    force_convert = mime in _ALWAYS_CONVERT_MIMES
+    if max_long_side > 0 or force_convert:
+        converted = _downscale_to_jpeg(data, max_long_side, jpeg_quality, force=force_convert)
+        if converted is not None:
+            data = converted
             mime = "image/jpeg"
     b64 = base64.b64encode(data).decode("ascii")
     return f"data:{mime};base64,{b64}"
