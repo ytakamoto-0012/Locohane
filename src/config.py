@@ -247,8 +247,11 @@ class Config:
             実質発火しない（run_subagent 側で無条件に無効化される）。
         subagent_token_guard_soft_threshold: 直近1回のLLM呼び出しの
             total_tokens がこの値以上になったら、そのiterationのtool_calls
-            は通常通り実行した上で、次のモデル呼び出し前に「まとめて回答
-            せよ」という注意メッセージを1回だけ注入する。
+            は通常通り実行した上で、次のモデル呼び出し前に
+            subagent_token_guard_soft_warning_text の注意メッセージを
+            1回だけ注入する。
+        subagent_token_guard_soft_warning_text: 上記ソフト閾値到達時に
+            注入する注意メッセージの文言。
         subagent_token_guard_hard_threshold: ソフト警告後もなお
             total_tokens がこの値以上の応答が続いた場合、そのtool_calls
             は実行せず、それ以上model.ainvoke()を呼ばずに打ち切る
@@ -449,6 +452,7 @@ class Config:
     subagent_max_parallel: int
     subagent_token_guard_enabled: bool
     subagent_token_guard_soft_threshold: int
+    subagent_token_guard_soft_warning_text: str
     subagent_token_guard_hard_threshold: int
     subagent_empty_response_max_retries: int
 
@@ -913,6 +917,15 @@ def load_config(config_path: Path | None = None) -> Config:
                 "SUBAGENT_TOKEN_GUARD_SOFT_THRESHOLD",
                 subagent.get("token_guard_soft_threshold", 40000),
             )
+        ),
+        subagent_token_guard_soft_warning_text=os.getenv(
+            "SUBAGENT_TOKEN_GUARD_SOFT_WARNING_TEXT",
+            subagent.get(
+                "token_guard_soft_warning_text",
+                "[システム通知: このタスクのトークン使用量が上限に近づいています。"
+                "これ以上ツール呼び出しを追加せず、次の応答でこれまでに分かったことと"
+                "未処理の残り（あれば）をまとめて回答してください]",
+            ),
         ),
         subagent_token_guard_hard_threshold=int(
             os.getenv(

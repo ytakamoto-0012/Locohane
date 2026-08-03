@@ -53,12 +53,6 @@ from .llm import (
 
 logger = logging.getLogger(__name__)
 
-_TOKEN_GUARD_SOFT_WARNING_TEXT = (
-    "[システム通知: このタスクのトークン使用量が上限に近づいています。"
-    "これ以上ツール呼び出しを追加せず、次の応答でこれまでに分かったことと"
-    "未処理の残り（あれば）をまとめて回答してください]"
-)
-
 _EMPTY_RESPONSE_NUDGE_TEXT = (
     "[システム通知: 直前の応答にはツール呼び出しも本文もありませんでした。"
     "これまでに分かったことをまとめて回答するか、必要な追加のツール呼び出しを"
@@ -420,7 +414,7 @@ async def run_subagent(
             and total_tokens is not None
             and total_tokens >= config.subagent_token_guard_soft_threshold
         ):
-            messages.append(HumanMessage(content=_TOKEN_GUARD_SOFT_WARNING_TEXT))
+            messages.append(HumanMessage(content=config.subagent_token_guard_soft_warning_text))
             soft_warning_issued = True
             logger.info(
                 "subagent: トークン使用量が閾値(%d)に近づいたため注意メッセージを注入" "(iter=%d, total_tokens=%d)",
