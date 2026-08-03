@@ -189,6 +189,7 @@ _HELP_PATH: Path | None = None
 _PATH_MEMORY_DIR: Path | None = None
 _PATH_MEMORY_MAX_ENTRIES: int = 500
 _SRC_DIR: Path = Path(__file__).parent  # src/ディレクトリ（path_memory.py 等がある）
+_PROJECT_ROOT: Path = _SRC_DIR.parent  # リポジトリ直下（execute_python_code のFSガードで使用）
 _APPROVAL_TIMEOUT_SECONDS: int = 300
 _ASK_USER_QUESTION_TIMEOUT_SECONDS: int = 60
 _ASK_USER_CHOICE_TIMEOUT_SECONDS: int = 90
@@ -1961,6 +1962,107 @@ def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float
     return "[生成/更新ファイル]\n" + "\n".join(lines)
 
 
+def _python_fs_guard_preamble(allowed_roots: Sequence[Path], guarded_root: Path) -> str:
+    """execute_python_code が実行するコードの先頭に連結する、プロジェクト
+    フォルダ保護用のガードコードを生成する。
+
+    LLMが生成したコードは絶対パスや `..` で任意の場所へ書き込めてしまい、
+    cwd を作業用ディレクトリに絞るだけでは `src/tools.py` や `config.ini`
+    のようなプロジェクト本体のファイルを誤って書き換える事故を防げない。
+    ここで生成するコードは、サブプロセス内で `open`/`os`/`shutil` の
+    書き込み・削除・改名系関数をモンキーパッチし、guarded_root（通常
+    PROJECT_ROOT）配下への操作を allowed_roots（作業ディレクトリと
+    default_workdir）配下を除いてブロックする。guarded_root の外側
+    （ユーザーが指定した他ドライブのデータフォルダ等）は従来通り無制限
+    のまま。悪意ある回避（ctypes直叩き等）までは防げないベストエフォート
+    のガードであり、あくまで「LLMが悪気なくプロジェクトを触ってしまう」
+    事故防止が目的（run_script は既存の承認済みスクリプトしか実行できず
+    任意コード実行ではないため、この関数の対象外）。
+
+    Args:
+        allowed_roots: guarded_root 配下でも書き込み・削除を許可する
+            ディレクトリの一覧（実行用ディレクトリと default_workdir）。
+        guarded_root: 保護対象のルートディレクトリ（PROJECT_ROOT）。
+
+    Returns:
+        コード文字列の先頭に連結する、モンキーパッチ処理のPythonソース。
+        呼び出し元のコード自体には何も変更を加えない。
+    """
+    allowed_repr = ", ".join(repr(str(p)) for p in allowed_roots)
+    guarded_repr = repr(str(guarded_root))
+    return f'''\
+import builtins as _guard_builtins
+import io as _guard_io
+import os as _guard_os
+import shutil as _guard_shutil
+
+_GUARD_ALLOWED = [_guard_os.path.realpath(_p) for _p in ({allowed_repr},)]
+_GUARD_ROOT = _guard_os.path.realpath({guarded_repr})
+
+
+def _guard_check(_path, _op):
+    try:
+        _target = _guard_os.path.realpath(_guard_os.fspath(_path))
+    except TypeError:
+        return
+    if _target != _GUARD_ROOT and not _target.startswith(_GUARD_ROOT + _guard_os.sep):
+        return
+    for _root in _GUARD_ALLOWED:
+        if _target == _root or _target.startswith(_root + _guard_os.sep):
+            return
+    raise PermissionError(
+        f"[execute_python_codeガード] プロジェクトフォルダ内は{{_op}}できません: {{_path}}\\n"
+        "default_workdir配下のみ書き込み・削除可能です。"
+    )
+
+
+_guard_orig_open = _guard_builtins.open
+
+
+def _guard_open(_file, _mode="r", *_args, **_kwargs):
+    if any(_c in _mode for _c in ("w", "a", "x", "+")):
+        _guard_check(_file, "書き込み")
+    return _guard_orig_open(_file, _mode, *_args, **_kwargs)
+
+
+_guard_builtins.open = _guard_open
+_guard_io.open = _guard_open
+
+for _guard_name in ("remove", "unlink", "rename", "replace", "rmdir", "removedirs", "mkdir", "makedirs", "truncate"):
+    def _guard_make_os(_orig, _name):
+        def _fn(_path, *_args, **_kwargs):
+            _guard_check(_path, _name)
+            if _name in ("rename", "replace") and _args:
+                _guard_check(_args[0], _name)
+            return _orig(_path, *_args, **_kwargs)
+
+        return _fn
+
+    _guard_orig = getattr(_guard_os, _guard_name, None)
+    if _guard_orig is not None:
+        setattr(_guard_os, _guard_name, _guard_make_os(_guard_orig, _guard_name))
+
+for _guard_name in ("rmtree", "move", "copy", "copy2", "copyfile", "copytree"):
+    def _guard_make_shutil(_orig, _name):
+        def _fn(_src, *_args, **_kwargs):
+            if _name == "rmtree":
+                _guard_check(_src, _name)
+            else:
+                _guard_check(_src, _name)
+                if _args:
+                    _guard_check(_args[0], _name)
+            return _orig(_src, *_args, **_kwargs)
+
+        return _fn
+
+    _guard_orig = getattr(_guard_shutil, _guard_name, None)
+    if _guard_orig is not None:
+        setattr(_guard_shutil, _guard_name, _guard_make_shutil(_guard_orig, _guard_name))
+
+del _guard_name, _guard_orig
+'''
+
+
 @tool
 async def execute_python_code(code: str) -> str:
     """LLMが生成したPythonコードをその場で実行し、標準出力/標準エラーを返す。
@@ -2010,6 +2112,15 @@ async def execute_python_code(code: str) -> str:
     簡易なスクリプト実行やプロトタイピングに限定し、複雑なデータ処理や
     大規模なファイル操作は避ける。
 
+    **重要: プロジェクトフォルダは書き込み・削除できない**
+    このコードは実行前ガードにより、Locohaneのプロジェクトフォルダ配下
+    （src/・app.py・config.ini・skills/ 等）への書き込み・削除・改名が
+    default_workdir配下を除いて自動的にブロックされる（PermissionErrorで
+    失敗する）。プロジェクト自体の設定やソースコードを変更する必要が
+    ある場合はこのツールを使わず、ユーザーへ直接の編集を依頼すること。
+    default_workdir配下や、それ以外の任意のドライブ・フォルダ（ユーザーが
+    指定した作業対象データ）への読み書きは従来通り制限されない。
+
     Args:
         code: 実行する Python コード全文。path_memory の @N トークン
             （例: @0, @1）を含める場合、code内で `path_memory.resolve()`
@@ -2039,8 +2150,9 @@ async def execute_python_code(code: str) -> str:
         before_snapshot = {}
 
     try:
+        _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR], _PROJECT_ROOT)
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
-        tmp.write(code)
+        tmp.write(_fs_guard + code)
         tmp.close()
         tmp_path = Path(tmp.name)
     except OSError:
@@ -2051,8 +2163,9 @@ async def execute_python_code(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
+            _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR], _PROJECT_ROOT)
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
-            tmp.write(code)
+            tmp.write(_fs_guard + code)
             tmp.close()
             tmp_path = Path(tmp.name)
         except OSError as e2:
@@ -2145,6 +2258,15 @@ async def execute_python_code_background(code: str) -> str:
     簡易なスクリプト実行やプロトタイピングに限定し、複雑なデータ処理や
     大規模なファイル操作は避ける。
 
+    **重要: プロジェクトフォルダは書き込み・削除できない**
+    このコードは実行前ガードにより、Locohaneのプロジェクトフォルダ配下
+    （src/・app.py・config.ini・skills/ 等）への書き込み・削除・改名が
+    default_workdir配下を除いて自動的にブロックされる（PermissionErrorで
+    失敗する）。プロジェクト自体の設定やソースコードを変更する必要が
+    ある場合はこのツールを使わず、ユーザーへ直接の編集を依頼すること。
+    default_workdir配下や、それ以外の任意のドライブ・フォルダ（ユーザーが
+    指定した作業対象データ）への読み書きは従来通り制限されない。
+
     Args:
         code: 実行する Python コード全文。
 
@@ -2170,8 +2292,9 @@ async def execute_python_code_background(code: str) -> str:
         before_snapshot = {}
 
     try:
+        _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR], _PROJECT_ROOT)
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
-        tmp.write(code)
+        tmp.write(_fs_guard + code)
         tmp.close()
         tmp_path = Path(tmp.name)
     except OSError:
@@ -2182,8 +2305,9 @@ async def execute_python_code_background(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
+            _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR], _PROJECT_ROOT)
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
-            tmp.write(code)
+            tmp.write(_fs_guard + code)
             tmp.close()
             tmp_path = Path(tmp.name)
         except OSError as e2:
@@ -2641,12 +2765,22 @@ async def ask_user_question(question: str, labels: list[str] | None = None) -> s
     return "\n".join(f"{label}: {value}" for label, value in zip(labels, values))
 
 
+_ASK_CHOICE_CANCEL_VALUE = "__cancel__"
+_ASK_CHOICE_OTHER_VALUE = "__other__"
+_ASK_CHOICE_CANCEL_MESSAGE = "エラー: ユーザーが選択をキャンセルしました。"
+
+
 @tool
 async def ask_user_choice(question: str, choices: list[str], multi_select: bool = False) -> str:
     """会話を続けるために必要な選択を、ユーザーに選択肢形式で質問する。
 
     複数の進め方・方針からユーザーに1つ（または複数）選んでもらいたい場合に使う。
     自由記述の回答が必要な場合は AskUserQuestion を使うこと。
+
+    表示される選択肢には常に「✏️ その他（自由入力）」「❌ キャンセル」が
+    自動的に追加される。「その他」が選ばれた場合は続けて自由記述の入力欄を
+    表示しその回答を返す。「キャンセル」が選ばれた場合は choices に無い
+    指示をユーザーがしたいときの離脱手段として機能する。
 
     Args:
         question: ユーザーに表示する質問文。
@@ -2658,12 +2792,14 @@ async def ask_user_choice(question: str, choices: list[str], multi_select: bool 
             （択一で確定させたい場合はこちら）。
 
     Returns:
-        multi_select=False（既定）: ユーザーが選んだ選択肢の文字列。
-        multi_select=True: ユーザーが選択した選択肢を「、」区切りで連結した
-        文字列（未選択なら "(選択なし)"）。
-        choices が空の場合や、設定値（config.ini の
+        multi_select=False（既定）: ユーザーが選んだ選択肢の文字列。「その他」
+        経由の場合は自由記述の回答テキスト。
+        multi_select=True: ユーザーが選択した選択肢（＋自由記述があれば追加）を
+        「、」区切りで連結した文字列（未選択なら "(選択なし)"）。
+        ユーザーがキャンセルした場合は "エラー: ユーザーが選択をキャンセルしま
+        した。" を返す。choices が空の場合や、設定値（config.ini の
         [timeouts].ask_user_choice_seconds。0以下は無期限待ち）の秒数以内に
-        応答が無い場合は、例外を送出せず「エラー: ...」形式の文字列を返す。
+        応答が無い場合も、例外を送出せず「エラー: ...」形式の文字列を返す。
     """
     if not choices:
         return "エラー: choices が空です。1件以上の選択肢を指定してください。"
@@ -2674,13 +2810,28 @@ async def ask_user_choice(question: str, choices: list[str], multi_select: bool 
         res = await cl.AskElementMessage(content=question, element=element, timeout=timeout).send()
         if res is None:
             return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
-        selected = res.get("values") or []
+        if not res.get("submitted", True):
+            return _ASK_CHOICE_CANCEL_MESSAGE
+        selected = list(res.get("values") or [])
+        other = (res.get("other") or "").strip()
+        if other:
+            selected.append(other)
         return "、".join(selected) if selected else "(選択なし)"
     actions = [cl.Action(name=f"choice_{i}", payload={"value": c}, label=c) for i, c in enumerate(choices)]
+    actions.append(cl.Action(name="other", payload={"value": _ASK_CHOICE_OTHER_VALUE}, label="✏️ その他（自由入力）"))
+    actions.append(cl.Action(name="cancel", payload={"value": _ASK_CHOICE_CANCEL_VALUE}, label="❌ キャンセル"))
     res = await cl.AskActionMessage(content=question, actions=actions, timeout=timeout).send()
     if res is None:
         return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
-    return res["payload"].get("value") or res.get("label", "")
+    value = res["payload"].get("value") or res.get("label", "")
+    if value == _ASK_CHOICE_CANCEL_VALUE:
+        return _ASK_CHOICE_CANCEL_MESSAGE
+    if value == _ASK_CHOICE_OTHER_VALUE:
+        other_res = await cl.AskUserMessage(content=question, timeout=timeout).send()
+        if other_res is None:
+            return "エラー: ユーザーからの応答がありませんでした（タイムアウト）。"
+        return other_res.get("output", "")
+    return value
 
 
 @tool(response_format="content_and_artifact")

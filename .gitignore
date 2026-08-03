@@ -243,7 +243,7 @@ __marimo__/
 bin/
 
 # Coding Agent
-.qwen/
+# .qwen/
 
 # Locohane プロジェクト固有指示（CLAUDE.md相当）。.example側のみコミット対象。
 .locohane/LOCOHANE.md

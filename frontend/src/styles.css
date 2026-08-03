@@ -494,6 +494,29 @@
   color: white;
 }
 
+.ask-form-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ask-form-cancel {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ask-form-cancel:hover {
+  background: var(--surface-muted);
+  color: inherit;
+}
+
 .ask-text-bar {
   display: flex;
   flex-direction: column;

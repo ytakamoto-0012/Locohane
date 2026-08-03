@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(dir *)",
+      "Bash(findstr *)",
+      "Bash(c:\\dt_python\\python311\\env_claudecode\\scripts\\python.exe *)",
+      "Bash(c:\\dt_python\\python311\\env_claudecode\\scripts\\pip.exe *)",
+      "Bash(c:\\dt_python\\python311\\env_local_agent_system\\scripts\\python.exe *)",
+      "Bash(git add *)",
+      "Bash(git tag *)",
+      "Bash(git commit *)",
+      "Bash(c:\\dt_python\\python311\\python.exe *)",
+      "Bash(c:\\dt_python\\python311\\scripts\\pip.exe *)",
+      "Bash(get-childitem *)",
+      "Bash(where-object *)",
+      "Bash(get-date *)",
+      "Bash(sort-object *)",
+      "Bash(select-object *)",
+      "Read(C:\\Users\\ytkmt\\.qwen\\projects\\c--dt-python-locohane\\issue/**)",
+      "cron_create"
+    ]
+  },
+  "$version": 4
+}
