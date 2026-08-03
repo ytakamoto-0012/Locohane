@@ -12,6 +12,8 @@ export const TOKEN_USAGE_PREFIX = '🔢 トークン使用量\n';
 export const WORK_DIR_PREFIX = '📁 作業ディレクトリ';
 /** src/tools.py の PLAN_PREFIX と一致させる（実行計画のサイドパネル表示）。 */
 export const PLAN_PREFIX = '📋 実行計画\n';
+/** app.py の STARTER_PREFIX と一致させる（チャット開始時の定型文ボタン表示）。 */
+export const STARTER_PREFIX = '🚀 定型文\n';
 
 function flattenAll(nodes: IStep[]): IStep[] {
   const out: IStep[] = [];
@@ -44,6 +46,10 @@ export function isPlanMessage(step: IStep): boolean {
   return isPrefixedStatusMessage(step, PLAN_PREFIX);
 }
 
+export function isStarterMessage(step: IStep): boolean {
+  return isPrefixedStatusMessage(step, STARTER_PREFIX);
+}
+
 /** メインカラムに表示する、ユーザー発言とアシスタントの最終回答のみ。 */
 export function selectMainThread(messages: IStep[]): IStep[] {
   return flattenAll(messages).filter(
@@ -51,7 +57,8 @@ export function selectMainThread(messages: IStep[]): IStep[] {
       (s.type === 'user_message' || s.type === 'assistant_message') &&
       !isTokenUsageMessage(s) &&
       !isWorkDirMessage(s) &&
-      !isPlanMessage(s)
+      !isPlanMessage(s) &&
+      !isStarterMessage(s)
   );
 }
 
@@ -97,4 +104,17 @@ export function selectLatestWorkDir(messages: IStep[]): IStep | undefined {
 export function selectLatestPlan(messages: IStep[]): IStep | undefined {
   const planMessages = flattenAll(messages).filter(isPlanMessage);
   return planMessages[planMessages.length - 1];
+}
+
+/** チャット開始時に届く定型文リスト(cl.Messageとして届く、JSON文字列)を1件だけ取り出しパースする。 */
+export function selectLatestStarters(messages: IStep[]): string[] {
+  const starterMessages = flattenAll(messages).filter(isStarterMessage);
+  const latest = starterMessages[starterMessages.length - 1];
+  if (!latest || typeof latest.output !== 'string') return [];
+  try {
+    const parsed = JSON.parse(latest.output.slice(STARTER_PREFIX.length));
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
 }

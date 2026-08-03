@@ -380,6 +380,10 @@ def _format_token_usage(call: dict, cumulative_main: dict, cumulative: dict) -> 
 # メインスレッドから除外し、サイドパネルへ抽出する。
 WORK_DIR_PREFIX = "📁 作業ディレクトリ"
 
+# frontend/src/utils/messageTree.ts の STARTER_PREFIX と一致させる
+# （チャット開始時の定型文ボタン表示用マーカー。PLAN_PREFIX/WORK_DIR_PREFIX と同じ方式）。
+STARTER_PREFIX = "🚀 定型文\n"
+
 
 # public/settings/welcome.md が存在しない場合のフォールバック（{skills} はスキル一覧に置換される）。
 _WELCOME_TEMPLATE_DEFAULT = (
@@ -799,6 +803,11 @@ async def on_chat_start() -> None:
     names = "、".join(s.name for s in skills) or "（なし）"
     welcome_template = _load_settings_text("welcome.md", _WELCOME_TEMPLATE_DEFAULT)
     await cl.Message(content=welcome_template.replace("{skills}", names)).send()
+
+    if _config.chat_starter_prompts:
+        await cl.Message(
+            content=STARTER_PREFIX + json.dumps(_config.chat_starter_prompts, ensure_ascii=False)
+        ).send()
 
 
 @cl.on_chat_end

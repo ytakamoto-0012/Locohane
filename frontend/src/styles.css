@@ -430,6 +430,33 @@
   color: white;
 }
 
+.starter-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 20px 14px;
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.starter-prompt-button {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+
+.starter-prompt-button:hover {
+  background: var(--accent);
+  color: white;
+}
+
 .ask-form-bar {
   display: flex;
   flex-direction: column;

@@ -148,6 +148,9 @@ class Config:
         chat_log_dir: 会話ログの保存先ルートディレクトリの絶対パス。
             実際には <chat_log_dir>/<ユーザー名>/<日付>_<thread_id>.log の
             構成で書き出す（src/chat_log.py 参照）。
+        chat_starter_prompts: チャット開始時に表示する定型文ボタンの候補
+            リスト（[chat_starters].prompts）。クリックするとそのまま
+            メッセージとして送信される。空リストならボタンを表示しない。
         default_workdir: エージェントの既定の作業ディレクトリ（run_script の
             cwd、スクリプトが生成するファイルの出力先の基準）。Chainlit の
             ChatSettings でセッション単位の作業ディレクトリが指定されな
@@ -415,6 +418,9 @@ class Config:
     # --- 会話ログ（[chat_log]） ---
     chat_log_enabled: bool
     chat_log_dir: Path
+
+    # --- チャット開始時の定型文ボタン（[chat_starters]） ---
+    chat_starter_prompts: list[str]
 
     # --- run_script / execute_python_code 共通実行設定 ---
     script_timeout: int
@@ -721,6 +727,7 @@ def load_config(config_path: Path | None = None) -> Config:
       AUTH_ENABLED / AUTH_REQUIRE_PASSWORD / AUTH_USERS（AUTH_USERS は .env 専用、
       config.ini 側フォールバックを持たない）
       CHAT_LOG_ENABLED / CHAT_LOG_DIR
+      CHAT_STARTER_PROMPTS
       MCP_ENABLED / MCP_SETTINGS_PATH / MCP_CONNECT_TIMEOUT_SECONDS / MCP_CALL_TIMEOUT_SECONDS
       （これら4値は .locohane/settings.json の "mcp" ブロックがあればさらに
       上書きされる。config.ini/環境変数はその既定値という位置づけ）
@@ -756,6 +763,7 @@ def load_config(config_path: Path | None = None) -> Config:
     path_memory = parser["path_memory"] if parser.has_section("path_memory") else {}
     log_section = parser["log"] if parser.has_section("log") else {}
     chat_log = parser["chat_log"] if parser.has_section("chat_log") else {}
+    chat_starters = parser["chat_starters"] if parser.has_section("chat_starters") else {}
     scripts = parser["scripts"] if parser.has_section("scripts") else {}
     file_tools_duplicate_guard = parser["file_tools_duplicate_guard"] if parser.has_section("file_tools_duplicate_guard") else {}
     graph = parser["graph"] if parser.has_section("graph") else {}
@@ -844,6 +852,9 @@ def load_config(config_path: Path | None = None) -> Config:
         log_cleanup_interval_hours=float(os.getenv("LOG_CLEANUP_INTERVAL_HOURS", log_section.get("cleanup_interval_hours", 1))),
         chat_log_enabled=_as_bool(os.getenv("CHAT_LOG_ENABLED", chat_log.get("enabled", False))),
         chat_log_dir=_resolve(PROJECT_ROOT, os.getenv("CHAT_LOG_DIR", chat_log.get("dir", "./data/logs_chat"))),
+        chat_starter_prompts=_as_message_list(
+            os.getenv("CHAT_STARTER_PROMPTS", chat_starters.get("prompts", ""))
+        ),
         script_timeout=int(os.getenv("SCRIPT_TIMEOUT", scripts.get("timeout", 60))),
         script_python=os.getenv("SCRIPT_PYTHON", scripts.get("python", "python")),
         code_exec_enabled=_as_bool(os.getenv("CODE_EXECUTION_ENABLED", scripts.get("code_execution_enabled", True))),

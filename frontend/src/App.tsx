@@ -10,12 +10,14 @@ import { AskFormBar } from './components/AskFormBar';
 import { AskChoiceFormBar } from './components/AskChoiceFormBar';
 import { AskTextBar } from './components/AskTextBar';
 import { AskFileDropzone } from './components/AskFileDropzone';
+import { StarterPrompts } from './components/StarterPrompts';
 import {
   selectMainThread,
   selectSideSteps,
   selectLatestTokenUsage,
   selectLatestWorkDir,
-  selectLatestPlan
+  selectLatestPlan,
+  selectLatestStarters
 } from './utils/messageTree';
 import './styles.css';
 
@@ -39,6 +41,7 @@ function App() {
   const tokenUsage = selectLatestTokenUsage(messages);
   const workDir = selectLatestWorkDir(messages);
   const plan = selectLatestPlan(messages);
+  const starterPrompts = selectLatestStarters(messages);
 
   const lastMain = mainMessages[mainMessages.length - 1];
   // 送信直後〜最終回答のストリーミング開始までの「空白時間」を可視化する。
@@ -60,6 +63,7 @@ function App() {
         <AskChoiceFormBar />
         <AskTextBar />
         <AskFileDropzone />
+        {mainMessages.length === 0 && <StarterPrompts prompts={starterPrompts} />}
         <Composer plan={plan} />
       </div>
       <SidePanel sideSteps={sideSteps} tokenUsage={tokenUsage} workDir={workDir} plan={plan} />
