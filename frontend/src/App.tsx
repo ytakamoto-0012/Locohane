@@ -17,7 +17,8 @@ import {
   selectLatestTokenUsage,
   selectLatestWorkDir,
   selectLatestPlan,
-  selectLatestStarters
+  selectLatestStarters,
+  selectLatestMaxDisplayMessages
 } from './utils/messageTree';
 import './styles.css';
 
@@ -43,6 +44,14 @@ function App() {
   const plan = selectLatestPlan(messages);
   const starterPrompts = selectLatestStarters(messages);
 
+  // 表示専用の間引き。会話コンテキスト(LangGraph側のstate)やログには一切影響しない。
+  // 上限0または未取得（値未着信/パース失敗）の場合は無制限（従来どおり全件描画）。
+  const maxDisplayMessages = selectLatestMaxDisplayMessages(messages);
+  const displayMessages =
+    maxDisplayMessages && maxDisplayMessages > 0
+      ? mainMessages.slice(-maxDisplayMessages)
+      : mainMessages;
+
   const lastMain = mainMessages[mainMessages.length - 1];
   // 送信直後〜最終回答のストリーミング開始までの「空白時間」を可視化する。
   // 既に回答トークンが届き始めていれば streaming カーソル側で表現されるため不要。
@@ -56,14 +65,16 @@ function App() {
       <div className="main-column">
         <Header />
         <div className="messages-scroll">
-          <MessageThread messages={mainMessages} showTyping={showTyping} />
+          <MessageThread messages={displayMessages} showTyping={showTyping} />
         </div>
         <AskActionBar />
         <AskFormBar />
         <AskChoiceFormBar />
         <AskTextBar />
         <AskFileDropzone />
-        {mainMessages.length === 0 && <StarterPrompts prompts={starterPrompts} />}
+        {!mainMessages.some((m) => m.type === 'user_message') && (
+          <StarterPrompts prompts={starterPrompts} />
+        )}
         <Composer plan={plan} />
       </div>
       <SidePanel sideSteps={sideSteps} tokenUsage={tokenUsage} workDir={workDir} plan={plan} />

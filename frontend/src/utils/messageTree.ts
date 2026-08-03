@@ -14,6 +14,8 @@ export const WORK_DIR_PREFIX = '📁 作業ディレクトリ';
 export const PLAN_PREFIX = '📋 実行計画\n';
 /** app.py の STARTER_PREFIX と一致させる（チャット開始時の定型文ボタン表示）。 */
 export const STARTER_PREFIX = '🚀 定型文\n';
+/** app.py の MAX_DISPLAY_MESSAGES_PREFIX と一致させる（メインスレッドの表示件数上限）。 */
+export const MAX_DISPLAY_MESSAGES_PREFIX = '📏 表示件数上限\n';
 
 function flattenAll(nodes: IStep[]): IStep[] {
   const out: IStep[] = [];
@@ -50,6 +52,10 @@ export function isStarterMessage(step: IStep): boolean {
   return isPrefixedStatusMessage(step, STARTER_PREFIX);
 }
 
+export function isMaxDisplayMessagesMessage(step: IStep): boolean {
+  return isPrefixedStatusMessage(step, MAX_DISPLAY_MESSAGES_PREFIX);
+}
+
 /** メインカラムに表示する、ユーザー発言とアシスタントの最終回答のみ。 */
 export function selectMainThread(messages: IStep[]): IStep[] {
   return flattenAll(messages).filter(
@@ -58,7 +64,8 @@ export function selectMainThread(messages: IStep[]): IStep[] {
       !isTokenUsageMessage(s) &&
       !isWorkDirMessage(s) &&
       !isPlanMessage(s) &&
-      !isStarterMessage(s)
+      !isStarterMessage(s) &&
+      !isMaxDisplayMessagesMessage(s)
   );
 }
 
@@ -116,5 +123,18 @@ export function selectLatestStarters(messages: IStep[]): string[] {
     return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
   } catch {
     return [];
+  }
+}
+
+/** メインスレッドの表示件数上限(cl.Messageとして届く、JSON数値)を1件だけ取り出す。取得不可/0なら無制限。 */
+export function selectLatestMaxDisplayMessages(messages: IStep[]): number | undefined {
+  const limitMessages = flattenAll(messages).filter(isMaxDisplayMessagesMessage);
+  const latest = limitMessages[limitMessages.length - 1];
+  if (!latest || typeof latest.output !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(latest.output.slice(MAX_DISPLAY_MESSAGES_PREFIX.length));
+    return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
   }
 }

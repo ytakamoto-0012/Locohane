@@ -509,6 +509,12 @@ class Config:
     checkpointer_close_timeout_seconds: float
     checkpointer_shutdown_drain_timeout_seconds: float
 
+    # --- UI（フロントエンド表示、[ui]） ---
+    # チャット画面メインスレッドの描画件数上限（0 = 無制限）。あくまで表示専用の
+    # 間引きであり、LLMへ渡す会話コンテキストや会話ログには影響しない
+    # （frontend/src/App.tsx / messageTree.ts 参照）。
+    ui_max_display_messages: int
+
 
 def _resolve(base: Path, value: str) -> Path:
     """config.ini 内の相対パスをプロジェクトルート基準の絶対パスへ解決する。
@@ -780,6 +786,7 @@ def load_config(config_path: Path | None = None) -> Config:
     auth = parser["auth"] if parser.has_section("auth") else {}
     mcp = parser["mcp"] if parser.has_section("mcp") else {}
     checkpointer = parser["checkpointer"] if parser.has_section("checkpointer") else {}
+    ui = parser["ui"] if parser.has_section("ui") else {}
 
     project_locohane_dirs = _as_path_list(
         os.getenv("PROJECT_LOCOHANE_DIR", paths.get("project_locohane_dir", "./.locohane")),
@@ -1053,6 +1060,9 @@ def load_config(config_path: Path | None = None) -> Config:
                 "CHECKPOINTER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS",
                 checkpointer.get("shutdown_drain_timeout_seconds", 5),
             )
+        ),
+        ui_max_display_messages=int(
+            os.getenv("UI_MAX_DISPLAY_MESSAGES", ui.get("max_display_messages", 50))
         ),
     )
 

@@ -384,6 +384,12 @@ WORK_DIR_PREFIX = "📁 作業ディレクトリ"
 # （チャット開始時の定型文ボタン表示用マーカー。PLAN_PREFIX/WORK_DIR_PREFIX と同じ方式）。
 STARTER_PREFIX = "🚀 定型文\n"
 
+# frontend/src/utils/messageTree.ts の MAX_DISPLAY_MESSAGES_PREFIX と一致させる
+# （メインスレッドの表示件数上限をフロントエンドへ伝えるマーカー。あくまで表示専用の
+# 制限であり、LLMへ渡す会話コンテキストや会話ログには一切影響しない。
+# STARTER_PREFIX/PLAN_PREFIX と同じ方式）。
+MAX_DISPLAY_MESSAGES_PREFIX = "📏 表示件数上限\n"
+
 
 # public/settings/welcome.md が存在しない場合のフォールバック（{skills} はスキル一覧に置換される）。
 _WELCOME_TEMPLATE_DEFAULT = (
@@ -808,6 +814,13 @@ async def on_chat_start() -> None:
         await cl.Message(
             content=STARTER_PREFIX + json.dumps(_config.chat_starter_prompts, ensure_ascii=False)
         ).send()
+
+    # メインスレッドの表示件数上限をフロントエンドへ伝える（0=無制限も含め常に送信）。
+    # 表示専用の設定であり、これ自体がLLMへの会話コンテキストに影響することはない
+    # （フロントエンド側で selectMainThread() のフィルタにより本メッセージ自体も除外される）。
+    await cl.Message(
+        content=MAX_DISPLAY_MESSAGES_PREFIX + json.dumps(_config.ui_max_display_messages)
+    ).send()
 
 
 @cl.on_chat_end
