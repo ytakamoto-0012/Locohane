@@ -18,7 +18,8 @@
       "Bash(sort-object *)",
       "Bash(select-object *)",
       "Read(C:\\Users\\ytkmt\\.qwen\\projects\\c--dt-python-locohane\\issue/**)",
-      "cron_create"
+      "cron_create",
+      "Skill(monitor-app-log)"
     ]
   },
   "$version": 4

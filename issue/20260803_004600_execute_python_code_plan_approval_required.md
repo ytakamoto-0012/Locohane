@@ -85,6 +85,45 @@ approve_plan を飛ばして execute_python_code を実行していた。
 再呼び出し時の`plan_approved`リセット回避など）は`issue.md`の**ISSUE-004**に
 集約して記録した。
 
+## 追記（2026-08-03 23:04）
+
+同一パターン（execute_python_code で計画未承認エラー）が再発。
+画像ファイルのプレフィックス抽出コードを実行する際に、approve_plan
+を飛ばして execute_python_code を実行していた。
+
+```
+2026-08-03 23:04:02,680 WARNING src.tools: tool_result: name=execute_python_code args_code='import os\nimport re\n\n# 既存mdファイルから画像名のプレフィックスを抽出\nmd_dir = r"E:\\akiyo\\レシピ\\md"...' content='エラー: 計画が未承認のため実行できません。create_plan で計画を作成し、approve_plan でユーザーの承認を得てから実行してください。'
+```
+
+前8回（08/02 02:49〜08/03 02:02）との違い: 同日（08/03）の夜間セッション
+（23:04）でも再発。LLMの計画承認フロー違反パターンは解消されていない。
+
+## 追記（2026-08-03 23:25）
+
+同一パターン（execute_python_code で計画未承認エラー）が再発。
+画像ファイルの一覧取得コードを実行する際に、approve_plan を飛ばして
+execute_python_code を実行していた。
+
+```
+2026-08-03 23:25:45,742 WARNING src.subagent: subagent tool=execute_python_code args={'code': 'import os\nimport re\n\noutput_dir = r"E:\\akiyo\\レシピ\\md"...'} content='エラー: 計画が未承認のため実行できません。create_plan で計画を作成し、approve_plan でユーザーの承認を得てから実行してください。'
+```
+
+前9回（08/02 02:49〜08/03 23:04）との違い: 同日（08/03）の夜間セッション
+（23:25）でも再発。画像レシピ抽出バッチの最終段階で発生。
+
+## 追記（2026-08-03 23:34）
+
+同一パターン（execute_python_code で計画未承認エラー）が再発。
+images/mdフォルダの一覧取得コードを実行する際に、approve_plan を
+飛ばして execute_python_code を実行していた。
+
+```
+2026-08-03 23:34:07,282 WARNING src.tools: tool_result: name=execute_python_code args_code='import os\n\n# imagesフォルダ内の全ファイル一覧（既に取得済み）...' content='エラー: 計画が未承認のため実行できません。create_plan で計画を作成し、approve_plan でユーザーの承認を得てから実行してください。'
+```
+
+前10回（08/02 02:49〜08/03 23:25）との違い: 同日（08/03）の夜間セッション
+（23:34）でも再発。23:25の追記から約9分で再発。
+
 ## ユーザー回答
 
 ここにはユーザーの回答が記述される

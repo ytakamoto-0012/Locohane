@@ -92,7 +92,7 @@
                  └───┬───────────────────────────┬──────────────┘
                      │ モデル呼び出し             │ ツール実行
        ┌─────────────▼───────────┐   ┌───────────▼──────────────────────┐
-       │ ChatOpenAI              │   │ src/tools.py (29ツール)             │
+       │ ChatOpenAI              │   │ src/tools.py (34ツール)             │
        │  → llama-server /v1     │   │  read_skill / read_skill_file /    │
        │  (OpenAI 互換)          │   │  run_script / execute_python_code /│
        └─────────────────────────┘   │  get_tool_source / check_work_dir_status /│
@@ -180,7 +180,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 スキルの frontmatter（name/description）だけはこれとは別に、`src/skills.py` が
 起動時にシステムプロンプトへテキスト注入する（Discovery 段階、こちらはプロンプトベース）。
 
-上記3段階に加えて、スキルの読み込みとは独立したツールが以下の33個ある（いずれも `src/tools.py`）。
+上記3段階に加えて、スキルの読み込みとは独立したツールが以下の34個ある（いずれも `src/tools.py`）。
 
 | ツール | 役割 |
 |--------|------|
@@ -190,8 +190,9 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `run_script_background` | `run_script` と同じスクリプトをバックグラウンドで起動し、即座に `job_id` を返す（要承認は同様）。完了を待たずエージェントのターンを解放する |
 | `check_script_job` | `run_script_background` のジョブの状況（実行中の経過秒数・途中出力）または最終結果を取得する |
 | `stop_script_job` | `run_script_background` のジョブを強制終了する |
-| `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `execute_python_code_background` を使う |
-| `execute_python_code_background` | `execute_python_code` と同じコードをバックグラウンドで起動し、即座に `job_id` を返す（要承認・`config.ini` での無効化は同様）。完了を待たずエージェントのターンを解放し、状況確認・停止は `run_script_background` と共通の `check_script_job`/`stop_script_job` を使う |
+| `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `execute_python_code_background` を使う。code内で `@N`（パスメモリ）を参照する場合は `AGENT_SRC_DIR` 環境変数経由で `path_memory.resolve()` を呼んで実パスへ展開する必要がある。実行前ガードにより `src/`・`app.py`・`config.ini`・`skills/` 等プロジェクトフォルダ配下への書き込み・削除・改名は `default_workdir` 配下を除き自動的にブロックされる |
+| `execute_python_code_background` | `execute_python_code` と同じコードをバックグラウンドで起動し、即座に `job_id` を返す（要承認・`config.ini` での無効化・パスメモリ展開・プロジェクトフォルダ保護ガードは同様）。完了を待たずエージェントのターンを解放し、状況確認・停止は `run_script_background` と共通の `check_script_job`/`stop_script_job` を使う |
+| `write_scratch_note` | 調査中に分かった内容をスクラッチファイルへ追記する。計画未承認でも常に呼べ、書き込み先はツール自身が決めるため任意パスには書けない。トークン上限打ち切り時の引き継ぎ用途 |
 | `get_tool_source` | `run_script` がエラーになった際、原因調査用にスクリプトの絶対パスを返す（中身は返さない） |
 | `check_work_dir_status` | 現在の作業ディレクトリの実際のアクセス状況を確認する |
 | `Read` / `Glob` / `Grep` | ローカルファイルシステム上の任意の絶対パスに対する読込・ファイル名検索・全文検索（ClaudeCode の同名ツールに合わせた名前。読み取り専用のため計画未承認でも常に呼べる。ロジックは `src/file_tools.py`） |
@@ -203,7 +204,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される |
 | `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ |
 | `get_plan_status` / `lock_plan_mode` | 現在 Plan Mode（書き込み系ツールがブロックされたロック状態）か Edit Automatically（承認済み計画を実行できる状態）かを確認し、後者から前者へユーザー承認なしに手動で戻す |
-| `AskUserQuestion` / `ask_user_choice` | 会話継続に必要な追加情報をユーザーへ質問（`AskUserQuestion` は自由記述。`labels` 省略時は単一入力、指定時は複数項目をまとめて提示。`ask_user_choice` は選択肢形式） |
+| `AskUserQuestion` / `ask_user_choice` | 会話継続に必要な追加情報をユーザーへ質問（`AskUserQuestion` は自由記述。`labels` 省略時は単一入力、指定時は複数項目をまとめて提示。`ask_user_choice` は選択肢形式で、表示される選択肢には常に「✏️ その他（自由入力）」「❌ キャンセル」が自動で追加される） |
 | `create_memory` / `update_memory` / `delete_memory` / `read_memory` / `search_memory` / `list_memories` | スレッドをまたぐ永続メモリー（`src/memory.py`）の保存・更新・削除・全文読込・検索・一覧。主エージェントのみに公開し `dispatch_agent` のサブエージェントには渡さない |
 | `help` | ユーザー向けヘルプ本文（`system_prompt/help.md`）をそのまま返す |
 
@@ -303,7 +304,7 @@ Locohane/
 │   ├── config.py            # config.ini ローダー（frozen dataclass）
 │   ├── skills.py            # スキル発見ミドルウェア（第1段階 Discovery）
 │   ├── agent_types.py       # エージェント種別発見（agents/*.md）
-│   ├── tools.py             # LangGraph ツール29種（第2・第3段階＋独立ツール）
+│   ├── tools.py             # LangGraph ツール34種（第2・第3段階＋独立ツール）
 │   ├── file_tools.py        # Read/Glob/Grep/json_query のロジック層
 │   ├── path_memory.py       # パスメモリー（@N）レジストリの読み書き
 │   ├── memory.py            # 永続メモリーの読み書き・索引再構築
@@ -677,9 +678,11 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `dry_allowed_length` | DRYサンプラーがこの文字数以下の反復を許容する閾値（空欄で未指定） | `LLM_DRY_ALLOWED_LENGTH` |
 | `[llm]` | `dry_penalty_last_n` | DRYサンプラーが反復検出に遡って見るトークン数（空欄で未指定） | `LLM_DRY_PENALTY_LAST_N` |
 | `[llm]` | `dry_sequence_breakers` | DRYサンプラーの反復検出リセット区切り文字（カンマ区切り、空欄で既定値） | `LLM_DRY_SEQUENCE_BREAKERS` |
+| `[llm]` | `enable_thinking` | Qwen3系モデルのthinking（reasoning、`<think>`ブロック）モードのON/OFF（llama.cpp拡張、空欄なら未指定でモデル・llama-server既定に委ねる） | `LLM_ENABLE_THINKING` |
 | `[llm]` | `track_token_usage` | トークン使用量の取得を有効にする（Chainlit UI表示・eval結果に反映） | `LLM_TRACK_TOKEN_USAGE` |
 | `[llm]` | `request_timeout_seconds` | LLMサーバーへの応答待ちタイムアウト秒数（read/write/pool） | `LLM_REQUEST_TIMEOUT_SECONDS` |
 | `[llm]` | `stream_chunk_timeout_seconds` | ストリーミング中にチャンクが届かない場合のタイムアウト秒数 | `LLM_STREAM_CHUNK_TIMEOUT_SECONDS` |
+| `[llm]` | `max_concurrent_requests` | llama-serverへの同時リクエスト数上限。1以上でSemaphore(N)ガード（既定1＝完全直列化）、0以下で無制限 | `LLM_MAX_CONCURRENT_REQUESTS` |
 | `[paths]` | `skills_dir` | スキルフォルダ | `SKILLS_DIR` |
 | `[paths]` | `agents_dir` | エージェント種別定義フォルダ（`dispatch_agent` の `agent_type`） | `AGENTS_DIR` |
 | `[paths]` | `project_locohane_dir` | プロジェクト固有の拡張ディレクトリ（ClaudeCode の `.claude/` 相当）。配下の `skills/`（`skills_dir` にマージ走査、同名は優先）・`agents/`（`agents_dir` にマージ走査、同名は優先）・`LOCOHANE.md`（プロジェクト固有指示、存在しなくてもエラーにならない）を自動検知する。`nudge_messages` と同じリスト形式で複数ディレクトリ指定可 | `PROJECT_LOCOHANE_DIR` |
@@ -732,7 +735,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[context_trim]` | `keep_recent_tool_messages` | 全文保持する直近 `ToolMessage` の件数 | `CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES` |
 | `[context_trim]` | `truncated_max_chars` | 切り詰め対象 `ToolMessage` の残す最大文字数 | `CONTEXT_TRIM_TRUNCATED_MAX_CHARS` |
 | `[context_compaction]` | `enabled` | 会話履歴の自動要約・圧縮機能（ClaudeCodeのcompact相当）の有効/無効 | `CONTEXT_COMPACTION_ENABLED` |
-| `[context_compaction]` | `token_threshold` | 直近1回のLLM呼び出しの合計トークン数がこの値を超えたら圧縮を検討する閾値 | `CONTEXT_COMPACTION_TOKEN_THRESHOLD` |
+| `[context_compaction]` | `token_threshold` | メインエージェントの累積トークン数（圧縮発火のたびに0へリセット）がこの値を超えたら圧縮する条件（1リクエストあたりの上限ではない） | `CONTEXT_COMPACTION_TOKEN_THRESHOLD` |
+| `[context_compaction]` | `single_request_token_threshold` | 直近1回のLLM呼び出しのtotal_tokensがこの値を超えたら圧縮する条件（累積条件とのOR判定） | `CONTEXT_COMPACTION_SINGLE_REQUEST_TOKEN_THRESHOLD` |
 | `[context_compaction]` | `keep_recent_turns` | 圧縮時に丸ごと保持する直近のユーザーターン数 | `CONTEXT_COMPACTION_KEEP_RECENT_TURNS` |
 | `[context_compaction]` | `min_messages_to_compact` | 会話全体のメッセージ数がこの件数未満なら圧縮しない安全弁 | `CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT` |
 | `[context_compaction]` | `compaction_prompt_path` | 要約を指示するプロンプト本文（Markdown）のパス | `CONTEXT_COMPACTION_PROMPT_PATH` |

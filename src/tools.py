@@ -1979,6 +1979,14 @@ def _python_fs_guard_preamble(allowed_roots: Sequence[Path], guarded_root: Path)
     事故防止が目的（run_script は既存の承認済みスクリプトしか実行できず
     任意コード実行ではないため、この関数の対象外）。
 
+    加えて、`subprocess.Popen`（`run`/`call`/`check_call`/`check_output`
+    もこれを経由する）・`os.system`・`os.popen` をモンキーパッチし、
+    コマンド名（basename、拡張子は無視）が git / npm / pip / pip3 の
+    いずれかに一致する場合は場所を問わず PermissionError にする。
+    execute_python_code に生成させたコードが誤ってリポジトリ操作や
+    パッケージインストールを行う事故を防ぐためで、こちらは
+    allowed_roots による除外はない（常に全面禁止）。
+
     Args:
         allowed_roots: guarded_root 配下でも書き込み・削除を許可する
             ディレクトリの一覧（実行用ディレクトリと default_workdir）。
@@ -2060,6 +2068,70 @@ for _guard_name in ("rmtree", "move", "copy", "copy2", "copyfile", "copytree"):
         setattr(_guard_shutil, _guard_name, _guard_make_shutil(_guard_orig, _guard_name))
 
 del _guard_name, _guard_orig
+
+import subprocess as _guard_subprocess
+
+_GUARD_BLOCKED_CMDS = {{"git", "npm", "pip", "pip3"}}
+
+
+def _guard_cmd_basename(_arg):
+    try:
+        _s = _guard_os.fspath(_arg)
+    except TypeError:
+        _s = _arg
+    _base = _guard_os.path.basename(str(_s)).lower()
+    for _ext in (".exe", ".cmd", ".bat"):
+        if _base.endswith(_ext):
+            _base = _base[: -len(_ext)]
+            break
+    return _base
+
+
+def _guard_check_cmd(_args):
+    if isinstance(_args, (str, bytes)):
+        _tokens = str(_args).strip().split()
+        _first = _tokens[0] if _tokens else ""
+    elif isinstance(_args, _guard_os.PathLike):
+        _first = _args
+    elif _args:
+        _first = _args[0]
+    else:
+        _first = ""
+    if _guard_cmd_basename(_first) in _GUARD_BLOCKED_CMDS:
+        raise PermissionError(
+            f"[execute_python_codeガード] git/npm/pipコマンドの実行は禁止されています: {{_args}}"
+        )
+
+
+_guard_orig_popen_init = _guard_subprocess.Popen.__init__
+
+
+def _guard_popen_init(self, args, *_a, **_kw):
+    _guard_check_cmd(args)
+    _guard_orig_popen_init(self, args, *_a, **_kw)
+
+
+_guard_subprocess.Popen.__init__ = _guard_popen_init
+
+_guard_orig_system = _guard_os.system
+
+
+def _guard_os_system(_cmd):
+    _guard_check_cmd(_cmd)
+    return _guard_orig_system(_cmd)
+
+
+_guard_os.system = _guard_os_system
+
+_guard_orig_os_popen = _guard_os.popen
+
+
+def _guard_os_popen(_cmd, *_a, **_kw):
+    _guard_check_cmd(_cmd)
+    return _guard_orig_os_popen(_cmd, *_a, **_kw)
+
+
+_guard_os.popen = _guard_os_popen
 '''
 
 
