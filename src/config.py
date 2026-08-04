@@ -235,6 +235,18 @@ class Config:
             graph_handoff_prompt_path の文言を差し込む。
         graph_handoff_prompt_path: 上記で差し込む文言（新しいチャットへの
             引継ぎ手順）のMarkdownファイルの絶対パス。
+        graph_input_length_guard_enabled: ユーザーの1ターンの生入力テキスト
+            （message.content。UNCパス置換や添付ファイルパス追記より前）の
+            文字数を、LLM呼び出し前に事前チェックする機能の有効/無効
+            （src.input_length_guard 参照）。graph_token_guard_*（LLM応答後の
+            total_tokens をReActループ内で監視）とは判定材料・タイミングが
+            異なる別機能。
+        graph_input_length_guard_threshold_chars: 上記の文字数閾値。超過時も
+            LLM呼び出し自体はスキップせず、
+            graph_input_length_guard_warning_text の注意書きを本文の先頭に
+            追加してLLMへ渡す。
+        graph_input_length_guard_warning_text: 上記閾値超過時に本文の先頭へ
+            追加する注意書きの文言。
         subagent_max_iterations: dispatch_agent が内部で回す ReAct
             ループの最大反復回数（agent→tools 遷移の回数）。
         subagent_max_parallel: dispatch_agent ツールの実LLM呼び出しを同時に
@@ -452,6 +464,9 @@ class Config:
     graph_token_guard_enabled: bool
     graph_token_guard_soft_threshold: int
     graph_handoff_prompt_path: Path
+    graph_input_length_guard_enabled: bool
+    graph_input_length_guard_threshold_chars: int
+    graph_input_length_guard_warning_text: str
 
     # --- サブエージェント（dispatch_agent）設定 ---
     subagent_max_iterations: int
@@ -973,6 +988,27 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "GRAPH_HANDOFF_PROMPT_PATH",
                 graph.get("handoff_prompt_path", "./system_prompt/handoff_prompt.md"),
+            ),
+        ),
+        graph_input_length_guard_enabled=_as_bool(
+            os.getenv(
+                "GRAPH_INPUT_LENGTH_GUARD_ENABLED",
+                graph.get("input_length_guard_enabled", True),
+            )
+        ),
+        graph_input_length_guard_threshold_chars=int(
+            os.getenv(
+                "GRAPH_INPUT_LENGTH_GUARD_THRESHOLD_CHARS",
+                graph.get("input_length_guard_threshold_chars", 64000),
+            )
+        ),
+        graph_input_length_guard_warning_text=os.getenv(
+            "GRAPH_INPUT_LENGTH_GUARD_WARNING_TEXT",
+            graph.get(
+                "input_length_guard_warning_text",
+                "入力テキストが大きすぎます（64000文字超）。一度に全てを処理しようとせず、"
+                "作業を複数の段階に分割し、各段階の入力・出力が扱いやすい分量に"
+                "収まるように進めてください。",
             ),
         ),
         subagent_max_iterations=int(os.getenv("SUBAGENT_MAX_ITERATIONS", subagent.get("max_iterations", 6))),
