@@ -1800,6 +1800,11 @@ async def on_message(message: cl.Message) -> None:
                     "チェックポインタを再構築しました [%s]",
                     describe_current_task(),
                 )
+            # ThinkingLoopDetected 経路（1772行目）と同じ理由で、旧接続を
+            # 強制クローズしてから再構築する。ここを素通りすると
+            # llama-server側で旧ストリームがactiveなまま残り、次のターンが
+            # 応答ヘッダー待ちでハングして復旧不能になる。
+            await aclose_active_llm_clients(thread_id)
             _rebuild_graph(thread_id)
             logging.getLogger(__name__).warning(
                 "エラーのためグラフを再構築しました: %s [%s]",
