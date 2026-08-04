@@ -57,7 +57,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -197,22 +197,9 @@ _PLAN_BADGE_ALLOW_UNLOCK: bool = True
 
 # run_script は本来「書き込み系ツール」として一律に計画承認を要求するが、
 # 副作用のない純粋な読み取り専用スクリプトはここに (skill_name, script_filename)
-# を明示的に登録することで承認チェックを免除できる（read_vba.py は oletools で
-# ファイルのバイト列を読むだけ、read_excel.py も openpyxl/xlrd でファイルを
-# 読むだけで、いずれもExcel本体・COMを使わず書き込みも発生しないため対象外とした。
-# read_docx.py/read_pdf.py/read_pptx.py/inspect_pptx.py も同様に対象ファイルを
-# 読むだけで書き込みは発生しない。render_pdf_pages.py はユーザーの元PDFは変更
-# しないが、レンダリング結果のPNGをスキル内のrendered/へ新規保存する点で他とは
-# 異なるものの、対象自体は読み取り専用のため同様に対象外とした）。
-_PLAN_APPROVAL_EXEMPT_SCRIPTS: set[tuple[str, str]] = {
-    ("excel-tools", "read_vba.py"),
-    ("excel-tools", "read_excel.py"),
-    ("docx-tools", "read_docx.py"),
-    ("pdf-tools", "read_pdf.py"),
-    ("pdf-tools", "render_pdf_pages.py"),
-    ("pptx-tools", "read_pptx.py"),
-    ("pptx-tools", "inspect_pptx.py"),
-}
+# を明示的に登録することで承認チェックを免除できる。init_tools() が config.ini の
+# [scripts].plan_approval_exempt_scripts から注入するため、ここでは空集合で初期化する。
+_PLAN_APPROVAL_EXEMPT_SCRIPTS: set[tuple[str, str]] = set()
 
 
 # 「無期限待ち」の代替として使う実質無期限の秒数（2^31-1 ≈ 68年）。
@@ -252,6 +239,7 @@ def init_tools(
     graph_tool_max_parallel: int = 1,
     script_background_max_runtime_seconds: int = 3600,
     script_background_job_retention_seconds: int = 1800,
+    plan_approval_exempt_scripts: Iterable[tuple[str, str]] = (),
 ) -> None:
     """ツールが使う設定を注入する（app 起動時に一度だけ呼ぶ）。
 
@@ -327,6 +315,10 @@ def init_tools(
             ジョブが終了後、check_script_job で一度も取得されないまま
             registry に残ってよい秒数（config.ini の
             [scripts].background_job_retention_seconds 由来）。
+        plan_approval_exempt_scripts: run_script/run_script_background の
+            計画承認（Plan Mode）を免除する、副作用のない読み取り専用
+            スクリプトのホワイトリスト。(skill_name, script_filename) の
+            並び（config.ini の [scripts].plan_approval_exempt_scripts 由来）。
 
     Returns:
         None。副作用としてモジュール globals を更新するのみ。
@@ -343,6 +335,7 @@ def init_tools(
     global _PLAN_BADGE_ALLOW_UNLOCK
     global _DISPATCH_AGENT_SEMAPHORE
     global _TOOL_CALL_SEMAPHORE
+    global _PLAN_APPROVAL_EXEMPT_SCRIPTS
     _skills_root_list = [skills_root] if isinstance(skills_root, (str, Path)) else list(skills_root)
     _SKILLS_ROOTS = [Path(p).resolve() for p in _skills_root_list]
     _SCRIPT_PYTHON = script_python
@@ -350,6 +343,7 @@ def init_tools(
     _CODE_EXEC_ENABLED = code_exec_enabled
     _SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS = script_background_max_runtime_seconds
     _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS = script_background_job_retention_seconds
+    _PLAN_APPROVAL_EXEMPT_SCRIPTS = set(plan_approval_exempt_scripts)
     _DEFAULT_WORKDIR = Path(default_workdir).resolve()
     _LLM_CONFIG = llm_config
     _AGENT_TYPES = _resolve_agent_types(agent_type_defs)
@@ -1267,8 +1261,8 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
     書き込み系ツールのため、create_plan/approve_plan で計画が承認済み
     （cl.user_session["plan_approved"] が True）でない限り実行できない
     （未承認の場合はエラーを返す）。ただし副作用のない読み取り専用スクリプト
-    （`_PLAN_APPROVAL_EXEMPT_SCRIPTS` に登録済みのもの。例: excel-tools の
-    read_vba.py）はこの承認チェックを免除される。
+    （config.ini の [scripts].plan_approval_exempt_scripts に登録済みのもの。
+    例: excel-tools の read_vba.py）はこの承認チェックを免除される。
 
     Args:
         skill_name: スクリプトを持つスキルのフォルダ名。
@@ -1510,8 +1504,9 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
 
     引数のパスメモリー解決 → スクリプトパス解決 → 作業ディレクトリ解決 →
     計画承認チェック → 実行コマンド組み立て、までを行う。
-    (skill_name, script_filename) が _PLAN_APPROVAL_EXEMPT_SCRIPTS に
-    登録されている場合は計画未承認でも実行できる。
+    (skill_name, script_filename) が config.ini の
+    [scripts].plan_approval_exempt_scripts に登録されている場合は
+    計画未承認でも実行できる。
 
     Returns:
         検証に成功すれば (cmd, workdir) のタプル。失敗すれば
@@ -1761,7 +1756,7 @@ async def run_script_background(skill_name: str, script_filename: str, script_ar
     処理に時間がかかっていること自体は打ち切る理由にならない。ユーザーから
     明示的に中断を指示された場合にのみ stop_script_job を使う。
     引数解決・作業ディレクトリ解決・計画承認チェックは run_script と同じ
-    （_PLAN_APPROVAL_EXEMPT_SCRIPTS による免除も同様）。
+    （config.ini の [scripts].plan_approval_exempt_scripts による免除も同様）。
     バックグラウンドジョブを強制終了するまでの上限は config.ini の
     [scripts].background_max_runtime_seconds（既定3600秒）。
 

@@ -199,6 +199,9 @@ class Config:
             ジョブが完了・失敗・タイムアウト等で終了した後、check_script_job で
             一度も取得されないまま registry に残ってよい秒数。超過分は次回の
             run_script_background 呼び出し時に破棄される。
+        script_plan_approval_exempt_scripts: run_script/run_script_background
+            の計画承認（Plan Mode）を免除する、副作用のない読み取り専用
+            スクリプトのホワイトリスト（{(スキル名, スクリプトファイル名), ...}）。
         file_tools_duplicate_guard_enabled: 読み取り専用の Read/Glob/Grep/
             json_query ツールを同一引数で繰り返し呼び出すのを防ぐガード機能の
             有効/無効。
@@ -433,6 +436,9 @@ class Config:
     # --- run_script_background 用設定 ---
     script_background_max_runtime_seconds: int
     script_background_job_retention_seconds: int
+
+    # --- run_script/run_script_background の計画承認免除ホワイトリスト ---
+    script_plan_approval_exempt_scripts: frozenset[tuple[str, str]]
 
     # --- Read/Glob/Grep/json_query 重複呼び出しガード（src/tools.py の _check_file_tools_duplicate） ---
     file_tools_duplicate_guard_enabled: bool
@@ -705,6 +711,47 @@ def _parse_auth_users(value: str | None) -> dict[str, str]:
     return users
 
 
+def _parse_plan_approval_exempt_scripts(value: str | None) -> frozenset[tuple[str, str]]:
+    """config.ini の [scripts].plan_approval_exempt_scripts をパースする。
+
+    run_script/run_script_background の計画承認（Plan Mode）を免除する、
+    副作用のない読み取り専用スクリプトのホワイトリスト。Python風の
+    [["スキル名","スクリプトファイル名"], ...] リテラルを _parse_auth_users
+    と同様 ast.literal_eval で読む（末尾カンマ等の緩い記法も許容するため）。
+
+    Args:
+        value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
+            空欄・None なら空集合を返す。
+
+    Returns:
+        {(スキル名, スクリプトファイル名), ...} の frozenset。
+
+    Raises:
+        ValueError: リストとして解釈できない場合、または各要素が
+            [スキル名, スクリプトファイル名] の2要素配列でない場合。
+    """
+    if not value or not value.strip():
+        return frozenset()
+    text = value.strip()
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(
+            f"plan_approval_exempt_scripts はPythonのリスト形式で指定してください: {text!r}"
+        ) from e
+    if not isinstance(parsed, list):
+        raise ValueError(f"plan_approval_exempt_scripts はリスト（配列）形式で指定してください: {text!r}")
+    entries: set[tuple[str, str]] = set()
+    for item in parsed:
+        if not (isinstance(item, (list, tuple)) and len(item) == 2):
+            raise ValueError(
+                f"plan_approval_exempt_scripts の各要素は [スキル名, スクリプトファイル名] の"
+                f"2要素にしてください: {item!r}"
+            )
+        entries.add((str(item[0]), str(item[1])))
+    return frozenset(entries)
+
+
 def load_config(config_path: Path | None = None) -> Config:
     """config.ini を読み、環境変数で上書きした Config を返す。
 
@@ -879,6 +926,18 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS",
                 scripts.get("background_job_retention_seconds", 1800),
+            )
+        ),
+        script_plan_approval_exempt_scripts=_parse_plan_approval_exempt_scripts(
+            os.getenv(
+                "SCRIPT_PLAN_APPROVAL_EXEMPT_SCRIPTS",
+                scripts.get(
+                    "plan_approval_exempt_scripts",
+                    '[["excel-tools","read_vba.py"],["excel-tools","read_excel.py"],'
+                    '["docx-tools","read_docx.py"],["pdf-tools","read_pdf.py"],'
+                    '["pdf-tools","render_pdf_pages.py"],["pptx-tools","read_pptx.py"],'
+                    '["pptx-tools","inspect_pptx.py"]]',
+                ),
             )
         ),
         file_tools_duplicate_guard_enabled=_as_bool(
