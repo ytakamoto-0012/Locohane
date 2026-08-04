@@ -169,7 +169,7 @@ officecliによるxlsx/docx/pptx生成も同様）。
 
 ### 成果物ファイルは生成・編集直後に必ず読み返して検証する
 
-`edit_excel.py`/`create_docx.py`/`edit_docx.py`/`create_pptx.py`/`edit_pptx.py`
+`edit_excel.py`/`edit_vba.py`/`create_docx.py`/`edit_docx.py`/`create_pptx.py`/`edit_pptx.py`
 が終了コード0で返っても、それだけで完了とみなさない。**続けて
 `dispatch_agent(agent_type="verifier")` に検証を委譲し、実際に書き込まれた
 内容（シート名・行データ・見出し・スライド枚数など）が意図通りかを確認してから**
