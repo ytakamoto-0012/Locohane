@@ -1346,10 +1346,14 @@ async def on_message(message: cl.Message) -> None:
         answer: cl.Message | None = None  # ツール呼び出しごとに区切って新規発行する
         thinking: cl.Step | None = None  # <think> ブロック（reasoning_content）を表示するStep
         steps: dict[str, cl.Step] = {}  # run_id -> Step（ツール開始/終了を対応付け）
-        # コンテキスト圧縮の安全点検知用: 直近のメインエージェントのAIMessageが
-        # 発行したtool_call idの集合と、対応する返却済みToolMessage。
-        # サブエージェント（dispatch_agent内部）呼び出しは対象外
-        # （_is_subagent_call参照）。
+        # コンテキスト圧縮の安全点検知用: メインエージェントのtool_call idの
+        # 集合と、対応する返却済みToolMessage。サブエージェント（dispatch_agent
+        # 内部）呼び出しは対象外（_is_subagent_call参照）。
+        #
+        # 重要: ツール呼び出しは複数回の LLM 応答にまたがって返却される場合が
+        # ある（例: dispatch_agent の tool_call は別の AIMessage を挟んでから
+        # ToolMessage が返ってくる）。そのため、この集合は on_chat_model_end
+        # でリセットせず、ターン通じて累積する。
         pending_main_tool_ids: set[str] = set()
         pending_main_tool_msgs: list[ToolMessage] = []
         compaction_continued = False  # ループ内圧縮による継続かどうか
@@ -1550,12 +1554,19 @@ async def on_message(message: cl.Message) -> None:
                             _accumulate_usage(cumulative_main, usage)
                             cl.user_session.set("token_usage_cumulative_main", cumulative_main)
                             # コンテキスト圧縮: ループ内の安全な区切り検知用に、
-                            # 今回のAIMessageが発行したtool_callsを追跡する
-                            # （対応するToolMessageがon_tool_endで全て揃った
-                            # 時点が、孤立tool_callの無い安全な区切りになる）。
+                            # メインエージェントが発行したtool_callsを追跡する。
+                            #
+                            # 重要: ツール呼び出しは複数回の LLM 応答にまたがっ
+                            # て返却される場合がある（例: dispatch_agent の
+                            # tool_call はサブエージェント内部の最終 LLM 応答
+                            # を挟んでから ToolMessage が返ってくる）。
+                            # そのため、この集合は on_chat_model_end でリセッ
+                            # トせず、ターン通じて累積して tool_call id を追
+                            # 跡する。対応する ToolMessage が on_tool_end で
+                            # 全て返却された時点で、孤立 tool_call の無い安全
+                            # な区切りになる。
                             tool_calls = getattr(output, "tool_calls", None) or []
-                            pending_main_tool_ids = {tc["id"] for tc in tool_calls}
-                            pending_main_tool_msgs = []
+                            pending_main_tool_ids.update(tc["id"] for tc in tool_calls)
                         # UI表示（cl.Message）はセッション終了とともに追えなくなる
                         # ため、事後にapp.logだけでトークン使用量の推移（LLM呼び出し
                         # 単位の値・このターンの累積・会話全体の累積）を追跡できる
@@ -1712,6 +1723,10 @@ async def on_message(message: cl.Message) -> None:
             if exc.tool_messages:
                 await graph.aupdate_state(config, {"messages": exc.tool_messages}, as_node="tools")
             await _run_context_compaction(graph, config, thread_id, last_usage)
+            # 圧縮後に新しいツール呼び出しが続く場合に備え、安全点検知用
+            # 変数をリセットする。
+            pending_main_tool_ids.clear()
+            pending_main_tool_msgs.clear()
             compaction_continued = True
         except asyncio.CancelledError as exc:
             # 停止ボタン・切断・リロード等でこのターンがキャンセルされた場合、
