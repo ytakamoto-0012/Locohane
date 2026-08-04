@@ -811,16 +811,12 @@ async def on_chat_start() -> None:
     await cl.Message(content=welcome_template.replace("{skills}", names)).send()
 
     if _config.chat_starter_prompts:
-        await cl.Message(
-            content=STARTER_PREFIX + json.dumps(_config.chat_starter_prompts, ensure_ascii=False)
-        ).send()
+        await cl.Message(content=STARTER_PREFIX + json.dumps(_config.chat_starter_prompts, ensure_ascii=False)).send()
 
     # メインスレッドの表示件数上限をフロントエンドへ伝える（0=無制限も含め常に送信）。
     # 表示専用の設定であり、これ自体がLLMへの会話コンテキストに影響することはない
     # （フロントエンド側で selectMainThread() のフィルタにより本メッセージ自体も除外される）。
-    await cl.Message(
-        content=MAX_DISPLAY_MESSAGES_PREFIX + json.dumps(_config.ui_max_display_messages)
-    ).send()
+    await cl.Message(content=MAX_DISPLAY_MESSAGES_PREFIX + json.dumps(_config.ui_max_display_messages)).send()
 
 
 @cl.on_chat_end
@@ -1624,8 +1620,7 @@ async def on_message(message: cl.Message) -> None:
             # 発言を追加するわけではないため、ThinkingLoopDetectedのnudge注入
             # 経路（STARTからの再実行）とは異なる継続方法になる。
             logging.getLogger(__name__).info(
-                "on_message: ループ内の安全な区切りでコンテキスト圧縮の条件を"
-                "満たしたため、ターン内でグラフ実行を一時中断して圧縮します [%s]",
+                "on_message: ループ内の安全な区切りでコンテキスト圧縮の条件を" "満たしたため、ターン内でグラフ実行を一時中断して圧縮します [%s]",
                 describe_current_task(),
             )
             if thinking is not None:
@@ -1810,7 +1805,7 @@ async def on_message(message: cl.Message) -> None:
                 turn_broken_exc,
                 describe_current_task(),
             )
-            await cl.Message(content="通信エラーのため中断しました。Llamaサーバーの再起動後、" "少し待って「続けて」と送信してください。").send()
+            await cl.Message(content="通信エラーのため中断しました。 少し待って「続けて」と送信してください。").send()
             return
 
         if thinking is not None:
