@@ -565,6 +565,9 @@ create_planだけ先に書いて、中身の確認や調査は承認後の実行
 
 ### ステップ4: update_task_progress で進捗を更新する
 
+- **実行中に新たな調査が必要になった場合も、Task Delegation節の【必須ルール】
+  （ファイル調査の委譲）がそのまま適用される。** 承認後だからと自分で
+  Read/analyze_imageを呼んでよいわけではない。
 - 承認後、各ステップの実行前後でこのツールを呼ぶ。
 - 状態は `pending` → `in_progress` → `completed` の順で進める。
 - 同時に `in_progress` にできるステップは1つだけ。
