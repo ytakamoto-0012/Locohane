@@ -1116,6 +1116,22 @@ class _PlanDeniedInterrupt(Exception):
         self.tool_message = tool_message
 
 
+class _CompactionCheckpoint(Exception):
+    """ループ内の安全な区切りでコンテキスト圧縮の条件を満たしたことを、
+    async for ループの外側まで伝えるための内部例外。
+
+    「安全な区切り」とは、直近のメインエージェントのAIMessageが発行した
+    tool_calls に対応する ToolMessage が on_tool_end で全て返却済みになった
+    時点を指す（サブエージェント内部の呼び出しは対象外。_is_subagent_call
+    参照）。_PlanDeniedInterrupt と同じ理由（ToolNode が生成した
+    ToolMessage群はこの時点ではまだチェックポイントへコミットされていない）
+    で、まず aupdate_state(as_node="tools") で明示コミットしてから圧縮を行う。
+    """
+
+    def __init__(self, tool_messages: list[ToolMessage]) -> None:
+        self.tool_messages = tool_messages
+
+
 def _find_orphaned_tool_calls(messages: list) -> list[dict]:
     """直近のAIMessageのtool_callsのうち、対応するToolMessageがまだ無いものを返す。
 
@@ -1131,6 +1147,48 @@ def _find_orphaned_tool_calls(messages: list) -> list[dict]:
     if not tool_calls:
         return []
     return list(tool_calls)
+
+
+async def _run_context_compaction(
+    graph,
+    config: dict,
+    thread_id: str,
+    last_usage: dict | None,
+) -> bool:
+    """コンテキスト圧縮（src/context_compaction.py）の判定・実行を行う。
+
+    「安全な区切り」（進行中のグラフ実行と aupdate_state が競合しない
+    タイミング）でのみ呼ばれる想定。on_message から、ターン完了後と
+    ループ内の安全点（_CompactionCheckpoint）の両方から呼ぶ共通ヘルパー。
+    会話ログ追記はターン完了時専用の処理のため、ここには含めない。
+
+    Returns:
+        圧縮を実行した場合は True。
+    """
+    state = await graph.aget_state(config)
+    messages = state.values.get("messages", []) if state else []
+    cumulative_main = cl.user_session.get("token_usage_cumulative_main")
+    if not should_compact(cumulative_main, last_usage, len(messages), _config):
+        return False
+    summary_model = build_model(_config)
+    new_messages = await maybe_compact(messages, summary_model, _config)
+    if new_messages is None:
+        return False
+    await graph.aupdate_state(
+        config,
+        {"messages": [RemoveMessage(id=m.id) for m in messages] + new_messages},
+        as_node="tools",
+    )
+    # 圧縮により古い履歴が要約へ置き換わったため、次にまた同じ閾値で
+    # 即座に発火し続けないよう、メインエージェントの累積トークン数をリセットする。
+    cl.user_session.set("token_usage_cumulative_main", _new_usage_totals())
+    logging.getLogger(__name__).info(
+        "コンテキスト圧縮を実行しました thread_id=%s messages=%d->%d",
+        thread_id,
+        len(messages),
+        len(new_messages),
+    )
+    return True
 
 
 @cl.on_message
@@ -1202,10 +1260,25 @@ async def on_message(message: cl.Message) -> None:
     loop_exc: ThinkingLoopDetected | None = None
     turn_broken_exc: Exception | None = None
     checkpointer_needs_rebuild: bool = False
-    for attempt in range(total_retries + 1):
+    # total_retries（無言終了・反復ループ用のエラーリトライ予算）とは別に、
+    # ターン内コンテキスト圧縮（_CompactionCheckpoint）による継続を扱うため
+    # for range(...) ではなく手動カウンタの while True にしている。圧縮継続は
+    # attempt を増やさない（1ターンで圧縮が何度発火してもエラーリトライの
+    # 残り予算に影響を与えないため）。既存の for range(total_retries + 1) と
+    # 同じ意味を保つよう、リトライする経路では continue の直前に必ず
+    # attempt += 1 する。
+    attempt = 0
+    while True:
         answer: cl.Message | None = None  # ツール呼び出しごとに区切って新規発行する
         thinking: cl.Step | None = None  # <think> ブロック（reasoning_content）を表示するStep
         steps: dict[str, cl.Step] = {}  # run_id -> Step（ツール開始/終了を対応付け）
+        # コンテキスト圧縮の安全点検知用: 直近のメインエージェントのAIMessageが
+        # 発行したtool_call idの集合と、対応する返却済みToolMessage。
+        # サブエージェント（dispatch_agent内部）呼び出しは対象外
+        # （_is_subagent_call参照）。
+        pending_main_tool_ids: set[str] = set()
+        pending_main_tool_msgs: list[ToolMessage] = []
+        compaction_continued = False  # ループ内圧縮による継続かどうか
 
         event_stream = graph.astream_events(inputs, config=config, version="v2")
         # リトライ経路（attempt>0）での初回チャンク受信までの待ち時間を計測。
@@ -1343,6 +1416,9 @@ async def on_message(message: cl.Message) -> None:
                     # src/tools.py参照）。ここで即returnせず _PlanDeniedInterrupt を
                     # raise するのは、ToolNode が生成したこの ToolMessage がまだ
                     # チェックポイントへコミットされていないため（下の except節参照）。
+                    # コンテキスト圧縮の安全点チェック（下）より必ず先に評価する:
+                    # 却下と圧縮条件が同時に満たされた場合、却下によるターン
+                    # 打ち切りを圧縮継続で握りつぶしてはならないため。
                     if event["name"] == "approve_plan" and cl.user_session.get("plan_denied_just_now"):
                         cl.user_session.set("plan_denied_just_now", False)
                         if thinking is not None:
@@ -1355,13 +1431,31 @@ async def on_message(message: cl.Message) -> None:
                         await cl.Message(content="実行計画が却下されたため、処理を終了しました。ご指示をお待ちしています。").send()
                         raise _PlanDeniedInterrupt(tool_message=event["data"].get("output"))
 
+                    # コンテキスト圧縮: 直近のメインAIMessageが発行した
+                    # tool_calls（pending_main_tool_ids）に、今回返却された
+                    # ToolMessageが全て揃った時点が、孤立tool_callの無い
+                    # 安全な区切り。ここで should_compact() の条件を満たして
+                    # いれば _CompactionCheckpoint を送出し、async for ループの
+                    # 外側（except節）で安全に aupdate_state による圧縮を行う。
+                    if step is not None and not _is_subagent_call(event, steps):
+                        tool_msg = event["data"].get("output")
+                        if isinstance(tool_msg, ToolMessage) and tool_msg.tool_call_id in pending_main_tool_ids:
+                            pending_main_tool_msgs.append(tool_msg)
+                            pending_main_tool_ids.discard(tool_msg.tool_call_id)
+                            if not pending_main_tool_ids and pending_main_tool_msgs:
+                                cumulative_main = cl.user_session.get("token_usage_cumulative_main")
+                                cstate = await graph.aget_state(config)
+                                committed_messages = cstate.values.get("messages", []) if cstate else []
+                                approx_count = len(committed_messages) + len(pending_main_tool_msgs)
+                                if should_compact(cumulative_main, last_usage, approx_count, _config):
+                                    raise _CompactionCheckpoint(list(pending_main_tool_msgs))
+
                 elif kind == "on_chat_model_end":
                     # config.ini [llm].track_token_usage=true の場合のみ usage_metadata が乗る
                     # （src/llm.py の build_model が stream_usage を有効化している場合）。
                     output = event["data"].get("output")
                     usage = getattr(output, "usage_metadata", None)
                     if usage:
-                        last_usage = usage
                         _accumulate_usage(turn_totals, usage)
                         # 長時間の承認待ち等でセッションデータが失われている場合に
                         # 備え、Noneなら0から再初期化する（totals[key]でのクラッシュ防止）。
@@ -1370,8 +1464,24 @@ async def on_message(message: cl.Message) -> None:
                         cl.user_session.set("token_usage_cumulative", cumulative)
                         cumulative_main = cl.user_session.get("token_usage_cumulative_main") or _new_usage_totals()
                         if not _is_subagent_call(event, steps):
+                            # last_usage はコンテキスト圧縮の単発閾値判定
+                            # （should_compact の single_request_token_threshold）
+                            # にのみ使うため、メインエージェント由来のusageでのみ
+                            # 更新する。サブエージェント呼び出しで無条件に
+                            # 上書きしてしまうと、dispatch_agent委譲直後の
+                            # on_tool_end安全点でまさに「直前のon_chat_model_end
+                            # がサブエージェント内部の最後の呼び出しだった」
+                            # ケースが高頻度で起き、判定が歪む。
+                            last_usage = usage
                             _accumulate_usage(cumulative_main, usage)
                             cl.user_session.set("token_usage_cumulative_main", cumulative_main)
+                            # コンテキスト圧縮: ループ内の安全な区切り検知用に、
+                            # 今回のAIMessageが発行したtool_callsを追跡する
+                            # （対応するToolMessageがon_tool_endで全て揃った
+                            # 時点が、孤立tool_callの無い安全な区切りになる）。
+                            tool_calls = getattr(output, "tool_calls", None) or []
+                            pending_main_tool_ids = {tc["id"] for tc in tool_calls}
+                            pending_main_tool_msgs = []
                         # UI表示（cl.Message）はセッション終了とともに追えなくなる
                         # ため、事後にapp.logだけでトークン使用量の推移（LLM呼び出し
                         # 単位の値・このターンの累積・会話全体の累積）を追跡できる
@@ -1504,6 +1614,32 @@ async def on_message(message: cl.Message) -> None:
             await _finalize_orphaned_steps(steps, "interrupted")
             await graph.aupdate_state(config, {"messages": [e.tool_message]}, as_node="tools")
             return
+        except _CompactionCheckpoint as exc:
+            # ループ内の安全な区切り（直近のメインAIMessageのtool_callsに
+            # 対応するToolMessageが全て返却済み）でコンテキスト圧縮の条件を
+            # 満たした。thinking/answerを確定送信してから、まず孤立していない
+            # ことが確認済みのToolMessage群を明示コミットし（_PlanDeniedInterrupt
+            # と同じ理由）、圧縮を実行してから inputs=None で同じグラフ実行の
+            # 続き（チェックポイントのpending task）を再開する。新しいユーザー
+            # 発言を追加するわけではないため、ThinkingLoopDetectedのnudge注入
+            # 経路（STARTからの再実行）とは異なる継続方法になる。
+            logging.getLogger(__name__).info(
+                "on_message: ループ内の安全な区切りでコンテキスト圧縮の条件を"
+                "満たしたため、ターン内でグラフ実行を一時中断して圧縮します [%s]",
+                describe_current_task(),
+            )
+            if thinking is not None:
+                thinking.end = utc_now()
+                await thinking.update()
+                thinking = None
+            if answer is not None:
+                await answer.send()
+                answer = None
+            await _finalize_orphaned_steps(steps, "context_compaction")
+            if exc.tool_messages:
+                await graph.aupdate_state(config, {"messages": exc.tool_messages}, as_node="tools")
+            await _run_context_compaction(graph, config, thread_id, last_usage)
+            compaction_continued = True
         except asyncio.CancelledError as exc:
             # 停止ボタン・切断・リロード等でこのターンがキャンセルされた場合、
             # 実行中だったtool_call（approve_planのAskActionMessage待機中など）
@@ -1627,6 +1763,14 @@ async def on_message(message: cl.Message) -> None:
         # これにより「aclose→rebuild→新リクエスト」の順序が保証される。
         # 却下する案: finally の後始末を別タスクに切り離す案は、今回の障害の
         # 直接原因（後始末が別タスクに漏れたこと）を悪化させるだけなので採用しない。
+        if compaction_continued:
+            # ターン内コンテキスト圧縮による継続は、total_retries（エラー
+            # リトライ予算）を消費しない。inputs=None はチェックポイントの
+            # pending task（agentノードの続き）から再開する意味であり、
+            # 新しいユーザー発言を追加するわけではない。
+            inputs = None
+            continue
+
         if loop_exc is not None:
             if loop_attempt < loop_max_retries:
                 # ThinkingLoopDetected 発生時は常に旧接続を強制クローズする。
@@ -1646,6 +1790,7 @@ async def on_message(message: cl.Message) -> None:
                 text = pick_loop_nudge_message(_config.thinking_loop_guard_nudge_messages, loop_attempt)
                 loop_attempt += 1
                 inputs = {"messages": [HumanMessage(content=text, id=nudge_id)]}
+                attempt += 1  # for range(total_retries + 1) の暗黙インクリメント相当
                 continue
             await cl.Message(content=(f"生成がループし、{loop_max_retries}回リトライしましたが" "改善しなかったため停止しました。")).send()
             if loop_nudge_ids:
@@ -1686,6 +1831,7 @@ async def on_message(message: cl.Message) -> None:
                 nudge_id = str(uuid.uuid4())
                 empty_nudge_ids.append(nudge_id)
                 inputs = {"messages": [HumanMessage(content=EMPTY_RESPONSE_NUDGE, id=nudge_id)]}
+                attempt += 1  # for range(total_retries + 1) の暗黙インクリメント相当
                 continue
         break
 
@@ -1697,18 +1843,14 @@ async def on_message(message: cl.Message) -> None:
     if remove_ids:
         await graph.aupdate_state(config, {"messages": [RemoveMessage(id=i) for i in remove_ids]})
 
-    # コンテキスト圧縮（ClaudeCodeのcompact相当）。進行中のグラフ実行が
-    # 完全に終わった後のこのタイミングでのみ判定・実行する（ストリーミング
-    # 中に aupdate_state すると競合するため）。
-    state = await graph.aget_state(config)
-    messages = state.values.get("messages", []) if state else []
-
     # 会話ログ（[chat_log].enabled=true の場合のみ、on_chat_start で
     # cl.user_session["chat_log_path"] が設定済み）。ユーザー発言と
     # このターンのAIの最終応答（thinking・ツール呼び出し詳細は含めない）
     # のみをテキストファイルへ追記する。
     chat_log_path = cl.user_session.get("chat_log_path")
     if chat_log_path is not None:
+        state = await graph.aget_state(config)
+        messages = state.values.get("messages", []) if state else []
         final_ai_message = messages[-1] if messages else None
         ai_text = final_ai_message.content if isinstance(final_ai_message, AIMessage) else ""
         append_turn(
@@ -1718,16 +1860,9 @@ async def on_message(message: cl.Message) -> None:
             token_usage_cumulative=cl.user_session.get("token_usage_cumulative"),
         )
 
-    cumulative_main = cl.user_session.get("token_usage_cumulative_main")
-    if should_compact(cumulative_main, last_usage, len(messages), _config):
-        summary_model = build_model(_config)
-        new_messages = await maybe_compact(messages, summary_model, _config)
-        if new_messages is not None:
-            await graph.aupdate_state(
-                config,
-                {"messages": [RemoveMessage(id=m.id) for m in messages] + new_messages},
-            )
-            # 圧縮により古い履歴が要約へ置き換わったため、次にまた同じ閾値で
-            # 即座に発火し続けないよう、メインエージェントの累積トークン数を
-            # リセットする。
-            cl.user_session.set("token_usage_cumulative_main", _new_usage_totals())
+    # コンテキスト圧縮（ClaudeCodeのcompact相当）。ターン内の安全な区切り
+    # （_CompactionCheckpoint）で既に発火している可能性があるが、ここでも
+    # ターン完了直後の状態で改めて判定する（ループ内で発火しなかった場合の
+    # 最終防衛ライン）。_run_context_compaction は進行中のグラフ実行が
+    # 完全に終わった後のこのタイミングでも安全に呼べる。
+    await _run_context_compaction(graph, config, thread_id, last_usage)
