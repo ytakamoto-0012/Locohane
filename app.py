@@ -1147,6 +1147,46 @@ def _find_orphaned_tool_calls(messages: list) -> list[dict]:
     return list(tool_calls)
 
 
+async def _repair_orphaned_tool_calls(graph, config: dict) -> int:
+    """チェックポイント末尾に孤立tool_callがあれば、プレースホルダのToolMessageを
+    補完コミットして修復する。修復した件数を返す（0なら修復不要だった）。
+
+    _rebuild_graph() 自体はグラフ・接続オブジェクトの再構築のみで永続化済みの
+    チェックポイント内容は変更しないため、孤立tool_callが一度コミットされると
+    再構築だけでは直らず次回ターンも同じValueErrorを再現し続ける
+    （issue.md ISSUE-003 / issue/20260804_234928_orphaned_tool_call_dual_session_freeze.md
+    参照）。復旧経路の最後に必ずこれを呼び、次回ターンが同じ場所で失敗し続けない
+    ようにする。
+    """
+    try:
+        state = await graph.aget_state(config)
+    except _CheckpointerTimeout:
+        logging.getLogger(__name__).debug(
+            "孤立tool_call修復中にcheckpointer操作がタイムアウトしました",
+            exc_info=True,
+        )
+        return 0
+    messages = state.values.get("messages", []) if state else []
+    orphaned = _find_orphaned_tool_calls(messages)
+    if not orphaned:
+        return 0
+    await graph.aupdate_state(
+        config,
+        {
+            "messages": [
+                ToolMessage(
+                    content=("エラー: 直前のセッション異常により、" "このツール呼び出しの実行結果が失われました。"),
+                    tool_call_id=tc["id"],
+                    name=tc.get("name", ""),
+                )
+                for tc in orphaned
+            ]
+        },
+        as_node="tools",
+    )
+    return len(orphaned)
+
+
 async def _run_context_compaction(
     graph,
     config: dict,
@@ -1165,6 +1205,12 @@ async def _run_context_compaction(
     """
     state = await graph.aget_state(config)
     messages = state.values.get("messages", []) if state else []
+    if _find_orphaned_tool_calls(messages):
+        # 未解決のtool_callが残っている間は圧縮しない
+        # （安全のための防御線。通常は_CompactionCheckpointのpending_main_tool_idsで
+        # 既にガードされるが、ターン完了直後の最終呼び出し[app.py]はこのチェックが
+        # 無かった）。
+        return False
     cumulative_main = cl.user_session.get("token_usage_cumulative_main")
     if not should_compact(cumulative_main, last_usage, len(messages), _config):
         return False
@@ -1788,6 +1834,13 @@ async def on_message(message: cl.Message) -> None:
                     "ThinkingLoopDetected: リトライ前にLLMグラフを再構築しました [%s]",
                     describe_current_task(),
                 )
+                repaired = await _repair_orphaned_tool_calls(graph, config)
+                if repaired:
+                    logging.getLogger(__name__).warning(
+                        "孤立tool_call(%d件)を修復しました [%s]",
+                        repaired,
+                        describe_current_task(),
+                    )
                 nudge_id = str(uuid.uuid4())
                 loop_nudge_ids.append(nudge_id)
                 text = pick_loop_nudge_message(_config.thinking_loop_guard_nudge_messages, loop_attempt)
@@ -1812,12 +1865,19 @@ async def on_message(message: cl.Message) -> None:
             # llama-server側で旧ストリームがactiveなまま残り、次のターンが
             # 応答ヘッダー待ちでハングして復旧不能になる。
             await aclose_active_llm_clients(thread_id)
-            _rebuild_graph(thread_id)
+            graph = _rebuild_graph(thread_id)
             logging.getLogger(__name__).warning(
                 "エラーのためグラフを再構築しました: %s [%s]",
                 turn_broken_exc,
                 describe_current_task(),
             )
+            repaired = await _repair_orphaned_tool_calls(graph, config)
+            if repaired:
+                logging.getLogger(__name__).warning(
+                    "孤立tool_call(%d件)を修復しました [%s]",
+                    repaired,
+                    describe_current_task(),
+                )
             await cl.Message(content="通信エラーのため中断しました。 少し待って「続けて」と送信してください。").send()
             return
 
