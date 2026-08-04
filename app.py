@@ -1187,6 +1187,20 @@ async def _repair_orphaned_tool_calls(graph, config: dict) -> int:
     return len(orphaned)
 
 
+def _messages_summary(messages: list) -> str:
+    """メッセージリストの概要を文字列化する（role + content冒頭120文字）。"""
+    parts = []
+    for i, m in enumerate(messages):
+        role = type(m).__name__
+        content = getattr(m, "content", "")
+        if isinstance(content, str):
+            preview = content[:120].replace("\n", " ").replace("\r", "")
+        else:
+            preview = str(content)[:120]
+        parts.append(f"  [{i}] {role}: {preview}")
+    return "\n".join(parts)
+
+
 async def _run_context_compaction(
     graph,
     config: dict,
@@ -1218,6 +1232,16 @@ async def _run_context_compaction(
     new_messages = await maybe_compact(messages, summary_model, _config)
     if new_messages is None:
         return False
+    logging.getLogger(__name__).debug(
+        "コンテキスト圧縮: 圧縮前 messages=%d\n%s",
+        len(messages),
+        _messages_summary(messages),
+    )
+    logging.getLogger(__name__).debug(
+        "コンテキスト圧縮: 圧縮後 messages=%d\n%s",
+        len(new_messages),
+        _messages_summary(new_messages),
+    )
     await graph.aupdate_state(
         config,
         {"messages": [RemoveMessage(id=m.id) for m in messages] + new_messages},
