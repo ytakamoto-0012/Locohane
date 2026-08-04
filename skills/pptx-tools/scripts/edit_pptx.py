@@ -23,7 +23,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import backup_before_overwrite, setup_utf8_stdio
+from _common import backup_before_overwrite, register_output_path, setup_utf8_stdio
 
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -360,6 +360,9 @@ def main() -> int:
         "size_bytes": output_path.stat().st_size,
         "applied_operations": len(operations),
     }
+    path_memory = register_output_path(output_path, description="edit_pptxが生成/更新したPPTX")
+    if path_memory:
+        result["path_memory"] = path_memory
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

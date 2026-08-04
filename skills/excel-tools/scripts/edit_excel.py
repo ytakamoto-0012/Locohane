@@ -23,7 +23,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import backup_before_overwrite, setup_utf8_stdio
+from _common import backup_before_overwrite, register_output_path, setup_utf8_stdio
 from _ops import apply_op
 
 
@@ -114,12 +114,16 @@ def main() -> int:
         print(f"ファイルの保存に失敗しました: {e}", file=sys.stderr)
         return 1
 
-    print(json.dumps({
+    result = {
         "path": str(output_path),
         "backup_path": str(backup_path) if backup_path else None,
         "sheets": wb.sheetnames,
         "applied_ops": len(ops),
-    }, ensure_ascii=False))
+    }
+    path_memory = register_output_path(output_path, description="edit_excelが生成/更新したファイル")
+    if path_memory:
+        result["path_memory"] = path_memory
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

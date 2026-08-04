@@ -6,7 +6,9 @@ scripts/ 配下の各スクリプトが同一ディレクトリから import し
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
 
 
 def setup_utf8_stdio() -> None:
@@ -19,3 +21,27 @@ def setup_utf8_stdio() -> None:
     """
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
+
+
+def register_output_path(path, description: str | None = None) -> dict[str, str] | None:
+    """生成/更新したファイルをパスメモリーへ登録し、{"@N": 絶対パス} を返す。
+
+    run_script が子プロセスへ注入する AGENT_SRC_DIR 経由で src/path_memory.py
+    を import する。AGENT_SRC_DIR未設定やimport失敗時はNone（run_script以外
+    から直接実行された場合でもスクリプト自体は失敗させないためのフォールバック）。
+    """
+    src_dir = os.environ.get("AGENT_SRC_DIR")
+    if not src_dir:
+        return None
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+    try:
+        import path_memory
+    except ImportError:
+        return None
+    thread_id, pm_dir, max_entries = path_memory.env_params()
+    abs_path = str(Path(path).resolve())
+    idx = path_memory.register(thread_id, abs_path, pm_dir, max_entries, description=description)
+    if idx is None:
+        return None
+    return {f"@{idx}": abs_path}

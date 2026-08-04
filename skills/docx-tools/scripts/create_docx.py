@@ -21,7 +21,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import register_output_path, setup_utf8_stdio
 from _blocks import BLOCK_HANDLERS, DEFAULT_FONT, _set_east_asian_font
 
 PAGE_SIZES_CM = {
@@ -171,6 +171,9 @@ def main() -> int:
         "blocks_written": len(spec.get("blocks") or []),
         "warnings": warnings,
     }
+    path_memory = register_output_path(output_path, description="create_docxが生成したDOCX")
+    if path_memory:
+        result["path_memory"] = path_memory
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

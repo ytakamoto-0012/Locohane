@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import register_output_path, setup_utf8_stdio
 
 from pptx import Presentation
 from pptx.util import Inches
@@ -207,6 +207,9 @@ def main() -> int:
         "total_slides": len(prs.slides),
         "size_bytes": output_path.stat().st_size,
     }
+    path_memory = register_output_path(output_path, description="create_pptxが生成したPPTX")
+    if path_memory:
+        result["path_memory"] = path_memory
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

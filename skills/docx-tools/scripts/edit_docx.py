@@ -24,7 +24,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import backup_before_overwrite, setup_utf8_stdio
+from _common import backup_before_overwrite, register_output_path, setup_utf8_stdio
 from _ops import apply_op
 
 
@@ -125,6 +125,9 @@ def main() -> int:
         "applied_ops": len(ops),
         "op_results": op_results,
     }
+    path_memory = register_output_path(output_path, description="edit_docxが生成/更新したDOCX")
+    if path_memory:
+        result["path_memory"] = path_memory
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

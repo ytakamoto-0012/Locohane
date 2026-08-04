@@ -132,3 +132,11 @@ offset/limitと同じ考え方のページ版です）。
   `pip install pypdf pypdfium2 reportlab` の実施を促してください。
 - いずれのスクリプトも例外を投げず、エラーはstderr+終了コード非0で返します。
   `run_script` の戻り値テキストの `[標準エラー]` セクションを確認してください。
+
+## パスメモリー（`@N`）
+
+`create_pdf.py` が生成したPDF、`render_pdf_pages.py` が生成した画像は、
+出力JSONに `path_memory`（例: `{"@12": "C:\\foo\\report.pdf"}`）として
+自動登録されます。続けて `run_script` を呼ぶ場合、絶対パスの代わりに
+その `@N` を `script_args` にそのまま渡せます（自動的に実パスへ解決
+されます）。

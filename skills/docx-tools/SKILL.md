@@ -320,3 +320,10 @@ indexがずれるため、**大きいindexから先に削除する**よう指定
   `pip install python-docx` の実施を促してください。
 - いずれのスクリプトも例外を投げず、エラーはstderr+終了コード非0で返します。
   `run_script` の戻り値テキストの `[標準エラー]` セクションを確認してください。
+
+## パスメモリー（`@N`）
+
+`create_docx.py`・`edit_docx.py` が生成・更新したファイルは、出力JSONに
+`path_memory`（例: `{"@12": "C:\\foo\\report.docx"}`）として自動登録
+されます。続けて `run_script` を呼ぶ場合、絶対パスの代わりにその `@N` を
+`script_args` にそのまま渡せます（自動的に実パスへ解決されます）。

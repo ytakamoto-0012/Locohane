@@ -25,7 +25,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import register_output_path, setup_utf8_stdio
 
 _XL_CELL_TYPE_FORMULAS = -4123
 _XL_ERRORS = 16
@@ -67,7 +67,11 @@ def _recalc(path: Path) -> dict:
         excel.CalculateFullRebuild()
         errors = _collect_errors(workbook)
         workbook.Save()
-        return {"path": str(path), "recalculated": True, "errors": errors}
+        result = {"path": str(path), "recalculated": True, "errors": errors}
+        path_memory = register_output_path(path, description="recalc_excelが再計算・保存したファイル")
+        if path_memory:
+            result["path_memory"] = path_memory
+        return result
     finally:
         if workbook is not None:
             try:

@@ -22,7 +22,7 @@ import os
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import register_output_path, setup_utf8_stdio
 
 import pypdfium2 as pdfium
 
@@ -76,6 +76,12 @@ def main() -> int:
         bitmap.to_pil().save(out_path)
         images.append({"page": page_num, "image_path": str(out_path)})
 
+    path_memory: dict[str, str] = {}
+    for image in images:
+        pm = register_output_path(image["image_path"], description=f"render_pdf_pagesが生成したページ{image['page']}の画像")
+        if pm:
+            path_memory.update(pm)
+
     result = {
         "path": str(path),
         "total_pages": total_pages,
@@ -84,6 +90,8 @@ def main() -> int:
         "dpi": dpi,
         "images": images,
     }
+    if path_memory:
+        result["path_memory"] = path_memory
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

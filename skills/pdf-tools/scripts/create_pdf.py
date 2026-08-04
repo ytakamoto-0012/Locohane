@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from _common import setup_utf8_stdio
+from _common import register_output_path, setup_utf8_stdio
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
@@ -103,6 +103,9 @@ def main() -> int:
         return 1
 
     result = {"output_path": str(output_path), "size_bytes": output_path.stat().st_size}
+    path_memory = register_output_path(output_path, description="create_pdfが生成したPDF")
+    if path_memory:
+        result["path_memory"] = path_memory
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
