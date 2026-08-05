@@ -1,4 +1,5 @@
 import { useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import { useChatData, useChatInteract } from '@chainlit/react-client';
 import type { IFileRef, IStep } from '@chainlit/react-client';
 import { WorkDirButton } from './WorkDirButton';
@@ -64,7 +65,7 @@ export function Composer({ plan }: { plan?: IStep }) {
 
     const message: IStep = {
       threadId: '',
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       name: 'あなた',
       type: 'user_message',
       output: value,

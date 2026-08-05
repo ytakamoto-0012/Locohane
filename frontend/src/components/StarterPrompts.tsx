@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import { useChatInteract } from '@chainlit/react-client';
 import type { IStep } from '@chainlit/react-client';
 
@@ -13,7 +14,7 @@ export function StarterPrompts({ prompts }: { prompts: string[] }) {
   const handleClick = (text: string) => {
     const message: IStep = {
       threadId: '',
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       name: 'あなた',
       type: 'user_message',
       output: text,

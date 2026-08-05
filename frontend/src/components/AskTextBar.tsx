@@ -1,4 +1,5 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import { useChatData, useChatInteract } from '@chainlit/react-client';
 import type { IStep } from '@chainlit/react-client';
 
@@ -26,7 +27,7 @@ export function AskTextBar() {
     if (!value.trim()) return;
     const message: IStep = {
       threadId: '',
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       name: 'あなた',
       type: 'user_message',
       output: value,
