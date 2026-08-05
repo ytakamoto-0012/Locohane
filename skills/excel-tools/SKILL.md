@@ -30,6 +30,12 @@ xlsx/xls/xlsm の読み込み・編集・数式再計算・VBAマクロコード
 各スクリプトは正常系なら終了コード0でJSON1行を標準出力へ、異常系なら
 終了コード非0でエラーメッセージを標準エラーへ出力します。
 
+`read_excel.py`・`read_vba.py` は本文データ（シート一覧・セル行・VBAモジュール
+一覧・VBAコード全文）を直接標準出力へは返さず、一時JSONファイルへ書き出して
+そのパス（`result_path`）を返します。中身を確認するには `Read` ツールで
+`result_path`（または `path_memory` の `@N`）を読んでください（内容は複数行に
+整形されているため `offset`/`limit` で部分読み込みできます）。
+
 このプロジェクトには汎用のファイル書き込みツールが無いため、構造化データ
 （ops等）は **LLMが組み立てたJSON文字列をそのまま `run_script` の
 `script_args` の1要素として渡す**ことでスクリプトへ伝えます
@@ -88,25 +94,32 @@ xlsx/xls/xlsm の読み込み・編集・数式再計算・VBAマクロコード
 ### 出力例（シート一覧モード、`--sheet` 省略時）
 
 ```json
-{"path": "C:\\foo\\book.xlsx", "mode": "sheets", "sheets": [{"name": "Sheet1", "max_row": 120, "max_column": 5}]}
+{"path": "C:\\foo\\book.xlsx", "mode": "sheets", "sheets_count": 3,
+ "result_path": "C:\\...\\_tmp_<thread_id>\\excel_read\\1a2b3c4d_20260805_153012_123456.json"}
 ```
+`sheets`（各要素 `{"name", "max_row", "max_column"}`）は標準出力からは省かれ、
+`result_path` が指すJSONファイルにのみ含まれます。`Read` ツールで
+`result_path` を読んでシート一覧を確認してください。
 
 ### 出力例（セルデータモード、`--sheet` 指定時）
 
 ```json
-{"path": "C:\\foo\\book.xlsx", "mode": "rows", "sheet": "Sheet1", "total_rows": 120, "total_columns": 5, "start_row": 1, "end_row": 120, "rows": [["名前", "点数"], ["太郎", 80]]}
+{"path": "C:\\foo\\book.xlsx", "mode": "rows", "sheet": "Sheet1", "total_rows": 120, "total_columns": 5, "start_row": 1, "end_row": 120, "rows_count": 120,
+ "result_path": "C:\\...\\_tmp_<thread_id>\\excel_read\\1a2b3c4d_20260805_153012_123456.json"}
 ```
 
-`rows` は1行=1配列（セル値の配列）のリストです。日付・時刻のセルはISO8601
-文字列（例: `"2026-07-13T00:00:00"`）に変換済みです。空セルは `null` です。
+`rows`（1行=1配列（セル値の配列）のリスト。日付・時刻のセルはISO8601文字列
+（例: `"2026-07-13T00:00:00"`）に変換済み、空セルは `null`）は標準出力からは
+省かれ、`result_path` のJSONファイルにのみ含まれます。
 
 ### 出力例（`--include-style` 指定時）
 
 ```json
-{"path": "C:\\foo\\book.xlsx", "mode": "rows", "sheet": "Sheet1", "total_rows": 3, "total_columns": 3, "start_row": 1, "end_row": 3, "rows": [[{"value": "太郎", "style": {"bold": true, "fill_color": "1F4E78"}}, {"value": 80}]], "merged_cells": ["A1:B1"], "tables": [{"name": "MyTable", "range": "A1:C3", "style": "TableStyleMedium9"}]}
+{"path": "C:\\foo\\book.xlsx", "mode": "rows", "sheet": "Sheet1", "total_rows": 3, "total_columns": 3, "start_row": 1, "end_row": 3, "rows_count": 3,
+ "merged_cells": ["A1:B1"], "tables": [{"name": "MyTable", "range": "A1:C3", "style": "TableStyleMedium9"}],
+ "result_path": "C:\\...\\_tmp_<thread_id>\\excel_read\\1a2b3c4d_20260805_153012_123456.json"}
 ```
-
-各セルは `{"value": ..., "style": {...}}` の形で返る（`style` は
+`rows` の本体（各セルは `{"value": ..., "style": {...}}` の形。`style` は
 `edit_excel.py` の `set_cell`/`set_range`等が受け取る `style` 辞書
 （下記「style 共通スキーマ」参照）と同じキー体系。**書いた書式をそのまま
 読み返して確認できる**ため、既定値と一致する項目（`bold: false`等）は
@@ -449,14 +462,20 @@ Pythonの例外メッセージがそのまま返るので、それを手がか�
 ### 出力例（モジュール一覧モード）
 
 ```json
-{"path": "C:\\foo\\book.xlsm", "has_vba": true, "modules": [{"name": "Module1", "type": "standard", "line_count": 4}, {"name": "ThisWorkbook", "type": "document", "line_count": 9}]}
+{"path": "C:\\foo\\book.xlsm", "has_vba": true, "modules_count": 2,
+ "result_path": "C:\\...\\_tmp_<thread_id>\\excel_vba_read\\1a2b3c4d_20260805_153012_123456.json"}
 ```
+`modules`（各要素 `{"name", "type", "line_count"}`）は標準出力からは省かれ、
+`result_path` が指すJSONファイルにのみ含まれます。
 
 ### 出力例（`--module` 指定時）
 
 ```json
-{"path": "C:\\foo\\book.xlsm", "module": "Module1", "type": "standard", "code": "Attribute VB_Name = \"Module1\"\r\nSub Hello()\r\nEnd Sub\r\n"}
+{"path": "C:\\foo\\book.xlsm", "module": "Module1", "type": "standard", "code_length": 45,
+ "result_path": "C:\\...\\_tmp_<thread_id>\\excel_vba_read\\1a2b3c4d_20260805_153012_123456.json"}
 ```
+ソースコード全文（`code`）は標準出力からは省かれ、`result_path` の
+JSONファイルにのみ含まれます。`Read` ツールで読んでください。
 
 ### 手順
 
@@ -683,4 +702,5 @@ End Sub
 したファイルは、出力JSONに `path_memory`（例: `{"@12": "C:\\foo\\book.xlsx"}`）
 として自動登録されます。続けて `run_script` を呼ぶ場合、絶対パスの代わりに
 その `@N` を `script_args` にそのまま渡せます（自動的に実パスへ解決
-されます）。
+されます）。`read_excel.py`・`read_vba.py` が書き出す結果JSON
+（`result_path`）も同様に自動登録されます。

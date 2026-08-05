@@ -20,6 +20,11 @@ Word文書（.docx）の読み込み・生成・編集を行うスキルです�
 各スクリプトは正常系なら終了コード0でJSON1行を標準出力へ、異常系なら
 終了コード非0でエラーメッセージを標準エラーへ出力します。
 
+`read_docx.py` は本文データ（段落・表）を直接標準出力へは返さず、一時JSON
+ファイルへ書き出してそのパス（`result_path`）を返します。中身を確認するには
+`Read` ツールで `result_path`（または `path_memory` の `@N`）を読んでください
+（内容は複数行に整形されているため `offset`/`limit` で部分読み込みできます）。
+
 ## 1. read_docx.py — docxの読み込み（段落・表・プロパティ取得）
 
 呼び出し例:
@@ -40,22 +45,24 @@ Word文書（.docx）の読み込み・生成・編集を行うスキルです�
   "total_paragraphs": 450,
   "start_index": 0,
   "end_index": 299,
-  "paragraphs": [
-    {"index": 0, "style": "Title", "text": "報告書タイトル"},
-    {"index": 1, "style": "Heading 1", "text": "1. 概要"},
-    {"index": 2, "style": "Normal", "text": "本文テキスト..."}
-  ],
+  "paragraphs_count": 300,
   "table_count": 1,
-  "tables": [[["項目", "値"], ["売上", "1200万円"]]],
+  "tables_count": 1,
   "core_properties": {"title": "報告書", "author": "山田太郎", "created": "2026-01-10T09:00:00", "modified": null},
-  "track_changes": {"has_pending_revisions": false, "insertion_count": 0, "deletion_count": 0}
+  "track_changes": {"has_pending_revisions": false, "insertion_count": 0, "deletion_count": 0},
+  "result_path": "C:\\...\\_tmp_<thread_id>\\docx_read\\1a2b3c4d_20260805_153012_123456.json",
+  "path_memory": {"@7": "C:\\...\\_tmp_<thread_id>\\docx_read\\1a2b3c4d_20260805_153012_123456.json"}
 }
 ```
+
+段落本文（`paragraphs`、各要素は `{"index", "style", "text"}`）と表本体
+（`tables`、「表1つ＝行の配列（各行はセル文字列の配列）」）は上記のように
+標準出力からは省かれ、`result_path` が指すJSONファイルにのみ含まれます。
+`Read` ツールで `result_path` を読んで内容を確認してください。
 
 - `paragraphs` の各要素の `style` は見出しレベルの判定に使えます
   （`"Title"`, `"Heading 1"`, `"Heading 2"`, ... , `"Normal"` など）。
   `text` を `style` に応じて章立てとしてユーザーに報告してください。
-- `tables` は「表1つ＝行の配列（各行はセル文字列の配列）」です。
 - `total_paragraphs` が `end_index + 1` より多い場合は続きがあります。
   `--offset` を `end_index + 1` に指定して再度呼び出すことを案内してください。
 - `track_changes.has_pending_revisions` が `true` の場合、文書内に未確定の
@@ -327,3 +334,4 @@ indexがずれるため、**大きいindexから先に削除する**よう指定
 `path_memory`（例: `{"@12": "C:\\foo\\report.docx"}`）として自動登録
 されます。続けて `run_script` を呼ぶ場合、絶対パスの代わりにその `@N` を
 `script_args` にそのまま渡せます（自動的に実パスへ解決されます）。
+`read_docx.py` が書き出す結果JSON（`result_path`）も同様に自動登録されます。

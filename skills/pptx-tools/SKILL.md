@@ -21,6 +21,12 @@ python-pptx既定テーマ準拠）のデザインになりますが、既存テ
 各スクリプトは正常系なら終了コード0でJSON1行を標準出力へ、異常系なら
 終了コード非0でエラーメッセージを標準エラーへ出力します。
 
+`read_pptx.py`・`inspect_pptx.py` はスライドごとの本文データを直接標準出力へは
+返さず、一時JSONファイルへ書き出してそのパス（`result_path`）を返します。
+中身を確認するには `Read` ツールで `result_path`（または `path_memory` の
+`@N`）を読んでください（内容は複数行に整形されているため `offset`/`limit`
+で部分読み込みできます）。
+
 ## 1. read_pptx.py — pptxからテキスト・表・ノート抽出
 
 呼び出し例:
@@ -36,11 +42,13 @@ python-pptx既定テーマ準拠）のデザインになりますが、既存テ
 出力例:
 ```json
 {"path": "C:\\foo\\sample.pptx", "total_slides": 12, "start_slide": 1, "end_slide": 12,
- "slides": [
-   {"index": 1, "title": "表紙タイトル", "texts": ["サブタイトル本文"], "tables": [], "notes": null},
-   {"index": 2, "title": "章立て", "texts": ["項目1\n項目2"], "tables": [[["列1","列2"],["a","b"]]], "notes": "発表者向けメモ"}
- ]}
+ "slides_count": 12,
+ "result_path": "C:\\...\\_tmp_<thread_id>\\pptx_read\\1a2b3c4d_20260805_153012_123456.json"}
 ```
+スライドごとの本文（`slides`、各要素は `{"index", "title", "texts", "tables", "notes"}`）は
+標準出力からは省かれ、`result_path` が指すJSONファイルにのみ含まれます。
+`Read` ツールで読んで内容を確認してください。各要素のキーの意味は以下の通りです。
+
 - `title`: そのスライドのタイトルプレースホルダのテキスト（無ければ `null`）。
 - `texts`: タイトル以外のテキストを持つ図形のテキスト一覧（1図形＝1要素、複数行はそのまま`\n`区切り）。
 - `tables`: 表があれば2次元配列（1行目を含む全行）のリストとして格納。表が無ければ `[]`。
@@ -53,7 +61,7 @@ start-page/max-pageと同じ考え方のスライド版です）。
 エッジケース:
 - ファイル不在・ディレクトリ指定・pptx以外の壊れたファイルはエラー終了します。
 - `start_slide` が総スライド数を超える場合はエラーにはならず、
-  `slides: []`, `start_slide`/`end_slide`: `null` を終了コード0で返します。
+  `slides_count: 0`, `start_slide`/`end_slide`: `null` を終了コード0で返します。
 
 ## 2. create_pptx.py — JSON定義から新規pptx生成
 
@@ -141,20 +149,17 @@ start-page/max-pageと同じ考え方のスライド版です）。
 出力例:
 ```json
 {"path": "C:\\foo\\template.pptx", "total_slides": 4, "start_slide": 1, "end_slide": 4,
- "slides": [
-   {"index": 3, "layout_name": "Title and Content", "layout_index": 1,
-    "shapes": [
-      {"shape_index": 0, "name": "Title 1", "shape_type": "PLACEHOLDER (14)",
-       "is_placeholder": true, "placeholder_idx": 0, "placeholder_type": "TITLE (1)",
-       "has_text_frame": true, "text_preview": "実績一覧",
-       "has_table": false, "table_dims": null, "has_picture": false},
-      {"shape_index": 2, "name": "Table 3", "shape_type": "TABLE (19)",
-       "is_placeholder": false, "placeholder_idx": null, "placeholder_type": null,
-       "has_text_frame": false, "text_preview": null,
-       "has_table": true, "table_dims": {"rows": 3, "cols": 2}, "has_picture": false}
-    ], "notes_present": false}
- ]}
+ "slides_count": 4,
+ "result_path": "C:\\...\\_tmp_<thread_id>\\pptx_inspect\\1a2b3c4d_20260805_153012_123456.json"}
 ```
+スライド単位のshape構造（`slides`、各要素は
+`{"index", "layout_name", "layout_index", "shapes", "notes_present"}`。
+`shapes` の各要素は `{"shape_index", "name", "shape_type", "is_placeholder",
+"placeholder_idx", "placeholder_type", "has_text_frame", "text_preview",
+"has_table", "table_dims", "has_picture"}`）は標準出力からは省かれ、
+`result_path` が指すJSONファイルにのみ含まれます。`Read` ツールで読んで
+`shape_index` を確認してから `edit_pptx.py` を呼んでください。
+
 - `shape_index` は `edit_pptx.py` の各操作で指定する `shape_index` と完全に一致します
   （このスライド内での0始まり連番）。
 - `text_preview` は先頭50文字までの切り詰め表示です（編集対象を見分けるための参考情報で、
@@ -254,3 +259,5 @@ start-page/max-pageと同じ考え方のスライド版です）。
 `path_memory`（例: `{"@12": "C:\\foo\\out.pptx"}`）として自動登録されます。
 続けて `run_script` を呼ぶ場合、絶対パスの代わりにその `@N` を
 `script_args` にそのまま渡せます（自動的に実パスへ解決されます）。
+`read_pptx.py`・`inspect_pptx.py` が書き出す結果JSON（`result_path`）も
+同様に自動登録されます。

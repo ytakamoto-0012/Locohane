@@ -25,7 +25,7 @@ import re
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import setup_utf8_stdio, summarize_result, write_json_result
 
 _SHEET_CODENAME_RE = re.compile(r"^Sheet\d+$")
 
@@ -115,7 +115,9 @@ def main() -> int:
         print(f"VBAコードの読み込みに失敗しました: {e}", file=sys.stderr)
         return 1
 
-    print(json.dumps(result, ensure_ascii=False))
+    summary = summarize_result(result, ["modules", "code"])
+    summary.update(write_json_result(result, "excel_vba_read", path))
+    print(json.dumps(summary, ensure_ascii=False))
     return 0
 
 

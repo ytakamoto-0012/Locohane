@@ -20,7 +20,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import setup_utf8_stdio, summarize_result, write_json_result
 
 
 def main() -> int:
@@ -94,7 +94,9 @@ def main() -> int:
         "core_properties": core_properties,
         "track_changes": track_changes,
     }
-    print(json.dumps(result, ensure_ascii=False))
+    summary = summarize_result(result, ["paragraphs", "tables"])
+    summary.update(write_json_result(result, "docx_read", path))
+    print(json.dumps(summary, ensure_ascii=False))
     return 0
 
 

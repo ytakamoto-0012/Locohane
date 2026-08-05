@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio
+from _common import setup_utf8_stdio, summarize_result, write_json_result
 
 from pptx import Presentation
 from pptx.exc import PackageNotFoundError
@@ -92,7 +92,9 @@ def main() -> int:
         "end_slide": end_idx if slides_out else None,
         "slides": slides_out,
     }
-    print(json.dumps(result, ensure_ascii=False))
+    summary = summarize_result(result, ["slides"])
+    summary.update(write_json_result(result, "pptx_read", path))
+    print(json.dumps(summary, ensure_ascii=False))
     return 0
 
 

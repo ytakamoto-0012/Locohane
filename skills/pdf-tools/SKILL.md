@@ -16,6 +16,11 @@ PDFの読み込み（テキスト抽出／ページの画像化）とPDFの生�
 各スクリプトは正常系なら終了コード0でJSON1行を標準出力へ、異常系なら
 終了コード非0でエラーメッセージを標準エラーへ出力します。
 
+`read_pdf.py` は抽出したページ本文を直接標準出力へは返さず、一時JSON
+ファイルへ書き出してそのパス（`result_path`）を返します。中身を確認するには
+`Read` ツールで `result_path`（または `path_memory` の `@N`）を読んでください
+（内容は複数行に整形されているため `offset`/`limit` で部分読み込みできます）。
+
 ## 1. read_pdf.py — PDFからテキスト抽出
 
 呼び出し例:
@@ -32,9 +37,14 @@ PDFの読み込み（テキスト抽出／ページの画像化）とPDFの生�
 ```json
 {"path": "C:\\foo\\report.pdf", "total_pages": 42, "start_page": 1, "end_page": 20,
  "metadata": {"title": "資料タイトル", "author": null, "subject": null},
- "pages": [{"page": 1, "text": "1ページ目の抽出テキスト..."}, {"page": 2, "text": "..."}]}
+ "pages_count": 20,
+ "result_path": "C:\\...\\_tmp_<thread_id>\\pdf_read\\1a2b3c4d_20260805_153012_123456.json",
+ "path_memory": {"@7": "C:\\...\\_tmp_<thread_id>\\pdf_read\\1a2b3c4d_20260805_153012_123456.json"}}
 ```
-`pages` の各要素の `text` をつなげてユーザーに内容を報告するか、要約して伝えてください。
+ページ本文（`pages`、各要素は `{"page", "text"}`）は標準出力からは省かれ、
+`result_path` が指すJSONファイルにのみ含まれます。`Read` ツールで
+`result_path`（または `path_memory` の `@N`）を読み、各要素の `text` を
+つなげてユーザーに内容を報告するか、要約して伝えてください。
 `total_pages` が `max_pages` より多い場合は、続きを読みたければ `--start-page` を
 `end_page + 1` に指定して再度呼び出すことを案内してください（`read_file.py` の
 offset/limitと同じ考え方のページ版です）。
@@ -45,7 +55,7 @@ offset/limitと同じ考え方のページ版です）。
 - パスワード保護されたPDFは、空パスワードでの復号を試みて失敗すればエラー終了します
   （「パスワード保護されたPDFです」という旨がstderrに出ます）。
 - `start_page` が総ページ数を超える場合はエラーにはならず、
-  `pages: []`, `start_page`/`end_page`: `null` を終了コード0で返します。
+  `pages_count: 0`, `start_page`/`end_page`: `null` を終了コード0で返します。
 - スキャン画像のみのPDF（OCRされていないもの）は `text` が空文字になることがあります。
   その場合は下記の `render_pdf_pages.py` でページを画像化し、`analyze_image` で
   LLMに直接見せる方法を使ってください（このスキルはOCRを行いません）。
@@ -135,8 +145,9 @@ offset/limitと同じ考え方のページ版です）。
 
 ## パスメモリー（`@N`）
 
-`create_pdf.py` が生成したPDF、`render_pdf_pages.py` が生成した画像は、
-出力JSONに `path_memory`（例: `{"@12": "C:\\foo\\report.pdf"}`）として
+`create_pdf.py` が生成したPDF、`render_pdf_pages.py` が生成した画像、
+`read_pdf.py` が書き出す結果JSON（`result_path`）は、出力JSONに
+`path_memory`（例: `{"@12": "C:\\foo\\report.pdf"}`）として
 自動登録されます。続けて `run_script` を呼ぶ場合、絶対パスの代わりに
 その `@N` を `script_args` にそのまま渡せます（自動的に実パスへ解決
 されます）。

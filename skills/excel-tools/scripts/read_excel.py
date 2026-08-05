@@ -29,7 +29,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import cell_to_json, resolve_sheet_name, setup_utf8_stdio
+from _common import cell_to_json, resolve_sheet_name, setup_utf8_stdio, summarize_result, write_json_result
 from _style import extract_style
 
 
@@ -179,7 +179,9 @@ def main() -> int:
         print(f"読み込みに失敗しました: {e}", file=sys.stderr)
         return 1
 
-    print(json.dumps(result, ensure_ascii=False))
+    summary = summarize_result(result, ["rows", "sheets"])
+    summary.update(write_json_result(result, "excel_read", path))
+    print(json.dumps(summary, ensure_ascii=False))
     return 0
 
 

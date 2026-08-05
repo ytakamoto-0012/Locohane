@@ -7,6 +7,8 @@ scripts/ 配下の各スクリプトが同一ディレクトリから import し
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import sys
@@ -85,3 +87,41 @@ def register_output_path(path, description: str | None = None) -> dict[str, str]
     if idx is None:
         return None
     return {f"@{idx}": abs_path}
+
+
+def write_json_result(result: dict, category: str, source_path) -> dict:
+    """result全体をJSONファイルへ書き出し、要約に足す {"result_path", "path_memory"} を返す。
+
+    保存先は execute_python_code の中間生成物と同じ `_tmp_<thread_id>/<category>/`
+    規約（pdf-tools の render_pdf_pages.py 参照）。会話終了時に自動削除される。
+    """
+    thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
+    out_dir = Path.cwd() / f"_tmp_{thread_id}" / category
+    out_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str(Path(source_path).resolve()).encode("utf-8")).hexdigest()[:8]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    out_path = out_dir / f"{digest}_{timestamp}.json"
+    out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    info: dict = {"result_path": str(out_path)}
+    pm = register_output_path(out_path, description=f"{category}の読み込み結果全文JSON")
+    if pm:
+        info["path_memory"] = pm
+    return info
+
+
+def summarize_result(result: dict, omit_keys: list[str]) -> dict:
+    """result から omit_keys で指定したキーを除いた要約辞書を返す。
+
+    除いたキーがlist型なら "<key>_count"、str型なら "<key>_length" を
+    件数/文字数として残す（本文全体はファイル側にのみ残す）。
+    """
+    summary = dict(result)
+    for key in omit_keys:
+        if key not in summary:
+            continue
+        value = summary.pop(key)
+        if isinstance(value, list):
+            summary[f"{key}_count"] = len(value)
+        elif isinstance(value, str):
+            summary[f"{key}_length"] = len(value)
+    return summary
