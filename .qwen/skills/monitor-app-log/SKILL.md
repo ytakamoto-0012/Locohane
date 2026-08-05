@@ -18,7 +18,7 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 
 ## 状態ファイル
 
-`data/temp/state.json`:
+`.qwen/state/monitor-app-log/state.json`:
 
 ```json
 {"last_checked": "2026-08-01T22:50:00", "cron_job_id": "xxxxx"}
@@ -28,6 +28,10 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
   ファイルが無い/壊れている場合は**現在時刻**で初期化する
   （過去ログの一括バックフィルはしない。監視開始時点より先のみが対象）。
 - `cron_job_id`: このスキルが自己登録した `CronCreate` のジョブID。
+
+> **注意**: 元々は `data/temp/state.json` に保存していたが、`.gitignore` で
+> `data/` 全体が除外されているため、Qwen Code からのファイル検知が不安定に
+> なっていた。これを避けるため、`.qwen/state/monitor-app-log/` 配下へ移動した。
 
 ## 手順
 
