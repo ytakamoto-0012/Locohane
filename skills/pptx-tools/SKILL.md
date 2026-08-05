@@ -1,6 +1,6 @@
 ---
 name: pptx-tools
-description: pptx(PowerPoint)ファイルの読み込み（スライドのタイトル・本文・表・発表者ノートの抽出）、JSON構造を指定した新規pptxファイルの生成、および既存pptxテンプレートのデザインを保ったままの部分編集（テキスト・表・ノートの差し替え、スライドの複製・削除・並び替え、画像の差し替え）を行う。ユーザーがPowerPointファイルの内容を確認・要約したいとき、pptxからテキストや表を抽出したいとき、新しいプレゼン資料・スライドを作成してほしいとき、簡単な資料をpptx形式で出力したいとき、既存のPowerPointテンプレート（社内フォーマット等）を流用して一部だけ差し替えたいとき、スライドを複製・削除・並び替えしたいときに使う。pptxを扱う場面では、officecli-pptxスキルが利用可能な場合は原則そちらを優先して使用し、本スキルはofficecliが利用できない場合のフォールバックとして使う。
+description: pptx(PowerPoint)ファイルの読み込み（スライドのタイトル・本文・表・発表者ノートの抽出）、JSON構造を指定した新規pptxファイルの生成、既存pptxテンプレートのデザインを保ったままの部分編集（テキスト・表・ノートの差し替え、スライドの複製・削除・並び替え、画像の差し替え）、PPTXスライドの画像化（OLE→PDF→PNG、余白自動除去）を行う。ユーザーがPowerPointファイルの内容を確認・要約したいとき、pptxからテキストや表を抽出したいとき、新しいプレゼン資料・スライドを作成してほしいとき、簡単な資料をpptx形式で出力したいとき、既存のPowerPointテンプレート（社内フォーマット等）を流用して一部だけ差し替えたいとき、スライドを複製・削除・並び替えしたいとき、スライドのレイアウトや図表を確認したいときに使う。pptxを扱う場面では、officecli-pptxスキルが利用可能な場合は原則そちらを優先して使用し、本スキルはofficecliが利用できない場合のフォールバックとして使う。
 license: MIT
 metadata:
   author: ytakamoto
@@ -245,6 +245,54 @@ start-page/max-pageと同じ考え方のスライド版です）。
 - 操作の途中でエラーになった場合、`output_path` へのファイル保存は行われません
   （テンプレート自体もその場では変更されないため、途中失敗しても既存ファイルへの影響はありません）。
 - 未対応の `op` 値を指定した場合、対応一覧を添えてエラー終了します。
+
+## 4. render_pptx.py — PPTXスライドを画像化してLLMに見せる
+
+スライドのレイアウト・図表・画像の配置を確認したいとき、`read_pptx.py` で
+テキストだけ取れても「どのように表示されているか」を知りたいときに使います。
+
+呼び出し例:
+```json
+{
+    "skill_name": "pptx-tools",
+    "script_filename": "render_pptx.py",
+    "script_args": ["C:\\Users\\me\\presentation.pptx", "--start-page", "1", "--max-pages", "3"]
+}
+```
+`--start-page`/`--max-pages`（既定3、最大5にクランプ）/`--dpi`（既定300、
+72〜600にクランプ）/`--no-crop`（余白除去をオフ）は省略可。
+
+出力例:
+```json
+{"path": "C:\\foo\\presentation.pptx", "tool": "pptx", "total_pages": 12, "start_page": 1, "end_page": 3, "dpi": 300, "target_dpi": 150, "crop_applied": true,
+ "images": [
+   {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300, "cropped": true},
+   {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300, "cropped": true},
+   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300, "cropped": true}
+ ]}
+```
+
+**重要（2段階手順）**: このスクリプト自体はPNGファイルを保存してパスをJSONで
+返すだけで、LLMへ画像を見せるところまでは行いません。`images` の各要素の
+`image_path`（絶対パス）を、続けて `analyze_image` ツール（このスキル専用ではなく
+共通ツール）の `relative_path` 引数にそのまま渡して呼び出してください。
+1回の `analyze_image` 呼び出しで1スライド分が見えるので、複数スライドある場合は
+スライド数分 `analyze_image` を呼びます。
+
+**余白除去について**: 既定では白黒境界判定で余白を自動除去します。スライドの
+背景色や図形の配置を正確に把握できるので、このオプションを有効にしてください。
+
+エッジケース:
+- ファイル不在・ディレクトリ指定・壊れたファイル/PowerPoint未インストールはエラー終了します。
+- `start_slide` が総スライド数を超える場合はエラーにはならず、`images: []` を
+  終了コード0で返します。
+- `max_pages` は5にクランプされます。総スライド数が多いプレゼンを広く画像化
+  したい場合は `--start-page` を変えて複数回に分けて呼び出してください。
+- 生成されるPNGは作業ディレクトリ配下のセッション専用一時フォルダ
+  （`_tmp_<thread_id>/rendered/`）に保存されます。同一ファイルの再実行時は
+  上書きされ、会話終了時に自動的に削除されます。
+- 依存パッケージ `pywin32`・`pypdfium2`・`pillow` が実行環境に無い場合は
+  `ImportError` で終了コード非0になります。
 
 ## エッジケース共通
 

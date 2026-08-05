@@ -1,6 +1,6 @@
 ---
 name: excel-tools
-description: xlsx/xls/xlsmファイルの読み込み、既存xlsx/xlsmの編集（セル書式・行列操作・グラフ・条件付き書式・データ検証を含む）、数式の再計算、xlsm/xlsのVBAマクロコードの読み込み・xlsmへのVBAマクロコードの追加/上書き/削除・マクロの実行を行う。ユーザーがExcelファイルの中身を確認したいとき、表データを新規に作成/編集したいとき、書式付きのレポートやグラフ入りのExcelを出力したいとき、数式の計算結果を確認したいとき、VBAマクロのコード（標準モジュール・クラスモジュール・Sub/Function）を見たい/書きたい/実行したいときに使う。xlsxを扱う場面では、officecli-xlsxスキルが利用可能な場合は原則そちらを優先して使用し、本スキルはofficecliが利用できない場合のフォールバックとして使う。
+description: xlsx/xls/xlsmファイルの読み込み、既存xlsx/xlsmの編集（セル書式・行列操作・グラフ・条件付き書式・データ検証を含む）、数式の再計算、xlsm/xlsのVBAマクロコードの読み込み・xlsmへのVBAマクロコードの追加/上書き/削除・マクロの実行、Excelページの画像化（OLE→PDF→PNG、余白自動除去）。ユーザーがExcelファイルの中身を確認したいとき、表データを新規に作成/編集したいとき、書式付きのレポートやグラフ入りのExcelを出力したいとき、数式の計算結果を確認したいとき、VBAマクロのコード（標準モジュール・クラスモジュール・Sub/Function）を見たい/書きたい/実行したいとき、Excelのレイアウトや罫線を確認したいときに使う。xlsxを扱う場面では、officecli-xlsxスキルが利用可能な場合は原則そちらを優先して使用し、本スキルはofficecliが利用できない場合のフォールバックとして使う。
 license: MIT
 metadata:
   author: ytakamoto
@@ -695,6 +695,56 @@ End Sub
   内容をそのままユーザーに伝えること。
 - 万一スクリプトが強制終了された場合、`recalc_excel.py`と同様にEXCEL.EXE
   プロセスが残留する可能性がある（タスクマネージャーでの手動終了が必要）。
+
+## 4. render_excel.py — Excelページを画像化してLLMに見せる
+
+表の罫線・書式・グラフ・レイアウトを確認したいとき、`read_excel.py` で
+数値だけ取れても「どのように表示されているか」を知りたいときに使います。
+
+呼び出し例:
+```json
+{
+    "skill_name": "excel-tools",
+    "script_filename": "render_excel.py",
+    "script_args": ["C:\\Users\\me\\book.xlsx", "--start-page", "1", "--max-pages", "3"]
+}
+```
+`--start-page`/`--max-pages`（既定3、最大5にクランプ）/`--dpi`（既定300、
+72〜600にクランプ）/`--no-crop`（余白除去をオフ）は省略可。
+
+出力例:
+```json
+{"path": "C:\\foo\\book.xlsx", "tool": "excel", "total_pages": 5, "start_page": 1, "end_page": 3, "dpi": 300, "target_dpi": 150, "crop_applied": true,
+ "images": [
+   {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300, "cropped": true},
+   {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300, "cropped": true},
+   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300, "cropped": true}
+ ]}
+```
+
+**重要（2段階手順）**: このスクリプト自体はPNGファイルを保存してパスをJSONで
+返すだけで、LLMへ画像を見せるところまでは行いません。`images` の各要素の
+`image_path`（絶対パス）を、続けて `analyze_image` ツール（このスキル専用ではなく
+共通ツール）の `relative_path` 引数にそのまま渡して呼び出してください。
+1回の `analyze_image` 呼び出しで1ページ分が見えるので、複数ページある場合は
+ページ数分 `analyze_image` を呼びます。
+
+**余白除去について**: 既定では白黒境界判定で余白を自動除去します。特にExcelは
+余白が大きい場合が多いので、このオプションを付けることでコンテンツ領域の
+解像度が高まり、文字が読みやすくなります。`--no-crop` を付けると余白除去を
+オフにし、元のサイズのまま画像化します。
+
+エッジケース:
+- ファイル不在・ディレクトリ指定・壊れたファイル/Excel未インストールはエラー終了します。
+- `start_page` が総ページ数を超える場合はエラーにはならず、`images: []` を
+  終了コード0で返します。
+- `max_pages` は5にクランプされます。総ページ数が多い文書を広く画像化したい
+  場合は `--start-page` を変えて複数回に分けて呼び出してください。
+- 生成されるPNGは作業ディレクトリ配下のセッション専用一時フォルダ
+  （`_tmp_<thread_id>/rendered/`）に保存されます。同一ファイルの再実行時は
+  上書きされ、会話終了時に自動的に削除されます。
+- 依存パッケージ `pywin32`・`pypdfium2`・`pillow` が実行環境に無い場合は
+  `ImportError` で終了コード非0になります。
 
 ## パスメモリー（`@N`）
 

@@ -1,6 +1,6 @@
 ---
 name: docx-tools
-description: Word文書（.docx）の読み込み（段落・表・文書プロパティ・変更履歴有無の取得）、新規docxファイルの生成（見出し・段落・箇条書き・表・画像・ページ設定・ヘッダーフッター・ページ番号などを含む本格的な文書作成）、既存Word文書の編集（文字列の検索置換、段落の末尾追加・削除、Track Changes/変更履歴つきの検索置換、変更履歴の一括確定・却下）を行う。ユーザーがWord文書の内容を確認したいとき、docxの文章を要約・検索したいとき、レポートや議事録、案内文書などをWordファイルとして出力・保存したいとき、既存のWordファイルの文言を修正・追記したいとき、変更履歴（校閲）付きで修正を提案したいときに使う。.doc（レガシーのバイナリ形式）の読み込みには対応していない。docxを扱う場面では、officecli-docxスキルが利用可能な場合は原則そちらを優先して使用し、本スキルはofficecliが利用できない場合のフォールバックとして使う。
+description: Word文書（.docx）の読み込み（段落・表・文書プロパティ・変更履歴有無の取得）、新規docxファイルの生成（見出し・段落・箇条書き・表・画像・ページ設定・ヘッダーフッター・ページ番号などを含む本格的な文書作成）、既存Word文書の編集（文字列の検索置換、段落の末尾追加・削除、Track Changes/変更履歴つきの検索置換、変更履歴の一括確定・却下）、DOCXページの画像化（OLE→PDF→PNG、余白自動除去）を行う。ユーザーがWord文書の内容を確認したいとき、docxの文章を要約・検索したいとき、レポートや議事録、案内文書などをWordファイルとして出力・保存したいとき、既存のWordファイルの文言を修正・追記したいとき、変更履歴（校閲）付きで修正を提案したいとき、文書のレイアウトや表・画像の配置を確認したいときに使う。.doc（レガシーのバイナリ形式）の読み込みには対応していない。docxを扱う場面では、officecli-docxスキルが利用可能な場合は原則そちらを優先して使用し、本スキルはofficecliが利用できない場合のフォールバックとして使う。
 license: MIT
 metadata:
   author: ytakamoto
@@ -327,6 +327,54 @@ indexがずれるため、**大きいindexから先に削除する**よう指定
   `pip install python-docx` の実施を促してください。
 - いずれのスクリプトも例外を投げず、エラーはstderr+終了コード非0で返します。
   `run_script` の戻り値テキストの `[標準エラー]` セクションを確認してください。
+
+## 4. render_docx.py — DOCXページを画像化してLLMに見せる
+
+文書のレイアウト・表・画像の配置を確認したいとき、`read_docx.py` で
+テキストだけ取れても「どのように表示されているか」を知りたいときに使います。
+
+呼び出し例:
+```json
+{
+    "skill_name": "docx-tools",
+    "script_filename": "render_docx.py",
+    "script_args": ["C:\\Users\\me\\report.docx", "--start-page", "1", "--max-pages", "3"]
+}
+```
+`--start-page`/`--max-pages`（既定3、最大5にクランプ）/`--dpi`（既定300、
+72〜600にクランプ）/`--no-crop`（余白除去をオフ）は省略可。
+
+出力例:
+```json
+{"path": "C:\\foo\\report.docx", "tool": "docx", "total_pages": 5, "start_page": 1, "end_page": 3, "dpi": 300, "target_dpi": 150, "crop_applied": true,
+ "images": [
+   {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300, "cropped": true},
+   {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300, "cropped": true},
+   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300, "cropped": true}
+ ]}
+```
+
+**重要（2段階手順）**: このスクリプト自体はPNGファイルを保存してパスをJSONで
+返すだけで、LLMへ画像を見せるところまでは行いません。`images` の各要素の
+`image_path`（絶対パス）を、続けて `analyze_image` ツール（このスキル専用ではなく
+共通ツール）の `relative_path` 引数にそのまま渡して呼び出してください。
+1回の `analyze_image` 呼び出しで1ページ分が見えるので、複数ページある場合は
+ページ数分 `analyze_image` を呼びます。
+
+**余白除去について**: 既定では白黒境界判定で余白を自動除去します。Word文書の
+ページ余白を除去することでコンテンツ領域の解像度が高まり、文字が読みやすくなります。
+
+エッジケース:
+- ファイル不在・ディレクトリ指定・壊れたファイル/Word未インストールはエラー終了します。
+- `start_page` が総ページ数を超える場合はエラーにはならず、`images: []` を
+  終了コード0で返します。
+- `max_pages` は5にクランプされます。総ページ数が多い文書を広く画像化したい
+  場合は `--start-page` を変えて複数回に分けて呼び出してください。
+- 生成されるPNGは作業ディレクトリ配下のセッション専用一時フォルダ
+  （`_tmp_<thread_id>/rendered/`）に保存されます。同一ファイルの再実行時は
+  上書きされ、会話終了時に自動的に削除されます。
+- 依存パッケージ `pywin32`・`pypdfium2`・`pillow` が実行環境に無い場合は
+  `ImportError` で終了コード非0になります。
 
 ## パスメモリー（`@N`）
 
