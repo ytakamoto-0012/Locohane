@@ -15,15 +15,16 @@ import random
 import threading
 import time
 import weakref
+import zlib
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import openai
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_openai import ChatOpenAI
 
-from .config import Config
+from .config import Config, LLMEndpoint
 
 logger = logging.getLogger(__name__)
 
@@ -729,7 +730,104 @@ class ChatLlamaCpp(ChatOpenAI):
         return super()._generate(*args, **kwargs)
 
 
-def build_model(config: Config) -> ChatOpenAI:
+# --- LLM接続先の簡易ルーティング ([llm].main_url / sub_url が複数件のとき) ---
+# _LLM_REQUEST_SEMAPHORE 等と同じく、プロセス全体で共有するグローバル可変
+# 状態（ロック不要。asyncio単一イベントループ内での逐次的な読み書きのみを
+# 想定）。ただし _LAST_SELECTED_INDEX だけは role 単独ではなく
+# (role, セッションID) をキーにする。複数タブ・複数ユーザーが同時に
+# 接続する運用では、role単独キーだと「直近グローバルに選ばれたindex」が
+# 別セッションの選択で上書きされてしまい、mark_last_endpoint_failed() が
+# 実際には無関係な接続先をクールダウンしてしまう恐れがあるため
+# （priority_failover を複数接続先・並行セッションで使う想定への対応）。
+# _CURRENT_SESSION_ID は set_current_session(thread_id) が会話単位で設定する
+# contextvar で、build_model() 呼び出し時と、後続の通信エラー検知時
+# （app.py の except LLM_CONNECTION_ERRORS）の両方で同一会話中は同じ値になる。
+_ROUND_ROBIN_COUNTERS: dict[str, int] = {}
+_LAST_SELECTED_INDEX: dict[tuple[str, str], int] = {}
+_ENDPOINT_COOLDOWN_UNTIL: dict[tuple[str, int], float] = {}
+# priority_failover 戦略で、通信エラーを検知した接続先を一時的に避ける秒数。
+_ENDPOINT_FAILOVER_COOLDOWN_SECONDS = 60.0
+
+
+def _select_endpoint(role: str, endpoints: tuple[LLMEndpoint, ...], strategy: str) -> LLMEndpoint:
+    """config.ini [llm].main_routing_strategy / sub_routing_strategy に従って接続先を1つ選ぶ。
+
+    Args:
+        role: "main" または "sub"（ルーティング状態を役割ごとに分けるためのキー）。
+        endpoints: config.main_endpoints または config.sub_endpoints。
+        strategy: config.main_routing_strategy または config.sub_routing_strategy
+            （"round_robin"/"random"/"priority_failover"/"sticky" のいずれか）。
+
+    Returns:
+        選ばれた LLMEndpoint。要素数が1件の場合は strategy に関わらず常にそれを返す。
+    """
+    # sticky のハッシュキー、および mark_last_endpoint_failed() が後で
+    # 引けるようにするための「選択時点の会話ID」。未設定（サブエージェント
+    # 経由でset_current_session未実行など）なら空文字として扱う。
+    session_id = _CURRENT_SESSION_ID.get() or ""
+    state_key = (role, session_id)
+
+    if len(endpoints) == 1:
+        _LAST_SELECTED_INDEX[state_key] = 0
+        return endpoints[0]
+
+    if strategy == "random":
+        index = random.randrange(len(endpoints))
+    elif strategy == "sticky":
+        # 会話（thread_id）単位で常に同じ接続先を選ぶ。llama.cpp はプロンプト
+        # 先頭が同じだとKVキャッシュが効くため、同一会話を毎回同じサーバーに
+        # 固定すると有利。
+        index = zlib.crc32(session_id.encode("utf-8")) % len(endpoints)
+    elif strategy == "priority_failover":
+        # 先頭から順に見て、クールダウン中でない最初の接続先を使う。
+        # 全滅時は安全側として先頭(0)へフォールバックする。
+        now = time.time()
+        index = 0
+        for i in range(len(endpoints)):
+            if _ENDPOINT_COOLDOWN_UNTIL.get((role, i), 0.0) <= now:
+                index = i
+                break
+    else:  # "round_robin"（既定）
+        index = _ROUND_ROBIN_COUNTERS.get(role, 0) % len(endpoints)
+        _ROUND_ROBIN_COUNTERS[role] = index + 1
+
+    _LAST_SELECTED_INDEX[state_key] = index
+    return endpoints[index]
+
+
+def mark_last_endpoint_failed(role: str) -> None:
+    """直近この会話の build_model(config, role) が選んだ接続先を一時的にクールダウンする。
+
+    priority_failover 戦略専用のフィードバックフック。通信エラーを検知した
+    呼び出し元（現状は app.py の except LLM_CONNECTION_ERRORS）が、エラーを
+    検知した会話のコンテキスト内（set_current_session(thread_id) 済みの状態）
+    でここを呼ぶと、次回以降の build_model() 呼び出しで
+    _ENDPOINT_FAILOVER_COOLDOWN_SECONDS秒間その接続先を避け、次点の接続先へ
+    切り替わる（round_robin/random/sticky 戦略では index は記録されるが
+    参照されないため実質無視される）。
+
+    _LAST_SELECTED_INDEX は (role, セッションID) 単位で管理しているため、
+    複数タブ・複数ユーザーが同時に接続していても、他セッションの選択に
+    巻き込まれず「このセッションが直近実際に使っていた接続先」だけを
+    クールダウンできる。
+
+    Args:
+        role: "main" または "sub"。
+    """
+    session_id = _CURRENT_SESSION_ID.get() or ""
+    index = _LAST_SELECTED_INDEX.get((role, session_id))
+    if index is None:
+        return
+    _ENDPOINT_COOLDOWN_UNTIL[(role, index)] = time.time() + _ENDPOINT_FAILOVER_COOLDOWN_SECONDS
+    logger.warning(
+        "LLM接続失敗を検知したため接続先を一時的に避けます（role=%s, index=%d, %.0f秒間）",
+        role,
+        index,
+        _ENDPOINT_FAILOVER_COOLDOWN_SECONDS,
+    )
+
+
+def build_model(config: Config, role: Literal["main", "sub"] = "main") -> ChatOpenAI:
     """llama.cpp server の OpenAI 互換エンドポイントに繋ぐ ChatOpenAI を作る。
 
     Ollama 固有の API・ライブラリは使わず、langchain-openai の ChatOpenAI
@@ -744,8 +842,9 @@ def build_model(config: Config) -> ChatOpenAI:
     マージされ llama-server に届く。
 
     Args:
-        config: base_url / api_key / model / temperature / top_p / top_k /
-            repeat_penalty / frequency_penalty / presence_penalty /
+        config: main_endpoints/main_routing_strategy（role="main"時）または
+            sub_endpoints/sub_routing_strategy（role="sub"時）/ temperature /
+            top_p / top_k / repeat_penalty / frequency_penalty / presence_penalty /
             max_tokens / dry_multiplier / dry_base / dry_allowed_length /
             dry_penalty_last_n / dry_sequence_breakers / enable_thinking / track_token_usage /
             request_timeout_seconds / thinking_loop_guard_* を含むアプリ設定。
@@ -753,6 +852,9 @@ def build_model(config: Config) -> ChatOpenAI:
             デフォルトに委ねる。thinking_loop_guard_* は ChatLlamaCpp の
             loop_guard_* フィールドへ渡され、ストリーミング中の反復ループ検知
             （ThinkingLoopDetected）に使う。
+        role: "main"（メインエージェント、既定）または "sub"（サブエージェント
+            ／dispatch_agent）。どちらの接続先リスト・ルーティング戦略を
+            使うかを切り替える（_select_endpoint() 参照）。
 
     Returns:
         streaming=True で構築された ChatLlamaCpp インスタンス（未 bind_tools）。
@@ -767,6 +869,10 @@ def build_model(config: Config) -> ChatOpenAI:
         aclose_active_llm_clients(session_id) が自セッション分だけを
         強制クローズできる。
     """
+    endpoints = config.main_endpoints if role == "main" else config.sub_endpoints
+    routing_strategy = config.main_routing_strategy if role == "main" else config.sub_routing_strategy
+    endpoint = _select_endpoint(role, endpoints, routing_strategy)
+
     extra_body: dict[str, Any] = {}
     if config.top_k is not None:
         extra_body["top_k"] = config.top_k
@@ -824,9 +930,9 @@ def build_model(config: Config) -> ChatOpenAI:
     # ある（2026-07-20, 2026-07-21, 2026-07-28 の各 incident で確認された
     # 構造的な欠陥）。
     return ChatLlamaCpp(
-        base_url=config.base_url,
-        api_key=config.api_key,  # llama.cpp は認証不要のためダミー値
-        model=config.model,
+        base_url=endpoint.base_url,
+        api_key=endpoint.api_key,  # llama.cpp は認証不要のためダミー値
+        model=endpoint.model,
         temperature=config.temperature,
         top_p=config.top_p,
         max_tokens=config.max_tokens,

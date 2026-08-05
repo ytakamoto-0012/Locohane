@@ -25,6 +25,25 @@ from . import memory
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.ini"
 
+# main_routing_strategy / sub_routing_strategy が取りうる値。
+# src/llm.py の _select_endpoint() がこの文字列で分岐する。
+LLM_ROUTING_STRATEGIES = frozenset({"round_robin", "random", "priority_failover", "sticky"})
+
+
+@dataclass(frozen=True)
+class LLMEndpoint:
+    """LLM接続先1件分（[llm].main_url / sub_url の各要素）。
+
+    Attributes:
+        base_url: llama.cpp server（OpenAI 互換）のベース URL。
+        api_key: LLM API キー。llama.cpp は認証不要のためダミー値でよい。
+        model: 使用するモデル名（llama-server の --model / --alias と一致させる）。
+    """
+
+    base_url: str
+    api_key: str
+    model: str
+
 
 @dataclass(frozen=True)
 class Config:
@@ -33,9 +52,16 @@ class Config:
     load_config() によってのみ構築される frozen dataclass。
 
     Attributes:
-        base_url: llama.cpp server（OpenAI 互換）のベース URL。
-        api_key: LLM API キー。llama.cpp は認証不要のためダミー値でよい。
-        model: 使用するモデル名。
+        main_endpoints: メインエージェント用のLLM接続先リスト（[llm].main_url）。
+            要素数1なら常にそれを使い、複数なら main_routing_strategy に
+            従って呼び出しごとに選ぶ（src/llm.py の build_model/_select_endpoint
+            参照）。
+        main_routing_strategy: main_endpoints が複数ある場合の選び方
+            （"round_robin"/"random"/"priority_failover"/"sticky" のいずれか）。
+        sub_endpoints: サブエージェント（dispatch_agent）用のLLM接続先リスト
+            （[llm].sub_url）。形式は main_endpoints と同じ。
+        sub_routing_strategy: sub_endpoints が複数ある場合の選び方。
+            形式は main_routing_strategy と同じ。
         temperature: 生成時のtemperature。
         top_p: 累積確率上位のみサンプリングする閾値。None なら未指定
             （llama-server既定に委ねる）。
@@ -359,9 +385,10 @@ class Config:
     """
 
     # --- LLM (llama.cpp server / OpenAI 互換) ---
-    base_url: str
-    api_key: str
-    model: str
+    main_endpoints: tuple[LLMEndpoint, ...]
+    main_routing_strategy: str
+    sub_endpoints: tuple[LLMEndpoint, ...]
+    sub_routing_strategy: str
     temperature: float
     top_p: float | None
     top_k: int | None
@@ -656,6 +683,75 @@ def _as_message_list(value: str | None) -> list[str]:
     return [str(item) for item in parsed if str(item).strip()]
 
 
+# [llm].main_url / sub_url が config.ini に無い場合の既定値（1件のみ）。
+_DEFAULT_LLM_URL = '[{"base_url": "http://localhost:8080/v1", "api_key": "dummy-not-used", "model": "local-model"}]'
+
+
+def _as_llm_endpoints(value: str | None, key_name: str) -> tuple[LLMEndpoint, ...]:
+    """[llm].main_url / sub_url のJSON/Python風リスト値を LLMEndpoint のタプルに変換する。
+
+    例: '[{"base_url": "http://localhost:8080/v1", "api_key": "dummy-not-used",
+    "model": "local-model"}]'。_as_message_list() と同じく ast.literal_eval を
+    使い、末尾カンマ等の緩い記法を許容する。
+
+    Args:
+        value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
+        key_name: エラーメッセージに使う設定キー名（例: "main_url"）。
+
+    Returns:
+        パースした LLMEndpoint のタプル（1件以上）。
+
+    Raises:
+        ValueError: リスト（配列）として解釈できない、空リスト、要素が
+            dict でない、または必須キー（base_url/model）が欠けている場合。
+    """
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"[llm].{key_name} は最低1件の接続先を指定してください: {value!r}")
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(f"[llm].{key_name} はJSON/Pythonのリスト（配列）形式で指定してください: {text!r}") from e
+    if not isinstance(parsed, list) or not parsed:
+        raise ValueError(f"[llm].{key_name} は最低1件を含むリスト（配列）形式で指定してください: {text!r}")
+    endpoints: list[LLMEndpoint] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"[llm].{key_name} の各要素は " '{"base_url":..., "api_key":..., "model":...} の' f"dict にしてください: {item!r}"
+            )
+        if not item.get("base_url") or not item.get("model"):
+            raise ValueError(f"[llm].{key_name} の各要素には base_url と model が必須です: {item!r}")
+        endpoints.append(
+            LLMEndpoint(
+                base_url=str(item["base_url"]),
+                api_key=str(item.get("api_key") or "dummy-not-used"),
+                model=str(item["model"]),
+            )
+        )
+    return tuple(endpoints)
+
+
+def _as_routing_strategy(value: str | None, key_name: str) -> str:
+    """[llm].main_routing_strategy / sub_routing_strategy の値を検証する。
+
+    Args:
+        value: config.ini から得た文字列、または環境変数由来の文字列。
+        key_name: エラーメッセージに使う設定キー名。
+
+    Returns:
+        前後の空白を除いた文字列（LLM_ROUTING_STRATEGIES のいずれか）。
+
+    Raises:
+        ValueError: LLM_ROUTING_STRATEGIES に無い値が指定された場合。
+    """
+    text = str(value or "").strip()
+    if text not in LLM_ROUTING_STRATEGIES:
+        choices = "/".join(sorted(LLM_ROUTING_STRATEGIES))
+        raise ValueError(f"[llm].{key_name} は {choices} のいずれかにしてください: {value!r}")
+    return text
+
+
 def _as_path_list(value: str | None, base: Path) -> list[Path]:
     """config.ini のパス指定を list[Path] に変換する。
 
@@ -757,7 +853,8 @@ def load_config(config_path: Path | None = None) -> Config:
     """config.ini を読み、環境変数で上書きした Config を返す。
 
     環境変数（設定されていれば config.ini より優先）:
-      LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_TEMPERATURE
+      LLM_MAIN_URL / LLM_MAIN_ROUTING_STRATEGY / LLM_SUB_URL / LLM_SUB_ROUTING_STRATEGY
+      LLM_TEMPERATURE
       LLM_TOP_P / LLM_TOP_K / LLM_REPEAT_PENALTY / LLM_FREQUENCY_PENALTY / LLM_PRESENCE_PENALTY / LLM_MAX_TOKENS
       LLM_DRY_MULTIPLIER / LLM_DRY_BASE / LLM_DRY_ALLOWED_LENGTH / LLM_DRY_PENALTY_LAST_N / LLM_DRY_SEQUENCE_BREAKERS
       LLM_ENABLE_THINKING / LLM_TRACK_TOKEN_USAGE
@@ -846,9 +943,22 @@ def load_config(config_path: Path | None = None) -> Config:
     )
 
     cfg = Config(
-        base_url=os.getenv("LLM_BASE_URL", llm.get("base_url", "http://localhost:8080/v1")),
-        api_key=os.getenv("LLM_API_KEY", llm.get("api_key", "dummy-not-used")),
-        model=os.getenv("LLM_MODEL", llm.get("model", "local-model")),
+        main_endpoints=_as_llm_endpoints(
+            os.getenv("LLM_MAIN_URL", llm.get("main_url", _DEFAULT_LLM_URL)),
+            "main_url",
+        ),
+        main_routing_strategy=_as_routing_strategy(
+            os.getenv("LLM_MAIN_ROUTING_STRATEGY", llm.get("main_routing_strategy", "round_robin")),
+            "main_routing_strategy",
+        ),
+        sub_endpoints=_as_llm_endpoints(
+            os.getenv("LLM_SUB_URL", llm.get("sub_url", _DEFAULT_LLM_URL)),
+            "sub_url",
+        ),
+        sub_routing_strategy=_as_routing_strategy(
+            os.getenv("LLM_SUB_ROUTING_STRATEGY", llm.get("sub_routing_strategy", "round_robin")),
+            "sub_routing_strategy",
+        ),
         temperature=float(os.getenv("LLM_TEMPERATURE", llm.get("temperature", 0.3))),
         top_p=_as_optional_float(os.getenv("LLM_TOP_P", llm.get("top_p", ""))),
         top_k=_as_optional_int(os.getenv("LLM_TOP_K", llm.get("top_k", ""))),

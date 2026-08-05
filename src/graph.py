@@ -68,7 +68,7 @@ def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
         コンパイル済みの LangGraph（CompiledStateGraph）。
         astream_events / ainvoke などで実行できる。
     """
-    model = build_model(config).bind_tools(get_all_tools())
+    model = build_model(config, role="main").bind_tools(get_all_tools())
 
     async def call_model(state: MessagesState) -> dict:
         """agent ノード: システムプロンプトを先頭に付けてモデルを呼ぶ。
@@ -154,7 +154,7 @@ def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer):
         コンパイル済みの LangGraph（CompiledStateGraph）。
         astream_events / ainvoke などで実行できる。
     """
-    model = build_model(config)
+    model = build_model(config, role="main")
 
     def pre_model_hook(state: MessagesState) -> dict:
         """モデル呼び出し直前に、入力を絞り、必要なら引継ぎ促しを差し込む。

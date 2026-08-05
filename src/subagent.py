@@ -182,7 +182,7 @@ async def _invoke_with_loop_retry(model, messages: list, config: Config, tools: 
                 exc.snippet,
                 describe_current_task(),
             )
-            current_model = build_model(config).bind_tools(tools)
+            current_model = build_model(config, role="sub").bind_tools(tools)
             logger.warning(
                 "subagent: リトライ前にLLMモデルを再構築しました" "（client_broken=%s） [%s]",
                 exc.client_broken,
@@ -351,7 +351,7 @@ async def run_subagent(
     Returns:
         サブエージェントの最終回答テキスト。
     """
-    model = build_model(config).bind_tools(tools)
+    model = build_model(config, role="sub").bind_tools(tools)
     tools_by_name = {t.name: t for t in tools}
     messages: list = [SystemMessage(content=system_prompt), HumanMessage(content=task)]
 

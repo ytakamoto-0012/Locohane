@@ -76,6 +76,7 @@ from src.llm import (
     describe_current_task,
     forget_session,
     init_llm_concurrency,
+    mark_last_endpoint_failed,
     pick_loop_nudge_message,
     recent_cancel_scope_breakage,
     set_current_session,
@@ -1247,7 +1248,7 @@ async def _run_context_compaction(
     cumulative_main = cl.user_session.get("token_usage_cumulative_main")
     if not should_compact(cumulative_main, last_usage, len(messages), _config):
         return False
-    summary_model = build_model(_config)
+    summary_model = build_model(_config, role="main")
     new_messages = await maybe_compact(messages, summary_model, _config)
     if new_messages is None:
         return False
@@ -1659,6 +1660,10 @@ async def on_message(message: cl.Message) -> None:
                 exc,
                 describe_current_task(),
             )
+            # [llm].main_routing_strategy=priority_failover の場合、直近使用した
+            # 接続先を一時的にクールダウンし、次回 build_model() で次点の
+            # 接続先へ切り替わるようにする（他戦略では実質無視される）。
+            mark_last_endpoint_failed("main")
             if thinking is not None:
                 thinking.end = utc_now()
                 await thinking.update()

@@ -663,9 +663,10 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 
 | セクション | キー | 意味 | 対応する環境変数 |
 |-----------|------|------|------------------|
-| `[llm]` | `base_url` | llama-server の OpenAI 互換 URL | `LLM_BASE_URL` |
-| `[llm]` | `api_key` | ダミー値（llama.cpp は認証不要） | `LLM_API_KEY` |
-| `[llm]` | `model` | モデル名（`--alias` と一致させる） | `LLM_MODEL` |
+| `[llm]` | `main_url` | メインエージェント用のLLM接続先リスト（`[{"base_url":...,"api_key":...,"model":...}]` のJSON/Python風リスト形式、複数指定可） | `LLM_MAIN_URL` |
+| `[llm]` | `main_routing_strategy` | `main_url` が複数件のときの選び方（`round_robin`/`random`/`priority_failover`/`sticky`） | `LLM_MAIN_ROUTING_STRATEGY` |
+| `[llm]` | `sub_url` | サブエージェント（`dispatch_agent`）用のLLM接続先リスト。形式は `main_url` と同じ | `LLM_SUB_URL` |
+| `[llm]` | `sub_routing_strategy` | `sub_url` が複数件のときの選び方。形式は `main_routing_strategy` と同じ | `LLM_SUB_ROUTING_STRATEGY` |
 | `[llm]` | `temperature` | 生成のばらつき | `LLM_TEMPERATURE` |
 | `[llm]` | `top_p` | 累積確率上位のみサンプリング（空欄で未指定） | `LLM_TOP_P` |
 | `[llm]` | `top_k` | 上位k候補のみサンプリング（llama.cpp拡張、空欄で未指定） | `LLM_TOP_K` |
