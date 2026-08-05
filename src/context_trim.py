@@ -20,16 +20,13 @@ import copy
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 _MARKER_TEMPLATE = (
-    "\n...(切り詰め: 元は{original_len}文字中、先頭{limit}文字のみ表示していま"
-    "す。全文はこの会話の履歴に保存されていますが、入力容量の都合でモデルへは"
-    "渡されていません。詳細が必要な場合は、同じ引数での再実行ではなく、別の"
-    "範囲指定（例: Readツールのoffset/limit）で読み直してください)"
+    "\n...[truncated: {original_len} chars total, first {limit} chars shown. "
+    "Full text preserved in conversation history. "
+    "To read the rest, re-run the tool with different offset/limit parameters]"
 )
 
 
-def trim_old_tool_messages(
-    messages: list[BaseMessage], *, keep_recent: int, max_chars: int
-) -> list[BaseMessage]:
+def trim_old_tool_messages(messages: list[BaseMessage], *, keep_recent: int, max_chars: int) -> list[BaseMessage]:
     """直近 keep_recent 件の ToolMessage は全文保持し、それより古いものは
     content を先頭 max_chars 文字に切り詰める。
 
@@ -107,9 +104,7 @@ def _trim_tool_call_args(tool_calls: list[dict], max_chars: int) -> list[dict] |
     return new_calls if changed else None
 
 
-def trim_old_ai_messages(
-    messages: list[BaseMessage], *, keep_recent: int, max_chars: int
-) -> list[BaseMessage]:
+def trim_old_ai_messages(messages: list[BaseMessage], *, keep_recent: int, max_chars: int) -> list[BaseMessage]:
     """直近 keep_recent 件の AIMessage は全文保持し、それより古いものは
     content と tool_calls の引数を先頭 max_chars 文字に切り詰める。
 

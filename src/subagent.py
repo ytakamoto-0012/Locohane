@@ -36,11 +36,8 @@ def _contains_error(content: str) -> bool:
     「ｴﾗｰ」に対応する。
     """
     content_lower = content.lower()
-    return (
-        "エラー" in content or
-        "error" in content_lower or
-        "ｴﾗｰ" in content
-    )
+    return "エラー" in content or "error" in content_lower or "ｴﾗｰ" in content
+
 
 from .config import Config
 from .images import image_followup_message
@@ -479,7 +476,7 @@ def _collect_tool_results_summary(messages: list) -> str:
         while i < n and isinstance(messages[i], ToolMessage):
             content = str(messages[i].content)
             if len(content) > _TOOL_RESULT_SNIPPET_LIMIT:
-                content = content[:_TOOL_RESULT_SNIPPET_LIMIT] + "...(以下省略)"
+                content = content[:_TOOL_RESULT_SNIPPET_LIMIT] + "...[truncated]"
             name = getattr(messages[i], "name", None) or "?"
             snippets.append(f"- ツール={name}: {content}")
             i += 1
@@ -494,13 +491,10 @@ def _collect_tool_results_summary(messages: list) -> str:
                 ai_content = str(nxt.content).strip()
                 if ai_content:
                     if len(ai_content) > _TOOL_RESULT_SNIPPET_LIMIT:
-                        ai_content = ai_content[:_TOOL_RESULT_SNIPPET_LIMIT] + "...(以下省略)"
+                        ai_content = ai_content[:_TOOL_RESULT_SNIPPET_LIMIT] + "...[truncated]"
                     snippets.append(f"  → モデルの解釈: {ai_content}")
                 break
     joined = "\n".join(snippets)
     if len(joined) > _TOOL_RESULT_TOTAL_LIMIT:
-        joined = (
-            "(件数が多いため前半の結果は省略。直近の実行結果のみ表示)\n...\n"
-            + joined[-_TOOL_RESULT_TOTAL_LIMIT:]
-        )
+        joined = "(too many results, first part omitted. showing recent results only)\n...\n" + joined[-_TOOL_RESULT_TOTAL_LIMIT:]
     return joined
