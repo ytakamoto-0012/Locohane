@@ -244,6 +244,7 @@ bin/
 
 # Coding Agent
 # .qwen/
+state.json
 
 # Locohane プロジェクト固有指示（CLAUDE.md相当）。.example側のみコミット対象。
 .locohane/LOCOHANE.md

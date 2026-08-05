@@ -63,3 +63,40 @@ mdフォルダに料理のレシピが記述されたmdファイルがありま�
 各mdファイルの内容を読み取り、栄養に関する情報をWEBで調べて 栄養情報のセクションに記述してください。
 
 ---
+
+system_prompt.md の簡潔性ルール反映後の評価を tune-prompt で実施してください。
+
+## 背景
+コンテキスト圧縮（src/context_compaction.py）が頻発する問題への根本対策として、
+LLMの応答（最終回答・中間出力とも）を簡潔にする方向でsystem_prompt.mdを改訂した
+（コミット 2afc9ed「system_promptに簡潔性ルールとexplore-docsサブエージェントの
+説明を追加」）。Claude Code / OpenAI Codex CLI / Qwen Code の公開システムプロンプト
+を調査し、共通する「数値アンカー」「悪い例良い例の対比」「preamble/postamble禁止」
+のテクニックを移植した。
+
+## 変更箇所（system_prompt/system_prompt.md）
+1. `# Important Reminders` の項目2「レスポンスは簡潔に」を拡張。
+   - 前置き・後置きの禁止
+   - 単純な質問には一言で答える（例: 「11は素数ですか？」→「はい」）
+   - ツール呼び出し前後の説明文（「これから〜します」等）の禁止
+   - 変更規模別の報告分量目安（単純=1〜3文、数ファイル=箇条書き6個・
+     コード引用8行まで・before/after禁止、大規模=ファイルごと1〜2行）
+2. `explore-docs` サブエージェントの説明を3箇所に追加
+   （委譲先テーブル、読み取り専用の制約説明、Important Remindersの項目5）。
+   ※こちらは簡潔性とは無関係な別件（system_promptにexploreの説明はあるが
+   explore-docsの説明が漏れていたのを補完しただけ）。tune-promptでの評価は
+   1の簡潔性ルールが主目的。
+
+## 評価してほしいこと（tune-promptスキルで実施）
+- evals/cases/ を使い、実際のローカルLLM（llama.cpp）で改訂前後の応答を比較。
+- 特に重点的に見てほしい観点:
+  - 最終回答の行数・トークン数が実際に減っているか
+  - ツール呼び出し前後の説明文（preamble/postamble）が減っているか
+  - 単純なタスクで一言・数文の回答に収まっているか
+  - 簡潔にしすぎて必要な情報（変更内容の把握に必要な要点）が欠落していないか
+    （簡潔性と正確性のトレードオフが崩れていないか）
+- 失敗ケースがあれば ClaudeCode 自身が system_prompt.md を修正し、再評価する
+  ループを回してください（tune-promptの通常フロー通り）。
+- 併せて、src/context_compaction.py の圧縮発生頻度に体感差が出ているかも
+  可能であれば確認してください（token_threshold=81920 / 
+  single_request_token_threshold=48000 の閾値に対する余裕の変化）。

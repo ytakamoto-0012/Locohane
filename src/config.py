@@ -717,9 +717,7 @@ def _as_llm_endpoints(value: str | None, key_name: str) -> tuple[LLMEndpoint, ..
     endpoints: list[LLMEndpoint] = []
     for item in parsed:
         if not isinstance(item, dict):
-            raise ValueError(
-                f"[llm].{key_name} の各要素は " '{"base_url":..., "api_key":..., "model":...} の' f"dict にしてください: {item!r}"
-            )
+            raise ValueError(f"[llm].{key_name} の各要素は " '{"base_url":..., "api_key":..., "model":...} の' f"dict にしてください: {item!r}")
         if not item.get("base_url") or not item.get("model"):
             raise ValueError(f"[llm].{key_name} の各要素には base_url と model が必須です: {item!r}")
         endpoints.append(
@@ -833,18 +831,13 @@ def _parse_plan_approval_exempt_scripts(value: str | None) -> frozenset[tuple[st
     try:
         parsed = ast.literal_eval(text)
     except (ValueError, SyntaxError) as e:
-        raise ValueError(
-            f"plan_approval_exempt_scripts はPythonのリスト形式で指定してください: {text!r}"
-        ) from e
+        raise ValueError(f"plan_approval_exempt_scripts はPythonのリスト形式で指定してください: {text!r}") from e
     if not isinstance(parsed, list):
         raise ValueError(f"plan_approval_exempt_scripts はリスト（配列）形式で指定してください: {text!r}")
     entries: set[tuple[str, str]] = set()
     for item in parsed:
         if not (isinstance(item, (list, tuple)) and len(item) == 2):
-            raise ValueError(
-                f"plan_approval_exempt_scripts の各要素は [スキル名, スクリプトファイル名] の"
-                f"2要素にしてください: {item!r}"
-            )
+            raise ValueError(f"plan_approval_exempt_scripts の各要素は [スキル名, スクリプトファイル名] の" f"2要素にしてください: {item!r}")
         entries.add((str(item[0]), str(item[1])))
     return frozenset(entries)
 
@@ -1022,9 +1015,7 @@ def load_config(config_path: Path | None = None) -> Config:
         log_cleanup_interval_hours=float(os.getenv("LOG_CLEANUP_INTERVAL_HOURS", log_section.get("cleanup_interval_hours", 1))),
         chat_log_enabled=_as_bool(os.getenv("CHAT_LOG_ENABLED", chat_log.get("enabled", False))),
         chat_log_dir=_resolve(PROJECT_ROOT, os.getenv("CHAT_LOG_DIR", chat_log.get("dir", "./data/logs_chat"))),
-        chat_starter_prompts=_as_message_list(
-            os.getenv("CHAT_STARTER_PROMPTS", chat_starters.get("prompts", ""))
-        ),
+        chat_starter_prompts=_as_message_list(os.getenv("CHAT_STARTER_PROMPTS", chat_starters.get("prompts", ""))),
         script_timeout=int(os.getenv("SCRIPT_TIMEOUT", scripts.get("timeout", 60))),
         script_python=os.getenv("SCRIPT_PYTHON", scripts.get("python", "python")),
         code_exec_enabled=_as_bool(os.getenv("CODE_EXECUTION_ENABLED", scripts.get("code_execution_enabled", True))),
@@ -1046,9 +1037,11 @@ def load_config(config_path: Path | None = None) -> Config:
                 scripts.get(
                     "plan_approval_exempt_scripts",
                     '[["excel-tools","read_vba.py"],["excel-tools","read_excel.py"],'
-                    '["docx-tools","read_docx.py"],["pdf-tools","read_pdf.py"],'
-                    '["pdf-tools","render_pdf_pages.py"],["pptx-tools","read_pptx.py"],'
-                    '["pptx-tools","inspect_pptx.py"]]',
+                    '["excel-tools","render_excel.py"],'
+                    '["docx-tools","read_docx.py"],["docx-tools","render_docx.py"],'
+                    '["pdf-tools","read_pdf.py"],["pdf-tools","render_pdf_pages.py"],'
+                    '["pptx-tools","read_pptx.py"],["pptx-tools","inspect_pptx.py"],'
+                    '["pptx-tools","render_pptx.py"]]',
                 ),
             )
         ),
@@ -1232,9 +1225,7 @@ def load_config(config_path: Path | None = None) -> Config:
                 checkpointer.get("shutdown_drain_timeout_seconds", 5),
             )
         ),
-        ui_max_display_messages=int(
-            os.getenv("UI_MAX_DISPLAY_MESSAGES", ui.get("max_display_messages", 50))
-        ),
+        ui_max_display_messages=int(os.getenv("UI_MAX_DISPLAY_MESSAGES", ui.get("max_display_messages", 50))),
     )
 
     # .locohane/settings.json の "mcp" ブロックがあれば、config.ini/環境変数由来の
