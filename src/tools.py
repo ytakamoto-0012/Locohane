@@ -2972,32 +2972,6 @@ def analyze_image(relative_path: str) -> tuple[str, dict | None]:
     }
 
 
-# init_tools() の _resolve_agent_types() がこのリストを実行時に参照するだけなので、
-# 定義順は init_tools()/dispatch_agent より後でもよい（analyze_image を含めるため
-# analyze_image の定義後に置く）。
-_SUBAGENT_TOOLS: list = [
-    read_skill,
-    read_skill_file,
-    provide_download,
-    show_image,
-    run_script,
-    run_script_background,
-    check_script_job,
-    stop_script_job,
-    execute_python_code,
-    execute_python_code_background,
-    get_tool_source,
-    check_work_dir_status,
-    analyze_image,
-    read_tool,
-    glob_tool,
-    grep_tool,
-    json_query,
-    list_path_memory,
-    write_scratch_note,
-]
-
-
 def _with_image_followups(result: dict) -> dict:
     """ToolMessage.artifact に画像があれば、直後に画像付き HumanMessage を追加する。
 
@@ -3358,6 +3332,38 @@ def show_help() -> str:
         return f"エラー: ヘルプファイルが見つかりません: {_HELP_PATH}"
     logger.info("show_help")
     return _HELP_PATH.read_text(encoding="utf-8")
+
+
+# init_tools() の _resolve_agent_types() がこのリストを実行時に参照するだけなので、
+# 定義順は init_tools()/dispatch_agent より後でもよい（analyze_image・メモリー系
+# ツールを含めるため、それらの定義後に置く）。
+_SUBAGENT_TOOLS: list = [
+    read_skill,
+    read_skill_file,
+    provide_download,
+    show_image,
+    run_script,
+    run_script_background,
+    check_script_job,
+    stop_script_job,
+    execute_python_code,
+    execute_python_code_background,
+    get_tool_source,
+    check_work_dir_status,
+    analyze_image,
+    read_tool,
+    glob_tool,
+    grep_tool,
+    json_query,
+    list_path_memory,
+    write_scratch_note,
+    create_memory,
+    update_memory,
+    delete_memory,
+    read_memory,
+    search_memory,
+    list_memories,
+]
 
 
 # グラフに渡す組み込みツール一覧（3 段階の progressive disclosure + サブエージェント委譲 +

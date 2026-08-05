@@ -41,7 +41,7 @@ tools: read_skill, Read, Glob, run_script   # 任意。カンマ区切り文字�
 
 ## 3. `tools:` フィールドとツール名の解決
 
-サブエージェントに渡せるツールの実体は、`tools.py` の `_SUBAGENT_TOOLS` リスト（2978-2998行）に列挙された固定セットのみ:
+サブエージェントに渡せるツールの実体は、`tools.py` の `_SUBAGENT_TOOLS` リスト（3340-3366行、メモリー系ツール定義より後に置く必要があるため `_BASE_TOOLS` 直前に配置）に列挙された固定セットのみ:
 
 ```
 read_skill, read_skill_file, provide_download, show_image,
@@ -49,8 +49,12 @@ run_script, run_script_background, check_script_job, stop_script_job,
 execute_python_code, execute_python_code_background,
 get_tool_source, check_work_dir_status, analyze_image,
 read_tool(=Read), glob_tool(=Glob), grep_tool(=Grep),
-json_query, list_path_memory, write_scratch_note
+json_query, list_path_memory, write_scratch_note,
+create_memory, update_memory, delete_memory,
+read_memory, search_memory, list_memories
 ```
+
+- メモリー系6ツールは `_SUBAGENT_TOOLS` に含まれてはいるが、実際に各サブエージェントへ渡るかは `agents/*.md` 側の `tools:` 次第。`explore`/`explore-docs` は読み込み系（`read_memory`/`search_memory`/`list_memories`）のみ、`worker` は全6ツール（フルアクセス）、`verifier` は含めていない。
 
 - `Read`/`Glob`/`Grep` のように大文字始まりでfrontmatterに書く名前は、Python側の関数名（`read_tool`等）とは別に `@tool("Read")` のようにデコレータ引数で明示された `.name` 属性。frontmatterには **`.name` の方**（`Read`/`Glob`/`Grep`）を書く。
 - `_resolve_agent_types()`（378-417行）が `tool_lookup = {t.name: t for t in _SUBAGENT_TOOLS}`（395行）を作り、frontmatterの `tools:` に書かれた名前と突き合わせて解決する。**未知のツール名は例外を出さず警告してスキップ**（405-409行）— 誤字に気づきにくいので、追加・変更時はアプリ起動ログを必ず確認すること。
