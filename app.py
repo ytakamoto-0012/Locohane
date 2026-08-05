@@ -67,7 +67,6 @@ from src.context_compaction import maybe_compact, should_compact
 from src.files import extract_generated_file
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
 from src.images import is_image_file, to_data_url
-from src.input_length_guard import apply_input_length_guard
 from src.llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -1274,9 +1273,7 @@ async def on_message(message: cl.Message) -> None:
     視覚情報として渡し、それ以外は保存先パスを本文に追記する（LLM が
     run_script 等にパスを渡せるようにするため）。本文中に生のUNCパスが
     含まれる場合は register_raw_unc_paths_in_text() で path_memory へ
-    事前登録し `@N` へ置換してからグラフへ渡す（ISSUE-002対策）。生入力の
-    文字数が閾値を超える場合は apply_input_length_guard() で分割を促す
-    注意書きを本文の先頭へ追加する（src/input_length_guard.py 参照）。
+    事前登録し `@N` へ置換してからグラフへ渡す（ISSUE-002対策）。
 
     Args:
         message: ユーザーが送信した Chainlit のメッセージ
@@ -1303,11 +1300,7 @@ async def on_message(message: cl.Message) -> None:
     # アップロードがあれば保存する。画像は data URL 化してLLMに見せ、それ以外は
     # 保存先パスを本文に明示する（LLM が run_script に渡せるように）。
     saved = _save_uploads(message)
-    raw_input_length = len(message.content)
     processed_text = register_raw_unc_paths_in_text(message.content)
-    # 1ターンの生入力が大きすぎる場合、LLM呼び出し自体はスキップせず、段階的な
-    # 分割対応を促す注意書きを本文の先頭に追加する（src/input_length_guard.py）。
-    processed_text = apply_input_length_guard(processed_text, raw_input_length, _config)
     human_message = _build_human_message(processed_text, saved)
 
     inputs = {"messages": [human_message]}
