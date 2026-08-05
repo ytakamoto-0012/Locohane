@@ -574,6 +574,7 @@ async def _setup() -> None:
         script_background_max_runtime_seconds=_config.script_background_max_runtime_seconds,
         script_background_job_retention_seconds=_config.script_background_job_retention_seconds,
         plan_approval_exempt_scripts=_config.script_plan_approval_exempt_scripts,
+        plans_dir=_config.plans_dir,
     )
 
     # チェックポインタ（会話状態の永続化）。接続はアプリ寿命で保持する。

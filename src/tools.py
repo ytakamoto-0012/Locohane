@@ -59,6 +59,7 @@ import time
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import chainlit as cl
@@ -185,6 +186,7 @@ _LLM_CONFIG: Config | None = None
 _AGENT_TYPES: dict[str, ResolvedAgentType] = {}
 _SUBAGENT_MAX_ITERATIONS: int = 6
 _MEMORY_ROOT: Path | None = None
+_PLANS_DIR: Path | None = None
 _HELP_PATH: Path | None = None
 _PATH_MEMORY_DIR: Path | None = None
 _PATH_MEMORY_MAX_ENTRIES: int = 500
@@ -240,6 +242,7 @@ def init_tools(
     script_background_max_runtime_seconds: int = 3600,
     script_background_job_retention_seconds: int = 1800,
     plan_approval_exempt_scripts: Iterable[tuple[str, str]] = (),
+    plans_dir: Path | None = None,
 ) -> None:
     """ツールが使う設定を注入する（app 起動時に一度だけ呼ぶ）。
 
@@ -319,6 +322,10 @@ def init_tools(
             計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト。(skill_name, script_filename) の
             並び（config.ini の [scripts].plan_approval_exempt_scripts 由来）。
+        plans_dir: create_plan が detail_markdown 引数を渡した際に詳細計画
+            Markdownを書き出す保存先ディレクトリ（config.ini の
+            [paths].plans_dir 由来）。None の場合は detail_markdown を
+            渡してもファイル保存をスキップする。
 
     Returns:
         None。副作用としてモジュール globals を更新するのみ。
@@ -328,6 +335,7 @@ def init_tools(
     global _SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS, _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS
     global _DEFAULT_WORKDIR, _LLM_CONFIG, _AGENT_TYPES, _SUBAGENT_MAX_ITERATIONS
     global _MEMORY_ROOT
+    global _PLANS_DIR
     global _HELP_PATH
     global _PATH_MEMORY_DIR, _PATH_MEMORY_MAX_ENTRIES
     global _APPROVAL_TIMEOUT_SECONDS, _ASK_USER_QUESTION_TIMEOUT_SECONDS
@@ -350,6 +358,9 @@ def init_tools(
     _SUBAGENT_MAX_ITERATIONS = subagent_max_iterations
     _MEMORY_ROOT = Path(memory_root).resolve()
     memory.ensure_dirs(_MEMORY_ROOT)
+    _PLANS_DIR = Path(plans_dir).resolve() if plans_dir else None
+    if _PLANS_DIR is not None:
+        _PLANS_DIR.mkdir(parents=True, exist_ok=True)
     _HELP_PATH = Path(help_path).resolve()
     _PATH_MEMORY_DIR = Path(path_memory_dir).resolve()
     _PATH_MEMORY_MAX_ENTRIES = path_memory_max_entries
@@ -2559,8 +2570,51 @@ def _render_plan_payload(plan: list[dict], *, finished: bool = False, approved: 
     return PLAN_PREFIX + json.dumps(payload, ensure_ascii=False)
 
 
+def _plan_detail_path() -> Path | None:
+    """create_plan が detail_markdown を書き出すファイルの絶対パスを決める。
+
+    ファイル名は thread_id から機械的に決め打ちするため、呼び出し側（LLM）が
+    任意パスへ書き込むことはできない。_PLANS_DIR 未設定（init_tools() 未実行
+    や evals 等の簡易経路）なら None を返し、保存をスキップする。
+    """
+    if _PLANS_DIR is None:
+        return None
+    thread_id = cl.user_session.get("thread_id") or "_no_session"
+    return _PLANS_DIR / f"plan_{thread_id}.md"
+
+
+def _write_plan_detail(plan: list[dict], detail_markdown: str) -> Path | None:
+    """steps のスナップショットと detail_markdown を1ファイルへまとめて上書き保存する。
+
+    create_plan が呼ばれるたびに全文を上書きする（update_task_progress では
+    更新しないため、常に「直近の create_plan 呼び出し時点」のスナップショット
+    になる）。
+    """
+    path = _plan_detail_path()
+    if path is None:
+        return None
+    lines = [
+        "# 実行計画",
+        "",
+        f"- スレッドID: {cl.user_session.get('thread_id') or '_no_session'}",
+        f"- 作成日時: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+        f"- ステップ数: {len(plan)}",
+        "",
+        "## ステップ一覧",
+        "",
+        *[f"{i + 1}. {s['content']}" for i, s in enumerate(plan)],
+        "",
+        "## 詳細",
+        "",
+        detail_markdown.rstrip(),
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
 @tool
-async def create_plan(steps: list[dict[str, str]]) -> str:
+async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None = None) -> str:
     """複数ステップの実行計画を作成し、ユーザーへチェックリストとして表示する。
 
     書き込み系ツール（run_script、run_script_background、execute_python_code、
@@ -2575,15 +2629,26 @@ async def create_plan(steps: list[dict[str, str]]) -> str:
     状態）を取得できてから。起動ステップとは別に「結果を確認する」ステップを
     設けること。
 
+    detail_markdown を渡すと、steps とは別に詳細な計画Markdownファイルを
+    data/plans/ 配下へ保存する（会話スレッドごとに1ファイル、このツールを
+    呼ぶたびに上書き更新される。update_task_progress では更新されない）。
+    背景・設計判断・調査結果・代替案の検討など、パネル表示のチェックリスト
+    には収まらない情報を残したい複雑なタスクでは、この引数も渡すことを
+    推奨する（省略しても create_plan 自体はエラーにならない）。
+
     Args:
         steps: 実行計画の各ステップを表す辞書のリスト（1件以上、実行順）。
             各辞書は次の2キーを持つこと。
             - content: ステップの内容（例: "設定ファイルを読み込む"）。
             - activeForm: 実行中（in_progress）の間だけチェックリストに
               表示する現在進行形の説明（例: "設定ファイルを読み込み中"）。
+        detail_markdown: 詳細な実行計画を記した任意のMarkdown本文
+            （背景・設計判断・調査結果等、自由形式）。省略時（None または
+            空文字）はファイルを保存しない。
 
     Returns:
-        計画を作成した旨とステップ件数を伝えるテキスト。steps が空、または
+        計画を作成した旨とステップ件数を伝えるテキスト。detail_markdown を
+        渡した場合は保存先の絶対パスも併記する。steps が空、または
         いずれかの要素に content / activeForm が欠けている場合は、例外を
         送出せず「エラー: ...」形式の文字列を返す。
     """
@@ -2599,8 +2664,18 @@ async def create_plan(steps: list[dict[str, str]]) -> str:
     message = cl.Message(content=_render_plan_payload(plan))
     await message.send()
     cl.user_session.set("plan_message", message)
-    logger.info("create_plan: %d steps", len(steps))
-    return f"計画を作成しました（全{len(steps)}件）。approve_plan でユーザーの承認を得てください。"
+    logger.info("create_plan: %d steps, detail_markdown=%d chars", len(steps), len(detail_markdown or ""))
+
+    result = f"計画を作成しました（全{len(steps)}件）。approve_plan でユーザーの承認を得てください。"
+    if detail_markdown and detail_markdown.strip():
+        try:
+            plan_path = _write_plan_detail(plan, detail_markdown)
+        except OSError as e:
+            result += f"\n（詳細計画の保存に失敗しました: {e}）"
+        else:
+            if plan_path is not None:
+                result += f"\n詳細計画を保存しました: {plan_path}"
+    return result
 
 
 @tool

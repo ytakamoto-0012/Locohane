@@ -372,6 +372,7 @@ async def _run(case: EvalCase) -> dict:
             dispatch_agent_max_parallel=config.subagent_max_parallel,
             script_background_max_runtime_seconds=config.script_background_max_runtime_seconds,
             script_background_job_retention_seconds=config.script_background_job_retention_seconds,
+            plans_dir=config.plans_dir,
         )
 
         thread_id = str(uuid.uuid4())

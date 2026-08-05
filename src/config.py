@@ -396,6 +396,7 @@ class Config:
     log_clear_on_startup: bool
     default_workdir: Path
     memory_dir: Path
+    plans_dir: Path
     help_path: Path
 
     # --- アップロードファイルの自動削除 ---
@@ -760,7 +761,7 @@ def load_config(config_path: Path | None = None) -> Config:
       LLM_TOP_P / LLM_TOP_K / LLM_REPEAT_PENALTY / LLM_FREQUENCY_PENALTY / LLM_PRESENCE_PENALTY / LLM_MAX_TOKENS
       LLM_DRY_MULTIPLIER / LLM_DRY_BASE / LLM_DRY_ALLOWED_LENGTH / LLM_DRY_PENALTY_LAST_N / LLM_DRY_SEQUENCE_BREAKERS
       LLM_ENABLE_THINKING / LLM_TRACK_TOKEN_USAGE
-      SKILLS_DIR / AGENTS_DIR / PROJECT_LOCOHANE_DIR / SYSTEM_PROMPT_PATH / CHECKPOINT_DB / UPLOAD_DIR / LOG_DIR / LOG_LEVEL / LOG_CLEAR_ON_STARTUP / DEFAULT_WORKDIR / MEMORY_DIR / HELP_PATH
+      SKILLS_DIR / AGENTS_DIR / PROJECT_LOCOHANE_DIR / SYSTEM_PROMPT_PATH / CHECKPOINT_DB / UPLOAD_DIR / LOG_DIR / LOG_LEVEL / LOG_CLEAR_ON_STARTUP / DEFAULT_WORKDIR / MEMORY_DIR / PLANS_DIR / HELP_PATH
       UPLOAD_RETENTION_DAYS / UPLOAD_CLEANUP_INTERVAL_HOURS
       PATH_MEMORY_DIR / PATH_MEMORY_RETENTION_DAYS / PATH_MEMORY_CLEANUP_INTERVAL_HOURS / PATH_MEMORY_MAX_ENTRIES
       SCRIPT_TIMEOUT / SCRIPT_PYTHON / SCRIPT_REQUIRE_APPROVAL
@@ -892,6 +893,7 @@ def load_config(config_path: Path | None = None) -> Config:
         log_clear_on_startup=_as_bool(os.getenv("LOG_CLEAR_ON_STARTUP", paths.get("log_clear_on_startup", False))),
         default_workdir=_resolve(PROJECT_ROOT, os.getenv("DEFAULT_WORKDIR", paths.get("default_workdir", "./"))),
         memory_dir=_resolve(PROJECT_ROOT, os.getenv("MEMORY_DIR", paths.get("memory_dir", "./data/memory"))),
+        plans_dir=_resolve(PROJECT_ROOT, os.getenv("PLANS_DIR", paths.get("plans_dir", "./data/plans"))),
         help_path=_resolve(PROJECT_ROOT, os.getenv("HELP_PATH", paths.get("help_path", "./system_prompt/help.md"))),
         upload_retention_days=int(os.getenv("UPLOAD_RETENTION_DAYS", uploads.get("retention_days", 7))),
         upload_cleanup_interval_hours=float(os.getenv("UPLOAD_CLEANUP_INTERVAL_HOURS", uploads.get("cleanup_interval_hours", 1))),
@@ -1145,6 +1147,7 @@ def load_config(config_path: Path | None = None) -> Config:
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     cfg.path_memory_dir.mkdir(parents=True, exist_ok=True)
     cfg.default_workdir.mkdir(parents=True, exist_ok=True)
+    cfg.plans_dir.mkdir(parents=True, exist_ok=True)
     memory.ensure_dirs(cfg.memory_dir)
 
     return cfg
