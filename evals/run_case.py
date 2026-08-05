@@ -45,7 +45,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-from evals.case_schema import Expect, EvalCase, load_case  # noqa: E402
+from evals.case_schema import EvalCase, Expect, load_case  # noqa: E402
 from evals.headless_chainlit import install as install_headless_chainlit  # noqa: E402
 from evals.timing_callbacks import LatencyCallbackHandler  # noqa: E402
 
@@ -81,9 +81,7 @@ def _serialize_messages(messages) -> list[dict]:
         entry: dict = {"type": type(msg).__name__, "content": content}
         tool_calls = getattr(msg, "tool_calls", None)
         if tool_calls:
-            entry["tool_calls"] = [
-                {"name": tc.get("name"), "args": tc.get("args")} for tc in tool_calls
-            ]
+            entry["tool_calls"] = [{"name": tc.get("name"), "args": tc.get("args")} for tc in tool_calls]
         if isinstance(msg, ToolMessage) and getattr(msg, "name", None):
             entry["tool_name"] = msg.name
         usage = getattr(msg, "usage_metadata", None)
@@ -262,9 +260,7 @@ async def _run(case: EvalCase) -> dict:
     # 事故が実際に発生した）。使い捨ての一時ディレクトリへ内容をコピーして
     # からそちらを作業ディレクトリにすることで、フィクスチャを常に読み取り
     # 専用のまま保つ。
-    workdir_cm = (
-        tempfile.TemporaryDirectory(prefix="evals_workdir_") if case.work_dir else contextlib.nullcontext(None)
-    )
+    workdir_cm = tempfile.TemporaryDirectory(prefix="evals_workdir_") if case.work_dir else contextlib.nullcontext(None)
     with (
         tempfile.TemporaryDirectory(prefix="evals_memory_") as tmp_memory_dir,
         tempfile.TemporaryDirectory(prefix="evals_path_memory_") as tmp_path_memory_dir,
@@ -296,9 +292,7 @@ async def _run(case: EvalCase) -> dict:
             root_logger = logging.getLogger()
             root_logger.setLevel(logging.DEBUG if log_level == "debug" else logging.INFO)
             formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-            file_handler = logging.FileHandler(
-                config.log_dir / "evals.log", mode="a", encoding="utf-8"
-            )
+            file_handler = logging.FileHandler(config.log_dir / "evals.log", mode="a", encoding="utf-8")
             file_handler.setFormatter(formatter)
             root_logger.addHandler(file_handler)
             # aiosqlite（checkpointer）・openai/httpx/httpcore（LLM呼び出し）が
@@ -309,16 +303,15 @@ async def _run(case: EvalCase) -> dict:
                 logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
             logging.getLogger(__name__).info("=== eval case 開始: %s ===", case.id)
 
-        unreachable = _check_llm_reachable(config.base_url)
+        # main_endpoints の先頭エントリを使って疎通確認する（config.ini の main_url 相当）
+        main_url = config.main_endpoints[0].base_url if config.main_endpoints else "http://localhost:8080/v1"
+        unreachable = _check_llm_reachable(main_url)
         if unreachable:
             return {
                 "case_id": case.id,
                 "target": case.target,
                 "error": "llm_unreachable",
-                "detail": (
-                    f"{config.base_url} に接続できませんでした: {unreachable}。"
-                    "llama.cpp server が起動しているか確認してください。"
-                ),
+                "detail": (f"{main_url} に接続できませんでした: {unreachable}。" "llama.cpp server が起動しているか確認してください。"),
             }
 
         skills = scan_skills([config.skills_dir, *config.locohane_skills_dirs])
@@ -328,14 +321,9 @@ async def _run(case: EvalCase) -> dict:
         # （本番と同じシステムプロンプトで評価するため）。
         agent_type_defs = scan_agent_types([config.agents_dir, *config.locohane_agents_dirs])
         skills_block = render_skills_block(skills)
-        agent_type_defs = [
-            replace(a, system_prompt=a.system_prompt.replace("{{skills}}", skills_block))
-            for a in agent_type_defs
-        ]
+        agent_type_defs = [replace(a, system_prompt=a.system_prompt.replace("{{skills}}", skills_block)) for a in agent_type_defs]
         system_prompt = system_prompt.replace("{{memory}}", render_memory_block(config.memory_dir))
-        system_prompt = system_prompt.replace(
-            "{{agent_types}}", render_agent_types_block(agent_type_defs)
-        )
+        system_prompt = system_prompt.replace("{{agent_types}}", render_agent_types_block(agent_type_defs))
         # config.ini の値を ${変数名} として埋め込めるよう展開する（app.py の
         # _setup() と同じ手順、{{...}}置換完了後に行う）。
         system_prompt = expand_config_vars(system_prompt, config)
@@ -346,10 +334,7 @@ async def _run(case: EvalCase) -> dict:
             (config.system_prompt_path.parent / "subagent_common.md").read_text(encoding="utf-8"),
             config,
         )
-        agent_type_defs = [
-            replace(a, system_prompt=f"{a.system_prompt}\n\n{subagent_common}")
-            for a in agent_type_defs
-        ]
+        agent_type_defs = [replace(a, system_prompt=f"{a.system_prompt}\n\n{subagent_common}") for a in agent_type_defs]
 
         # キーワード引数で渡す（init_tools は開発中でシグネチャが変わりうるため、
         # 位置引数だとズレて誤った型を渡してしまう事故が起きやすい）。

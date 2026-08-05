@@ -75,3 +75,32 @@
 `aclose_active_llm_clients()` で旧接続を強制クローズし、
 `_rebuild_graph()` でグラフ再構築するフローに統一した。
 動作テスト中。
+
+## 追記（2026-08-05 23:36）
+
+栄養情報追加バッチ処理中にスロット詰まりが再発。前回の575秒に次ぐ
+極端な遅延。
+
+```
+2026-08-05 23:36:16,548 WARNING app.py: on_message: リトライ2回目開始 [name='Task-101' id=1987090799120 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-05 23:36:20,278 WARNING app.py: on_message: リトライ3回目開始 [name='Task-101' id=1987090799120 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-05 23:36:32,251 WARNING app.py: リトライ後の初回チャンク受信まで12秒（異常遅延） [name='Task-101' id=1987090799120 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+```
+
+## 追記（2026-08-05 23:42）
+
+栄養情報追加バッチ処理中のループ検知リトライでもスロット詰まりが発生。
+11秒、130秒の遅延。
+
+```
+2026-08-05 23:42:18,398 WARNING app.py: on_message: リトライ2回目開始 [name='Task-5855' id=1987091661840 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-05 23:42:29,389 WARNING app.py: リトライ後の初回チャンク受信まで11秒（異常遅延） [name='Task-5855' id=1987091661840 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+```
+
+```
+2026-08-05 23:43:47,222 WARNING app.py: on_message: リトライ2回目開始 [name='Task-5855' id=1987091661840 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-05 23:45:57,279 WARNING app.py: リトライ後の初回チャンク受信まで130秒（異常遅延） [name='Task-5855' id=1987091661840 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+```
+
+130秒は過去最悪の575秒には及ばないものの、依然として極めて長い遅延。
+大量ファイル処理タスク中に頻発する傾向がある。
