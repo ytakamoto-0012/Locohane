@@ -38,6 +38,10 @@ export function Composer({ plan }: { plan?: IStep }) {
     });
   };
 
+  const handleRemoveAttachment = (index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const items = Array.from(e.clipboardData?.items ?? []);
     const imageFiles = items
@@ -95,6 +99,14 @@ export function Composer({ plan }: { plan?: IStep }) {
             <span key={i} className="composer-attachment-chip">
               {a.uploading ? <span className="attachment-chip-spinner" /> : <Icon name="paperclip" size={12} />}
               {a.name}
+              <button
+                type="button"
+                className="composer-attachment-remove"
+                title="添付を削除"
+                onClick={() => handleRemoveAttachment(i)}
+              >
+                <Icon name="x" size={10} />
+              </button>
             </span>
           ))}
         </div>

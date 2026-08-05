@@ -1,4 +1,4 @@
-type IconName = 'paperclip' | 'folder' | 'palette' | 'sun' | 'moon' | 'monitor' | 'plus';
+type IconName = 'paperclip' | 'folder' | 'palette' | 'sun' | 'moon' | 'monitor' | 'plus' | 'x';
 
 function IconPath({ name }: { name: IconName }) {
   switch (name) {
@@ -36,6 +36,8 @@ function IconPath({ name }: { name: IconName }) {
       );
     case 'plus':
       return <path d="M12 5v14M5 12h14" />;
+    case 'x':
+      return <path d="M18 6L6 18M6 6l12 12" />;
   }
 }
 

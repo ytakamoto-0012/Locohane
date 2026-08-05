@@ -621,6 +621,24 @@
   padding: 3px 9px;
 }
 
+.composer-attachment-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  padding: 0;
+  margin-left: 2px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.composer-attachment-remove:hover {
+  color: var(--text);
+  background: var(--surface-hover, rgba(0, 0, 0, 0.06));
+}
+
 .attachment-chip-spinner {
   width: 10px;
   height: 10px;
