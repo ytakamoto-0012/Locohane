@@ -1216,7 +1216,26 @@ async def _run_context_compaction(
     Returns:
         圧縮を実行した場合は True。
     """
-    state = await graph.aget_state(config)
+    if cl.user_session.get("awaiting_approve_plan_call"):
+        # create_plan直後、approve_plan/lock_plan_modeが呼ばれるまでの承認待ち中。
+        # ここで圧縮（要約用LLM呼び出し）が割り込むと、失敗・長時間化した際に
+        # thinking/answerが既に確定送信済みでユーザーには何も表示されず、
+        # 承認ボタンも出ない見かけ上のハングになるため、承認確定まで圧縮しない。
+        return False
+    try:
+        state = await graph.aget_state(config)
+    except Exception:
+        # checkpointer操作の失敗（DB接続切れ・ロック固着等）。呼び出し元の
+        # 2箇所（_CompactionCheckpointハンドラの中／ターン完了後の最終防衛
+        # ライン）はどちらも turn_broken_exc 経由の自己修復ルート
+        # （_rebuild_checkpointer等）を通らない構造のため、ここで例外を
+        # 伝播させると自己修復が一切走らないまま壊れたcheckpointerが
+        # 居座り続ける（プロセス再起動でしか直らない）。圧縮を今回だけ
+        # スキップし、次の通常ターンが同じ操作で同じ例外に遭遇した際に
+        # on_message側の既存の except _CheckpointerTimeout /
+        # except LLM_CONNECTION_ERRORS 経路で自己修復させる。
+        logging.getLogger(__name__).exception("コンテキスト圧縮: 状態取得(aget_state)に失敗したため今回はスキップします")
+        return False
     messages = state.values.get("messages", []) if state else []
     if _find_orphaned_tool_calls(messages):
         # 未解決のtool_callが残っている間は圧縮しない
@@ -1241,11 +1260,17 @@ async def _run_context_compaction(
         len(new_messages),
         _messages_summary(new_messages),
     )
-    await graph.aupdate_state(
-        config,
-        {"messages": [RemoveMessage(id=m.id) for m in messages] + new_messages},
-        as_node="tools",
-    )
+    try:
+        await graph.aupdate_state(
+            config,
+            {"messages": [RemoveMessage(id=m.id) for m in messages] + new_messages},
+            as_node="tools",
+        )
+    except Exception:
+        # 上のaget_state同様の理由で握りつぶす。要約結果は破棄して構わない
+        # （次回のshould_compact判定でまた同じ範囲が圧縮候補になるだけ）。
+        logging.getLogger(__name__).exception("コンテキスト圧縮: 状態更新(aupdate_state)に失敗したため今回はスキップします")
+        return False
     # 圧縮により古い履歴が要約へ置き換わったため、次にまた同じ閾値で
     # 即座に発火し続けないよう、メインエージェントの累積トークン数をリセットする。
     cl.user_session.set("token_usage_cumulative_main", _new_usage_totals())
@@ -1518,7 +1543,9 @@ async def on_message(message: cl.Message) -> None:
                                 cstate = await graph.aget_state(config)
                                 committed_messages = cstate.values.get("messages", []) if cstate else []
                                 approx_count = len(committed_messages) + len(pending_main_tool_msgs)
-                                if should_compact(cumulative_main, last_usage, approx_count, _config):
+                                if should_compact(
+                                    cumulative_main, last_usage, approx_count, _config
+                                ) and not cl.user_session.get("awaiting_approve_plan_call"):
                                     raise _CompactionCheckpoint(list(pending_main_tool_msgs))
 
                 elif kind == "on_chat_model_end":
