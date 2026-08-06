@@ -25,8 +25,25 @@ _MARKER_TEMPLATE = (
     "To read the rest, re-run the tool with different offset/limit parameters]"
 )
 
+# Read/Glob/Grep/json_query/analyze_image は src/tools.py の
+# _check_file_tools_duplicate / 個別の重複ガードにより「同一引数での
+# 再呼び出しは上限回数まで」しか許されない（結果が変わらない読み取り専用
+# ツールのため）。ガードのエラー文言は「会話履歴にある前回の実行結果を
+# 参照してください」と案内するが、その前回結果が一般的な max_chars で
+# 切り詰められていると、実際にはモデルへ渡っていない分を参照させることに
+# なり、案内が機能しない。そのためこれらのツール名の ToolMessage だけは
+# 別枠の guarded_tool_max_chars を使えるようにする（ツール名は @tool の
+# 明示指定と一致させること）。
+_DUPLICATE_GUARD_TOOL_NAMES = frozenset({"Read", "Glob", "Grep", "json_query", "analyze_image"})
 
-def trim_old_tool_messages(messages: list[BaseMessage], *, keep_recent: int, max_chars: int) -> list[BaseMessage]:
+
+def trim_old_tool_messages(
+    messages: list[BaseMessage],
+    *,
+    keep_recent: int,
+    max_chars: int,
+    guarded_tool_max_chars: int | None = None,
+) -> list[BaseMessage]:
     """直近 keep_recent 件の ToolMessage は全文保持し、それより古いものは
     content を先頭 max_chars 文字に切り詰める。
 
@@ -34,6 +51,12 @@ def trim_old_tool_messages(messages: list[BaseMessage], *, keep_recent: int, max
         messages: state["messages"]（元の全履歴。書き換えない）。
         keep_recent: 全文保持する直近 ToolMessage の件数。
         max_chars: 切り詰め後に残す本文の最大文字数（マーカー文言は含まない）。
+            _DUPLICATE_GUARD_TOOL_NAMES に含まれないツールの ToolMessage に
+            適用する。
+        guarded_tool_max_chars: _DUPLICATE_GUARD_TOOL_NAMES に含まれる
+            ツール（Read/Glob/Grep/json_query/analyze_image）の ToolMessage
+            にだけ適用する切り詰め文字数。None の場合は max_chars を使う
+            （従来どおりの挙動）。
 
     Returns:
         content だけ差し替えたコピーを含むメッセージ列。書き換え不要な
@@ -47,11 +70,14 @@ def trim_old_tool_messages(messages: list[BaseMessage], *, keep_recent: int, max
         if i in keep or not isinstance(m, ToolMessage) or not isinstance(m.content, str):
             result.append(m)
             continue
-        if len(m.content) <= max_chars:
+        limit = max_chars
+        if guarded_tool_max_chars is not None and getattr(m, "name", None) in _DUPLICATE_GUARD_TOOL_NAMES:
+            limit = guarded_tool_max_chars
+        if len(m.content) <= limit:
             result.append(m)
             continue
-        marker = _MARKER_TEMPLATE.format(original_len=len(m.content), limit=max_chars)
-        result.append(m.model_copy(update={"content": m.content[:max_chars] + marker}))
+        marker = _MARKER_TEMPLATE.format(original_len=len(m.content), limit=limit)
+        result.append(m.model_copy(update={"content": m.content[:limit] + marker}))
     return result
 
 

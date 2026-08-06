@@ -197,6 +197,14 @@ class Config:
             ピクセル数の上限。0以下、または画像の長辺が既にこの値以下の
             場合は縮小しない（src/images.py の to_data_url 参照）。
         image_jpeg_quality: 上記の縮小時に再エンコードするJPEG品質（1-95）。
+        image_inline_preview_max_long_side_pixels: LLMの回答本文（Markdown
+            テーブルのセル等）へ直接埋め込む画像プレビューの、長辺ピクセル数の
+            上限。image_max_long_side_pixels（Vision向け）とは別の、意図的に
+            小さい値（ChainlitのSocket.IO送信には1メッセージ既定1MBの上限が
+            あり、Vision向け解像度のままだと数枚で超過する。
+            src/images.py の embed_local_images_as_data_urls 参照）。
+        image_inline_preview_jpeg_quality: 上記プレビューの再エンコード品質
+            （1-95）。
         default_workdir_retention_days: default_workdir 直下に溜まり続ける
             ファイルの保持日数。この日数を過ぎた（更新日時が古い）ファイルは
             自動削除する。0以下で無効化。ユーザーが ChatSettings で指定した
@@ -351,7 +359,17 @@ class Config:
             の件数。これより古い ToolMessage のみ切り詰め対象にする。
         context_trim_truncated_max_chars: 切り詰め対象 ToolMessage /
             AIMessage の content を、先頭何文字まで残すか
-            （超過分はマーカー文言に置換）。
+            （超過分はマーカー文言に置換）。context_trim_duplicate_guard_tool_max_chars
+            の対象ツール（Read/Glob/Grep/json_query/analyze_image）には適用されない。
+        context_trim_duplicate_guard_tool_max_chars: Read/Glob/Grep/
+            json_query/analyze_image（src.tools の _check_file_tools_duplicate
+            等、同一引数での再呼び出しに上限回数があるツール）の ToolMessage
+            にだけ適用する切り詰め文字数。これらのツールは上限到達時
+            「会話履歴にある前回の実行結果を参照してください」と案内するが、
+            前回結果が context_trim_truncated_max_chars（既定は小さめの値）で
+            切り詰められていると、実際にはモデルへ渡っていない分を参照させる
+            ことになり案内が機能しない。そのため通常より大きめの値を
+            別枠で持たせる。
         context_trim_ai_messages: ToolMessage だけでなく AIMessage
             （モデル自身の思考本文と tool_calls の引数）も切り詰めるか。
         context_trim_keep_recent_ai_messages: 全文保持する直近 AIMessage
@@ -384,6 +402,14 @@ class Config:
             この件数未満なら、閾値を超えていても圧縮しない安全弁。
         context_compaction_prompt_path: 要約を指示するプロンプト本文
             （Markdown）の絶対パス。
+        context_compaction_summary_source_max_chars: 要約対象の古い
+            ToolMessage を要約LLMへ渡す前に切り詰める文字数。context_trim
+            （プリフィル短縮が目的で、直近以外の全ツール結果に一律適用
+            される小さめの値）とは別枠。要約は永続履歴を置き換える
+            恒久的な操作のため、context_trim と同じ値を使うと要約対象
+            ツール結果の情報がまとめて失われ、要約が内容の薄いものに
+            なりうる（大量ファイル処理タスクでファイル名の列挙しか
+            残らない等）。
         auth_enabled: ログイン認証機能のON/OFF（[auth].enabled）。True の場合、
             app.py がモジュール読み込み時に @cl.password_auth_callback を
             登録し、未ログインユーザーはチャット画面にアクセスできなくなる。
@@ -446,6 +472,10 @@ class Config:
     # --- 画像をLLMへ渡す前の縮小 ---
     image_max_long_side_pixels: int
     image_jpeg_quality: int
+
+    # --- 回答本文へ埋め込む画像プレビューの縮小 ---
+    image_inline_preview_max_long_side_pixels: int
+    image_inline_preview_jpeg_quality: int
 
     # --- default_workdir 直下のファイルの自動削除 ---
     default_workdir_retention_days: int
@@ -531,6 +561,7 @@ class Config:
     context_trim_enabled: bool
     context_trim_keep_recent_tool_messages: int
     context_trim_truncated_max_chars: int
+    context_trim_duplicate_guard_tool_max_chars: int
     context_trim_ai_messages: bool
     context_trim_keep_recent_ai_messages: int
 
@@ -541,6 +572,7 @@ class Config:
     context_compaction_keep_recent_turns: int
     context_compaction_min_messages_to_compact: int
     context_compaction_prompt_path: Path
+    context_compaction_summary_source_max_chars: int
 
     # --- ログイン認証（[auth]、機密情報は .env 側） ---
     auth_enabled: bool
@@ -1021,6 +1053,12 @@ def load_config(config_path: Path | None = None) -> Config:
         upload_cleanup_interval_hours=float(os.getenv("UPLOAD_CLEANUP_INTERVAL_HOURS", uploads.get("cleanup_interval_hours", 1))),
         image_max_long_side_pixels=int(os.getenv("IMAGE_MAX_LONG_SIDE_PIXELS", images_section.get("max_long_side_pixels", 0))),
         image_jpeg_quality=int(os.getenv("IMAGE_JPEG_QUALITY", images_section.get("jpeg_quality", 85))),
+        image_inline_preview_max_long_side_pixels=int(
+            os.getenv("IMAGE_INLINE_PREVIEW_MAX_LONG_SIDE_PIXELS", images_section.get("inline_preview_max_long_side_pixels", 320))
+        ),
+        image_inline_preview_jpeg_quality=int(
+            os.getenv("IMAGE_INLINE_PREVIEW_JPEG_QUALITY", images_section.get("inline_preview_jpeg_quality", 70))
+        ),
         default_workdir_retention_days=int(os.getenv("DEFAULT_WORKDIR_RETENTION_DAYS", default_workdir_section.get("retention_days", 7))),
         default_workdir_cleanup_interval_hours=float(
             os.getenv("DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS", default_workdir_section.get("cleanup_interval_hours", 1))
@@ -1195,6 +1233,12 @@ def load_config(config_path: Path | None = None) -> Config:
                 context_trim.get("truncated_max_chars", 2000),
             )
         ),
+        context_trim_duplicate_guard_tool_max_chars=int(
+            os.getenv(
+                "CONTEXT_TRIM_DUPLICATE_GUARD_TOOL_MAX_CHARS",
+                context_trim.get("duplicate_guard_tool_max_chars", 2000),
+            )
+        ),
         context_trim_ai_messages=_as_bool(os.getenv("CONTEXT_TRIM_AI_MESSAGES", context_trim.get("trim_ai_messages", True))),
         context_trim_keep_recent_ai_messages=int(
             os.getenv(
@@ -1233,6 +1277,12 @@ def load_config(config_path: Path | None = None) -> Config:
                 "CONTEXT_COMPACTION_PROMPT_PATH",
                 context_compaction.get("compaction_prompt_path", "./system_prompt/compaction_prompt.md"),
             ),
+        ),
+        context_compaction_summary_source_max_chars=int(
+            os.getenv(
+                "CONTEXT_COMPACTION_SUMMARY_SOURCE_MAX_CHARS",
+                context_compaction.get("summary_source_max_chars", 2000),
+            )
         ),
         auth_enabled=_as_bool(os.getenv("AUTH_ENABLED", auth.get("enabled", False))),
         auth_require_password=_as_bool(os.getenv("AUTH_REQUIRE_PASSWORD", auth.get("require_password", True))),

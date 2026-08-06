@@ -92,6 +92,7 @@ def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
                 history,
                 keep_recent=config.context_trim_keep_recent_tool_messages,
                 max_chars=config.context_trim_truncated_max_chars,
+                guarded_tool_max_chars=config.context_trim_duplicate_guard_tool_max_chars,
             )
             if config.context_trim_ai_messages:
                 # モデル自身が tool_calls の引数へファイル本文を書き写した場合、
@@ -169,6 +170,7 @@ def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer):
                 trimmed,
                 keep_recent=config.context_trim_keep_recent_tool_messages,
                 max_chars=config.context_trim_truncated_max_chars,
+                guarded_tool_max_chars=config.context_trim_duplicate_guard_tool_max_chars,
             )
         if config.context_trim_enabled and config.context_trim_ai_messages:
             # モデル自身が tool_calls の引数へファイル本文を書き写した場合、

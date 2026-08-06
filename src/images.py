@@ -150,6 +150,7 @@ def embed_local_images_as_data_urls(
     *,
     max_long_side: int = 0,
     jpeg_quality: int = 85,
+    max_total_bytes: int = 600_000,
 ) -> str:
     """回答本文中のMarkdown画像記法 `![alt](絶対パス)` を data URL に置き換える。
 
@@ -167,26 +168,38 @@ def embed_local_images_as_data_urls(
     Args:
         text: 置換対象の回答本文（Markdown）。
         max_long_side: `to_data_url` へ渡す縮小設定
-            （config.ini [images].max_long_side_pixels）。
+            （config.ini [images].inline_preview_max_long_side_pixels）。
         jpeg_quality: `to_data_url` へ渡す再エンコード品質
-            （config.ini [images].jpeg_quality）。
+            （config.ini [images].inline_preview_jpeg_quality）。
+        max_total_bytes: 変換後 data URL の合計文字数（≒バイト数）の予算。
+            ChainlitはSocket.IO（python-engineio）経由でメッセージを送信して
+            おり、1メッセージあたり既定1MB（max_http_buffer_size）の上限が
+            ある。超過するとメッセージ自体が送信できず、表内の画像が全滅で
+            壊れて見える（変換前の生パスのまま残る）。それを避けるため、
+            予算を使い切った時点で以降の画像は変換せず元のまま残す
+            （そこから先だけ壊れて見える、という部分的な失敗にとどめる）。
 
     Returns:
         置換後の本文。
     """
+    budget = max_total_bytes
 
     def _replace(m: re.Match[str]) -> str:
+        nonlocal budget
         alt, href = m.group(1), m.group(2).strip()
         if not href or href.startswith(("http://", "https://", "data:", "/")):
             return m.group(0)
         path = Path(href)
         if not path.is_absolute() or not path.is_file() or not is_image_file(path):
             return m.group(0)
+        if budget <= 0:
+            return m.group(0)
         try:
             url = to_data_url(path, max_long_side=max_long_side, jpeg_quality=jpeg_quality)
         except Exception:
             logger.exception("画像のdata URL変換に失敗しました: %s", path)
             return m.group(0)
+        budget -= len(url)
         return f"![{alt}]({url})"
 
     return _MARKDOWN_IMAGE_RE.sub(_replace, text)

@@ -696,6 +696,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[uploads]` | `cleanup_interval_hours` | 自動削除チェックの実行間隔（時間） | `UPLOAD_CLEANUP_INTERVAL_HOURS` |
 | `[images]` | `max_long_side_pixels` | LLMへ渡す前に画像を縮小する長辺ピクセル数の上限（`0`で縮小なし） | `IMAGE_MAX_LONG_SIDE_PIXELS` |
 | `[images]` | `jpeg_quality` | 縮小後に再エンコードするJPEG品質（1-95） | `IMAGE_JPEG_QUALITY` |
+| `[images]` | `inline_preview_max_long_side_pixels` | 回答本文（Markdownテーブルのセル等）へ直接埋め込む画像プレビューの長辺ピクセル数の上限。ChainlitのSocket.IO送信には1メッセージ既定1MBの上限があり超過しやすいため、Vision向け設定とは別に小さい値を使う | `IMAGE_INLINE_PREVIEW_MAX_LONG_SIDE_PIXELS` |
+| `[images]` | `inline_preview_jpeg_quality` | 上記プレビューの再エンコード品質（1-95） | `IMAGE_INLINE_PREVIEW_JPEG_QUALITY` |
 | `[scripts]` | `timeout` | `run_script`/`execute_python_code` 共通のタイムアウト秒 | `SCRIPT_TIMEOUT` |
 | `[scripts]` | `python` | `.py` 実行に使う Python | `SCRIPT_PYTHON` |
 | `[scripts]` | `code_execution_enabled` | `execute_python_code` ツール自体の有効/無効 | `CODE_EXECUTION_ENABLED` |
@@ -738,12 +740,14 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[context_trim]` | `enabled` | 古い `ToolMessage` を切り詰めてプリフィル遅延を抑える機能の有効/無効 | `CONTEXT_TRIM_ENABLED` |
 | `[context_trim]` | `keep_recent_tool_messages` | 全文保持する直近 `ToolMessage` の件数 | `CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES` |
 | `[context_trim]` | `truncated_max_chars` | 切り詰め対象 `ToolMessage` の残す最大文字数 | `CONTEXT_TRIM_TRUNCATED_MAX_CHARS` |
+| `[context_trim]` | `duplicate_guard_tool_max_chars` | Read/Glob/Grep/json_query/analyze_image（`[file_tools_duplicate_guard]`の対象ツール）の `ToolMessage` にだけ適用する切り詰め文字数（`truncated_max_chars`の代わりに使う） | `CONTEXT_TRIM_DUPLICATE_GUARD_TOOL_MAX_CHARS` |
 | `[context_compaction]` | `enabled` | 会話履歴の自動要約・圧縮機能（ClaudeCodeのcompact相当）の有効/無効 | `CONTEXT_COMPACTION_ENABLED` |
 | `[context_compaction]` | `token_threshold` | メインエージェントの累積トークン数（圧縮発火のたびに0へリセット）がこの値を超えたら圧縮する条件（1リクエストあたりの上限ではない） | `CONTEXT_COMPACTION_TOKEN_THRESHOLD` |
 | `[context_compaction]` | `single_request_token_threshold` | 直近1回のLLM呼び出しのtotal_tokensがこの値を超えたら圧縮する条件（累積条件とのOR判定） | `CONTEXT_COMPACTION_SINGLE_REQUEST_TOKEN_THRESHOLD` |
 | `[context_compaction]` | `keep_recent_turns` | 圧縮時に丸ごと保持する直近のユーザーターン数 | `CONTEXT_COMPACTION_KEEP_RECENT_TURNS` |
 | `[context_compaction]` | `min_messages_to_compact` | 会話全体のメッセージ数がこの件数未満なら圧縮しない安全弁 | `CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT` |
 | `[context_compaction]` | `compaction_prompt_path` | 要約を指示するプロンプト本文（Markdown）のパス | `CONTEXT_COMPACTION_PROMPT_PATH` |
+| `[context_compaction]` | `summary_source_max_chars` | 要約対象の古い`ToolMessage`を要約LLMへ渡す前に切り詰める文字数（`[context_trim]`とは別枠） | `CONTEXT_COMPACTION_SUMMARY_SOURCE_MAX_CHARS` |
 | `[path_memory]` | `dir` | パスメモリー機能のレジストリファイル（`<thread_id>.json`）保存先 | `PATH_MEMORY_DIR` |
 | `[path_memory]` | `retention_days` | パスメモリーのレジストリファイル保持日数 | `PATH_MEMORY_RETENTION_DAYS` |
 | `[path_memory]` | `cleanup_interval_hours` | パスメモリーの自動削除チェック間隔（時間） | `PATH_MEMORY_CLEANUP_INTERVAL_HOURS` |

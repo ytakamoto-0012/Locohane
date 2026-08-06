@@ -1271,6 +1271,24 @@ def _record_and_check_duplicate(session_key: str, signature: str, max_calls: int
     return is_duplicate
 
 
+def reset_call_history_guards_after_compaction() -> None:
+    """コンテキスト圧縮（要約）で古い会話履歴が消えた際、Read/Glob等の
+    重複呼び出しガードが記録しているシグネチャ履歴も合わせてリセットする。
+
+    _check_file_tools_duplicate / analyze_image の重複ガードは
+    cl.user_session に会話（thread）全体を通じた呼び出し履歴を保持し続ける
+    仕組みだが、要約後のモデルは要約に含まれなかった個々の呼び出し
+    （どのファイルをどの引数で読んだか等）を覚えていない。記憶が無いのに
+    ガードだけが「既に呼び出し済み」として拒否し続けると、モデルは
+    エラーの理由を理解できないまま同じような呼び出しを繰り返し、
+    抜け出せないループに陥る。要約が確定した直後に呼ばれる想定
+    （app.py の圧縮成功パス。token_usage_cumulative_main のリセットと同様の
+    位置づけ）。
+    """
+    cl.user_session.set("file_tools_call_signatures", None)
+    cl.user_session.set("analyze_image_call_signatures", None)
+
+
 _FAILURE_STREAK_THRESHOLD = 4
 
 

@@ -32,6 +32,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import shutil
 import time
 import uuid
@@ -92,6 +93,7 @@ from src.tools import (
     init_tools,
     probe_workdir_access,
     register_raw_unc_paths_in_text,
+    reset_call_history_guards_after_compaction,
     toggle_plan_mode_from_ui,
 )
 from src.uploads import cleanup_old_uploads, run_cleanup_loop
@@ -1025,6 +1027,29 @@ def _build_human_message(user_text: str, saved_paths: list[str]) -> HumanMessage
     return HumanMessage(content=content)
 
 
+_TABLE_LINE_RE = re.compile(r"^[ \t]{0,3}\|")
+
+
+def _ensure_blank_line_before_tables(text: str) -> str:
+    """Markdownテーブルらしき行の直前に空行が無ければ挿入する。
+
+    LLMが「番号付きリストで一覧を書いた直後、空行を挟まずに表を書く」
+    ような出力をすると、Markdownパーサーは表を独立したブロックと認識できず
+    直前のリスト項目の続きの段落として飲み込んでしまう（実機検証で確認済み:
+    表が `<table>` ではなく直前の `<li>` に取り込まれ、セル内の
+    `![alt](パス)` も `<img src="">` — src が空文字列 — になり画像ごと
+    消える）。空行の挿入はMarkdownの意味を変えない安全な正規化なので、
+    LLMの出力形式に関わらず常に適用する。
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    for line in lines:
+        if _TABLE_LINE_RE.match(line) and out and out[-1].strip() != "" and not _TABLE_LINE_RE.match(out[-1]):
+            out.append("")
+        out.append(line)
+    return "\n".join(out)
+
+
 async def _send_answer(answer: cl.Message) -> None:
     """本回答メッセージを確定送信する（送信直前にローカル画像埋め込みを解決）。
 
@@ -1032,12 +1057,15 @@ async def _send_answer(answer: cl.Message) -> None:
     参照している場合、ストリーミング中は生パスのまま流れる（ブラウザは
     読めず一瞬壊れた画像アイコンになり得る）が、この確定送信の瞬間に
     data URL へ変換してからUIへ渡すことで最終表示を正しくする
-    （embed_local_images_as_data_urls 参照）。
+    （embed_local_images_as_data_urls 参照）。あわせて、表の直前に空行が
+    無いために表自体が描画されない問題（_ensure_blank_line_before_tables
+    参照）も正規化する。
     """
+    answer.content = _ensure_blank_line_before_tables(answer.content)
     answer.content = embed_local_images_as_data_urls(
         answer.content,
-        max_long_side=_config.image_max_long_side_pixels,
-        jpeg_quality=_config.image_jpeg_quality,
+        max_long_side=_config.image_inline_preview_max_long_side_pixels,
+        jpeg_quality=_config.image_inline_preview_jpeg_quality,
     )
     await answer.send()
 
@@ -1308,6 +1336,10 @@ async def _run_context_compaction(
     # 圧縮により古い履歴が要約へ置き換わったため、次にまた同じ閾値で
     # 即座に発火し続けないよう、メインエージェントの累積トークン数をリセットする。
     cl.user_session.set("token_usage_cumulative_main", _new_usage_totals())
+    # 要約後のモデルは要約に含まれなかった個々のツール呼び出しを覚えていない
+    # ため、Read/Glob等の重複呼び出しガードの履歴も合わせてリセットする
+    # （記憶が無いのにガードだけが残り、拒否され続けてループする問題を防ぐ）。
+    reset_call_history_guards_after_compaction()
     logging.getLogger(__name__).info(
         "コンテキスト圧縮を実行しました thread_id=%s messages=%d->%d",
         thread_id,

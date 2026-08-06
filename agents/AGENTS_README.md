@@ -74,7 +74,56 @@ read_memory, search_memory, list_memories
 - 委譲元に返るのは、サブエージェントが最後に返す「tool_calls を伴わないメッセージ」の content のみ。各 `agents/*.md` 本文が「最終回答を必ず書け、無言で終わるな」と強調しているのはこのため（空文字で終えると委譲元には何も伝わらない）。
 - `dispatch_agent` 実行中は `_IN_SUBAGENT` コンテキスト変数が `True` になる（2458行）。
 
-## 6. 計画承認（`create_plan`/`approve_plan`）による書き込みブロック
+## 6. 画像をチャットメッセージ・Markdownテーブルへ埋め込む場合の注意
+
+サブエージェントの最終回答（tool_calls を伴わない最後のメッセージの content）は、
+5節の通り `dispatch_agent` の**ツール結果**としてメインエージェントの会話履歴へ
+`ToolMessage` として積まれるだけであり、**ユーザーのブラウザへ直接表示される
+わけではない**。ユーザー画面に実際に描画されるのは、あくまでメインエージェント
+自身が最終的に生成する回答テキスト（`app.py` の `_send_answer()` が送信直前に
+処理する内容）だけである。
+
+`![説明](絶対パス)` によるMarkdown画像埋め込み（`src/images.py` の
+`embed_local_images_as_data_urls()` が data URL へ変換する仕組み。
+`skills/SKILLS_README.md` 4-5節参照）も例外ではない。サブエージェントが最終
+回答に `![説明](絶対パス)` を書いても、それだけでは画像は表示されない —
+**メインエージェントがそのMarkdown記法を改変せず自分の最終回答へそのまま
+転記して初めて**、送信直前の変換処理にかかり画像として表示される
+（`system_prompt.md` の「実務上の注意」節に、メインエージェント側へこの転記を
+促す指示がある）。
+
+画像プレビュー付きの表をユーザーへ見せる作業を `worker` 等へ委譲する場合、
+`agents/<name>.md` 側の指示文には次の2点を明記すること:
+
+1. 最終回答に**貼り付けてそのまま使える完成形のMarkdown**（表全体、または
+   `![説明](絶対パス)` の行そのもの）を書かせる。パスの説明文だけを返させて
+   メインエージェント側で組み立てさせようとすると、パスの書き写しミスや
+   `@N` の誤用（下記）が起きやすい。
+2. パスは**`@N`（パスメモリー参照）ではなく実際の絶対パス文字列**を使わせる。
+   `@N` はツール引数専用の解決対象であり、回答本文（Markdown）の中に書いても
+   解決されない（`skills/SKILLS_README.md` 4-5節参照）。`dispatch_agent` の
+   結果に含まれるパスはもともと `@N` ではなく解決済みの絶対パスなので、
+   そのまま使わせればよい。
+
+**テンプレート例**（画像を含む一覧表をユーザーへ返す委譲先の指示文の例。
+`worker.md` 等に記載する想定）:
+
+```markdown
+## 最終回答の書き方
+
+生成した画像をユーザーへ見せる場合は `show_image` を呼ばず、次の形式で
+そのまま最終回答へ書く（呼び出し元のメインエージェントがこの行をそのまま
+自分の回答へ転記して表示する）:
+
+    | No. | ファイル名 | プレビュー |
+    |---|---|---|
+    | 1 | out1.png | ![out1.png](C:\DT_Python\Locohane\data\temp\out1.png) |
+    | 2 | out2.png | ![out2.png](C:\DT_Python\Locohane\data\temp\out2.png) |
+
+パスは必ず絶対パスをそのまま書く（`@N` は使わない）。
+```
+
+## 7. 計画承認（`create_plan`/`approve_plan`）による書き込みブロック
 
 `worker.md` が使う `run_script`/`execute_python_code` は、計画未承認だとブロックされる。
 
@@ -82,7 +131,7 @@ read_memory, search_memory, list_memories
 - `cl.user_session` は Chainlit のセッションスコープ。メインエージェントの `create_plan`/`approve_plan`（同ファイル2563行/2607行、`plan_approved` を `cl.user_session.set`）が更新した値を、サブエージェント内から呼ばれるツールもそのまま参照する。**サブエージェント専用の特別なロジックは無く、セッション状態の共有のみで実現されている。**
 - したがって `explore`/`explore-docs`/`verifier` のように `execute_python_code`/`run_script` を持たない（または読み込み専用スクリプトしか呼ばない前提の）エージェントはこの制約と無関係だが、`worker` のように書き込み系ツールを持つエージェントは、委譲元で計画承認が済んでいないと途中でブロックされる。ブロックされた場合、サブエージェント自身は `approve_plan` を呼ぶ手段を持たないため、`worker.md` はリトライせず「計画未承認のため書き込みができなかった」旨を最終回答に明記するよう指示している。
 
-## 7. 新しいサブエージェント種別を追加する手順
+## 8. 新しいサブエージェント種別を追加する手順
 
 1. `agents/<agent-name>.md` を作成（frontmatter必須、`name` はファイル名(stem)と一致）。
 2. `tools:` に必要なツール名を `_SUBAGENT_TOOLS`（3節参照）の中から選んでカンマ区切りで列挙する（省略時は全ツール継承）。
@@ -90,7 +139,7 @@ read_memory, search_memory, list_memories
 4. **アプリを再起動する**（`app.py` の `_setup()` は起動後1回しか `scan_agent_types()` を呼ばない冪等関数のため、ホットリロードは無い。新規チャットセッションを開いただけでは再スキャンされない）。起動ログの `エージェント種別発見: <name>` を確認する。
 5. 実際にチャットから、メインエージェントが `dispatch_agent(agent_type="<agent-name>", ...)` を正しく呼び出し、サブエージェントが意図した最終回答を返すことを確認する。
 
-## 8. Anthropic（ClaudeCode）仕様との関係
+## 9. Anthropic（ClaudeCode）仕様との関係
 
 `agent_types.py` 冒頭コメント（3行）に「ClaudeCode の `.claude/agents/*.md` 相当」と明記されている通り、frontmatter形式（`name`/`description`/`tools`）・`tools` 省略時の全ツール継承・カンマ区切りを主形式とする書式は、Anthropic公式のサブエージェント仕様の挙動を踏襲している。
 

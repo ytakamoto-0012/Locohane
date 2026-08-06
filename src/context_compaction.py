@@ -203,12 +203,18 @@ async def maybe_compact(
         return None
 
     # 要約対象自体が長大だと要約プロンプト自体のプリフィルが遅くなるため、
-    # context_trim と同じ切り詰めを要約対象にも適用してから渡す
+    # context_trim と同様の切り詰めを要約対象にも適用してから渡す
     # （keep_recent=0: 要約対象内では「直近だから全文保持」は意味を持たない）。
+    # ただし max_chars は [context_trim] のものを流用せず、要約専用の
+    # context_compaction_summary_source_max_chars を使う。要約は永続履歴を
+    # 置き換える恒久的な操作のため、プリフィル短縮目的の[context_trim]と
+    # 同じ小さめの値を使うと、要約対象のツール結果がまとめて情報欠落し、
+    # 要約が内容の薄いものになりうる（例: 大量ファイル処理タスクで
+    # ファイル名の列挙しか残らない）。
     trimmed_old = trim_old_tool_messages(
         old_messages,
         keep_recent=0,
-        max_chars=config.context_trim_truncated_max_chars,
+        max_chars=config.context_compaction_summary_source_max_chars,
     )
     text = _messages_to_text(trimmed_old)
     if not text.strip():
