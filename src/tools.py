@@ -850,31 +850,37 @@ def read_skill_file(relative_path: str) -> str:
 
 
 @tool
-def provide_download(file_path: str) -> str:
+def provide_download(file_paths: list[str]) -> str:
     """既存のファイルをチャット画面にダウンロードボタンとして提示する。
 
     アップロード済みファイルや、Read/Glob 等で見つけた既存ファイル、以前の
     作業で生成済みのファイルなどを、あらためてユーザーがダウンロードできる
     ようにしたいときに使う。Read 等と同様にパスの制限は行わない
-    （ローカルファイルシステム上の任意の絶対パスを指定できる）。
+    （ローカルファイルシステム上の任意の絶対パスを指定できる）。複数指定
+    した場合、1つのメッセージにダウンロードボタンがまとめて並んで表示
+    される（1件だけの場合はリストに1件だけ入れて渡す）。
 
     Args:
-        file_path: ダウンロードさせたいファイルの絶対パス（相対パスの場合は
-            セッションの作業ディレクトリ基準で解決する）。
+        file_paths: ダウンロードさせたいファイルの絶対パスのリスト
+            （相対パスの場合はセッションの作業ディレクトリ基準で解決する）。
 
     Returns:
-        成功時: {"output_path": "..."} 形式のJSON文字列
-            （自動的にチャットへダウンロードボタンが表示される）。
-        失敗時: 「エラー: ...」形式の文字列。
+        成功時: {"output_paths": ["...", ...]} 形式のJSON文字列
+            （自動的にチャットへダウンロードボタンがまとめて表示される）。
+        1件でも見つからないファイルがあれば「エラー: ...」形式の文字列を
+            返す（部分的な成功はしない）。
     """
-    path = Path(file_path)
-    if not path.is_absolute():
-        path = _resolve_workdir() / path
-    path = path.resolve()
-    if not path.is_file():
-        return f"エラー: ファイルが見つかりません: {file_path}"
-    logger.info("provide_download: %s", path)
-    return json.dumps({"output_path": str(path)}, ensure_ascii=False)
+    resolved: list[Path] = []
+    for file_path in file_paths:
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = _resolve_workdir() / path
+        path = path.resolve()
+        if not path.is_file():
+            return f"エラー: ファイルが見つかりません: {file_path}"
+        resolved.append(path)
+    logger.info("provide_download: %s", resolved)
+    return json.dumps({"output_paths": [str(p) for p in resolved]}, ensure_ascii=False)
 
 
 @tool

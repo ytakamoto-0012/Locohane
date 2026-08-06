@@ -67,7 +67,7 @@ from src.cleanup import run_cleanup_dirs_loop as cleanup_run_cleanup_dirs_loop
 from src.cleanup import run_cleanup_loop as cleanup_run_cleanup_loop
 from src.config import expand_config_vars, load_config
 from src.context_compaction import maybe_compact, should_compact
-from src.files import extract_generated_file
+from src.files import extract_generated_files
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
 from src.images import is_image_file, load_image_bytes, to_data_url
 from src.llm import (
@@ -1630,15 +1630,18 @@ async def on_message(message: cl.Message) -> None:
                                 )
                             ).send()
                         if isinstance(content, str):
-                            generated = extract_generated_file(content)
-                            if generated is not None:
-                                if is_image_file(generated):
-                                    element = cl.Image(name=generated.name, path=str(generated), display="inline")
-                                else:
-                                    element = cl.File(name=generated.name, path=str(generated))
+                            generated = extract_generated_files(content)
+                            if generated:
+                                elements = [
+                                    cl.Image(name=path.name, path=str(path), display="inline")
+                                    if is_image_file(path)
+                                    else cl.File(name=path.name, path=str(path))
+                                    for path in generated
+                                ]
+                                names = "、".join(path.name for path in generated)
                                 await cl.Message(
-                                    content=f"生成ファイル: {generated.name}",
-                                    elements=[element],
+                                    content=f"生成ファイル: {names}",
+                                    elements=elements,
                                 ).send()
                     # 実行計画がユーザーに却下された直後。ツール結果の文言・
                     # system_prompt.mdの指示だけに頼ると、LLMが計画を微修正して

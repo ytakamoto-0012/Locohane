@@ -91,23 +91,31 @@ LLMがどのスキルを読むか・どのスクリプトを叩くかは**すべ
 
 JSON化は必須ではない（`git-commit-style` のように知識のみでスクリプトを持たないスキルもある）が、構造化データを返す場合はこの規約に従うと `SKILL.md` の手順が書きやすい。
 
-### 4-4. ファイルを生成するスキルの追加規約: `output_path`
+### 4-4. ファイルを生成するスキルの追加規約: `output_path` / `output_paths`
 
 `pdf-tools`/`pptx-tools` のように、スクリプトが新規ファイル（PDF/PPTX/DOCX/XLSX等）を
 生成する場合は、正常終了時のJSON出力に **`output_path` キー（生成した絶対パスの文字列）を
-必ず含める**こと。
+必ず含める**こと。1回の実行で複数ファイルを生成し、それらをまとめて1メッセージの
+ダウンロードボタン列として見せたい場合は、代わりに **`output_paths` キー（絶対パスの
+文字列のリスト）** を使う（両方存在する場合は `output_paths` が優先される）。
 
 `app.py` の `on_tool_end` はツール結果の文字列から `src/files.py` の
-`extract_generated_file()` を使ってこのキーを自動検出し、実在するファイルであれば
-Chainlit UI上に `cl.File` 付きメッセージとしてダウンロード可能な添付を自動送信する
-（ツール名やスキル名による分岐は行わないため、この規約さえ守れば新しい生成スキルを
-追加しても `app.py` 側のコード変更は一切不要）。
+`extract_generated_files()` を使ってこれらのキーを自動検出し、実在するファイルであれば
+Chainlit UI上に `cl.File`（または画像なら `cl.Image`）付きメッセージとしてダウンロード
+可能な添付を自動送信する（ツール名やスキル名による分岐は行わないため、この規約さえ
+守れば新しい生成スキルを追加しても `app.py` 側のコード変更は一切不要）。複数件でも
+1つのメッセージにまとめてボタンが並ぶ。
 
 ```json
 {"output_path": "C:\\foo\\out.pptx", "total_slides": 4, "size_bytes": 34200}
 ```
 
-`output_path` 以外のキー名（`path`、`file` 等）では検出されない点に注意。
+```json
+{"output_paths": ["C:\\foo\\out1.pdf", "C:\\foo\\out2.pdf"]}
+```
+
+`output_path` / `output_paths` 以外のキー名（`path`、`file`、`paths` 等）では検出
+されない点に注意。
 
 ### 4-5. 画像をチャットメッセージ・Markdownテーブルへ埋め込む規約
 
