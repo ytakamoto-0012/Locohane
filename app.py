@@ -1150,20 +1150,34 @@ class _CompactionCheckpoint(Exception):
 
 
 def _find_orphaned_tool_calls(messages: list) -> list[dict]:
-    """直近のAIMessageのtool_callsのうち、対応するToolMessageがまだ無いものを返す。
+    """全AIMessageのtool_callsのうち、対応するToolMessageがまだ無いものを返す。
 
     停止ボタン等によるCancelledErrorでターンが中断された場合、チェックポイントに
     コミット済みのAIMessage(tool_calls)に対し、ToolNodeが生成するはずだった
     ToolMessageが記録されないまま終わることがある（_PlanDeniedInterruptの
     docstring参照）。次回グラフ実行前にこの孤立を検出するために使う。
+
+    以前は末尾のAIMessageだけを見ていたが、孤立tool_callの発生後に
+    loop_nudge等の後続メッセージが追記される・コンテキスト圧縮で圧縮後の
+    保持ウィンドウの途中に残る、といった経路で孤立tool_callが末尾ではなく
+    なるケースがあり検出漏れになっていた（issue/20260804_234928_
+    orphaned_tool_call_dual_session_freeze.md の再発）。langgraphの
+    _validate_chat_history と同じく、履歴全体を対象に判定する。
     """
-    if not messages:
-        return []
-    last = messages[-1]
-    tool_calls = getattr(last, "tool_calls", None)
-    if not tool_calls:
-        return []
-    return list(tool_calls)
+    answered_ids = {m.tool_call_id for m in messages if isinstance(m, ToolMessage)}
+    orphaned: list[dict] = []
+    seen_ids: set[str] = set()
+    for m in messages:
+        tool_calls = getattr(m, "tool_calls", None)
+        if not tool_calls:
+            continue
+        for tc in tool_calls:
+            tc_id = tc["id"]
+            if tc_id in answered_ids or tc_id in seen_ids:
+                continue
+            seen_ids.add(tc_id)
+            orphaned.append(tc)
+    return orphaned
 
 
 async def _repair_orphaned_tool_calls(graph, config: dict) -> int:
