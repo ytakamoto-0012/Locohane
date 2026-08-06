@@ -111,3 +111,30 @@ async def run_cleanup_loop(
     while True:
         await asyncio.sleep(interval_seconds)
         cleanup_old_files(directory, retention_days, pattern)
+
+
+async def run_cleanup_dirs_loop(
+    directory: Path, retention_days: int, interval_hours: float, pattern: str = "*"
+) -> None:
+    """interval_hours 間隔で cleanup_old_dirs を回し続ける常駐タスク。
+
+    run_cleanup_loop のディレクトリ単位版（Chainlitのセッションファイル
+    配信ディレクトリ `.files/<session_id>/` のように、ファイルではなく
+    サブディレクトリ単位で溜まっていくものを対象にする場合に使う）。
+
+    Args:
+        directory: チェック対象のディレクトリ。
+        retention_days: 保持日数。0以下の場合は即座に return する。
+        interval_hours: チェック間隔（時間）。
+        pattern: cleanup_old_dirs に渡す glob パターン（既定 "*"）。
+
+    Returns:
+        None。
+    """
+    if retention_days <= 0:
+        return
+
+    interval_seconds = interval_hours * 3600
+    while True:
+        await asyncio.sleep(interval_seconds)
+        cleanup_old_dirs(directory, retention_days, pattern)

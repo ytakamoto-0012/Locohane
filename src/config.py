@@ -208,6 +208,12 @@ class Config:
             過ぎた（更新日時が古い）ファイルは自動削除する。0以下で無効化。
         upload_cleanup_interval_hours: アップロードファイル自動削除の
             チェック間隔（時間）。起動時にも1回チェックする。
+        chainlit_files_retention_days: Chainlit自身のセッションファイル
+            ディレクトリ（`.files/<セッションID>/`。show_image・回答本文への
+            画像埋め込みが使う）の保持日数。ディレクトリ単位で削除する
+            （src/cleanup.py の cleanup_old_dirs 参照）。0以下で無効化。
+        chainlit_files_cleanup_interval_hours: 上記の自動削除チェック間隔
+            （時間）。起動時にも1回チェックする。
         image_max_long_side_pixels: 画像をLLMへ渡す前に縮小する際の、長辺の
             ピクセル数の上限。0以下、または画像の長辺が既にこの値以下の
             場合は縮小しない（src/images.py の to_data_url 参照）。
@@ -485,6 +491,10 @@ class Config:
     # --- アップロードファイルの自動削除 ---
     upload_retention_days: int
     upload_cleanup_interval_hours: float
+
+    # --- Chainlitセッションファイルディレクトリ（.files/）の自動削除 ---
+    chainlit_files_retention_days: int
+    chainlit_files_cleanup_interval_hours: float
 
     # --- 画像をLLMへ渡す前の縮小 ---
     image_max_long_side_pixels: int
@@ -1010,6 +1020,7 @@ def load_config(config_path: Path | None = None) -> Config:
     llm = parser["llm"] if parser.has_section("llm") else {}
     paths = parser["paths"] if parser.has_section("paths") else {}
     uploads = parser["uploads"] if parser.has_section("uploads") else {}
+    chainlit_files = parser["chainlit_files"] if parser.has_section("chainlit_files") else {}
     images_section = parser["images"] if parser.has_section("images") else {}
     default_workdir_section = parser["default_workdir"] if parser.has_section("default_workdir") else {}
     path_memory = parser["path_memory"] if parser.has_section("path_memory") else {}
@@ -1110,6 +1121,10 @@ def load_config(config_path: Path | None = None) -> Config:
         help_path=_resolve(PROJECT_ROOT, os.getenv("HELP_PATH", paths.get("help_path", "./system_prompt/help.md"))),
         upload_retention_days=int(os.getenv("UPLOAD_RETENTION_DAYS", uploads.get("retention_days", 7))),
         upload_cleanup_interval_hours=float(os.getenv("UPLOAD_CLEANUP_INTERVAL_HOURS", uploads.get("cleanup_interval_hours", 1))),
+        chainlit_files_retention_days=int(os.getenv("CHAINLIT_FILES_RETENTION_DAYS", chainlit_files.get("retention_days", 7))),
+        chainlit_files_cleanup_interval_hours=float(
+            os.getenv("CHAINLIT_FILES_CLEANUP_INTERVAL_HOURS", chainlit_files.get("cleanup_interval_hours", 1))
+        ),
         image_max_long_side_pixels=int(os.getenv("IMAGE_MAX_LONG_SIDE_PIXELS", images_section.get("max_long_side_pixels", 0))),
         image_jpeg_quality=int(os.getenv("IMAGE_JPEG_QUALITY", images_section.get("jpeg_quality", 85))),
         image_inline_preview_max_long_side_pixels=int(

@@ -384,10 +384,13 @@ Locohane/
 | `data/uploads/` | Chainlit にアップロードされたファイル | アップロード資料が不要になったとき | フォルダ内を削除 |
 | `data/logs/app.log` | アプリの動作ログ | いつでも | ファイルを削除 |
 | `data/memory/` | 永続メモリー（`user`/`feedback`/`project`/`reference` サブフォルダ＋`MEMORY.md`索引） | 蓄積した記憶が不要になったとき | フォルダ内を削除（`MEMORY.md`は次回保存時に再生成される） |
+| `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（`show_image`・回答本文への画像埋め込みが使う。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
 
 `data/uploads/` は `config.ini` の `[uploads] retention_days`（既定7日）を過ぎたファイルを
 `cleanup_interval_hours`（既定1時間）おきに自動削除する。`retention_days` を0以下にすると
-自動削除は無効化される。
+自動削除は無効化される。`.files/` も `[chainlit_files] retention_days`（既定7日）・
+`cleanup_interval_hours`（既定1時間）で同様に自動削除される（Chainlit自身のパス管理下に
+あるため `dir` キーは無い。ディレクトリ単位＝セッションIDごとに削除する点が他と異なる）。
 
 手動全削除（PowerShell / cmd、アプリ停止中に実行）:
 
@@ -694,6 +697,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[uploads]` | `dir` | アップロード保存先 | `UPLOAD_DIR` |
 | `[uploads]` | `retention_days` | アップロードファイルの保持日数（0以下で自動削除無効） | `UPLOAD_RETENTION_DAYS` |
 | `[uploads]` | `cleanup_interval_hours` | 自動削除チェックの実行間隔（時間） | `UPLOAD_CLEANUP_INTERVAL_HOURS` |
+| `[chainlit_files]` | `retention_days` | Chainlit自身のセッションファイルディレクトリ（`.files/<セッションID>/`）の保持日数（0以下で自動削除無効）。ディレクトリ単位で削除 | `CHAINLIT_FILES_RETENTION_DAYS` |
+| `[chainlit_files]` | `cleanup_interval_hours` | 自動削除チェックの実行間隔（時間） | `CHAINLIT_FILES_CLEANUP_INTERVAL_HOURS` |
 | `[images]` | `max_long_side_pixels` | LLMへ渡す前に画像を縮小する長辺ピクセル数の上限（`0`で縮小なし） | `IMAGE_MAX_LONG_SIDE_PIXELS` |
 | `[images]` | `jpeg_quality` | 縮小後に再エンコードするJPEG品質（1-95） | `IMAGE_JPEG_QUALITY` |
 | `[images]` | `inline_preview_max_long_side_pixels` | 回答本文（Markdownテーブルのセル等）へ直接埋め込む画像プレビューの長辺ピクセル数の上限。`show_image`と同じセッションファイル配信経路で渡すためVision向け設定より小さくても差し支えなく、表示帯域・ディスク使用量を抑える目的で別に小さい値を使う | `IMAGE_INLINE_PREVIEW_MAX_LONG_SIDE_PIXELS` |

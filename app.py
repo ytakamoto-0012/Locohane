@@ -53,6 +53,7 @@ import uuid
 
 import aiosqlite
 import chainlit as cl
+from chainlit.config import FILES_DIRECTORY as CHAINLIT_FILES_DIRECTORY
 from chainlit.input_widget import TextInput
 from chainlit.utils import utc_now
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
@@ -62,6 +63,7 @@ from langgraph.errors import GraphRecursionError
 from src.agent_types import render_agent_types_block, scan_agent_types
 from src.chat_log import append_turn, build_log_path, resolve_log_username
 from src.cleanup import cleanup_old_dirs, cleanup_old_files
+from src.cleanup import run_cleanup_dirs_loop as cleanup_run_cleanup_dirs_loop
 from src.cleanup import run_cleanup_loop as cleanup_run_cleanup_loop
 from src.config import expand_config_vars, load_config
 from src.context_compaction import maybe_compact, should_compact
@@ -597,6 +599,21 @@ async def _setup() -> None:
                 _config.upload_dir,
                 _config.upload_retention_days,
                 _config.upload_cleanup_interval_hours,
+            )
+        )
+
+    # show_image・回答本文への画像埋め込み（_embed_local_images_as_session_urls）が
+    # 使う Chainlit 自身のセッションファイルディレクトリ（.files/<セッションID>/）も
+    # 同様に日数ベースで自動削除する。Chainlit自身にもブラウザ切断時の削除処理は
+    # あるが、プロセス再起動等では確実に働くとは限らないための保険（ファイルでは
+    # なくセッションID単位のディレクトリを削除するため cleanup_old_dirs を使う）。
+    cleanup_old_dirs(CHAINLIT_FILES_DIRECTORY, _config.chainlit_files_retention_days)
+    if _config.chainlit_files_retention_days > 0:
+        asyncio.create_task(
+            cleanup_run_cleanup_dirs_loop(
+                CHAINLIT_FILES_DIRECTORY,
+                _config.chainlit_files_retention_days,
+                _config.chainlit_files_cleanup_interval_hours,
             )
         )
 
