@@ -698,8 +698,17 @@ End Sub
 
 ## 4. render_excel.py — Excelページを画像化してLLMに見せる
 
-表の罫線・書式・グラフ・レイアウトを確認したいとき、`read_excel.py` で
-数値だけ取れても「どのように表示されているか」を知りたいときに使います。
+`read_excel.py` で数値やテキストは取得できても、罫線・書式・グラフ・レイアウト
+などデータだけでは読み取れない情報があるため、シートの意図をより高精度に汲み取り
+たいときはこちらを使って画像として内容を確認します。
+
+PDF化する前に各シートの印刷設定を「横1ページ×縦1ページ」に収まるフィット印刷
+（`PageSetup.Zoom=False` + `FitToPagesWide=1` + `FitToPagesTall=1`）へ自動的に
+強制しています。これにより、シートの使用範囲が用紙サイズを超えて複数ページに
+分割される（＝画像が細切れになる）ことを防ぎます。PDF→画像化は600DPIの高解像度
+で行い余白除去（クロップ）の精度を確保した上で、最終的にLLMへ渡す目標DPI（既定
+300、1ページに収める分文字が小さくなりやすいため150〜300の上限寄り）まで
+ダウンスケールします。
 
 呼び出し例:
 ```json
@@ -709,16 +718,16 @@ End Sub
     "script_args": ["C:\\Users\\me\\book.xlsx", "--start-page", "1", "--max-pages", "3"]
 }
 ```
-`--start-page`/`--max-pages`（既定3、最大5にクランプ）/`--dpi`（既定300、
-72〜600にクランプ）/`--no-crop`（余白除去をオフ）は省略可。
+`--start-page`/`--max-pages`（既定3、最大5にクランプ）/`--dpi`（既定600、
+72〜600にクランプ、PDF→画像化時の解像度）/`--no-crop`（余白除去をオフ）は省略可。
 
 出力例:
 ```json
-{"path": "C:\\foo\\book.xlsx", "tool": "excel", "total_pages": 5, "start_page": 1, "end_page": 3, "dpi": 300, "target_dpi": 150, "crop_applied": true,
+{"path": "C:\\foo\\book.xlsx", "tool": "excel", "total_pages": 5, "start_page": 1, "end_page": 3, "dpi": 600, "target_dpi": 300, "crop_applied": true,
  "images": [
-   {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300, "cropped": true},
-   {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300, "cropped": true},
-   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300, "cropped": true}
+   {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 600, "cropped": true},
+   {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 600, "cropped": true},
+   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 600, "cropped": true}
  ]}
 ```
 

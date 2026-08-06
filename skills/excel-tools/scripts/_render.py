@@ -37,7 +37,11 @@ _PROG_ID = {
 _DEFAULT_RENDER_DPI = 300
 
 # 目標 DPI（余白除去後の縮尺）
-_TARGET_DPI = 150
+# PDF→画像化は600DPIの高解像度で行い、余白除去（クロップ）の精度を確保した上で、
+# 最終的にLLMへ渡すサイズとして扱いやすい解像度（150〜300DPI）までダウンスケールする。
+# 横1ページ×縦1ページに収める印刷設定でシートが縮小される分、下限寄りの150では
+# 文字がつぶれやすいため、上限寄りの300を既定にしている。
+_TARGET_DPI = 300
 
 # 白黒境界判定の閾値（ピクセルあたりの黒画素率。これ未満なら白＝余白）
 _MARGIN_THRESHOLD = 0.02  # 2%未満の黒画素なら余白とみなす
@@ -48,11 +52,11 @@ _MARGIN_THRESHOLD = 0.02  # 2%未満の黒画素なら余白とみなす
 # ---------------------------------------------------------------------------
 
 
-def _convert_office_to_pdf(path: Path, tool: str) -> Path:
+def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
     """OfficeファイルをOLE（COM）で開き、一時PDFへエクスポートする。
 
     tool: "excel" | "pptx" | "docx"
-    戻り値: 生成されたPDFのパス
+    戻り値: 生成されたPDFのパス（セッション専用一時フォルダ `_tmp_<thread_id>/pdf_export/` 配下）
     """
     import pythoncom
     import win32com.client as win32
@@ -72,10 +76,29 @@ def _convert_office_to_pdf(path: Path, tool: str) -> Path:
 
         abs_path = os.path.abspath(path)
 
+        # 中間生成物のPDFは元ファイルのフォルダを汚さないよう、他の一時出力
+        # （_render_pdf_to_images の画像など）と同じ `_tmp_<thread_id>/` 配下に
+        # 保存する。会話終了時に自動削除される。
+        out_dir = Path.cwd() / f"_tmp_{thread_id}" / "pdf_export"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha1(abs_path.encode("utf-8")).hexdigest()[:8]
+        pdf_path = str(out_dir / f"{tool}_{digest}_export.pdf")
+
         if tool == "excel":
             # Workbook → PDF (xlTypePDF = 0)
             doc = app.Workbooks.Open(abs_path)
-            pdf_path = os.path.join(os.path.dirname(abs_path), f"_tmp_{tool}_export.pdf")
+            # 印刷設定を「横1ページ×縦1ページ」に収めるフィット印刷へ強制する。
+            # これをしないとシートの使用範囲が用紙サイズ基準で複数ページに分割
+            # され、PDF化後の画像が細切れになる。Zoom=False は FitToPagesWide/
+            # Tall を有効にするために先に設定する必要がある（Excel COMの仕様）。
+            for ws in doc.Worksheets:
+                try:
+                    page_setup = ws.PageSetup
+                    page_setup.Zoom = False
+                    page_setup.FitToPagesWide = 1
+                    page_setup.FitToPagesTall = 1
+                except Exception:
+                    continue
             # Quality は XlFixedFormatQuality（xlQualityStandard=0）の整数指定が必要
             doc.ExportAsFixedFormat(0, pdf_path, Quality=0, IncludeDocProperties=True, IgnorePrintAreas=False, OpenAfterPublish=False)
             doc.Close(SaveChanges=False)
@@ -83,14 +106,12 @@ def _convert_office_to_pdf(path: Path, tool: str) -> Path:
         elif tool == "pptx":
             # Presentation → PDF (ppSaveAsPDF = 32)
             doc = app.Presentations.Open(abs_path, ReadOnly=True, Untitled=False, WithWindow=False)
-            pdf_path = os.path.join(os.path.dirname(abs_path), f"_tmp_{tool}_export.pdf")
             doc.SaveAs(pdf_path, 32)
             doc.Close()
 
         elif tool == "docx":
             # Document → PDF (wdFormatPDF = 17)
             doc = app.Documents.Open(abs_path, ReadOnly=False, Revert=True)
-            pdf_path = os.path.join(os.path.dirname(abs_path), f"_tmp_{tool}_export.pdf")
             doc.SaveAs2(pdf_path, 17)
             doc.Close(SaveChanges=False)
 
@@ -175,10 +196,11 @@ def _detect_content_bbox(image_path: Path) -> tuple[int, int, int, int] | None:
     return (left, top, right, bottom)
 
 
-def _crop_image(image_path: Path, bbox: tuple[int, int, int, int], target_dpi: int) -> Path:
+def _crop_image(image_path: Path, bbox: tuple[int, int, int, int], target_dpi: int, source_dpi: int) -> Path:
     """bbox で画像をクロップし、目標 DPI に縮尺して保存。
 
     target_dpi: 目標DPI（画像の解像度を調整）
+    source_dpi: 元画像の実際の描画DPI（_render_pdf_to_images に渡した dpi）
     戻り値: 保存先パス
     """
     from PIL import Image
@@ -191,8 +213,8 @@ def _crop_image(image_path: Path, bbox: tuple[int, int, int, int], target_dpi: i
 
     cropped = img.crop((left, top, right + 1, bottom + 1))
 
-    # 目標 DPI に縮尺（元画像は _DEFAULT_RENDER_DPI で描画済み）
-    scale = target_dpi / _DEFAULT_RENDER_DPI
+    # 目標 DPI に縮尺（元画像は source_dpi で描画済み）
+    scale = target_dpi / source_dpi
 
     if abs(scale - 1.0) > 0.01:
         new_size = (
@@ -299,7 +321,7 @@ def render_office_file(
     max_pages = min(max(max_pages, 1), 5)
 
     # 1. OLE → PDF 変換
-    pdf_path = _convert_office_to_pdf(path, tool)
+    pdf_path = _convert_office_to_pdf(path, tool, thread_id)
 
     # PDFの総ページ数を取得（PDF→画像化の前に取得）
     try:
@@ -330,7 +352,7 @@ def render_office_file(
             img_path = Path(img_info["image_path"])
             bbox = _detect_content_bbox(img_path)
             if bbox is not None:
-                cropped_path = _crop_image(img_path, bbox, target_dpi)
+                cropped_path = _crop_image(img_path, bbox, target_dpi, dpi)
                 img_info["image_path"] = str(cropped_path)
                 img_info["cropped"] = True
                 crop_applied = True

@@ -6,10 +6,11 @@ run_script ツールから
 の形で呼ばれる。
 
 動作概要:
-  1. OLE（COM）で Excel をヘッドレス起動し、ファイルをPDFへエクスポート。
-  2. pypdfium2 で PDF ページを画像化（既定300DPI）。
+  1. OLE（COM）で Excel をヘッドレス起動し、各シートの印刷設定を横1ページ×
+     縦1ページに収まるフィット印刷へ強制した上でファイルをPDFへエクスポート。
+  2. pypdfium2 で PDF ページを画像化（既定600DPI）。
   3. 白黒境界判定で余白を除去（既定）。
-  4. 目標DPI（150）に縮尺して保存。
+  4. 目標DPI（300）に縮尺して保存。
 
 生成したPNGは、作業ディレクトリ配下のセッション専用一時フォルダ
 `_tmp_<thread_id>/rendered/` に保存する。
@@ -38,7 +39,7 @@ def main() -> int:
     parser.add_argument("excel_path")
     parser.add_argument("--start-page", type=int, default=1)
     parser.add_argument("--max-pages", type=int, default=3)
-    parser.add_argument("--dpi", type=int, default=300)
+    parser.add_argument("--dpi", type=int, default=600)
     parser.add_argument("--no-crop", action="store_true",
                         help="余白除去を行わない")
     args = parser.parse_args()
