@@ -188,7 +188,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `read_skill_file` | skills ディレクトリ配下のファイルを読み込む（references/assets 等。progressive disclosure 第3段階） |
 | `run_script` | スキルの scripts/ 配下のスクリプトを実行する（要承認。`config.ini` で承認不要に切替可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `run_script_background` を使う |
 | `run_script_background` | `run_script` と同じスクリプトをバックグラウンドで起動し、即座に `job_id` を返す（要承認は同様）。完了を待たずエージェントのターンを解放する |
-| `check_script_job` | `run_script_background` のジョブの状況（実行中の経過秒数・途中出力）または最終結果を取得する |
+| `check_script_job` | `run_script_background` のジョブの状況（実行中の経過秒数・途中出力）または最終結果を取得する。実行中ジョブへの連続呼び出しは `[scripts].background_min_poll_interval_seconds` 未満の間隔だとサーバー側で拒否される |
 | `stop_script_job` | `run_script_background` のジョブを強制終了する |
 | `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `execute_python_code_background` を使う。code内で `@N`（パスメモリ）を参照する場合は `AGENT_SRC_DIR` 環境変数経由で `path_memory.resolve()` を呼んで実パスへ展開する必要がある。実行前ガードにより `src/`・`app.py`・`config.ini`・`skills/` 等プロジェクトフォルダ配下への書き込み・削除・改名は `default_workdir` 配下を除き自動的にブロックされる |
 | `execute_python_code_background` | `execute_python_code` と同じコードをバックグラウンドで起動し、即座に `job_id` を返す（要承認・`config.ini` での無効化・パスメモリ展開・プロジェクトフォルダ保護ガードは同様）。完了を待たずエージェントのターンを解放し、状況確認・停止は `run_script_background` と共通の `check_script_job`/`stop_script_job` を使う |
@@ -703,6 +703,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[scripts]` | `code_execution_enabled` | `execute_python_code` ツール自体の有効/無効 | `CODE_EXECUTION_ENABLED` |
 | `[scripts]` | `background_max_runtime_seconds` | `run_script_background` のジョブを強制終了するまでの上限秒 | `SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS` |
 | `[scripts]` | `background_job_retention_seconds` | `run_script_background` の完了済みジョブが `check_script_job` で未回収のまま残ってよい秒数 | `SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS` |
+| `[scripts]` | `background_min_poll_interval_seconds` | `check_script_job` を同一ジョブへ再度呼べるまでの最短間隔秒（0以下で無効化） | `SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS` |
 | `[file_tools_duplicate_guard]` | `enabled` | Read/Glob/Grep/json_query ツールの同一引数繰り返し呼び出しを防止するガードの有効/無効 | `FILE_TOOLS_DUPLICATE_GUARD_ENABLED` |
 | `[file_tools_duplicate_guard]` | `max_calls` | 同一シグネチャの呼び出しを許可する回数（既定1回） | `FILE_TOOLS_DUPLICATE_GUARD_MAX_CALLS` |
 | `[file_tools_duplicate_guard]` | `carry_over_to_main` | サブエージェント内の呼び出し履歴をメイン判定へ持ち越すかどうか | `FILE_TOOLS_DUPLICATE_GUARD_CARRY_OVER` |

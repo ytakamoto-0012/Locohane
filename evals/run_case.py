@@ -357,6 +357,7 @@ async def _run(case: EvalCase) -> dict:
             dispatch_agent_max_parallel=config.subagent_max_parallel,
             script_background_max_runtime_seconds=config.script_background_max_runtime_seconds,
             script_background_job_retention_seconds=config.script_background_job_retention_seconds,
+            script_background_min_poll_interval_seconds=config.script_background_min_poll_interval_seconds,
             plans_dir=config.plans_dir,
         )
 

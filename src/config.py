@@ -225,6 +225,10 @@ class Config:
             ジョブが完了・失敗・タイムアウト等で終了した後、check_script_job で
             一度も取得されないまま registry に残ってよい秒数。超過分は次回の
             run_script_background 呼び出し時に破棄される。
+        script_background_min_poll_interval_seconds: check_script_job が
+            「実行中」ステータスを返した直後、同じジョブへの次の
+            check_script_job 呼び出しを許可するまでの最短間隔秒数
+            （src/tools.py 参照）。0以下で無効化（強制なし）。
         script_plan_approval_exempt_scripts: run_script/run_script_background
             の計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト（{(スキル名, スクリプトファイル名), ...}）。
@@ -464,6 +468,7 @@ class Config:
     # --- run_script_background 用設定 ---
     script_background_max_runtime_seconds: int
     script_background_job_retention_seconds: int
+    script_background_min_poll_interval_seconds: int
 
     # --- run_script/run_script_background の計画承認免除ホワイトリスト ---
     script_plan_approval_exempt_scripts: frozenset[tuple[str, str]]
@@ -1029,6 +1034,12 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS",
                 scripts.get("background_job_retention_seconds", 1800),
+            )
+        ),
+        script_background_min_poll_interval_seconds=int(
+            os.getenv(
+                "SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS",
+                scripts.get("background_min_poll_interval_seconds", 20),
             )
         ),
         script_plan_approval_exempt_scripts=_parse_plan_approval_exempt_scripts(

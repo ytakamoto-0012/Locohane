@@ -181,6 +181,7 @@ _SCRIPT_TIMEOUT: int = 60
 _CODE_EXEC_ENABLED: bool = False
 _SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS: int = 3600
 _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS: int = 1800
+_SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS: int = 20
 _DEFAULT_WORKDIR: Path | None = None
 _LLM_CONFIG: Config | None = None
 _AGENT_TYPES: dict[str, ResolvedAgentType] = {}
@@ -241,6 +242,7 @@ def init_tools(
     graph_tool_max_parallel: int = 1,
     script_background_max_runtime_seconds: int = 3600,
     script_background_job_retention_seconds: int = 1800,
+    script_background_min_poll_interval_seconds: int = 20,
     plan_approval_exempt_scripts: Iterable[tuple[str, str]] = (),
     plans_dir: Path | None = None,
 ) -> None:
@@ -318,6 +320,14 @@ def init_tools(
             ジョブが終了後、check_script_job で一度も取得されないまま
             registry に残ってよい秒数（config.ini の
             [scripts].background_job_retention_seconds 由来）。
+        script_background_min_poll_interval_seconds: check_script_job が
+            「実行中」ステータスを返した直後、同じジョブへの次の
+            check_script_job 呼び出しを許可するまでの最短間隔秒数。
+            SKILL.md やツールのdocstringでLLMに「数秒おきに呼び直さない」
+            よう指示しても、指示に従わないローカルLLMでは無視され得るため、
+            サーバー側で強制する（config.ini の
+            [scripts].background_min_poll_interval_seconds 由来）。
+            0以下を指定すると強制を無効化する。
         plan_approval_exempt_scripts: run_script/run_script_background の
             計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト。(skill_name, script_filename) の
@@ -333,6 +343,7 @@ def init_tools(
     global _SKILLS_ROOTS, _SCRIPT_PYTHON, _SCRIPT_TIMEOUT
     global _CODE_EXEC_ENABLED
     global _SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS, _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS
+    global _SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS
     global _DEFAULT_WORKDIR, _LLM_CONFIG, _AGENT_TYPES, _SUBAGENT_MAX_ITERATIONS
     global _MEMORY_ROOT
     global _PLANS_DIR
@@ -351,6 +362,7 @@ def init_tools(
     _CODE_EXEC_ENABLED = code_exec_enabled
     _SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS = script_background_max_runtime_seconds
     _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS = script_background_job_retention_seconds
+    _SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS = script_background_min_poll_interval_seconds
     _PLAN_APPROVAL_EXEMPT_SCRIPTS = set(plan_approval_exempt_scripts)
     _DEFAULT_WORKDIR = Path(default_workdir).resolve()
     _LLM_CONFIG = llm_config
@@ -1626,6 +1638,12 @@ class _BackgroundJob:
     workdir: "Path | None" = None
     before_snapshot: "dict[Path, float] | None" = None
     fell_back: bool = False
+    # check_script_job が直前に「実行中」ステータスを返した時刻
+    # （time.monotonic()）。None は未確認（起動直後でまだ一度も
+    # check_script_job が呼ばれていない）ことを表す。連続呼び出しの
+    # 最短間隔（_SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS）を
+    # サーバー側で強制するために使う。
+    last_polled_at: float | None = None
 
 
 # run_script_background のジョブレジストリ。プロセス内メモリのみで永続化は
@@ -1834,13 +1852,18 @@ async def check_script_job(job_id: str) -> str:
     次のユーザー発言を待つか、十分な間隔（数十秒〜）を空けてから改めて
     呼ぶこと。処理に時間がかかっていること自体は異常でも打ち切る理由でも
     ない（強制終了までの上限は background_max_runtime_seconds が別途管理する）。
+    なお、この指示に反して短い間隔で呼び直した場合はサーバー側で拒否され、
+    「まだ確認間隔が短すぎます」という文字列が返る
+    （config.ini の [scripts].background_min_poll_interval_seconds、既定20秒）。
 
     Args:
         job_id: run_script_background の戻り値に含まれるID。
 
     Returns:
         状況または最終結果を表す文字列。job_id が不明・他セッションのもので
-        ある場合は「エラー: ...」形式の文字列。
+        ある場合、または直前の「実行中」応答から
+        background_min_poll_interval_seconds 未満しか経っていない場合は
+        「エラー: ...」/「まだ確認間隔が短すぎます...」形式の文字列。
     """
     resolved = _resolve_job(job_id)
     if isinstance(resolved, str):
@@ -1848,7 +1871,20 @@ async def check_script_job(job_id: str) -> str:
     job = resolved
 
     if job.status == "running":
-        elapsed = int(time.monotonic() - job.started_at)
+        now = time.monotonic()
+        if (
+            _SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS > 0
+            and job.last_polled_at is not None
+            and (now - job.last_polled_at) < _SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS
+        ):
+            wait_remaining = int(_SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS - (now - job.last_polled_at)) + 1
+            return (
+                f"まだ確認間隔が短すぎます。あと約{wait_remaining}秒待ってから、"
+                f"改めて check_script_job(job_id={job_id!r}) を呼び直してください"
+                f"（最短確認間隔: {_SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS}秒）。"
+            )
+        job.last_polled_at = now
+        elapsed = int(now - job.started_at)
         stdout_tail = "".join(job.stdout_chunks)[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
         stderr_tail = "".join(job.stderr_chunks)[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
         parts = [f"実行中です（経過 {elapsed} 秒）。"]
