@@ -29,6 +29,9 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.ini"
 # src/llm.py の _select_endpoint() がこの文字列で分岐する。
 LLM_ROUTING_STRATEGIES = frozenset({"round_robin", "random", "priority_failover", "sticky"})
 
+# reasoning_format が取りうる値（llama-server の --reasoning-format と同じ）。
+LLM_REASONING_FORMATS = frozenset({"none", "deepseek", "deepseek-legacy"})
+
 
 @dataclass(frozen=True)
 class LLMEndpoint:
@@ -90,6 +93,18 @@ class Config:
             モードのON/OFF（llama.cpp拡張、extra_body の chat_template_kwargs
             経由）。None なら未指定でモデル・llama-server既定に委ねる。
             False にすると reasoning をオフにする。
+        reasoning_format: thinkingタグの扱い方（llama.cpp拡張、extra_body
+            経由。llama-server起動時の --reasoning-format に相当）。
+            "none"/"deepseek"/"deepseek-legacy" のいずれか。None なら未指定で
+            llama-server既定（auto）に委ねる。
+        reasoning_budget: 思考に使えるトークン数の上限（llama.cpp拡張、
+            extra_body 経由。llama-server起動時の --reasoning-budget に相当）。
+            -1=無制限、0=即座に終了、N>0=上限トークン数。None なら未指定で
+            llama-server既定（-1）に委ねる。
+        reasoning_budget_message: reasoning_budget を使い切った際に思考終了
+            タグの直前へ挿入するメッセージ（llama.cpp拡張、extra_body 経由。
+            llama-server起動時の --reasoning-budget-message に相当）。None
+            なら未指定（挿入しない）。
         track_token_usage: LLM応答のトークン使用量（入力/出力/合計）を
             取得するかどうか。True の場合 build_model（src/llm.py）が
             ChatOpenAI の stream_usage=True を有効化し、app.py・eval側で
@@ -200,9 +215,8 @@ class Config:
         image_inline_preview_max_long_side_pixels: LLMの回答本文（Markdown
             テーブルのセル等）へ直接埋め込む画像プレビューの、長辺ピクセル数の
             上限。image_max_long_side_pixels（Vision向け）とは別の、意図的に
-            小さい値（ChainlitのSocket.IO送信には1メッセージ既定1MBの上限が
-            あり、Vision向け解像度のままだと数枚で超過する。
-            src/images.py の embed_local_images_as_data_urls 参照）。
+            小さい値（表示用サムネイルの帯域・容量を抑える目的。
+            app.py の _embed_local_images_as_session_urls 参照）。
         image_inline_preview_jpeg_quality: 上記プレビューの再エンコード品質
             （1-95）。
         default_workdir_retention_days: default_workdir 直下に溜まり続ける
@@ -441,6 +455,9 @@ class Config:
     dry_penalty_last_n: int | None
     dry_sequence_breakers: list[str] | None
     enable_thinking: bool | None
+    reasoning_format: str | None
+    reasoning_budget: int | None
+    reasoning_budget_message: str | None
     track_token_usage: bool
     request_timeout_seconds: float
     stream_chunk_timeout_seconds: float
@@ -699,6 +716,43 @@ def _as_optional_str_list(value: str | None) -> list[str] | None:
     if not text:
         return None
     return [item.strip() for item in text.split(",")]
+
+
+def _as_optional_str(value: str | None) -> str | None:
+    """config.ini の空欄、または環境変数の空文字列を None（未指定）として扱う。
+
+    Args:
+        value: config.ini から得た値、または環境変数から得た文字列。
+
+    Returns:
+        前後の空白を除いた文字列。空欄・None なら None。
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
+def _as_optional_reasoning_format(value: str | None) -> str | None:
+    """[llm].reasoning_format の値を検証する。
+
+    Args:
+        value: config.ini から得た値、または環境変数から得た文字列。
+
+    Returns:
+        前後の空白を除いた文字列（LLM_REASONING_FORMATS のいずれか）。
+        空欄・None なら None（未指定、llama-server既定の auto に委ねる）。
+
+    Raises:
+        ValueError: LLM_REASONING_FORMATS に無い値が指定された場合。
+    """
+    text = _as_optional_str(value)
+    if text is None:
+        return None
+    if text not in LLM_REASONING_FORMATS:
+        choices = "/".join(sorted(LLM_REASONING_FORMATS))
+        raise ValueError(f"[llm].reasoning_format は {choices} のいずれかを指定してください（現在値: {text!r}）")
+    return text
 
 
 def _as_message_list(value: str | None) -> list[str]:
@@ -1016,6 +1070,11 @@ def load_config(config_path: Path | None = None) -> Config:
         dry_penalty_last_n=_as_optional_int(os.getenv("LLM_DRY_PENALTY_LAST_N", llm.get("dry_penalty_last_n", ""))),
         dry_sequence_breakers=_as_optional_str_list(os.getenv("LLM_DRY_SEQUENCE_BREAKERS", llm.get("dry_sequence_breakers", ""))),
         enable_thinking=_as_optional_bool(os.getenv("LLM_ENABLE_THINKING", llm.get("enable_thinking", ""))),
+        reasoning_format=_as_optional_reasoning_format(os.getenv("LLM_REASONING_FORMAT", llm.get("reasoning_format", ""))),
+        reasoning_budget=_as_optional_int(os.getenv("LLM_REASONING_BUDGET", llm.get("reasoning_budget", ""))),
+        reasoning_budget_message=_as_optional_str(
+            os.getenv("LLM_REASONING_BUDGET_MESSAGE", llm.get("reasoning_budget_message", ""))
+        ),
         track_token_usage=_as_bool(os.getenv("LLM_TRACK_TOKEN_USAGE", llm.get("track_token_usage", True))),
         request_timeout_seconds=float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", llm.get("request_timeout_seconds", 300))),
         stream_chunk_timeout_seconds=float(

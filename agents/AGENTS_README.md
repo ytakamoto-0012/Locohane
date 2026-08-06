@@ -83,9 +83,10 @@ read_memory, search_memory, list_memories
 自身が最終的に生成する回答テキスト（`app.py` の `_send_answer()` が送信直前に
 処理する内容）だけである。
 
-`![説明](絶対パス)` によるMarkdown画像埋め込み（`src/images.py` の
-`embed_local_images_as_data_urls()` が data URL へ変換する仕組み。
-`skills/SKILLS_README.md` 4-5節参照）も例外ではない。サブエージェントが最終
+`![説明](絶対パス)` によるMarkdown画像埋め込み（`app.py` の
+`_embed_local_images_as_session_urls()` がブラウザから取得可能なURLへ
+変換する仕組み。`skills/SKILLS_README.md` 4-5節参照）も例外ではない。
+サブエージェントが最終
 回答に `![説明](絶対パス)` を書いても、それだけでは画像は表示されない —
 **メインエージェントがそのMarkdown記法を改変せず自分の最終回答へそのまま
 転記して初めて**、送信直前の変換処理にかかり画像として表示される

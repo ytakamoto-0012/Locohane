@@ -67,7 +67,7 @@ from src.config import expand_config_vars, load_config
 from src.context_compaction import maybe_compact, should_compact
 from src.files import extract_generated_file
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
-from src.images import embed_local_images_as_data_urls, is_image_file, to_data_url
+from src.images import is_image_file, load_image_bytes, to_data_url
 from src.llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -1050,23 +1050,72 @@ def _ensure_blank_line_before_tables(text: str) -> str:
     return "\n".join(out)
 
 
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^()]+)\)")
+
+
+async def _embed_local_images_as_session_urls(text: str) -> str:
+    """回答本文中の `![alt](絶対パス)` を、Chainlitのセッションファイル配信URLへ差し替える。
+
+    `show_image`（`cl.Image` 要素）が使っているのと同じ配信経路
+    （Chainlitがファイルをセッション専用ディレクトリ `.files/<session_id>/`
+    へコピーし、ブラウザは `/project/file/<id>?session_id=...` を通常の
+    HTTP GETで取りに行く。`chainlit/session.py` の `persist_file`、
+    `chainlit/server.py` の `get_file` 参照）を、回答本文中の画像記法にも
+    使う。data URL（base64）をテキストへ直接埋め込む方式は、メッセージ
+    サイズやMarkdownパーサーとの相性で表示が壊れることが実機検証で分かった
+    （表の直前に空行が無いと表ごと `<li>` に飲み込まれ `<img src="">` に
+    なる等）ため、実績のあるこの経路に統一した。
+
+    `http(s)://`・`data:`・`/`（Chainlitの `/public` 配下等）で始まる href、
+    相対パス、実在しないパス、画像以外の拡張子はいずれもそのまま残す
+    （＝該当箇所だけ画像が表示されない自然な失敗になる）。
+    """
+    matches = list(_MARKDOWN_IMAGE_RE.finditer(text))
+    if not matches:
+        return text
+
+    session = cl.context.session
+    replacements: dict[str, str] = {}
+    for m in matches:
+        raw = m.group(0)
+        if raw in replacements:
+            continue
+        alt, href = m.group(1), m.group(2).strip()
+        if not href or href.startswith(("http://", "https://", "data:", "/")):
+            continue
+        path = Path(href)
+        if not path.is_absolute() or not path.is_file() or not is_image_file(path):
+            continue
+        try:
+            data, mime = load_image_bytes(
+                path,
+                max_long_side=_config.image_inline_preview_max_long_side_pixels,
+                jpeg_quality=_config.image_inline_preview_jpeg_quality,
+            )
+            file_ref = await session.persist_file(name=path.name, mime=mime, content=data)
+        except Exception:
+            logging.getLogger(__name__).exception("画像のセッションファイル化に失敗しました: %s", path)
+            continue
+        replacements[raw] = f"![{alt}](/project/file/{file_ref['id']}?session_id={session.id})"
+
+    if not replacements:
+        return text
+    return _MARKDOWN_IMAGE_RE.sub(lambda m: replacements.get(m.group(0), m.group(0)), text)
+
+
 async def _send_answer(answer: cl.Message) -> None:
     """本回答メッセージを確定送信する（送信直前にローカル画像埋め込みを解決）。
 
     LLMが回答テキスト中に `![alt](絶対パス)` の形でローカル画像を直接
     参照している場合、ストリーミング中は生パスのまま流れる（ブラウザは
     読めず一瞬壊れた画像アイコンになり得る）が、この確定送信の瞬間に
-    data URL へ変換してからUIへ渡すことで最終表示を正しくする
-    （embed_local_images_as_data_urls 参照）。あわせて、表の直前に空行が
-    無いために表自体が描画されない問題（_ensure_blank_line_before_tables
+    表示可能なURLへ変換してからUIへ渡すことで最終表示を正しくする
+    （_embed_local_images_as_session_urls 参照）。あわせて、表の直前に
+    空行が無いために表自体が描画されない問題（_ensure_blank_line_before_tables
     参照）も正規化する。
     """
     answer.content = _ensure_blank_line_before_tables(answer.content)
-    answer.content = embed_local_images_as_data_urls(
-        answer.content,
-        max_long_side=_config.image_inline_preview_max_long_side_pixels,
-        jpeg_quality=_config.image_inline_preview_jpeg_quality,
-    )
+    answer.content = await _embed_local_images_as_session_urls(answer.content)
     await answer.send()
 
 

@@ -846,8 +846,10 @@ def build_model(config: Config, role: Literal["main", "sub"] = "main") -> ChatOp
             sub_endpoints/sub_routing_strategy（role="sub"時）/ temperature /
             top_p / top_k / repeat_penalty / frequency_penalty / presence_penalty /
             max_tokens / dry_multiplier / dry_base / dry_allowed_length /
-            dry_penalty_last_n / dry_sequence_breakers / enable_thinking / track_token_usage /
-            request_timeout_seconds / thinking_loop_guard_* を含むアプリ設定。
+            dry_penalty_last_n / dry_sequence_breakers / enable_thinking /
+            reasoning_format / reasoning_budget / reasoning_budget_message /
+            track_token_usage / request_timeout_seconds / thinking_loop_guard_*
+            を含むアプリ設定。
             未指定（None）の項目はリクエストに含めず llama-server 側の
             デフォルトに委ねる。thinking_loop_guard_* は ChatLlamaCpp の
             loop_guard_* フィールドへ渡され、ストリーミング中の反復ループ検知
@@ -890,6 +892,12 @@ def build_model(config: Config, role: Literal["main", "sub"] = "main") -> ChatOp
         extra_body["dry_sequence_breakers"] = config.dry_sequence_breakers
     if config.enable_thinking is not None:
         extra_body["chat_template_kwargs"] = {"enable_thinking": config.enable_thinking}
+    if config.reasoning_format is not None:
+        extra_body["reasoning_format"] = config.reasoning_format
+    if config.reasoning_budget is not None:
+        extra_body["reasoning_budget"] = config.reasoning_budget
+    if config.reasoning_budget_message is not None:
+        extra_body["reasoning_budget_message"] = config.reasoning_budget_message
 
     # keep-alive接続を無効化する: 思考ループ検知時にストリームを正しく
     # クローズできなかった場合（cancel scopeのtask不一致等）、壊れた接続が

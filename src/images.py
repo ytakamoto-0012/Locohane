@@ -17,7 +17,6 @@ from __future__ import annotations
 import base64
 import io
 import logging
-import re
 from pathlib import Path
 
 import pillow_heif
@@ -103,28 +102,31 @@ def _downscale_to_jpeg(
         return None
 
 
-def to_data_url(
+def load_image_bytes(
     path: str | Path,
     *,
     max_long_side: int = 0,
     jpeg_quality: int = 85,
-) -> str:
-    """画像ファイルを base64 エンコードし、data URL 文字列として返す。
+) -> tuple[bytes, str]:
+    """画像ファイルを読み込み、必要なら縮小・JPEG変換したバイト列とMIMEを返す。
+
+    `to_data_url`（Vision向けdata URL化）と、`app.py` がチャット回答本文への
+    画像埋め込みで使うセッションファイル化（Chainlitの `/project/file/...`
+    配信経路）の両方が使う共通ロジック。
 
     Args:
         path: 画像ファイルの絶対パス。拡張子は _MIME_BY_EXT に含まれるもの
             であることを is_image_file() で事前に確認しておくこと。
-        max_long_side: 縮小後の長辺のピクセル数の上限（config.ini
-            [images].max_long_side_pixels）。0以下、または画像の長辺が既に
-            この値以下の場合は**再エンコードせず元のバイト列をそのまま使う**
-            （劣化もPillowのコストも発生しない）。ただしHEIC/HEIFは
-            Vision APIのdata URLとして解釈できないため、この設定に関わらず
-            必ずJPEGへ変換する。
-        jpeg_quality: 縮小・変換時のJPEG品質（config.ini [images].jpeg_quality）。
+        max_long_side: 縮小後の長辺のピクセル数の上限。0以下、または画像の
+            長辺が既にこの値以下の場合は**再エンコードせず元のバイト列を
+            そのまま使う**（劣化もPillowのコストも発生しない）。ただし
+            HEIC/HEIFはこの設定に関わらず必ずJPEGへ変換する（多くの
+            クライアント・ブラウザがHEIC/HEIFをそのまま解釈できないため）。
+        jpeg_quality: 縮小・変換時のJPEG品質。
 
     Returns:
-        "data:<mime>;base64,<...>" 形式の文字列。縮小・変換した場合の mime は
-        常に image/jpeg になる。
+        (バイト列, MIMEタイプ) のタプル。縮小・変換した場合の mime は
+        常に "image/jpeg" になる。
 
     Raises:
         KeyError: 拡張子が _MIME_BY_EXT にない場合。
@@ -138,71 +140,33 @@ def to_data_url(
         if converted is not None:
             data = converted
             mime = "image/jpeg"
-    b64 = base64.b64encode(data).decode("ascii")
-    return f"data:{mime};base64,{b64}"
+    return data, mime
 
 
-_MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^()]+)\)")
-
-
-def embed_local_images_as_data_urls(
-    text: str,
+def to_data_url(
+    path: str | Path,
     *,
     max_long_side: int = 0,
     jpeg_quality: int = 85,
-    max_total_bytes: int = 600_000,
 ) -> str:
-    """回答本文中のMarkdown画像記法 `![alt](絶対パス)` を data URL に置き換える。
-
-    LLMがローカル画像ファイルの絶対パスを直接 `![alt](path)` と書いても、
-    ブラウザはローカルパスを読み込めず壊れた画像アイコンになる（Chainlitの
-    Markdownレンダラーは `<img src>` をそのままブラウザへ渡すだけで、
-    サーバー上のファイルパスは解決しない）。この関数は送信直前に本文を
-    走査し、実在する画像ファイルを指すものだけを data URL へ差し替える。
-
-    `http(s)://`・`data:`・`/`（Chainlitの `/public` 配下等）で始まる href、
-    相対パス、実在しないパス、画像以外の拡張子はいずれもそのまま残す
-    （＝該当箇所だけ画像が表示されない自然な失敗になる。他ツールの
-    「エラー: ...」文字列と同様、特別なフォールバック文言は付けない）。
+    """画像ファイルを base64 エンコードし、data URL 文字列として返す。
 
     Args:
-        text: 置換対象の回答本文（Markdown）。
-        max_long_side: `to_data_url` へ渡す縮小設定
-            （config.ini [images].inline_preview_max_long_side_pixels）。
-        jpeg_quality: `to_data_url` へ渡す再エンコード品質
-            （config.ini [images].inline_preview_jpeg_quality）。
-        max_total_bytes: 変換後 data URL の合計文字数（≒バイト数）の予算。
-            ChainlitはSocket.IO（python-engineio）経由でメッセージを送信して
-            おり、1メッセージあたり既定1MB（max_http_buffer_size）の上限が
-            ある。超過するとメッセージ自体が送信できず、表内の画像が全滅で
-            壊れて見える（変換前の生パスのまま残る）。それを避けるため、
-            予算を使い切った時点で以降の画像は変換せず元のまま残す
-            （そこから先だけ壊れて見える、という部分的な失敗にとどめる）。
+        path: 画像ファイルの絶対パス。拡張子は _MIME_BY_EXT に含まれるもの
+            であることを is_image_file() で事前に確認しておくこと。
+        max_long_side: load_image_bytes 参照（config.ini
+            [images].max_long_side_pixels）。
+        jpeg_quality: load_image_bytes 参照（config.ini [images].jpeg_quality）。
 
     Returns:
-        置換後の本文。
+        "data:<mime>;base64,<...>" 形式の文字列。
+
+    Raises:
+        KeyError: 拡張子が _MIME_BY_EXT にない場合。
     """
-    budget = max_total_bytes
-
-    def _replace(m: re.Match[str]) -> str:
-        nonlocal budget
-        alt, href = m.group(1), m.group(2).strip()
-        if not href or href.startswith(("http://", "https://", "data:", "/")):
-            return m.group(0)
-        path = Path(href)
-        if not path.is_absolute() or not path.is_file() or not is_image_file(path):
-            return m.group(0)
-        if budget <= 0:
-            return m.group(0)
-        try:
-            url = to_data_url(path, max_long_side=max_long_side, jpeg_quality=jpeg_quality)
-        except Exception:
-            logger.exception("画像のdata URL変換に失敗しました: %s", path)
-            return m.group(0)
-        budget -= len(url)
-        return f"![{alt}]({url})"
-
-    return _MARKDOWN_IMAGE_RE.sub(_replace, text)
+    data, mime = load_image_bytes(path, max_long_side=max_long_side, jpeg_quality=jpeg_quality)
+    b64 = base64.b64encode(data).decode("ascii")
+    return f"data:{mime};base64,{b64}"
 
 
 def image_followup_message(artifact: dict | None) -> HumanMessage | None:

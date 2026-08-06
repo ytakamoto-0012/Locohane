@@ -199,7 +199,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `json_query` | JSON/dict に対する JMESPath クエリ（読み取り専用） |
 | `list_path_memory` | 現在の会話のパスメモリー（`@N`）登録内容を一覧表示する（読み取り専用） |
 | `provide_download` | 既存のファイルをチャット画面にダウンロードボタンとして提示する |
-| `show_image` | 既存の画像ファイルをチャット画面にプレビュー表示する（LLM自身は内容を見ない。「表示して」「見せて」に）。回答本文（Markdownテーブルのセル等）の中に画像を組み込みたい場合はツールを使わず、回答テキストへ直接 `![説明](絶対パス)` と書けばよい（送信直前に自動でdata URLへ変換される。`src/images.py` の `embed_local_images_as_data_urls`） |
+| `show_image` | 既存の画像ファイルをチャット画面にプレビュー表示する（LLM自身は内容を見ない。「表示して」「見せて」に）。回答本文（Markdownテーブルのセル等）の中に画像を組み込みたい場合はツールを使わず、回答テキストへ直接 `![説明](絶対パス)` と書けばよい（送信直前に自動でブラウザから取得可能なURLへ変換される。`app.py` の `_embed_local_images_as_session_urls`） |
 | `analyze_image` | 画像ファイルをLLMへ視覚情報として見せ、LLM自身が内容を解析・説明・判断する（Vision対応モデル向け） |
 | `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される |
 | `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ |
@@ -696,7 +696,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[uploads]` | `cleanup_interval_hours` | 自動削除チェックの実行間隔（時間） | `UPLOAD_CLEANUP_INTERVAL_HOURS` |
 | `[images]` | `max_long_side_pixels` | LLMへ渡す前に画像を縮小する長辺ピクセル数の上限（`0`で縮小なし） | `IMAGE_MAX_LONG_SIDE_PIXELS` |
 | `[images]` | `jpeg_quality` | 縮小後に再エンコードするJPEG品質（1-95） | `IMAGE_JPEG_QUALITY` |
-| `[images]` | `inline_preview_max_long_side_pixels` | 回答本文（Markdownテーブルのセル等）へ直接埋め込む画像プレビューの長辺ピクセル数の上限。ChainlitのSocket.IO送信には1メッセージ既定1MBの上限があり超過しやすいため、Vision向け設定とは別に小さい値を使う | `IMAGE_INLINE_PREVIEW_MAX_LONG_SIDE_PIXELS` |
+| `[images]` | `inline_preview_max_long_side_pixels` | 回答本文（Markdownテーブルのセル等）へ直接埋め込む画像プレビューの長辺ピクセル数の上限。`show_image`と同じセッションファイル配信経路で渡すためVision向け設定より小さくても差し支えなく、表示帯域・ディスク使用量を抑える目的で別に小さい値を使う | `IMAGE_INLINE_PREVIEW_MAX_LONG_SIDE_PIXELS` |
 | `[images]` | `inline_preview_jpeg_quality` | 上記プレビューの再エンコード品質（1-95） | `IMAGE_INLINE_PREVIEW_JPEG_QUALITY` |
 | `[scripts]` | `timeout` | `run_script`/`execute_python_code` 共通のタイムアウト秒 | `SCRIPT_TIMEOUT` |
 | `[scripts]` | `python` | `.py` 実行に使う Python | `SCRIPT_PYTHON` |
