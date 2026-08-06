@@ -57,7 +57,7 @@ class EvalCase:
             ディレクトリ（_resolve_workdir）をこのケース専用に固定したい
             場合のプロジェクトルート相対パス（例:
             "evals/fixtures/annual_schedule"）。未指定なら config.ini の
-            [paths].default_workdir をそのまま使う。
+            [default_workdir].dir をそのまま使う。
         timeout_seconds: run_all.py がこのケースをサブプロセス実行する際の
             タイムアウト秒数。未指定なら run_all.py の既定値
             （CASE_TIMEOUT_SECONDS）を使う。大量ファイルを扱う重量級ケース

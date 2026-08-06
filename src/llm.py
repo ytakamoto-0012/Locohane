@@ -399,7 +399,7 @@ class _DebugResponseLogger(BaseCallbackHandler):
 
     build_model() が構築するモデルインスタンスに常時アタッチする（コストは
     logger.debug() 自体の isEnabledFor チェックのみで、config.ini の
-    [paths].log_level が "debug" 以外のときはほぼゼロオーバーヘッド）。
+    [log].level が "debug" 以外のときはほぼゼロオーバーヘッド）。
     on_llm_end はチャットモデルでも呼ばれ、streaming=True の場合も最終的に
     集約されたメッセージ1件を持つ LLMResult が渡される。graph.py（メイングラフ、
     handwritten/prebuilt いずれの実装でも）・subagent.py（dispatch_agent内部の

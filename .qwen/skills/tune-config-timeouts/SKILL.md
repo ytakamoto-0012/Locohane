@@ -21,7 +21,7 @@ description: Locohane の config.ini の timeout系設定（[llm].request_timeou
 | `[llm]` | `stream_chunk_timeout_seconds` | `max_stream_chunk_gap_seconds`（ストリーミング中のチャンク間隔の最大値） |
 | `[scripts]` | `timeout` | `max_script_seconds`（`run_script`/`execute_python_code` 実行時間の最大値） |
 
-**対象外**: `[timeouts]` セクション（`approval_seconds`/`ask_user_question_seconds`/
+**対象外**: `[user_response_timeouts]` セクション（`approval_seconds`/`ask_user_question_seconds`/
 `ask_user_choice_seconds`）は「人間の応答待ち」
 であり、ハードウェアスペックとは無関係なので**絶対に触らない**。
 
@@ -86,7 +86,7 @@ python evals/analyze_timing.py config_timeouts
 1. 変更前の `config.ini` を `evals/history/config_timeouts/iterNN_before.ini`
    （NN は今回のイテレーション番号）としてコピーする。
 2. 「変更推奨」となったキー**のみ**を Edit ツールで更新する
-   （コメント・他キー・`[timeouts]` セクションは一切変更しない）。
+   （コメント・他キー・`[user_response_timeouts]` セクションは一切変更しない）。
 3. `evals/tuning_log.md` に「### config_timeouts iterNN」の見出しで、
    対象ケース・実測値・推奨根拠・変更差分（旧値→新値）を簡潔に追記する
    （既存の `## iterNN: ...`（tune-prompt由来）と混同しないよう、
@@ -121,7 +121,7 @@ python evals/analyze_timing.py config_timeouts
   （スナップショット退避（`evals/history/config_timeouts/`）と
   `evals/tuning_log.md` のみで変更履歴を追える）。
 - 対象3キー（`[llm].request_timeout_seconds` / `[llm].stream_chunk_timeout_seconds`
-  / `[scripts].timeout`）以外は編集しない。特に `[timeouts]` セクションは
+  / `[scripts].timeout`）以外は編集しない。特に `[user_response_timeouts]` セクションは
   対象外なので絶対に触らない。
 - 1イテレーションで複数キーをまとめて大きく変更しない
   （原因の切り分けが難しくなり、振動検知も効かなくなるため）。

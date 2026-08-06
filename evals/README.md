@@ -64,7 +64,7 @@ scripted_text_answers: []            # AskUserQuestion が labels 省略で呼�
 work_dir: "evals/fixtures/xxx"       # run_script/execute_python_code/view_image の既定
                                       # 作業ディレクトリをこのケース専用に固定したい場合の
                                       # プロジェクトルート相対パス（省略可、既定は config.ini
-                                      # の [paths].default_workdir）
+                                      # の [default_workdir].dir）
 timeout_seconds: 3600                # run_all.py がサブプロセス実行する際のタイムアウト秒数
                                       # （省略可、既定は run_all.py の CASE_TIMEOUT_SECONDS=900。
                                       # 大量ファイルを扱う重量級ケースの上書き用）
@@ -127,4 +127,4 @@ ClaudeCode で `/tune-prompt system_prompt` のように実行する。
   同ディレクトリに `recommendations.json` を書き出す。**config.ini は
   直接書き換えない**（推奨値の提示のみ）。
 - 実際のチューニングループは `.claude/skills/tune-config-timeouts/SKILL.md`
-  を参照（イテレーション上限3回、`[timeouts]` セクションは対象外）。
+  を参照（イテレーション上限3回、`[user_response_timeouts]` セクションは対象外）。

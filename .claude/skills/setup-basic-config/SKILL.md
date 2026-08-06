@@ -35,7 +35,7 @@ description: Locohane の環境依存パス設定一式（config.ini の [llm]�
 | `Node.jsパス` | `frontend/` のビルド・テストに Claude Code が使う Node.js のディレクトリ |
 
 **対象外**: 上記6項目以外（`config.ini` の timeout系 `[llm].request_timeout_seconds` 等は
-`tune-config-timeouts` の担当、`[timeouts]`/`[paths]`/`[graph]`/`[subagent]` 等その他のセクション、
+`tune-config-timeouts` の担当、`[user_response_timeouts]`/`[paths]`/`[graph]`/`[subagent]` 等その他のセクション、
 `CLAUDE.md` の「Python実行環境」「Node.jsパス」以外の見出し、`app.bat` の `PYTHON_DIR` 以外の行）
 には一切触れない。ユーザー個人用の `~/.claude/CLAUDE.md`（グローバル設定）も対象外。
 

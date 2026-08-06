@@ -272,7 +272,7 @@ def init_tools(
         default_workdir: run_script の既定の作業ディレクトリ（cwd）。
             Chainlit の ChatSettings でセッション単位の作業ディレクトリが
             指定されなかった場合に使われる（config.ini の
-            [paths].default_workdir 由来）。
+            [default_workdir].dir 由来）。
         memory_root: 永続メモリーストアのルートディレクトリ（config.ini の
             [paths].memory_dir 由来）。create_memory 等のメモリー系
             ツールが参照する。
@@ -291,14 +291,14 @@ def init_tools(
             実行されない（config.ini の [scripts].code_execution_enabled 由来）。
         approval_timeout_seconds: create_plan/approve_plan の計画承認で
             ユーザーの応答を待つ秒数（config.ini の
-            [timeouts].approval_seconds 由来）。0以下は無期限待ちを意味する。
+            [user_response_timeouts].approval_seconds 由来）。0以下は無期限待ちを意味する。
         ask_user_question_timeout_seconds: AskUserQuestion（自由記述の
             質問。labels省略時は単発質問、labels指定時は複数項目フォーム）
             がユーザーの応答を待つ秒数（config.ini の
-            [timeouts].ask_user_question_seconds 由来）。0以下は無期限待ちを意味する。
+            [user_response_timeouts].ask_user_question_seconds 由来）。0以下は無期限待ちを意味する。
         ask_user_choice_timeout_seconds: ask_user_choice がユーザーの
             応答を待つ秒数（config.ini の
-            [timeouts].ask_user_choice_seconds 由来）。0以下は無期限待ちを意味する。
+            [user_response_timeouts].ask_user_choice_seconds 由来）。0以下は無期限待ちを意味する。
         plan_badge_allow_unlock: 送信ボタン付近の Plan Mode / Edit Automatically
             バッジをクリックした際、Plan Mode → Edit Automatically 方向
             （ロック解除）も許可するか。False の場合はロック方向のクリックのみ
@@ -981,7 +981,7 @@ def _resolve_workdir(need_write: bool = False) -> Path:
     Chainlit の ChatSettings（歯車アイコン）でユーザーがセッションに
     作業ディレクトリを設定していればそれを使い（app.py の
     on_settings_update が cl.user_session["work_dir"] に絶対パス文字列を
-    保存する）、未設定なら config.ini の [paths].default_workdir
+    保存する）、未設定なら config.ini の [default_workdir].dir
     （init_tools() で注入された _DEFAULT_WORKDIR）にフォールバックする。
 
     サーバー/クライアントでファイルシステムが分離している環境（別PCから
@@ -1275,7 +1275,7 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
 
     作業ディレクトリは、Chainlit の ChatSettings（歯車アイコン）でユーザーが
     セッションに設定していればそのディレクトリ、未設定なら config.ini の
-    [paths].default_workdir を使う（_resolve_workdir 参照）。
+    [default_workdir].dir を使う（_resolve_workdir 参照）。
     タイムアウトは設定値（既定 60 秒）。完了までこのツール呼び出し自体が
     ブロックされるため、タイムアウトに近い長時間の実行が見込まれるスクリプトは
     このツールではなく run_script_background を使うこと。
@@ -2923,7 +2923,7 @@ async def ask_user_question(question: str, labels: list[str] | None = None) -> s
     Returns:
         labels を省略した場合はユーザーが入力した回答テキストをそのまま返す。
         labels を指定した場合は "ラベル: 入力値" を改行区切りで並べた文字列を
-        返す。設定値（config.ini の [timeouts].ask_user_question_seconds。
+        返す。設定値（config.ini の [user_response_timeouts].ask_user_question_seconds。
         0以下は無期限待ち）の秒数以内に応答が無い場合は、例外を送出せず
         「エラー: ユーザーからの応答がありませんでした（タイムアウト）。」を返す。
     """
@@ -2976,7 +2976,7 @@ async def ask_user_choice(question: str, choices: list[str], multi_select: bool 
         「、」区切りで連結した文字列（未選択なら "(選択なし)"）。
         ユーザーがキャンセルした場合は "エラー: ユーザーが選択をキャンセルしま
         した。" を返す。choices が空の場合や、設定値（config.ini の
-        [timeouts].ask_user_choice_seconds。0以下は無期限待ち）の秒数以内に
+        [user_response_timeouts].ask_user_choice_seconds。0以下は無期限待ち）の秒数以内に
         応答が無い場合も、例外を送出せず「エラー: ...」形式の文字列を返す。
     """
     if not choices:
@@ -3122,7 +3122,7 @@ def _extract_tool_call_from_node_input(input) -> dict | None:  # noqa: A002
 def _log_tool_calls_debug(input) -> None:  # noqa: A002
     """メイングラフのツール呼び出し（呼び出し前）を DEBUG レベルで記録する。
 
-    config.ini の [paths].log_level が "debug" のときのみ実際にログへ出る
+    config.ini の [log].level が "debug" のときのみ実際にログへ出る
     （logger.isEnabledFor で早期リターンし、通常時はほぼゼロオーバーヘッド）。
     """
     if not logger.isEnabledFor(logging.DEBUG):

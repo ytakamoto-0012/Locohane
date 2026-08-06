@@ -6,7 +6,7 @@ description: Locohane の data/logs/app_*.log を5分おきに定期監視し、
 # monitor-app-log: app*.log の定期監視によるissue自動起票
 
 `Locohane` は `data/logs/app_YYYYMMDD_HH_N.log`（`config.ini` の
-`[paths].log_dir`、既定 `./data/logs`）に
+`[log].dir`、既定 `./data/logs`）に
 `%(asctime)s %(levelname)s %(name)s: %(message)s` 形式でアプリログを出力する
 （`app.py` の `initialize()`、`src/log_rotation.py`）。このスキルは新規に
 出力されたログを5分おきに確認し、バグ・改善点・問題点をプロジェクト直下
@@ -53,7 +53,7 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 
 ### 2. 設定読み込み
 
-`config.ini` の `[paths].log_dir`（既定 `./data/logs`）を読み、プロジェクト
+`config.ini` の `[log].dir`（既定 `./data/logs`）を読み、プロジェクト
 ルート（このリポジトリのルート）基準の絶対パスに解決する。
 
 ### 3. 新規ログ抽出
