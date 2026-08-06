@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import re
 from pathlib import Path
 
 import pillow_heif
@@ -139,6 +140,56 @@ def to_data_url(
             mime = "image/jpeg"
     b64 = base64.b64encode(data).decode("ascii")
     return f"data:{mime};base64,{b64}"
+
+
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^()]+)\)")
+
+
+def embed_local_images_as_data_urls(
+    text: str,
+    *,
+    max_long_side: int = 0,
+    jpeg_quality: int = 85,
+) -> str:
+    """回答本文中のMarkdown画像記法 `![alt](絶対パス)` を data URL に置き換える。
+
+    LLMがローカル画像ファイルの絶対パスを直接 `![alt](path)` と書いても、
+    ブラウザはローカルパスを読み込めず壊れた画像アイコンになる（Chainlitの
+    Markdownレンダラーは `<img src>` をそのままブラウザへ渡すだけで、
+    サーバー上のファイルパスは解決しない）。この関数は送信直前に本文を
+    走査し、実在する画像ファイルを指すものだけを data URL へ差し替える。
+
+    `http(s)://`・`data:`・`/`（Chainlitの `/public` 配下等）で始まる href、
+    相対パス、実在しないパス、画像以外の拡張子はいずれもそのまま残す
+    （＝該当箇所だけ画像が表示されない自然な失敗になる。他ツールの
+    「エラー: ...」文字列と同様、特別なフォールバック文言は付けない）。
+
+    Args:
+        text: 置換対象の回答本文（Markdown）。
+        max_long_side: `to_data_url` へ渡す縮小設定
+            （config.ini [images].max_long_side_pixels）。
+        jpeg_quality: `to_data_url` へ渡す再エンコード品質
+            （config.ini [images].jpeg_quality）。
+
+    Returns:
+        置換後の本文。
+    """
+
+    def _replace(m: re.Match[str]) -> str:
+        alt, href = m.group(1), m.group(2).strip()
+        if not href or href.startswith(("http://", "https://", "data:", "/")):
+            return m.group(0)
+        path = Path(href)
+        if not path.is_absolute() or not path.is_file() or not is_image_file(path):
+            return m.group(0)
+        try:
+            url = to_data_url(path, max_long_side=max_long_side, jpeg_quality=jpeg_quality)
+        except Exception:
+            logger.exception("画像のdata URL変換に失敗しました: %s", path)
+            return m.group(0)
+        return f"![{alt}]({url})"
+
+    return _MARKDOWN_IMAGE_RE.sub(_replace, text)
 
 
 def image_followup_message(artifact: dict | None) -> HumanMessage | None:

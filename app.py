@@ -66,7 +66,7 @@ from src.config import expand_config_vars, load_config
 from src.context_compaction import maybe_compact, should_compact
 from src.files import extract_generated_file
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
-from src.images import is_image_file, to_data_url
+from src.images import embed_local_images_as_data_urls, is_image_file, to_data_url
 from src.llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -467,7 +467,7 @@ async def _setup() -> None:
     # no-op になり FileHandler が root に付かない。そのため root logger へ
     # 明示的に addHandler する。
     #
-    # config.log_level（config.ini の [paths].log_level）で詳細度を切り替える:
+    # config.log_level（config.ini の [log].level）で詳細度を切り替える:
     #   "none"  - logging.disable() でプロセス全体のログ出力を無効化する
     #             （ハンドラ自体を作らない。data/logs/app_*.log は生成されない）。
     #   "info"  - 従来通り root logger を INFO でハンドラへ出す。
@@ -477,7 +477,7 @@ async def _setup() -> None:
     # ログファイルは data/logs/app_YYYYMMDD_HH.log のように日時つきの名前で
     # 出力され、config.log_max_lines（[log].max_lines）行を超えると新しい
     # 日時つきファイルへ自動的にローテーションする（LineCountRotatingFileHandler、
-    # src/log_rotation.py）。config.log_clear_on_startup（[paths].log_clear_on_startup）
+    # src/log_rotation.py）。config.log_clear_on_startup（[log].clear_on_startup）
     # が True なら、起動のたびに必ず新しいファイルを作成する。False（既定）なら
     # 直近の既存ファイルへの追記を試みる（行数超過ならその場でローテーション）。
     # ローテーションで増え続ける古い app_*.log は config.log_retention_days
@@ -485,7 +485,7 @@ async def _setup() -> None:
     log_level = _config.log_level
     if log_level not in ("info", "debug", "none"):
         raise ValueError(
-            f"unknown log_level: {_config.log_level!r}（config.ini の " "[paths].log_level は info/debug/none のいずれかで指定してください）"
+            f"unknown log_level: {_config.log_level!r}（config.ini の " "[log].level は info/debug/none のいずれかで指定してください）"
         )
     if log_level == "none":
         logging.disable(logging.CRITICAL)
@@ -796,7 +796,7 @@ async def on_chat_start() -> None:
     cl.user_session.set("token_usage_cumulative_main", _new_usage_totals())
 
     # run_script の作業ディレクトリを歯車アイコンから指定できるようにする。
-    # 未入力（初期値）なら config.ini の [paths].default_workdir が使われる
+    # 未入力（初期値）なら config.ini の [default_workdir].dir が使われる
     # （tools.py の _resolve_workdir）。
     await cl.ChatSettings(
         [
@@ -1023,6 +1023,23 @@ def _build_human_message(user_text: str, saved_paths: list[str]) -> HumanMessage
         )
         content.append({"type": "image_url", "image_url": {"url": url}})
     return HumanMessage(content=content)
+
+
+async def _send_answer(answer: cl.Message) -> None:
+    """本回答メッセージを確定送信する（送信直前にローカル画像埋め込みを解決）。
+
+    LLMが回答テキスト中に `![alt](絶対パス)` の形でローカル画像を直接
+    参照している場合、ストリーミング中は生パスのまま流れる（ブラウザは
+    読めず一瞬壊れた画像アイコンになり得る）が、この確定送信の瞬間に
+    data URL へ変換してからUIへ渡すことで最終表示を正しくする
+    （embed_local_images_as_data_urls 参照）。
+    """
+    answer.content = embed_local_images_as_data_urls(
+        answer.content,
+        max_long_side=_config.image_max_long_side_pixels,
+        jpeg_quality=_config.image_jpeg_quality,
+    )
+    await answer.send()
 
 
 def _resolve_parent_id(event: dict, steps: dict[str, cl.Step]) -> str | None:
@@ -1459,7 +1476,7 @@ async def on_message(message: cl.Message) -> None:
                         await thinking.update()
                         thinking = None
                     if answer is not None:
-                        await answer.send()
+                        await _send_answer(answer)
                         answer = None
                     # ツール実行を Step として可視化（どのスキル/ツールかが見える）。
                     # cl.Step はコンストラクタで local_steps（@cl.on_message が積む
@@ -1525,7 +1542,7 @@ async def on_message(message: cl.Message) -> None:
                             await thinking.update()
                             thinking = None
                         if answer is not None:
-                            await answer.send()
+                            await _send_answer(answer)
                             answer = None
                         await cl.Message(content="実行計画が却下されたため、処理を終了しました。ご指示をお待ちしています。").send()
                         raise _PlanDeniedInterrupt(tool_message=event["data"].get("output"))
@@ -1646,7 +1663,7 @@ async def on_message(message: cl.Message) -> None:
                 await thinking.update()
                 thinking = None
             if answer is not None:
-                await answer.send()
+                await _send_answer(answer)
                 answer = None
             await _finalize_orphaned_steps(steps, "loop_detected")
         except LLM_CONNECTION_ERRORS as exc:
@@ -1670,7 +1687,7 @@ async def on_message(message: cl.Message) -> None:
                 await thinking.update()
                 thinking = None
             if answer is not None:
-                await answer.send()
+                await _send_answer(answer)
                 answer = None
             await _finalize_orphaned_steps(steps, "connection_error")
             checkpointer_needs_rebuild = True
@@ -1693,7 +1710,7 @@ async def on_message(message: cl.Message) -> None:
                 await thinking.update()
                 thinking = None
             if answer is not None:
-                await answer.send()
+                await _send_answer(answer)
                 answer = None
             await _finalize_orphaned_steps(steps, "checkpointer_timeout")
         except GraphRecursionError:
@@ -1704,7 +1721,7 @@ async def on_message(message: cl.Message) -> None:
                 await thinking.update()
                 thinking = None
             if answer is not None:
-                await answer.send()
+                await _send_answer(answer)
                 answer = None
             await _finalize_orphaned_steps(steps, "recursion_limit")
             await cl.Message(
@@ -1744,7 +1761,7 @@ async def on_message(message: cl.Message) -> None:
                 await thinking.update()
                 thinking = None
             if answer is not None:
-                await answer.send()
+                await _send_answer(answer)
                 answer = None
             await _finalize_orphaned_steps(steps, "context_compaction")
             if exc.tool_messages:
@@ -1836,7 +1853,7 @@ async def on_message(message: cl.Message) -> None:
                 await thinking.update()
                 thinking = None
             if answer is not None:
-                await answer.send()
+                await _send_answer(answer)
                 answer = None
             await _finalize_orphaned_steps(steps, "unclassified_error")
         finally:
@@ -1951,7 +1968,7 @@ async def on_message(message: cl.Message) -> None:
             thinking.end = utc_now()
             await thinking.update()
         if answer is not None:
-            await answer.send()
+            await _send_answer(answer)
 
         # 無言終了（tool_calls も回答テキストも無いまま終わる）を検知した場合、
         # 最終回答を促す短いメッセージを注入して自動的に1回だけリトライする

@@ -199,7 +199,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `json_query` | JSON/dict に対する JMESPath クエリ（読み取り専用） |
 | `list_path_memory` | 現在の会話のパスメモリー（`@N`）登録内容を一覧表示する（読み取り専用） |
 | `provide_download` | 既存のファイルをチャット画面にダウンロードボタンとして提示する |
-| `show_image` | 既存の画像ファイルをチャット画面にプレビュー表示する（LLM自身は内容を見ない。「表示して」「見せて」に） |
+| `show_image` | 既存の画像ファイルをチャット画面にプレビュー表示する（LLM自身は内容を見ない。「表示して」「見せて」に）。回答本文（Markdownテーブルのセル等）の中に画像を組み込みたい場合はツールを使わず、回答テキストへ直接 `![説明](絶対パス)` と書けばよい（送信直前に自動でdata URLへ変換される。`src/images.py` の `embed_local_images_as_data_urls`） |
 | `analyze_image` | 画像ファイルをLLMへ視覚情報として見せ、LLM自身が内容を解析・説明・判断する（Vision対応モデル向け） |
 | `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される |
 | `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ |
@@ -376,7 +376,7 @@ Locohane/
 
 ## データの保存場所と手動削除の手順
 
-すべて `data/` 配下（`config.ini` の `[paths]` で変更可）。`data/` は `.gitignore` 済み。
+すべて `data/` 配下（`config.ini` の `[paths]`/`[uploads]`/`[log]`/`[default_workdir]` 等の `dir` 系キーで変更可）。`data/` は `.gitignore` 済み。
 
 | パス | 中身 | 削除してよいタイミング | 削除方法 |
 |------|------|------------------------|----------|
@@ -689,15 +689,13 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[paths]` | `project_locohane_dir` | プロジェクト固有の拡張ディレクトリ（ClaudeCode の `.claude/` 相当）。配下の `skills/`（`skills_dir` にマージ走査、同名は優先）・`agents/`（`agents_dir` にマージ走査、同名は優先）・`LOCOHANE.md`（プロジェクト固有指示、存在しなくてもエラーにならない）を自動検知する。`nudge_messages` と同じリスト形式で複数ディレクトリ指定可 | `PROJECT_LOCOHANE_DIR` |
 | `[paths]` | `system_prompt_path` | メインエージェント用システムプロンプトのテンプレート | `SYSTEM_PROMPT_PATH` |
 | `[paths]` | `checkpoint_db` | 会話状態 SQLite | `CHECKPOINT_DB` |
-| `[paths]` | `upload_dir` | アップロード保存先 | `UPLOAD_DIR` |
-| `[paths]` | `log_dir` | ログ出力先 | `LOG_DIR` |
-| `[paths]` | `log_level` | ログの詳細度。`info`（現行仕様、ツール呼び出しの概要のみ）／`debug`（ツール呼び出しの全引数・全結果・LLM応答本文・thinkingまで記録）／`none`（ログを一切生成しない） | `LOG_LEVEL` |
-| `[paths]` | `log_clear_on_startup` | 起動のたびに `app.log` を空にしてから書き始めるか（`false`＝従来通り追記） | `LOG_CLEAR_ON_STARTUP` |
-| `[paths]` | `default_workdir` | エージェントの既定の作業ディレクトリ（`run_script` の cwd 等） | `DEFAULT_WORKDIR` |
 | `[paths]` | `memory_dir` | 永続メモリーの保存先ルート | `MEMORY_DIR` |
 | `[paths]` | `help_path` | `help` ツールが返すヘルプ本文Markdownのパス | `HELP_PATH` |
+| `[uploads]` | `dir` | アップロード保存先 | `UPLOAD_DIR` |
 | `[uploads]` | `retention_days` | アップロードファイルの保持日数（0以下で自動削除無効） | `UPLOAD_RETENTION_DAYS` |
 | `[uploads]` | `cleanup_interval_hours` | 自動削除チェックの実行間隔（時間） | `UPLOAD_CLEANUP_INTERVAL_HOURS` |
+| `[images]` | `max_long_side_pixels` | LLMへ渡す前に画像を縮小する長辺ピクセル数の上限（`0`で縮小なし） | `IMAGE_MAX_LONG_SIDE_PIXELS` |
+| `[images]` | `jpeg_quality` | 縮小後に再エンコードするJPEG品質（1-95） | `IMAGE_JPEG_QUALITY` |
 | `[scripts]` | `timeout` | `run_script`/`execute_python_code` 共通のタイムアウト秒 | `SCRIPT_TIMEOUT` |
 | `[scripts]` | `python` | `.py` 実行に使う Python | `SCRIPT_PYTHON` |
 | `[scripts]` | `code_execution_enabled` | `execute_python_code` ツール自体の有効/無効 | `CODE_EXECUTION_ENABLED` |
@@ -716,12 +714,16 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[subagent]` | `token_guard_soft_threshold` | ソフト警告（注意メッセージ注入）のトークン閾値 | `SUBAGENT_TOKEN_GUARD_SOFT_THRESHOLD` |
 | `[subagent]` | `token_guard_hard_threshold` | ハード打ち切りのトークン閾値 | `SUBAGENT_TOKEN_GUARD_HARD_THRESHOLD` |
 | `[subagent]` | `empty_response_max_retries` | 空応答の再試行回数 | `SUBAGENT_EMPTY_RESPONSE_MAX_RETRIES` |
-| `[timeouts]` | `approval_seconds` | `approve_plan`／`run_script`・`execute_python_code`の個別実行確認でユーザー応答を待つ秒数。`0`で無期限待ち | `APPROVAL_TIMEOUT_SECONDS` |
-| `[timeouts]` | `ask_user_question_seconds` | `AskUserQuestion`（自由記述質問。`labels`省略時は単一入力、指定時は複数項目フォーム）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_QUESTION_TIMEOUT_SECONDS` |
-| `[timeouts]` | `ask_user_choice_seconds` | `ask_user_choice`（選択肢質問）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_CHOICE_TIMEOUT_SECONDS` |
+| `[user_response_timeouts]` | `approval_seconds` | `approve_plan`／`run_script`・`execute_python_code`の個別実行確認でユーザー応答を待つ秒数。`0`で無期限待ち | `APPROVAL_TIMEOUT_SECONDS` |
+| `[user_response_timeouts]` | `ask_user_question_seconds` | `AskUserQuestion`（自由記述質問。`labels`省略時は単一入力、指定時は複数項目フォーム）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_QUESTION_TIMEOUT_SECONDS` |
+| `[user_response_timeouts]` | `ask_user_choice_seconds` | `ask_user_choice`（選択肢質問）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_CHOICE_TIMEOUT_SECONDS` |
 | `[plan]` | `allow_badge_unlock` | Plan Mode バッジの双方向切り替えを許可するか | `PLAN_ALLOW_BADGE_UNLOCK` |
-| `[default_workdir]` | `retention_days` | default_workdir 配下のファイル保持日数（0以下で自動削除無効） | `DEFAULT_WORKDIR_RETENTION_DAYS` |
+| `[default_workdir]` | `dir` | エージェントの既定の作業ディレクトリ（`run_script` の cwd 等） | `DEFAULT_WORKDIR` |
+| `[default_workdir]` | `retention_days` | 上記 `dir` 配下のファイル保持日数（0以下で自動削除無効） | `DEFAULT_WORKDIR_RETENTION_DAYS` |
 | `[default_workdir]` | `cleanup_interval_hours` | default_workdir 自動削除チェック間隔（時間） | `DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS` |
+| `[log]` | `dir` | ログ出力先 | `LOG_DIR` |
+| `[log]` | `level` | ログの詳細度。`info`（現行仕様、ツール呼び出しの概要のみ）／`debug`（ツール呼び出しの全引数・全結果・LLM応答本文・thinkingまで記録）／`none`（ログを一切生成しない） | `LOG_LEVEL` |
+| `[log]` | `clear_on_startup` | 起動のたびに `app.log` を空にしてから書き始めるか（`false`＝従来通り追記） | `LOG_CLEAR_ON_STARTUP` |
 | `[log]` | `max_lines` | app_*.log の最大行数（超過時にローテーション） | `LOG_MAX_LINES` |
 | `[log]` | `retention_days` | ローテーション済み app_*.log の保持日数 | `LOG_RETENTION_DAYS` |
 | `[log]` | `cleanup_interval_hours` | app_*.log 自動削除チェック間隔（時間） | `LOG_CLEANUP_INTERVAL_HOURS` |
@@ -750,6 +752,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[auth]` | `require_password` | 認証ON時、パスワード一致を必須にするか（`false`＝ユーザー名のみで通す） | `AUTH_REQUIRE_PASSWORD` |
 | `[chat_log]` | `enabled` | 会話ログ（ユーザー発言・AI最終応答）のテキストファイル記録の有効/無効 | `CHAT_LOG_ENABLED` |
 | `[chat_log]` | `dir` | 会話ログの保存先ルートディレクトリ | `CHAT_LOG_DIR` |
+| `[chat_starters]` | `prompts` | チャット開始時に表示する定型文ボタン（クリックでそのまま送信、複数指定可） | `CHAT_STARTER_PROMPTS` |
 | `[checkpointer]` | `op_timeout_seconds` | LangGraphの会話状態SQLite（`[paths].checkpoint_db`）に対する1回あたりの操作（aget_tuple/aput_writes等）タイムアウト秒数。超過時はcheckpointer再構築へフォールバック | `CHECKPOINTER_OP_TIMEOUT_SECONDS` |
 | `[checkpointer]` | `close_timeout_seconds` | checkpointer再構築時に旧DB接続をクローズする際のタイムアウト秒数 | `CHECKPOINTER_CLOSE_TIMEOUT_SECONDS` |
 | `[checkpointer]` | `shutdown_drain_timeout_seconds` | アプリシャットダウン時、保留中の非同期タスクの完了を待つ最大秒数 | `CHECKPOINTER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS` |
@@ -757,6 +760,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[mcp]` | `settings_path` | `.locohane/settings.json` のパス | `MCP_SETTINGS_PATH` |
 | `[mcp]` | `connect_timeout_seconds` | 1サーバーあたりの起動（プロセス起動+initialize+tools/list）のタイムアウト秒数 | `MCP_CONNECT_TIMEOUT_SECONDS` |
 | `[mcp]` | `call_timeout_seconds` | MCPツール（tools/call）1回あたりのタイムアウト秒数 | `MCP_CALL_TIMEOUT_SECONDS` |
+| `[ui]` | `max_display_messages` | チャット画面に描画するメッセージの最大件数（表示専用の間引き、`0`で無制限） | `UI_MAX_DISPLAY_MESSAGES` |
 
 環境変数が設定されていれば `config.ini` の値より優先される（詳細は `src/config.py` を参照）。
 
