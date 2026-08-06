@@ -2665,12 +2665,14 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     状態）を取得できてから。起動ステップとは別に「結果を確認する」ステップを
     設けること。
 
-    detail_markdown を渡すと、steps とは別に詳細な計画Markdownファイルを
-    data/plans/ 配下へ保存する（会話スレッドごとに1ファイル、このツールを
-    呼ぶたびに上書き更新される。update_task_progress では更新されない）。
+    detail_markdown を渡すと、steps とは別にメインチャットへそのまま
+    表示され（サイドパネルのチェックリストとは別に、通常のメッセージとして
+    出力される）、かつ data/plans/ 配下へ詳細な計画Markdownファイルとしても
+    保存される（会話スレッドごとに1ファイル、このツールを呼ぶたびに
+    上書き更新される。update_task_progress では更新されない）。
     背景・設計判断・調査結果・代替案の検討など、パネル表示のチェックリスト
-    には収まらない情報を残したい複雑なタスクでは、この引数も渡すことを
-    推奨する（省略しても create_plan 自体はエラーにならない）。
+    には収まらない情報をユーザーに見せたい複雑なタスクでは、この引数も
+    渡すことを推奨する（省略しても create_plan 自体はエラーにならない）。
 
     Args:
         steps: 実行計画の各ステップを表す辞書のリスト（1件以上、実行順）。
@@ -2704,6 +2706,10 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
 
     result = f"計画を作成しました（全{len(steps)}件）。approve_plan でユーザーの承認を得てください。"
     if detail_markdown and detail_markdown.strip():
+        # プレフィックス無しの通常メッセージとして送る（PLAN_PREFIX 付きの
+        # チェックリストと違い、messageTree.ts の selectMainThread でサイドパネル
+        # 側へ除外されず、メインチャットにそのまま表示される）。
+        await cl.Message(content=detail_markdown.rstrip()).send()
         try:
             plan_path = _write_plan_detail(plan, detail_markdown)
         except OSError as e:
