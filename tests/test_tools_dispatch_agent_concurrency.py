@@ -17,6 +17,21 @@ import pytest
 from src import tools
 
 
+class _FakeUserSession:
+    """dispatch_agent の finally が main_agent_glob_guard カウンタをリセットする際に
+    触れる cl.user_session を、Chainlit実行コンテキスト無しでも動くよう差し替える。
+    """
+
+    def __init__(self):
+        self._data: dict = {}
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def set(self, key, value):
+        self._data[key] = value
+
+
 def _setup(monkeypatch) -> None:
     monkeypatch.setattr(tools, "_LLM_CONFIG", object())
     monkeypatch.setattr(
@@ -24,6 +39,7 @@ def _setup(monkeypatch) -> None:
         "_AGENT_TYPES",
         {"explore": tools.ResolvedAgentType(description="", system_prompt="", tools=[])},
     )
+    monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
 
 
 async def _dispatch_three(monkeypatch) -> tuple[list[str], int]:

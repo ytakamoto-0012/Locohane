@@ -29,6 +29,21 @@ class _Cfg:
     file_tools_duplicate_guard_carry_over_to_main: bool = False
 
 
+class _FakeUserSession:
+    """dispatch_agent の finally が main_agent_glob_guard カウンタをリセットする際に
+    触れる cl.user_session を、Chainlit実行コンテキスト無しでも動くよう差し替える。
+    """
+
+    def __init__(self):
+        self._data: dict = {}
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def set(self, key, value):
+        self._data[key] = value
+
+
 def _setup(monkeypatch, carry_over: bool) -> None:
     monkeypatch.setattr(
         tools, "_LLM_CONFIG", _Cfg(file_tools_duplicate_guard_carry_over_to_main=carry_over)
@@ -38,6 +53,7 @@ def _setup(monkeypatch, carry_over: bool) -> None:
         "_AGENT_TYPES",
         {"explore": tools.ResolvedAgentType(description="", system_prompt="", tools=[])},
     )
+    monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
 
 
 def test_session_key_is_shared_when_carry_over_enabled(monkeypatch) -> None:

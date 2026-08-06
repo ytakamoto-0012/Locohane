@@ -620,6 +620,42 @@ def _resolve_file_tools_path(raw: str) -> tuple[Path | None, str | None]:
     return p, None
 
 
+def _check_main_agent_glob_limit() -> str | None:
+    """メインエージェント自身によるGlobの連打を防ぎ、dispatch_agentへの委譲を促すガード。
+
+    system_prompt.md は「ファイル・フォルダ調査は必ず dispatch_agent へ委譲し、
+    自分でやってよい例外は対象ルート直下だけを見る1回だけの Glob」と指示しているが、
+    プロンプト文だけでは小型ローカルモデルの遵守が不確実なため（Globを引数を変えて
+    3〜4回連打する等）、_check_file_tools_duplicate の完全一致ガードとは別に、
+    呼び出し回数そのものをコード側で強制する。
+
+    サブエージェント（dispatch_agent経由）内部でのGlobは調査そのものが役目のため
+    対象外（_IN_SUBAGENT が True の間はガードしない）。app.py の on_message と
+    dispatch_agent の finally でカウンタをリセットするため、1ターン内で複数回
+    delegateすること自体は妨げない。[main_agent_glob_guard] の enabled/max_calls
+    で調整可能（max_calls=0 または enabled=false で実質無効化できる）。
+
+    Returns:
+        上限に達していればエラー文字列、そうでなければ None。
+    """
+    cfg = _LLM_CONFIG
+    guard_enabled = cfg.main_agent_glob_guard_enabled if cfg else True
+    if not guard_enabled:
+        return None
+    if _IN_SUBAGENT.get():
+        return None
+    guard_max_calls = cfg.main_agent_glob_guard_max_calls if cfg else 1
+    if _record_and_check_duplicate("main_agent_glob_call_count", "glob", guard_max_calls):
+        return (
+            "エラー: Glob はメインエージェントとして既に呼び出し上限"
+            f"（{guard_max_calls}回）に達しています"
+            "（対象ルート直下の確認用の例外のみ）。これ以上フォルダを深掘りせず、"
+            "残りの調査は dispatch_agent（explore/explore-docs/worker）へ"
+            "委譲してください。"
+        )
+    return None
+
+
 def _check_file_tools_duplicate(tool_label: str, signature: str) -> str | None:
     """Read/Glob/Grep/json_query 共通の重複呼び出しガード。
 
@@ -1221,6 +1257,10 @@ def _record_and_check_duplicate(session_key: str, signature: str, max_calls: int
         まだ上限に達していない（呼び出し元はその旨をこの関数が記録済みなので、
         通常通り処理を続けてよい）。
     """
+    if max_calls <= 0:
+        # 0以下は「無制限」を表す（config.ini側の運用上の逃げ道。ガードが
+        # モデルの挙動と噛み合わずループ等を起こす場合にここで無効化できる）。
+        return False
     counts = cl.user_session.get(session_key)
     if counts is None:
         counts = {}
@@ -1353,7 +1393,9 @@ def glob_tool(pattern: str, path: str = "", head_limit: int = 200) -> str:
     ファイル名検索だけでなく、ディレクトリ階層そのものの調査（対象直下に
     ファイルが1件も無くサブディレクトリしか無いかもしれない場合等）にも
     `"**/*"`/`"*"` 等で使う。読み取り専用のため、計画の有無に関わらず
-    いつでも呼んでよい。
+    いつでも呼んでよい。ただしメインエージェント自身が呼べるのは1ターンに
+    つき既定1回のみ（対象ルート直下の確認用の例外）。2回目以降はエラーを
+    返すので、それ以降の調査は `dispatch_agent` へ委譲すること。
 
     Args:
         pattern: globパターン（例: 配下の全Pythonファイルなら "**/*.py"）。
@@ -1378,6 +1420,9 @@ def glob_tool(pattern: str, path: str = "", head_limit: int = 200) -> str:
     base, error = _resolve_file_tools_path(path)
     if error:
         return f"エラー: {error}"
+    limit_error = _check_main_agent_glob_limit()
+    if limit_error:
+        return limit_error
     dup_error = _check_file_tools_duplicate("Glob", f"Glob\x00{pattern}\x00{base}\x00{head_limit}")
     if dup_error:
         return dup_error
@@ -2532,6 +2577,9 @@ async def dispatch_agent(task: str, agent_type: str) -> str:
     finally:
         _IN_SUBAGENT.reset(token)
         _SUBAGENT_RUN_ID.reset(run_id_token)
+        # 委譲が完了するたびに main_agent_glob_guard のカウンタをリセットする。
+        # 1ターン内で複数回「調査→delegate」を繰り返す正当なケースを妨げないため。
+        cl.user_session.set("main_agent_glob_call_count", None)
 
 
 def _append_scratch_note_hint(result: str) -> str:
