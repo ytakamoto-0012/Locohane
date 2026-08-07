@@ -172,7 +172,7 @@ class Config:
             その場で新しいファイルにローテーションする）。True なら起動の
             たびに必ず新しい日時つきファイルを作成する。log_level="none" の
             ときは意味を持たない。
-        log_max_lines: 1つのログファイル（app_YYYYMMDD_HH[_N].log）が保持する
+        log_max_lines: 1つのログファイル（app_YYYYMMDD_HHMMSS[_N].log）が保持する
             最大行数。この行数を超えたら新しいファイルへローテーションする
             （src/log_rotation.py の LineCountRotatingFileHandler が使う）。
             0以下でローテーション無効化。log_level="none" のときは意味を

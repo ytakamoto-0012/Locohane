@@ -5,7 +5,7 @@ description: Locohane の data/logs/app_*.log を5分おきに定期監視し、
 
 # monitor-app-log: app*.log の定期監視によるissue自動起票
 
-`Locohane` は `data/logs/app_YYYYMMDD_HH_N.log`（`config.ini` の
+`Locohane` は `data/logs/app_YYYYMMDD_HHMMSS_N.log`（`config.ini` の
 `[log].dir`、既定 `./data/logs`）に
 `%(asctime)s %(levelname)s %(name)s: %(message)s` 形式でアプリログを出力する
 （`app.py` の `initialize()`、`src/log_rotation.py`）。このスキルは新規に
@@ -134,7 +134,7 @@ issue起票時には、該当ログから `code` フィールドを抽出し、�
 
 - **区分**: バグ | 改善点 | 問題点
 - **検知日時**: YYYY-MM-DD HH:MM:SS
-- **対象ログファイル**: data/logs/app_YYYYMMDD_HH_N.log
+- **対象ログファイル**: data/logs/app_YYYYMMDD_HHMMSS_N.log
 
 ## 経緯
 

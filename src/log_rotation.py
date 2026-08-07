@@ -5,9 +5,9 @@
 要件のこのアプリでは独自実装が必要。
 
 ファイル名は起動時固定ではなく、ローテーションのたびに「今」の日時から
-<log_dir>/app_YYYYMMDD_HH.log の形式で作り直す（分・秒は含めない）。
-同一時間帯（同じ年月日時）に複数回ローテーションする場合は _1, _2... の
-連番を付けて衝突を避ける。
+<log_dir>/app_YYYYMMDD_HHMMSS.log の形式で作り直す。
+同一秒に複数回ローテーションする場合は _1, _2... の連番を付けて衝突を
+避ける。
 
 1レコード=1行とは限らない（例外トレースバックで複数行になるレコードが
 ある）ため、行数は「レコード数」ではなく「実際に書き込んだテキスト中の
@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 _PREFIX = "app"
-_STAMP_FMT = "%Y%m%d_%H"
+_STAMP_FMT = "%Y%m%d_%H%M%S"
 
 
 class LineCountRotatingFileHandler(logging.Handler):

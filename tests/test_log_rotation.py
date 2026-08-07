@@ -36,8 +36,8 @@ def test_creates_timestamped_file(tmp_path, monkeypatch):
     handler.emit(_make_record("hello"))
     handler.close()
 
-    assert (tmp_path / "app_20260725_14.log").exists()
-    assert (tmp_path / "app_20260725_14.log").read_text(encoding="utf-8") == "hello\n"
+    assert (tmp_path / "app_20260725_143000.log").exists()
+    assert (tmp_path / "app_20260725_143000.log").read_text(encoding="utf-8") == "hello\n"
 
 
 def test_rotates_on_line_count_and_appends_suffix(tmp_path, monkeypatch):
@@ -49,9 +49,9 @@ def test_rotates_on_line_count_and_appends_suffix(tmp_path, monkeypatch):
     handler.emit(_make_record("line3"))
     handler.close()
 
-    assert (tmp_path / "app_20260725_14.log").exists()
-    assert (tmp_path / "app_20260725_14_1.log").exists()
-    assert (tmp_path / "app_20260725_14_1.log").read_text(encoding="utf-8") == "line3\n"
+    assert (tmp_path / "app_20260725_143000.log").exists()
+    assert (tmp_path / "app_20260725_143000_1.log").exists()
+    assert (tmp_path / "app_20260725_143000_1.log").read_text(encoding="utf-8") == "line3\n"
 
 
 def test_multiline_record_counts_all_newlines(tmp_path, monkeypatch):
@@ -62,26 +62,26 @@ def test_multiline_record_counts_all_newlines(tmp_path, monkeypatch):
     handler.close()
 
     # 1レコードでも改行3つ（4行相当のテキスト）を書けば max_lines(2) 超過でローテーション済み。
-    assert (tmp_path / "app_20260725_14.log").exists()
-    assert (tmp_path / "app_20260725_14_1.log").exists()
+    assert (tmp_path / "app_20260725_143000.log").exists()
+    assert (tmp_path / "app_20260725_143000_1.log").exists()
 
 
 def test_clear_on_startup_always_creates_new_file(tmp_path, monkeypatch):
     monkeypatch.setattr(lr, "datetime", _FixedDatetime)
-    existing = tmp_path / "app_20260725_14.log"
+    existing = tmp_path / "app_20260725_143000.log"
     existing.write_text("old1\nold2\n", encoding="utf-8")
 
     handler = _new_handler(tmp_path, max_lines=10, clear_on_startup=True)
     handler.emit(_make_record("new"))
     handler.close()
 
-    assert (tmp_path / "app_20260725_14_1.log").read_text(encoding="utf-8") == "new\n"
+    assert (tmp_path / "app_20260725_143000_1.log").read_text(encoding="utf-8") == "new\n"
     assert existing.read_text(encoding="utf-8") == "old1\nold2\n"
 
 
 def test_resume_appending_when_under_max_lines(tmp_path, monkeypatch):
     monkeypatch.setattr(lr, "datetime", _FixedDatetime)
-    existing = tmp_path / "app_20260725_14.log"
+    existing = tmp_path / "app_20260725_143000.log"
     existing.write_text("old1\nold2\n", encoding="utf-8")
 
     handler = _new_handler(tmp_path, max_lines=10, clear_on_startup=False)
@@ -93,12 +93,12 @@ def test_resume_appending_when_under_max_lines(tmp_path, monkeypatch):
 
 def test_resume_rotates_when_existing_file_already_over_max_lines(tmp_path, monkeypatch):
     monkeypatch.setattr(lr, "datetime", _FixedDatetime)
-    existing = tmp_path / "app_20260725_14.log"
+    existing = tmp_path / "app_20260725_143000.log"
     existing.write_text("old1\nold2\n", encoding="utf-8")
 
     handler = _new_handler(tmp_path, max_lines=2, clear_on_startup=False)
     handler.emit(_make_record("new"))
     handler.close()
 
-    assert (tmp_path / "app_20260725_14_1.log").read_text(encoding="utf-8") == "new\n"
+    assert (tmp_path / "app_20260725_143000_1.log").read_text(encoding="utf-8") == "new\n"
     assert existing.read_text(encoding="utf-8") == "old1\nold2\n"

@@ -479,7 +479,7 @@ async def _setup() -> None:
     #   "debug" - root logger を DEBUG にする。DEBUG レベルのログ（ツール呼び出しの
     #             全引数・全結果、LLM応答本文・thinkingを含む、tools.py/subagent.py/
     #             llm.py 側で発行）も同じハンドラに記録されるようになる。
-    # ログファイルは data/logs/app_YYYYMMDD_HH.log のように日時つきの名前で
+    # ログファイルは data/logs/app_YYYYMMDD_HHMMSS.log のように日時つきの名前で
     # 出力され、config.log_max_lines（[log].max_lines）行を超えると新しい
     # 日時つきファイルへ自動的にローテーションする（LineCountRotatingFileHandler、
     # src/log_rotation.py）。config.log_clear_on_startup（[log].clear_on_startup）
