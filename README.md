@@ -402,8 +402,8 @@ OpenAI 互換エンドポイントを `http://localhost:8080/v1` で公開する
 llama-server --model C:\path\to\model.gguf --alias local-model --host 127.0.0.1 --port 8080 -c 8192
 ```
 
-- `--alias` はモデル名。`config.ini` の `[llm] model` と揃える。
-- 接続先・モデル名は `config.ini`（または環境変数 `LLM_BASE_URL` / `LLM_MODEL`）で切り替え可能。
+- `--alias` はモデル名。`config.ini` の `[llm] main_url` 内の `model` と揃える。
+- 接続先・モデル名は `config.ini`（または環境変数 `LLM_MAIN_URL` / `LLM_SUB_URL`）で切り替え可能。
 - サンプリング（`top_p`/`top_k`/`repeat_penalty`/`frequency_penalty`/`presence_penalty`/`max_tokens`）は
   `--repeat-penalty` 等の起動時 CLI オプションでも既定値を指定できるが、`config.ini` の
   `[llm]` 側で値を指定した場合はリクエストごとにその値が優先される（未指定＝空欄の項目のみ
@@ -427,9 +427,8 @@ llama-server を起動したら、環境依存で必ず実際の値に合わせ�
 
 | セクション | キー | 設定する値 |
 |---|---|---|
-| `[llm]` | `base_url` | 手順2で起動した llama-server の OpenAI 互換エンドポイント（例: `http://localhost:8080/v1`） |
-| `[llm]` | `api_key` | llama.cpp は認証不要のため通常はダミー値のままでよい |
-| `[llm]` | `model` | 手順2の `--alias` と一致させるモデル名 |
+| `[llm]` | `main_url` | メインエージェント用のLLM接続先（1件のみ変更対象。`base_url`＝手順2で起動した llama-server の OpenAI 互換エンドポイント例: `http://localhost:8080/v1`、`api_key`＝llama.cpp は認証不要のため通常はダミー値のまま、`model`＝手順2の `--alias` と一致させるモデル名） |
+| `[llm]` | `sub_url` | サブエージェント（`dispatch_agent`）用のLLM接続先。形式は `main_url` と同じ。通常は `main_url` と同じ値にする |
 | `[scripts]` | `python` | `run_script`/`execute_python_code` ツール（LLMが実行時に呼び出す）が使う Python 実行ファイルの絶対パス |
 
 **`app.bat`（アプリ本体＝chainlitサーバーを起動する仮想環境）**
@@ -453,13 +452,13 @@ llama-server を起動したら、環境依存で必ず実際の値に合わせ�
 **方法A: `setup-basic-config` スキルを使う（推奨）**
 
 Claude Code 上で `/setup-basic-config` を実行すると、上記3ファイル・
-7項目の現在値を提示した上で対話形式で新しい値を確認し、まとめて
+6項目の現在値を提示した上で対話形式で新しい値を確認し、まとめて
 更新してくれる（`.claude/skills/setup-basic-config/SKILL.md`）。
 
 **方法B: 各ファイルを直接編集する**
 
 エディタで `config.ini` を開き、`[llm]` セクションの
-`base_url`/`api_key`/`model`、`[scripts]` セクションの
+`main_url`/`sub_url`、`[scripts]` セクションの
 `python` を直接書き換える。`app.bat` の `PYTHON_DIR` と、プロジェクト
 `CLAUDE.md` の「Python実行環境」「Node.jsパス」も同様に書き換える。
 各項目の意味は後述の「設定リファレンス（config.ini）」も参照。
