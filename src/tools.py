@@ -1388,18 +1388,16 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
     """スキルの scripts/ 配下のスクリプトを実行し、標準出力/標準エラーを返す。
 
     作業ディレクトリは、Chainlit の ChatSettings（歯車アイコン）でユーザーが
-    セッションに設定していればそのディレクトリ、未設定なら config.ini の
-    [default_workdir].dir を使う（_resolve_workdir 参照）。
+    セッションに設定していればそのディレクトリ、未設定なら既定の作業フォルダを使う。
     タイムアウトは設定値（既定 60 秒）。完了までこのツール呼び出し自体が
     ブロックされるため、タイムアウトに近い長時間の実行が見込まれるスクリプトは
     このツールではなく run_script_background を使うこと。
     .py スクリプトは設定された Python 実行ファイルで起動する。
     Agent Skills 標準の progressive disclosure における第3段階（Execute）に相当する。
-    書き込み系ツールのため、create_plan/approve_plan で計画が承認済み
-    （cl.user_session["plan_approved"] が True）でない限り実行できない
-    （未承認の場合はエラーを返す）。ただし副作用のない読み取り専用スクリプト
-    （config.ini の [scripts].plan_approval_exempt_scripts に登録済みのもの。
-    例: excel-tools の read_vba.py）はこの承認チェックを免除される。
+    書き込み系ツールのため、create_plan/approve_plan で計画が承認済みでない
+    限り実行できない（未承認の場合はエラーを返す）。ただし副作用のない
+    読み取り専用スクリプト（一部は事前に例外登録されている。例: excel-tools の
+    read_vba.py）はこの承認チェックを免除される。
 
     Args:
         skill_name: スクリプトを持つスキルのフォルダ名。
@@ -1903,10 +1901,9 @@ async def run_script_background(skill_name: str, script_filename: str, script_ar
     ターンをブロックしない。完了確認・結果取得には check_script_job を使う。
     処理に時間がかかっていること自体は打ち切る理由にならない。ユーザーから
     明示的に中断を指示された場合にのみ stop_script_job を使う。
-    引数解決・作業ディレクトリ解決・計画承認チェックは run_script と同じ
-    （config.ini の [scripts].plan_approval_exempt_scripts による免除も同様）。
-    バックグラウンドジョブを強制終了するまでの上限は config.ini の
-    [scripts].background_max_runtime_seconds（既定3600秒）。
+    引数解決・作業ディレクトリ解決・計画承認チェック（例外の扱いも含む）は
+    run_script と同じ。バックグラウンドジョブを強制終了するまでの上限は
+    既定3600秒。
 
     Args:
         skill_name: スクリプトを持つスキルのフォルダ名。
@@ -1969,12 +1966,10 @@ async def check_script_job(job_id: str) -> str:
     実行中（"実行中です（経過 N 秒）。"）が返ってきた場合、数秒間隔で連続
     して呼び直さないこと。経過をユーザーへ一言伝えたらそのターンを終えて
     次のユーザー発言を待つか、十分な間隔（数十秒〜）を空けてから改めて
-    呼ぶこと。処理に時間がかかっていること自体は異常でも打ち切る理由でも
-    ない（強制終了までの上限は background_max_runtime_seconds が別途管理する）。
+    呼ぶこと。処理に時間がかかっていること自体は異常でも打ち切る理由でもない。
     なお、この指示に反して短い間隔で呼び直した場合はサーバー側で拒否され、
-    拒否メッセージ（既定は「まだ確認間隔が短すぎます」で始まる文字列。文言は
-    config.ini の [scripts].background_min_poll_message でカスタマイズ可）が
-    返る（間隔は [scripts].background_min_poll_interval_seconds、既定20秒）。
+    「まだ確認間隔が短すぎます」のような拒否メッセージが返る（既定の最小
+    間隔は20秒）。
 
     Args:
         job_id: run_script_background の戻り値に含まれるID。
@@ -2304,19 +2299,17 @@ async def execute_python_code(code: str) -> str:
 
     run_script が skills/*/scripts/ 配下の既存ファイルしか実行できないのに対し、
     このツールはコード文字列を一時ファイルへ書き出してその場で実行する。任意コード
-    実行はリスクが高いため、config.ini の [scripts].code_execution_enabled が
-    false の場合は実行せずエラーを返す。書き込み系ツールのため、create_plan/
-    approve_plan で計画が承認済み（cl.user_session["plan_approved"] が True）で
+    実行はリスクが高いため、サーバー設定で無効化されている場合は実行せずエラーを
+    返す。書き込み系ツールのため、create_plan/approve_plan で計画が承認済みで
     ない限り実行できない（未承認の場合はエラーを返す）。
 
-    作業ディレクトリは _resolve_exec_workdir() で決定する（run_script と
-    同じ作業ディレクトリ配下の `_tmp_<thread_id>` サブディレクトリ）。
-    このコードが相対パスで書き出すファイル（中間生成物）はここに溜まり、
-    LLMが作業ディレクトリのファイルを直接汚さないようにしている。
-    生成・更新されたファイルは実行後に自動検知して path_memory（`@N`）へ
-    登録し、戻り値に含める（後続の run_script 等へそのまま渡せる）。
-    タイムアウトや Python 実行ファイルは run_script と共通の設定
-    （[scripts].timeout / [scripts].python）を流用する。
+    作業ディレクトリは run_script と同じ作業ディレクトリ配下の、このセッション
+    専用のサブディレクトリになる。このコードが相対パスで書き出すファイル
+    （中間生成物）はここに溜まり、LLMが作業ディレクトリのファイルを直接
+    汚さないようにしている。生成・更新されたファイルは実行後に自動検知して
+    path_memory（`@N`）へ登録し、戻り値に含める（後続の run_script 等へ
+    そのまま渡せる）。タイムアウトや Python 実行ファイルは run_script と
+    共通の設定を流用する。
 
     **重要: パスメモリ(@N)の活用**
     Globや他のツールで取得したファイルパス（@0, @1, @2…）を、このツールの
@@ -2365,9 +2358,9 @@ async def execute_python_code(code: str) -> str:
     Returns:
         「[終了コード] N」に続けて、標準出力・標準エラー、生成/更新
         ファイルの path_memory 参照（あれば）を、それぞれ見出し付きで
-        連結した文字列。code が空の場合、config.ini で無効化されている
-        場合、計画が未承認の場合、タイムアウトした場合、起動自体に
-        失敗した場合はいずれも例外を送出せず「エラー: ...」形式で返す。
+        連結した文字列。code が空の場合、実行が無効化されている場合、
+        計画が未承認の場合、タイムアウトした場合、起動自体に失敗した
+        場合はいずれも例外を送出せず「エラー: ...」形式で返す。
     """
     if not code.strip():
         return "エラー: code が空です。"
@@ -2456,13 +2449,11 @@ async def execute_python_code_background(code: str) -> str:
     明示的に中断を指示された場合にのみ stop_script_job を使う
     （run_script_background のジョブと共通のレジストリ・ツールで扱われる）。
 
-    引数チェック・作業ディレクトリ解決（_resolve_exec_workdir()）・
-    計画承認チェック（免除なし、常に create_plan/approve_plan による承認が
-    必要）・code_execution_enabled チェックは execute_python_code と同じ。
-    生成・更新されたファイルは完了時に自動検知して path_memory（`@N`）へ
-    登録し、check_script_job の戻り値に含める。バックグラウンドジョブを
-    強制終了するまでの上限は config.ini の
-    [scripts].background_max_runtime_seconds（既定3600秒）。
+    引数チェック・作業ディレクトリ解決・計画承認チェック（免除なし、常に
+    create_plan/approve_plan による承認が必要）・実行可否チェックは
+    execute_python_code と同じ。生成・更新されたファイルは完了時に自動検知して
+    path_memory（`@N`）へ登録し、check_script_job の戻り値に含める。
+    バックグラウンドジョブを強制終了するまでの上限は既定3600秒。
 
     **重要: パスメモリ(@N)の活用**
     Globや他のツールで取得したファイルパス（@0, @1, @2…）を、このツールの
@@ -2507,9 +2498,9 @@ async def execute_python_code_background(code: str) -> str:
 
     Returns:
         起動に成功すれば job_id を含む案内文字列。code が空・実行が
-        config.ini で無効化されている・計画未承認・一時ファイル作成や
-        起動自体に失敗した場合は execute_python_code 同様「エラー: ...」
-        形式の文字列を返す。
+        無効化されている・計画未承認・一時ファイル作成や起動自体に
+        失敗した場合は execute_python_code 同様「エラー: ...」形式の
+        文字列を返す。
     """
     if not code.strip():
         return "エラー: code が空です。"
@@ -2849,13 +2840,12 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
 async def approve_plan() -> str:
     """作成済みの実行計画についてユーザーの承認を得る。
 
-    cl.AskActionMessage パターンで計画内容を提示し、承認/拒否を選ばせる。
-    承認されると、以後 run_script/run_script_background/execute_python_code/
+    計画内容を提示し、承認/拒否を選ばせる。承認されると、以後
+    run_script/run_script_background/execute_python_code/
     execute_python_code_background のハードブロックが解除され実行できるように
-    なる（cl.user_session["plan_approved"] を参照）。タイムアウト
-    （未応答）は安全側に倒して未承認扱いにするが、ユーザーが明示的に却下した
-    場合とは返り値のテキストで区別する（無応答は単に手が離せないだけの
-    可能性が高く、計画自体を作り直す必要はないため）。
+    なる。タイムアウト（未応答）は安全側に倒して未承認扱いにするが、ユーザーが
+    明示的に却下した場合とは返り値のテキストで区別する（無応答は単に手が
+    離せないだけの可能性が高く、計画自体を作り直す必要はないため）。
 
     Returns:
         承認・明示的却下・タイムアウトのいずれかを伝えるテキスト。計画が未作成の
@@ -2909,14 +2899,14 @@ async def update_task_progress(step_index: int, status: str) -> str:
     進捗を見せること。"in_progress" の間はチェックリスト上に content の代わりに
     create_plan で渡した activeForm が表示される。同時に "in_progress" にする
     ステップは1つまでにすること。全ステップが completed になると計画は完了した
-    ものとみなし、plan_approved を False に戻す（承認は作成済み計画の実行に
-    限定したスコープのため、完了後の無関係な run_script/execute_python_code は
+    ものとみなし、承認状態を解除する（承認は作成済み計画の実行に限定した
+    スコープのため、完了後の無関係な run_script/execute_python_code は
     再びブロックされる）。
 
     run_script_background/execute_python_code_background に対応するステップは、
     ジョブを起動しただけの時点では completed にしないこと。check_script_job
     自体は読み取り専用でいつでも呼べるが、起動直後に completed にすると
-    plan_approved が戻り Plan Mode 表示になるため、まだジョブが実行中なのに
+    承認状態が解除され Plan Mode 表示になるため、まだジョブが実行中なのに
     「計画をやり直す必要がある」と誤解し、不要な create_plan/approve_plan を
     繰り返す原因になる。check_script_job で最終結果（running 以外の状態）を
     確認できてから completed にすること。
@@ -3054,8 +3044,7 @@ async def ask_user_question(question: str, labels: list[str] | None = None) -> s
     Returns:
         labels を省略した場合はユーザーが入力した回答テキストをそのまま返す。
         labels を指定した場合は "ラベル: 入力値" を改行区切りで並べた文字列を
-        返す。設定値（config.ini の [user_response_timeouts].ask_user_question_seconds。
-        0以下は無期限待ち）の秒数以内に応答が無い場合は、例外を送出せず
+        返す。設定されたタイムアウト秒数以内に応答が無い場合は、例外を送出せず
         「エラー: ユーザーからの応答がありませんでした（タイムアウト）。」を返す。
     """
     timeout = _resolve_ask_timeout(_ASK_USER_QUESTION_TIMEOUT_SECONDS)
@@ -3106,8 +3095,7 @@ async def ask_user_choice(question: str, choices: list[str], multi_select: bool 
         multi_select=True: ユーザーが選択した選択肢（＋自由記述があれば追加）を
         「、」区切りで連結した文字列（未選択なら "(選択なし)"）。
         ユーザーがキャンセルした場合は "エラー: ユーザーが選択をキャンセルしま
-        した。" を返す。choices が空の場合や、設定値（config.ini の
-        [user_response_timeouts].ask_user_choice_seconds。0以下は無期限待ち）の秒数以内に
+        した。" を返す。choices が空の場合や、設定されたタイムアウト秒数以内に
         応答が無い場合も、例外を送出せず「エラー: ...」形式の文字列を返す。
     """
     if not choices:
@@ -3157,10 +3145,8 @@ def analyze_image(relative_path: str) -> tuple[str, dict | None]:
     画像ファイルの内容を確認して次の判断に使う場合、ユーザーが指定した作業
     ディレクトリ配下にある画像（写真・スキャン画像等）の内容を読み取って
     説明・分析する必要がある場合）。
-    OpenAI互換APIの制約上、ツール呼び出し結果（ToolMessage）自体には
-    画像を積めないため、この関数はテキストの確認メッセージのみを返し、
-    実データは artifact 経由でグラフ側（ImageAwareToolNode）に渡す。
-    ImageAwareToolNode がそれを直後の HumanMessage として会話履歴へ追加し、
+    ツール呼び出しの結果には画像データを直接積めない実装上の制約があるため、
+    この関数はテキストの確認メッセージのみを返す。画像本体は裏側で処理され、
     次のモデル呼び出しで実際にLLMへ見えるようになる。
 
     Args:
@@ -3560,9 +3546,9 @@ def show_help() -> str:
     """このシステムの使い方に関するヘルプ本文を返す。
 
     ユーザーがヘルプや使い方、フィードバックの窓口について尋ねてきた場合に呼ぶ。
-    本文は config.ini の [paths].help_path が指すMarkdownファイル
-    （既定: system_prompt/help.md）に記述されており、このツールはその内容を
-    そのまま読み込んで返すだけの薄いラッパー（憶測でヘルプ内容を生成しない）。
+    本文は設定されたヘルプ用Markdownファイルに記述されており、このツールは
+    その内容をそのまま読み込んで返すだけの薄いラッパー（憶測でヘルプ内容を
+    生成しない）。
 
     Returns:
         ヘルプ本文（UTF-8 テキスト、Markdown形式）。init_tools() が未実行、
