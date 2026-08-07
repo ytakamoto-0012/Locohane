@@ -699,13 +699,11 @@ def _subprocess_env() -> dict[str, str]:
     AGENT_SRC_DIR は execute_python_code のサブプロセスが
     `src/path_memory.py` をインポートするために使う。
 
-    config.ini `[paths].bin_path`（既定 `./.officecli/bin`）に列挙された
-    ディレクトリを PATH の先頭へ追加する。officecli-xlsx 等のスキルは
-    コマンド名（`officecli ...`）を素の状態で叩くため、事前にユーザーが
-    OS側のPATH環境変数へ手動登録していないと「コマンドが見つからない」で
-    失敗する。config.ini に配置先を明示しておけば、evals・app.py実行時の
-    どちらでも追加の手動設定なしで呼び出せる（事故: PATH未登録のまま
-    officecli-xlsx を優先させる設計へ変更したことで発覚）。
+    config.ini `[paths].bin_path`（既定は空）に列挙されたディレクトリを PATH の
+    先頭へ追加する。コマンド名を素の状態で叩く外部バイナリのスキルは、事前に
+    ユーザーがOS側のPATH環境変数へ手動登録していないと「コマンドが見つからない」
+    で失敗する。config.ini に配置先を明示しておけば、evals・app.py実行時の
+    どちらでも追加の手動設定なしで呼び出せる。
     """
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     env["AGENT_THREAD_ID"] = cl.user_session.get("thread_id") or "_no_session"

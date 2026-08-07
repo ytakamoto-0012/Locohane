@@ -1,12 +1,11 @@
 """src/tools.py の _subprocess_env() が config.ini [paths].bin_path を
 PATHへ反映することの回帰テスト。
 
-officecli-xlsx 等のスキルはコマンド名（`officecli ...`）を素の状態で叩く
-前提のため、OS側のPATH環境変数へユーザーが手動登録していないと
-run_script/execute_python_code のサブプロセスから「コマンドが見つからない」
-で失敗する。bin_path に配置先を明示しておけば、evals・app.py実行時のどちらも
-追加の手動設定なしで呼び出せるようにするための機能（2026-08-01追加、
-officecli優先化の設計変更にあわせて発覚した運用上の抜け）。
+コマンド名を素の状態で叩く前提の外部バイナリのスキルは、OS側のPATH環境変数へ
+ユーザーが手動登録していないと run_script/execute_python_code のサブプロセスから
+「コマンドが見つからない」で失敗する。bin_path に配置先を明示しておけば、
+evals・app.py実行時のどちらも追加の手動設定なしで呼び出せるようにするための
+機能（2026-08-01追加）。
 """
 
 import os
@@ -39,7 +38,7 @@ def _base_env(monkeypatch):
 
 
 def test_existing_bin_dir_is_prepended_to_path(tmp_path, monkeypatch):
-    bin_dir = tmp_path / ".officecli" / "bin"
+    bin_dir = tmp_path / "tools" / "bin"
     bin_dir.mkdir(parents=True)
     monkeypatch.setattr(tools, "_LLM_CONFIG", _FakeConfig(bin_path=[bin_dir]))
 

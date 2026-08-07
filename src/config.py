@@ -145,11 +145,10 @@ class Config:
             同名定義が両方に存在する場合は後方（.locohane側）が優先される
             （scan_agent_types() 参照）。
         bin_path: run_script/execute_python_code のサブプロセスへ渡す PATH の
-            先頭に追加するディレクトリの絶対パスのリスト（既定
-            [./.officecli/bin]）。officecli 等、コマンド名を素の状態で叩く
-            前提の外部バイナリをOS側のPATH登録なしで呼び出せるようにする
-            （src/tools.py の _subprocess_env() 参照）。存在しないディレクトリは
-            無視される。
+            先頭に追加するディレクトリの絶対パスのリスト（既定は空）。
+            コマンド名を素の状態で叩く前提の外部バイナリをOS側のPATH登録なしで
+            呼び出せるようにする（src/tools.py の _subprocess_env() 参照）。
+            存在しないディレクトリは無視される。
         system_prompt_path: システムプロンプトのテンプレートファイル
             （{{skills}} にスキル一覧を差し込む）の絶対パス。
         project_instructions_paths: プロジェクト固有の追加指示ファイル
@@ -1047,7 +1046,7 @@ def load_config(config_path: Path | None = None) -> Config:
         PROJECT_ROOT,
     )
     bin_path = _as_path_list(
-        os.getenv("BIN_PATH", paths.get("bin_path", "./.officecli/bin")),
+        os.getenv("BIN_PATH", paths.get("bin_path", "")),
         PROJECT_ROOT,
     )
 

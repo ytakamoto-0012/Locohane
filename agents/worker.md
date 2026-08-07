@@ -70,20 +70,11 @@ tools: read_skill, read_skill_file, get_tool_source, check_work_dir_status, anal
 `execute_python_code` で `openpyxl` 等を使って自作する前に、必ず対応するスキルの
 専用の仕組みを使うこと（委譲元のメインエージェントと同じルール）。
 
-| 作りたいもの | 優先スキル | 呼び出し方 | 使えない場合のフォールバック |
-|---|---|---|---|
-| xlsx（Excel） | `officecli-xlsx` | `execute_python_code` から `subprocess` 経由（**`run_script`不可**） | `excel-tools` の `edit_excel.py`（`run_script`） |
-| docx（Word） | `officecli-docx` | 同上 | `docx-tools` の `create_docx.py`/`edit_docx.py`（`run_script`） |
-| pptx（PowerPoint） | `officecli-pptx` | 同上 | `pptx-tools` の `create_pptx.py`/`edit_pptx.py`（`run_script`） |
-
-`officecli-*` は外部バイナリのCLIツールで `scripts/` ディレクトリを持たないため、
-`run_script(skill_name="officecli-xlsx", ...)` のように呼ぶと「scripts/ ディレクトリが
-ありません」というエラーになる（これは「officecliが使えない」という意味ではない）。
-`officecli-*` を使うと決めたら、`read_skill("officecli-xlsx")`（本文）に続けて
-`read_skill("officecli-python-bridge")` を読み、`execute_python_code` 内で
-`subprocess` からコマンドとして呼び出すこと。優先スキルを実際に実行してみた結果
-「未導入」等で使えないと分かった場合のみ、フォールバック（`excel-tools`等）へ
-切り替えて `run_script` で使う。
+| 作りたいもの | 使うスキル | 呼び出し方 |
+|---|---|---|
+| xlsx（Excel） | `excel-tools` | `edit_excel.py`（`run_script`） |
+| docx（Word） | `docx-tools` | `create_docx.py`/`edit_docx.py`（`run_script`） |
+| pptx（PowerPoint） | `pptx-tools` | `create_pptx.py`/`edit_pptx.py`（`run_script`） |
 
 ## 計画承認について
 

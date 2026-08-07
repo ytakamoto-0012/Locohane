@@ -24,27 +24,18 @@ judge: |
   generate_annual_schedule_fixture.py --preset large（既定: 5年×8件≒52ファイル）
   で生成した、実データ規模に近い構成。
 
-  2026-08-01時点で、xlsx生成の優先順位を「officecli-xlsx（外部バイナリ
-  officecliコマンド）を優先、未導入等で使えない場合のみ excel-toolsの
-  edit_excel.pyへフォールバック」に変更した（system_prompt.md 106-125行、
-  excel-tools SKILL.md description参照）。officecli-xlsx は run_script
-  ではなく execute_python_code から subprocess 等で officecli バイナリを
-  呼ぶ形になるため、`tool_call_args_contains` のような固定引数の完全一致
-  では判定できない。そのため以下は judge（本項目）でのみ確認する。
+  xlsx生成は excel-tools の edit_excel.py（run_script経由）で行う
+  （system_prompt.md「【必須ルール】ファイルの新規作成・編集はスキルの
+  専用スクリプトを最優先する」節、excel-tools SKILL.md参照）。
 
   以下を確認せよ:
-  1. execute_python_code、または run_script で file-tools 以外のスキルの
-     実処理（officecliコマンドの実行、または excel-toolsのedit_excel.py）を
-     呼ぶ前に、create_plan → approve_plan を経由しているか（計画未承認の
-     ままだとツール側でブロックされ「エラー: 計画が未承認のため実行できません」
-     が返るため、これが返っている場合は不合格）。
-  2. 次のいずれかの経路でannual_schedule.xlsx（またはそれに類するファイル名）
-     を作成しているか:
-     (a) `read_skill(officecli-xlsx)` を読み、`execute_python_code` の
-         コード引数内で `officecli` コマンドを呼び出している。
-     (b) officecliが使えない旨を確認した上で `read_skill(excel-tools)` を読み、
-         `run_script` で `edit_excel.py` を呼び出している。
-     どちらでもなく、`execute_python_code` で openpyxl等を使い自作している
+  1. run_script で excel-tools の実処理（edit_excel.py 等）を呼ぶ前に、
+     create_plan → approve_plan を経由しているか（計画未承認のままだと
+     ツール側でブロックされ「エラー: 計画が未承認のため実行できません」が
+     返るため、これが返っている場合は不合格）。
+  2. `read_skill(excel-tools)` を読み、`run_script` で `edit_excel.py` を
+     呼び出してannual_schedule.xlsx（またはそれに類するファイル名）を
+     作成しているか。`execute_python_code` で openpyxl等を使い自作している
      場合は不合格（system_prompt.md の「スキルの専用スクリプトを最優先する」
      ルール違反）。
   3. 実行結果（ToolMessage）が正常終了（エラーでない）になっているか。
@@ -58,15 +49,8 @@ judge: |
      thinking_loop によるターン打ち切り）が発生していないか結果JSONを確認し、
      発生していれば理由を報告せよ（打ち切り自体は不合格の直接理由にはしない
      が、何が起きたかは必ず報告すること）。
-  6. `read_skill` で officecli-xlsx と excel-tools の**両方**を予防的に
-     読み比べていないか（優先スキルを読んで使えると分かった時点でもう一方を
-     読む必要はない。両方読んでいたら無駄なトークン消費として指摘せよ。
-     ただし優先スキル側が実際に使えず、フォールバックへ切り替えた結果
-     両方読むことになった場合は不合格としない）。
-  7. 最終回答がユーザーに生成ファイルの場所を伝えているか。
-  1・2・7のいずれかに明確に反する場合は不合格とせよ。6は結果JSONに
-  transcriptとして記録し、明確な違反があれば報告するが、単独では不合格に
-  しない。
+  6. 最終回答がユーザーに生成ファイルの場所を伝えているか。
+  1・2・6のいずれかに明確に反する場合は不合格とせよ。
 notes: >-
   end-to-end本丸ケース（旧021の統合版。021は縮小フィクスチャで内容が
   重複するため削除し、こちらに一本化した）。/tune-prompt system_prompt の
@@ -90,3 +74,6 @@ notes: >-
   tool_call_args_contains: {dispatch_agent: {agent_type: worker}} に置き換えた
   （「実際に書き込み権限を持つworkerへ委譲したか」を確認する、より設計に
   即した機械チェック）。
+  2026-08-07: officecliをプロジェクトから撤去したため、judgeのofficecli
+  優先/フォールバック分岐を撤去し、excel-tools（edit_excel.py）一本の経路
+  のみを確認する内容に更新した。

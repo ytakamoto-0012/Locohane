@@ -254,18 +254,6 @@ Locohane/
 │   │   ├── pdf-tools/        # PDF読込・ページ画像化・PDF生成
 │   │   └── pptx-tools/       # PowerPoint読込・生成・テンプレート部分編集
 │   └── agents/              # agents_dir にマージ走査される追加エージェント種別（同名は優先）
-├── .officecli/                # このディレクトリに配置すると利用可能。（config.ini の project_locohane_dir にディレクトリ登録必要）
-│   │                           # OfficeCLI（外部OSS、Apache 2.0、要別途インストール）の配置先。
-│   │                           # .gitignore 対象のためリポジトリには同梱されない
-│   ├── bin/officecli.exe     # 単一バイナリ本体（.NET runtime内蔵、Office製品のインストール不要）
-│   ├── skills/                # skills_dir にマージ走査される、OfficeCLI公式配布のSKILL.md群
-│   │   ├── morph-ppt/         # 既存pptxを指定デザインスタイルへ再構成するスキル
-│   │   └── morph-ppt-3d/      # 3Dモデル(.glb)を含むpptx編集スキル
-│   ├── LICENSE                # Apache License 2.0
-│   ├── NOTICE
-│   ├── THIRD-PARTY-NOTICES.txt # OfficeCLIが内包する第三者コンポーネント一覧
-│   ├── SECURITY.md
-│   └── README_ja.md           # OfficeCLI公式README（日本語版）
 ├── frontend/                # カスタムReactフロントエンド
 │   ├── src/
 │   │   ├── components/      # UIコンポーネント（AskFormBar, PlanCard, SidePanel等）
@@ -510,11 +498,6 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 
 スキル開発の詳細な手順・規約は [`skills/SKILLS_README.md`](skills/SKILLS_README.md) を参照。
 
-上記に加え、[OfficeCLI](https://github.com/iOfficeAI/OfficeCLI)（外部OSS、後述）を
-`.officecli/` に導入すると、同梱の `morph-ppt`（既存pptxを指定デザインスタイルへ
-再構成）・`morph-ppt-3d`（3Dモデル(.glb)を含むpptx編集）スキルも `project_locohane_dir`
-経由で自動検知される。
-
 処理時間が `[scripts].timeout`（既定300秒）に近づく、または超えうるスクリプトを持つスキルは、
 SKILL.md 側で `run_script` ではなく `run_script_background` を使うよう指示し、起動後は
 ユーザーに実行中である旨を伝えた上で、後続のやり取りで `check_script_job` を呼んで状況を
@@ -540,33 +523,6 @@ description: 何をするスキルか、いつ使うかを具体的に書く。
 ```
 
 アプリを再起動すると起動時走査で自動的に発見される（動的リロードはしない）。
-
-### OfficeCLI の導入（任意）
-
-[OfficeCLI](https://github.com/iOfficeAI/OfficeCLI)（Apache License 2.0）は、Word/Excel/
-PowerPointをOfficeのインストールなしで読み書きできる、AIエージェント向けの単一バイナリCLI
-（`.NET runtime`内蔵）。本プロジェクトへは直接組み込まず、公式配布物一式（バイナリ・付属
-スキル・ライセンス文書）をリポジトリ直下 `.officecli/` にそのまま展開し、`config.ini` の
-`project_locohane_dir` に `"./.officecli"` を追加することで、同梱の `skills/`（`morph-ppt`・
-`morph-ppt-3d`）を Locohane のスキル発見機構（`skills_dir` へのマージ走査）に乗せる形で
-利用する。
-
-- **導入手順**: [公式リリース](https://github.com/iOfficeAI/OfficeCLI/releases)から
-  Windows用バイナリ（`officecli-win-x64.exe` 等）を取得し、`.officecli/bin/officecli.exe`
-  として配置する（付属の `LICENSE`・`NOTICE`・`THIRD-PARTY-NOTICES.txt`・`skills/` も
-  公式配布のまま `.officecli/` 配下に置く）。この配置規約に従えば、OS側のPATH環境変数へ
-  手動登録しなくても `config.ini` `[paths].bin_path`（既定 `./.officecli/bin`）経由で
-  run_script/execute_python_code のサブプロセスから `officecli` コマンドを呼び出せる
-  （`src/tools.py` の `_subprocess_env()` 参照）。別の場所に配置した場合は `bin_path` を
-  書き換えること。
-- **`.gitignore` 対象**: `.officecli/` はリポジトリにコミットされない
-  （外部OSSバイナリのため、利用者ごとに個別導入する想定）。導入しない場合、
-  `project_locohane_dir` に指定していても該当ディレクトリが存在しないだけでエラーには
-  ならない。
-- **完全オフライン運用時の注意**: OfficeCLIはバックグラウンドで更新の自動チェックを行う
-  （既定で有効）。オフライン環境で使う場合は `officecli config autoUpdate false` で
-  恒久的に無効化するか、実行のたびに環境変数 `OFFICECLI_SKIP_UPDATE=1` を設定してスキップ
-  する（詳細は後述の「外部通信について（完全オフライン保証）」を参照）。
 
 ---
 
@@ -851,18 +807,6 @@ THIRD_PARTY_LICENSES.md には含まれていません。npm 依存を追加・�
 [Chainlit](https://github.com/Chainlit/chainlit)（Apache 2.0）が同梱するデフォルトの
 favicon をそのまま使用しています。
 
-### OfficeCLI（外部バイナリツール、任意導入）
-
-上記の pip / npm 依存とは別に、`.officecli/` に導入する
-[OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) は **Apache License 2.0** の
-外部OSSで、本プロジェクトのソースコードには組み込まれていません（`.gitignore`
-対象、詳細は上記「OfficeCLI の導入（任意）」参照）。単一バイナリ内に
-`DocumentFormat.OpenXml`・`System.CommandLine`・`.NET Runtime`（いずれもMIT
-License）を同梱しており、帰属表示は `.officecli/THIRD-PARTY-NOTICES.txt` に
-含まれています。GPL / AGPL / LGPL は含まれず、商用利用可能です。詳細は
-[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) の「pip依存以外の同梱物（手動記載）」
-セクションを参照。
-
 ### 外部通信について（完全オフライン保証）
 
 本スタックの外部送信はすべて **opt-in**（API キー設定時のみ）で、既定では発生しません。
@@ -882,12 +826,6 @@ MCPサーバー機能（`.locohane/settings.json`、上記「MCPサーバー接�
 ネットワーク通信を行うかどうかは各MCPサーバーの実装次第であり、本プロジェクトの
 管理範囲外です。
 
-`.officecli/` に [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) を導入した場合、
-`officecli` バイナリ自身が**既定でバックグラウンド更新チェックの外部通信を行います**
-（本プロジェクトのコードが行うものではありません）。完全オフライン運用したい場合は、
-`officecli config autoUpdate false` で恒久的に無効化するか、実行のたびに環境変数
-`OFFICECLI_SKIP_UPDATE=1` を設定してください。導入しない場合はこの通信も発生しません。
-
 `web-search` スキル（Tavily APIによるWeb検索）は、スキル専用の
 `skills/web-search/scripts/.env` に `TAVILY_API_KEY` を設定した場合のみ、
 ユーザーがこのスキルを実行した時に限り `https://api.tavily.com` へ通信します。
@@ -898,8 +836,6 @@ MCPサーバー機能（`.locohane/settings.json`、上記「MCPサーバー接�
 
 - [ ] 使用する **GGUF モデルのライセンス** を確認する（→ 上記「llama-server 起動例」の注記）
 - [ ] 依存を追加・更新したら `tools/gen_licenses.py` で告知ファイルを再生成する
-- [ ] `.officecli/` を導入した場合、完全オフライン運用が必要なら
-      `officecli config autoUpdate false` で自動更新チェックを無効化する
 
 ---
 
