@@ -140,6 +140,16 @@ def set_current_session(session_id: str | None) -> None:
     _CURRENT_SESSION_ID.set(session_id)
 
 
+def get_current_session() -> str | None:
+    """set_current_session() で設定された現在のセッションID（thread_id）を返す。
+
+    src/tools.py がセッション毎の並列数ガード（_TOOL_CALL_SEMAPHORES /
+    _DISPATCH_AGENT_SEMAPHORES）のキーとして流用する。未設定（evals/ の
+    評価ハーネス等、Chainlitセッションを持たない呼び出し元）なら None。
+    """
+    return _CURRENT_SESSION_ID.get()
+
+
 def forget_session(session_id: str) -> None:
     """セッション終了時（タブを閉じた等）に、_active_async_clients の
     ブックキーピング用エントリだけを片付ける。

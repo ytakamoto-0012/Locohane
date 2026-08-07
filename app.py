@@ -92,6 +92,7 @@ from src.skills import build_system_prompt, render_skills_block, scan_skills
 from src.subagent import is_truncated_result
 from src.tools import (
     WorkDirAccessStatus,
+    forget_session_tool_semaphores,
     init_tools,
     probe_workdir_access,
     register_raw_unc_paths_in_text,
@@ -857,7 +858,10 @@ async def on_chat_end() -> None:
     プロセス寿命中ずっと残り続けていた（値のWeakSetはクライアントの
     参照が無くなり次第GCで自然に空になるが、辞書エントリそのものは
     消えない）。実害はごく軽微（文字列+空WeakSetオブジェクト程度）だが、
-    forget_session() で明示的に片付ける。
+    forget_session() で明示的に片付ける。src/tools.py のセッション毎
+    ツール呼び出しガード（_TOOL_CALL_SEMAPHORES/_DISPATCH_AGENT_SEMAPHORES）
+    も同じ理由で、forget_session_tool_semaphores() により辞書エントリを
+    片付ける。
 
     注意: ここでは強制クローズ（aclose_active_llm_clients）は呼ばない。
     このフックは session.current_task をキャンセルしないため、停止
@@ -879,6 +883,7 @@ async def on_chat_end() -> None:
     thread_id = cl.user_session.get("thread_id")
     if thread_id is not None:
         forget_session(thread_id)
+        forget_session_tool_semaphores(thread_id)
         work_dir = cl.user_session.get("work_dir")
         shutil.rmtree(_config.default_workdir / f"_tmp_{thread_id}", ignore_errors=True)
         if work_dir:

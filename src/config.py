@@ -286,13 +286,17 @@ class Config:
             （単位はノード遷移数で、subagent_max_iterations とは数え方が
             異なる）。
         graph_tool_max_parallel: メインエージェントのツール呼び出し
-            （ImageAwareToolNode）を同時に何件まで並列実行してよいか。
-            ToolNode は同一AIMessage内の複数tool_callsを asyncio.gather()
-            で完全並列実行するため、共有リソース（llama-server・DB等）への
-            同時アクセスや呼び出し順の乱れが起きうる（subagent_max_parallel
-            と同じ理由づけのメインエージェント版）。1以上は
-            asyncio.Semaphore(N)でその値までにガードし（既定1＝完全直列化）、
-            0以下はガードを無効化して並列呼び出しをそのまま許可する。
+            （ImageAwareToolNode）を、1セッションあたり同時に何件まで
+            並列実行してよいか。ToolNode は同一AIMessage内の複数tool_calls
+            を asyncio.gather() で完全並列実行するため、共有リソース
+            （llama-server・DB等）への同時アクセスや呼び出し順の乱れが
+            起きうる（subagent_max_parallel と同じ理由づけのメイン
+            エージェント版）。セッション（thread_id）ごとに独立した
+            asyncio.Semaphore を持つ（src/tools.py の _TOOL_CALL_SEMAPHORES
+            参照）ため、この値は「1セッションが同時に使える枠」の上限であり、
+            複数セッション間の並列自体は妨げない。1以上はその値までに
+            ガードし（既定1＝完全直列化）、0以下はガードを無効化して
+            並列呼び出しをそのまま許可する。
         graph_token_guard_enabled: メインエージェントの1リクエストあたりの
             トークン量を監視し、上限が近づいたら引継ぎプロンプトの生成を
             促す機能の有効/無効（src.main_token_guard 参照）。
@@ -303,11 +307,15 @@ class Config:
             引継ぎ手順）のMarkdownファイルの絶対パス。
         subagent_max_iterations: dispatch_agent が内部で回す ReAct
             ループの最大反復回数（agent→tools 遷移の回数）。
-        subagent_max_parallel: dispatch_agent ツールの実LLM呼び出しを同時に
-            何件まで許可するか。単一インスタンスのllama-serverへdispatch_agentの
-            並列リクエストが飛ぶとチェックポイント破損（ToolMessage欠落に
-            よるValueError）が本番で発生したための保険措置。1以上は
-            asyncio.Semaphore(N)でその値までにガードし（既定1＝完全直列化）、
+        subagent_max_parallel: dispatch_agent ツールの実LLM呼び出しを、
+            1セッションあたり同時に何件まで許可するか。単一インスタンスの
+            llama-serverへdispatch_agentの並列リクエストが飛ぶとチェック
+            ポイント破損（ToolMessage欠落によるValueError）が本番で発生した
+            ための保険措置。セッション（thread_id）ごとに独立した
+            asyncio.Semaphore を持つ（src/tools.py の
+            _DISPATCH_AGENT_SEMAPHORES 参照）ため、この値は「1セッションが
+            同時に使える枠」の上限であり、複数セッション間の並列自体は
+            妨げない。1以上はその値までにガードし（既定1＝完全直列化）、
             0以下はガードを無効化して並列呼び出しをそのまま許可する（検証用）。
         subagent_token_guard_enabled: dispatch_agent 内のLLM応答の
             usage_metadata.total_tokens を監視し、閾値超過時に注意喚起

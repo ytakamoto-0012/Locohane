@@ -71,6 +71,7 @@ from . import file_tools, memory, path_memory
 from .agent_types import AgentType
 from .config import Config, expand_config_vars
 from .images import image_followup_message, is_image_file, to_data_url
+from .llm import get_current_session
 from .subagent import is_truncated_result, run_subagent
 
 logger = logging.getLogger(__name__)
@@ -128,27 +129,63 @@ def _duplicate_guard_session_key(base_key: str) -> str:
 # でLangGraphがValueErrorを送出する）が本番で確認されたため、モデルの
 # 挙動に関係なく確実に効くコード側のガードとして同時実行数を制限する
 # （並列呼び出し自体は許可し、超過分は待ち順に処理される）。
-# init_tools() が config.ini の [subagent].max_parallel に応じて再設定する。
-# None はガード無効（無制限）を表す。既定値の Semaphore(1) は init_tools()
-# 未実行時（テスト等）の安全側フォールバック。
-_DISPATCH_AGENT_SEMAPHORE: "asyncio.Semaphore | None" = asyncio.Semaphore(1)
+# init_tools() が config.ini の [subagent].max_parallel に応じて
+# _DISPATCH_AGENT_MAX_PARALLEL を再設定する。0以下はガード無効（無制限）を表す。
+# セッション（llm.get_current_session() が返す thread_id）ごとに独立した
+# Semaphore を遅延生成する辞書で保持する（グローバル単一 Semaphore だと、
+# 無関係な複数セッションのdispatch_agent呼び出しが互いに待ち合ってしまうため。
+# 全体のHTTPリクエスト総数は [llm].max_concurrent_requests が別途一元管理する）。
+# 既定値1は init_tools() 未実行時（テスト等）の安全側フォールバック。
+_DISPATCH_AGENT_MAX_PARALLEL: int = 1
+_DISPATCH_AGENT_SEMAPHORES: "dict[str | None, asyncio.Semaphore]" = {}
 
 # メインエージェントの全ツール呼び出し（ImageAwareToolNode 経由）の同時実行数を
 # ガードするセマフォ。init_tools() が config.ini の [graph].max_parallel に
-# 応じて再設定する。None はガード無効を表す。既定 Semaphore(1) は init_tools()
-# 未実行時（テスト等）の安全側フォールバック。
-_TOOL_CALL_SEMAPHORE: "asyncio.Semaphore | None" = asyncio.Semaphore(1)
+# 応じて _TOOL_CALL_MAX_PARALLEL を再設定する。0以下はガード無効を表す。
+# 上記 _DISPATCH_AGENT_SEMAPHORES と同じ理由・同じ辞書方式でセッション毎に
+# 独立させる。既定値1は init_tools() 未実行時（テスト等）の安全側フォールバック。
+_TOOL_CALL_MAX_PARALLEL: int = 1
+_TOOL_CALL_SEMAPHORES: "dict[str | None, asyncio.Semaphore]" = {}
+
+
+def _get_session_semaphore(
+    registry: "dict[str | None, asyncio.Semaphore]", max_parallel: int
+) -> "asyncio.Semaphore | None":
+    """現在のセッション（llm.get_current_session()）専用の Semaphore を
+    registry から取得する。無ければ max_parallel で新規生成して登録する
+    （評価ハーネス等、Chainlitセッションを持たない呼び出し元は session_id が
+    None になり、その呼び出し元同士で1つの Semaphore を共有する）。
+    max_parallel が0以下ならガード無効として None を返す。
+    """
+    if max_parallel <= 0:
+        return None
+    session_id = get_current_session()
+    sem = registry.get(session_id)
+    if sem is None:
+        sem = asyncio.Semaphore(max_parallel)
+        registry[session_id] = sem
+    return sem
+
+
+def forget_session_tool_semaphores(session_id: str) -> None:
+    """セッション終了時（@cl.on_chat_end）に、そのセッション専用の Semaphore
+    エントリを辞書から削除する。Semaphore 自体は参照が無くなり次第GCされるが、
+    辞書キー（session_id文字列）がプロセス寿命中ずっと残り続けるのを防ぐのが
+    目的（src/llm.py の forget_session() と同じ理由）。
+    """
+    _TOOL_CALL_SEMAPHORES.pop(session_id, None)
+    _DISPATCH_AGENT_SEMAPHORES.pop(session_id, None)
 
 
 async def _tool_call_semaphore_wrap(request, execute):
     """ToolNode(awrap_tool_call=...) 用インターセプタ。
 
     全ツール呼び出し（同期/非同期問わず _execute_tool_async 経由で正しく
-    振り分けられた実行）を _TOOL_CALL_SEMAPHORE で待ち合わせる。dispatch_agent
-    は専用の _DISPATCH_AGENT_SEMAPHORE でも重ねてガードされる形になるが、
-    単に入れ子になるだけで問題ない。
+    振り分けられた実行）を、現在のセッション専用の Semaphore（_TOOL_CALL_SEMAPHORES
+    参照）で待ち合わせる。dispatch_agent は専用の _DISPATCH_AGENT_SEMAPHORES でも
+    重ねてガードされる形になるが、単に入れ子になるだけで問題ない。
     """
-    sem = _TOOL_CALL_SEMAPHORE
+    sem = _get_session_semaphore(_TOOL_CALL_SEMAPHORES, _TOOL_CALL_MAX_PARALLEL)
     if sem is None:
         return await execute(request)
     if sem.locked():
@@ -303,16 +340,16 @@ def init_tools(
             バッジをクリックした際、Plan Mode → Edit Automatically 方向
             （ロック解除）も許可するか。False の場合はロック方向のクリックのみ
             有効になる（config.ini の [plan].allow_badge_unlock 由来）。
-        dispatch_agent_max_parallel: dispatch_agent ツールの実LLM呼び出しを
-            _DISPATCH_AGENT_SEMAPHORE で同時に何件まで許可するか。1以上は
-            その値までにガードし（既定1＝完全直列化）、0以下はガードを
-            無効化して並列呼び出しをそのまま許可する
-            （config.ini の [subagent].max_parallel 由来）。
-        graph_tool_max_parallel: メインエージェントの全ツール呼び出し
-            （ImageAwareToolNode）を _TOOL_CALL_SEMAPHORE で同時に何件まで
+        dispatch_agent_max_parallel: dispatch_agent ツールの実LLM呼び出しを、
+            1セッションあたり _DISPATCH_AGENT_SEMAPHORES で同時に何件まで
             許可するか。1以上はその値までにガードし（既定1＝完全直列化）、
             0以下はガードを無効化して並列呼び出しをそのまま許可する
-            （config.ini の [graph].max_parallel 由来）。
+            （config.ini の [subagent].max_parallel 由来）。
+        graph_tool_max_parallel: メインエージェントの全ツール呼び出し
+            （ImageAwareToolNode）を、1セッションあたり _TOOL_CALL_SEMAPHORES
+            で同時に何件まで許可するか。1以上はその値までにガードし
+            （既定1＝完全直列化）、0以下はガードを無効化して並列呼び出しを
+            そのまま許可する（config.ini の [graph].max_parallel 由来）。
         script_background_max_runtime_seconds: run_script_background で
             起動したプロセスを強制終了するまでの上限秒数（config.ini の
             [scripts].background_max_runtime_seconds 由来）。
@@ -352,8 +389,8 @@ def init_tools(
     global _APPROVAL_TIMEOUT_SECONDS, _ASK_USER_QUESTION_TIMEOUT_SECONDS
     global _ASK_USER_CHOICE_TIMEOUT_SECONDS
     global _PLAN_BADGE_ALLOW_UNLOCK
-    global _DISPATCH_AGENT_SEMAPHORE
-    global _TOOL_CALL_SEMAPHORE
+    global _DISPATCH_AGENT_MAX_PARALLEL
+    global _TOOL_CALL_MAX_PARALLEL
     global _PLAN_APPROVAL_EXEMPT_SCRIPTS
     _skills_root_list = [skills_root] if isinstance(skills_root, (str, Path)) else list(skills_root)
     _SKILLS_ROOTS = [Path(p).resolve() for p in _skills_root_list]
@@ -380,8 +417,14 @@ def init_tools(
     _ASK_USER_QUESTION_TIMEOUT_SECONDS = ask_user_question_timeout_seconds
     _ASK_USER_CHOICE_TIMEOUT_SECONDS = ask_user_choice_timeout_seconds
     _PLAN_BADGE_ALLOW_UNLOCK = plan_badge_allow_unlock
-    _DISPATCH_AGENT_SEMAPHORE = asyncio.Semaphore(dispatch_agent_max_parallel) if dispatch_agent_max_parallel > 0 else None
-    _TOOL_CALL_SEMAPHORE = asyncio.Semaphore(graph_tool_max_parallel) if graph_tool_max_parallel > 0 else None
+    _DISPATCH_AGENT_MAX_PARALLEL = dispatch_agent_max_parallel
+    _TOOL_CALL_MAX_PARALLEL = graph_tool_max_parallel
+    # 設定値の変更（再初期化）に追従できるよう、以前の値で生成済みの
+    # セッション毎 Semaphore を破棄する。既に待機/取得中のタスクがあっても、
+    # 参照を持つ限りその Semaphore オブジェクト自体は生きたまま使われ続ける
+    # ため、ここでの clear() が実行中の待ち合わせを壊すことはない。
+    _DISPATCH_AGENT_SEMAPHORES.clear()
+    _TOOL_CALL_SEMAPHORES.clear()
     # 各ツールの description（LLMに見えるツールスキーマ説明）内の ${変数名} を
     # config.ini の実値へ展開する。@tool デコレータが docstring から description を
     # 設定するのは import 時の一度きりなので、ここで書き換えないと LLM には
@@ -2573,10 +2616,11 @@ async def dispatch_agent(task: str, agent_type: str) -> str:
     # 重複ガードの集合をこの実行専用にするためのID（_duplicate_guard_session_key 参照）。
     run_id_token = _SUBAGENT_RUN_ID.set(uuid.uuid4().hex)
     try:
-        if _DISPATCH_AGENT_SEMAPHORE is not None:
-            if _DISPATCH_AGENT_SEMAPHORE.locked():
+        sem = _get_session_semaphore(_DISPATCH_AGENT_SEMAPHORES, _DISPATCH_AGENT_MAX_PARALLEL)
+        if sem is not None:
+            if sem.locked():
                 logger.info("dispatch_agent: 空きスロットが無いため待機します task=%r", task)
-            async with _DISPATCH_AGENT_SEMAPHORE:
+            async with sem:
                 result = await run_subagent(
                     task,
                     resolved.tools,
@@ -3312,10 +3356,11 @@ class ImageAwareToolNode(ToolNode):
     このクラスを使うだけで画像受け渡しに対応できる。
 
     また ToolNode の公式拡張点 awrap_tool_call 経由で、全ツール呼び出しを
-    _TOOL_CALL_SEMAPHORE によりガードする（_tool_call_semaphore_wrap 参照。
-    ToolNode._afunc が同一AIMessage内の複数tool_callsを asyncio.gather() で
-    完全並列実行する挙動への対策。dispatch_agent 専用の
-    _DISPATCH_AGENT_SEMAPHORE と同じ理由づけのメインエージェント版）。
+    セッション毎の Semaphore（_TOOL_CALL_SEMAPHORES）によりガードする
+    （_tool_call_semaphore_wrap 参照。ToolNode._afunc が同一AIMessage内の
+    複数tool_callsを asyncio.gather() で完全並列実行する挙動への対策。
+    dispatch_agent 専用の _DISPATCH_AGENT_SEMAPHORES と同じ理由づけの
+    メインエージェント版）。
     """
 
     def __init__(self, tools, **kwargs):
