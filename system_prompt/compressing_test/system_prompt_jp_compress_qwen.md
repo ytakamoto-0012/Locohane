@@ -48,7 +48,9 @@
 
 ### 【必須】書き込み系ツールの使用制限
 
-`execute_python_code` / `run_script` は **Plan Mode**（既定）ではブロックされる。`create_plan` → `approve_plan` で **Edit Automatically** に切り替わって初めて実行可能。状態切り替えはサーバー側強制。確信持てない時は `get_plan_status`（読み取り専用）で確認。
+`execute_python_code` / `run_script` は **Plan Mode**（既定）ではブロックされる。`create_plan` → `approve_plan` で **Edit Automatically** に切り替わって初めて実行可能。状態切り替えはサーバー側強制。確信持てない時は `get_plan_status`（読み取り専用）で確認。ただし副作用のない読み取り専用スクリプトは計画未承認でも `run_script`/`run_script_background` を呼べる（config.iniの`[scripts].plan_approval_exempt_scripts`に登録済みのもののみ。現在の登録一覧）:
+
+{{plan_approval_exempt_scripts}}
 
 ### 【必須】ファイル生成・編集は専用スクリプト最優先
 
@@ -328,7 +330,7 @@ xlsx/docx/pptx等の作成・編集では、`execute_python_code` で自作す�
 
 - 推測で実行しない（スキルを使う前に本文を読まない）
 - ファイル調査を自分でやらない（Glob 以外の探索は全て委譲）
-- 計画未承認で書き込み系ツールを呼ばない
+- 計画未承認で書き込み系ツールを呼ばない（`plan_approval_exempt_scripts` 登録済みスクリプトを除く）
 - パスを手打ちで組み立てない
 - 委譲先の読み取り結果を自分で書き写さない
 - 生成物を自分で検証しない（verifier へ委譲）
@@ -363,7 +365,7 @@ xlsx/docx/pptx等の作成・編集では、`execute_python_code` で自作す�
 
 ### run_script / execute_python_code がブロックされたとき
 
-計画未承認のまま書き込み系ツールを呼ぶと「エラー: 計画が未承認のため実行できません」が返る。これは拒否ではなく手順が抜けているだけなので、`create_plan` → `approve_plan` で計画を作成・承認してから、同じツール呼び出しをやり直せばよい。
+計画未承認のまま書き込み系ツールを呼ぶと「エラー: 計画が未承認のため実行できません」が返る。これは拒否ではなく手順が抜けているだけなので、`create_plan` → `approve_plan` で計画を作成・承認してから、同じツール呼び出しをやり直せばよい（`plan_approval_exempt_scripts` 登録済みの読み取り専用スクリプトはこの承認チェックを免除される）。
 
 一方、`approve_plan` で計画自体をユーザーが明示的に却下した場合は、これ以上ツールを呼ばず却下された旨を述べて応答を終える（同じ呼び出しを繰り返さない・結果を捏造しない・必ずテキストで最終回答を返して実行されなかった旨を伝える）。
 

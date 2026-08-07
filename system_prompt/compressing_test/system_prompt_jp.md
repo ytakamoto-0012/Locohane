@@ -105,6 +105,13 @@
 （LLMの自己申告は不要）。状態に確信が持てない場合は、いつでも
 `get_plan_status`（読み取り専用）で確認できる。
 
+ただし例外として、副作用のない読み取り専用スクリプトは計画未承認のままでも
+`run_script`/`run_script_background` を呼べる。対象は config.ini の
+`[scripts].plan_approval_exempt_scripts` に登録済みのものに限られる
+（現在の登録一覧）:
+
+{{plan_approval_exempt_scripts}}
+
 （2状態の詳細・切り替え手順・`lock_plan_mode` の使い方は、後述の
 「Plan & Progress」節を参照）。
 
@@ -804,7 +811,9 @@ create_planだけ先に書いて、中身の確認や調査は承認後の実行
 計画未承認のまま書き込み系ツールを呼ぶと「エラー: 計画が未承認のため実行
 できません」という ToolMessage が返る。これは拒否ではなく、単に手順が
 抜けているだけなので、この場合はそのまま `create_plan` → `approve_plan` を
-呼んで計画を作成・承認してから、同じツール呼び出しをやり直せばよい。
+呼んで計画を作成・承認してから、同じツール呼び出しをやり直せばよい
+（`plan_approval_exempt_scripts` に登録済みの読み取り専用スクリプトは、
+この承認チェック自体を免除される。前述の「Skills」節を参照）。
 
 一方、`approve_plan` で計画自体をユーザーが明示的に却下した場合は、
 上記「Plan & Progress」節の通り、これ以上ツールを呼ばず却下された旨を
@@ -879,7 +888,7 @@ create_planだけ先に書いて、中身の確認や調査は承認後の実行
 3. スキルを使う前に必ず `read_skill` で本文を読む（推測で実行しない）。
    xlsx/docx/pptx等のファイル生成・編集は対応スキルの専用スクリプトを
    最優先し、`execute_python_code` で自作しない。
-4. `execute_python_code`、または `run_script` を使う作業は必ず `create_plan` → `approve_plan` → 実行 → `update_task_progress` の流れに従う（省略しない、未承認だとツール側でブロックされる）。却下されたら処理を終了し、次の指示を待つ。
+4. `execute_python_code`、または `run_script` を使う作業は必ず `create_plan` → `approve_plan` → 実行 → `update_task_progress` の流れに従う（省略しない、未承認だとツール側でブロックされる）。却下されたら処理を終了し、次の指示を待つ（例外: `plan_approval_exempt_scripts` 登録済みの読み取り専用スクリプトはこの承認チェックを免除される）。
 5. ファイルやフォルダに関する調査は、探すのも中身を読むのも、必ず
    `dispatch_agent` へ委譲する。自分でやってよい例外は、対象ルート直下だけを
    見る1回だけの `Glob` のみ。委譲先は目的で選ぶ（調べて報告させるなら

@@ -65,7 +65,7 @@ from src.chat_log import append_turn, build_log_path, resolve_log_username
 from src.cleanup import cleanup_old_dirs, cleanup_old_files
 from src.cleanup import run_cleanup_dirs_loop as cleanup_run_cleanup_dirs_loop
 from src.cleanup import run_cleanup_loop as cleanup_run_cleanup_loop
-from src.config import expand_config_vars, load_config
+from src.config import expand_config_vars, load_config, render_plan_approval_exempt_scripts_block
 from src.context_compaction import maybe_compact, should_compact
 from src.files import extract_generated_files
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
@@ -535,6 +535,12 @@ async def _setup() -> None:
     system_prompt = system_prompt.replace("{{memory}}", render_memory_block(_config.memory_dir))
     # dispatch_agent が選べるエージェント種別一覧を {{agent_types}} へ差し込む。
     system_prompt = system_prompt.replace("{{agent_types}}", render_agent_types_block(agent_type_defs))
+    # 計画承認（Plan Mode）を免除される読み取り専用スクリプトのホワイトリストを
+    # {{plan_approval_exempt_scripts}} へ差し込む（config.ini の値が唯一の正）。
+    system_prompt = system_prompt.replace(
+        "{{plan_approval_exempt_scripts}}",
+        render_plan_approval_exempt_scripts_block(_config.script_plan_approval_exempt_scripts),
+    )
     # config.ini の値を ${変数名} として埋め込めるよう展開する（{{...}}置換完了後に行う）。
     system_prompt = expand_config_vars(system_prompt, _config)
     # .locohane/LOCOHANE.md はユーザー自由記述のため ${...} を偶然含んでいても

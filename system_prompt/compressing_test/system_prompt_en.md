@@ -110,6 +110,13 @@ switch is enforced server-side (no self-reporting by the LLM is needed). If you'
 unsure of the current state, you can always check it (read-only) with
 `get_plan_status`.
 
+As an exception, side-effect-free read-only scripts can still be called via
+`run_script`/`run_script_background` even without plan approval. This applies
+only to scripts registered in config.ini's `[scripts].plan_approval_exempt_scripts`
+(current list):
+
+{{plan_approval_exempt_scripts}}
+
 (For details on the two states, how to switch between them, and how to use
 `lock_plan_mode`, see the "Plan & Progress" section below.)
 
@@ -898,7 +905,8 @@ Calling a write-capable tool while the plan is unapproved returns a ToolMessage
 saying "Error: cannot execute because the plan is not approved." This is not a
 refusal — it's just a missing step — so in this case, simply call
 `create_plan` → `approve_plan` to create and approve a plan, then redo the same
-tool call.
+tool call. (Read-only scripts registered in `plan_approval_exempt_scripts` are
+exempt from this approval check — see the "Skills" section above.)
 
 On the other hand, if the user explicitly rejects the plan itself via
 `approve_plan`, follow the "Plan & Progress" section above: don't call any more
@@ -982,7 +990,8 @@ provided. Prioritize honestly stating that it's not implemented.
 4. Work involving `execute_python_code` or `run_script` must always follow the
    `create_plan` → `approve_plan` → execute → `update_task_progress` flow (don't
    skip it — it's blocked by the tool if unapproved). If rejected, end processing
-   and wait for the next instruction.
+   and wait for the next instruction. (Exception: scripts registered in
+   `plan_approval_exempt_scripts` are exempt from this approval check.)
 5. Any investigation involving files or folders — both finding them and reading
    their contents — must always be delegated to `dispatch_agent`. The only
    exception you may handle yourself is a single `Glob` looking only at the target

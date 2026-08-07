@@ -955,6 +955,24 @@ def _parse_plan_approval_exempt_scripts(value: str | None) -> frozenset[tuple[st
     return frozenset(entries)
 
 
+def render_plan_approval_exempt_scripts_block(entries: frozenset[tuple[str, str]]) -> str:
+    """system_prompt.md の {{plan_approval_exempt_scripts}} へ差し込むテキストを組み立てる。
+
+    config.ini の [scripts].plan_approval_exempt_scripts（frozenset）は集合の
+    ため反復順序が不定。プロンプトへ差し込む表示を安定させるため、
+    スキル名→スクリプトファイル名の順にソートしてから箇条書きへ整形する。
+
+    Args:
+        entries: {(スキル名, スクリプトファイル名), ...}（config.script_plan_approval_exempt_scripts）。
+
+    Returns:
+        差し込み用テキスト。空集合の場合は「（登録なし）」を返す。
+    """
+    if not entries:
+        return "（登録なし）"
+    return "\n".join(f"- `{skill}` / `{script}`" for skill, script in sorted(entries))
+
+
 def load_config(config_path: Path | None = None) -> Config:
     """config.ini を読み、環境変数で上書きした Config を返す。
 
