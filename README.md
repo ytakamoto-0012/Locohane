@@ -488,6 +488,67 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 
 ---
 
+## 開発環境
+
+本プロジェクトの開発・動作検証に実際に使用している環境の一例。
+
+### コーディングAgentツール
+
+| ツール | 内容 |
+|--------|------|
+| ClaudeCode | Claude Pro Plan |
+| QwenCode | llama-server（ローカル）+ Qwen3.6-35B-A3B |
+
+### OS / ハードウェア
+
+- OS: Windows 11
+- CPU: Intel(R) Core(TM) Ultra 5 225（10コア / 10論理プロセッサ、ベース3.30GHz）
+- メモリ: 32GB
+- GPU: NVIDIA GeForce RTX 5060 Ti（専用GPUメモリ 16.0GB）
+
+### llama-server 起動パラメータ例
+
+上記ハードウェアに合わせて以下のパラメータで `llama-server` を起動している。
+
+```
+model         = .\models\unsloth\Qwen3.6-35B-A3B-GGUF\Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+mmproj        = .\models\unsloth\Qwen3.6-35B-A3B-GGUF\mmproj-F16.gguf
+n-cpu-moe     = 25
+n-gpu-layers  = 99
+threads       = 10
+threads-batch = 10
+threads-http  = 4
+models-max    = 1
+parallel      = 2
+batch-size    = 4096
+ubatch-size   = 2048
+ctx-size      = 256000
+n-predict     = 32000
+temp          = 0.6
+top-p         = 0.95
+top-k         = 20
+min-p         = 0.0
+presence-penalty = 0
+repeat-penalty   = 1.0
+cache-reuse   = 256
+cache-ram     = -1
+swa-full      = true
+cache-type-k  = q8_0
+cache-type-v  = q8_0
+flash-attn    = on
+jinja         = true
+no-mmap       = true
+mlock         = true
+reasoning-format = deepseek
+reasoning-budget = 8192
+reasoning-budget-message = **Wait, I am overthinking this. I should answer now.**
+```
+
+- `n-cpu-moe`/`n-gpu-layers` はGPUの専用メモリ容量（16GB）に収まるよう調整したMoEオフロード設定。
+- `ctx-size`/`cache-type-k`/`cache-type-v` はコンテキスト長とKVキャッシュ量子化のバランスをとった値。
+
+---
+
 ## 同梱スキル
 
 | スキル | 配置場所 | 種別 | 内容 |
@@ -571,6 +632,8 @@ Anthropic公式のModel Context Protocol（[仕様](https://modelcontextprotocol
   失敗も例外を送出せず `"エラー: ..."` 形式の文字列として返す。
 - **既知の限界**: 接続後にサーバープロセスがクラッシュした場合の自動再接続は
   行わない。応答はテキストブロックのみ抽出する（画像等のリソースは未対応）。
+
+**MCPサーバー接続は、実装のみで動作テストしていないのでまともに動くか保証できません**
 
 ---
 
