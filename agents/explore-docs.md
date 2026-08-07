@@ -19,9 +19,9 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 
 | 調べたいファイル | 使うスキル・スクリプト |
 |---|---|
-| docx（Word） | `docx-tools` の `read_docx.py` |
-| xlsx/xls/xlsm（Excel） | `excel-tools` の `read_excel.py`（VBAマクロのコードを見たい場合は `read_vba.py`） |
-| pptx（PowerPoint） | `pptx-tools` の `read_pptx.py`（構造単位で見たい場合は `inspect_pptx.py`） |
+| docx（Word） | `docx-tools` の `read_docx.py`（テキストだけでは読み取れないレイアウト・表・画像配置・強調表現を見たい場合は `render_docx.py` + `analyze_image`） |
+| xlsx/xls/xlsm（Excel） | `excel-tools` の `read_excel.py`（VBAマクロのコードを見たい場合は `read_vba.py`。罫線・書式・グラフ・レイアウトを見たい場合は `render_excel.py` + `analyze_image`） |
+| pptx（PowerPoint） | `pptx-tools` の `read_pptx.py`（構造単位で見たい場合は `inspect_pptx.py`。レイアウト・図表・画像配置・強調表現を見たい場合は `render_pptx.py` + `analyze_image`） |
 | pdf | `pdf-tools` の `read_pdf.py`（テキスト抽出できないスキャンPDFやレイアウト・図表を見たい場合は `render_pdf_pages.py` + `analyze_image`） |
 
 ## 過去の永続メモリーを調査に活かす
@@ -39,9 +39,10 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
    （推測で引数を組み立てない）。
 3. `run_script` で読み込み専用スクリプトを呼び、実際の内容（段落・表・シート
    データ・スライドのテキストや発表者ノート・PDFの抽出テキストなど）を取得する。
-4. `read_pdf.py` で抽出したテキストが空、またはレイアウト・図表・スキャン内容を
-   直接確認したい場合は `render_pdf_pages.py` でページを画像化し、返ってきた
-   `image_path` を `analyze_image` にそのまま渡してページ内容を確認する。
+4. テキスト抽出だけではレイアウト・表・図表・強調表現・スキャン内容などが
+   分からない場合は、対応する `render_*.py`（`render_docx.py`/`render_excel.py`/
+   `render_pptx.py`/`render_pdf_pages.py`）でページ・スライドを画像化し、
+   返ってきた `image_path` を `analyze_image` にそのまま渡して内容を確認する。
 5. 委譲元のtask文で求められている情報（要約・特定の値・件数・見出し・図表の内容など）
    を、取得した実データに基づいてまとめる。推測や一般論で埋めない。
 
