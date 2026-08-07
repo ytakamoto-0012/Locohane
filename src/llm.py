@@ -151,10 +151,22 @@ def forget_session(session_id: str) -> None:
     孤立した処理が残っている可能性があり、ここで close すると新たな
     エラーを誘発しかねないため）。
 
+    あわせて、sticky戦略（[llm].main_routing_strategy/sub_routing_strategy）
+    でこのセッションが固定していた接続先の占有記録（_STICKY_ASSIGNED_INDEX /
+    _STICKY_ENDPOINT_OCCUPANTS）も解放する。ここを呼び忘れると、会話が
+    終わった後もその接続先が「使用中」のまま扱われ続け、新しい会話が
+    空き接続先を選べなくなってしまう。
+
     Args:
         session_id: 片付け対象セッションの thread_id。
     """
     _active_async_clients.pop(session_id, None)
+    for role in ("main", "sub"):
+        index = _STICKY_ASSIGNED_INDEX.pop((role, session_id), None)
+        if index is not None:
+            occupants = _STICKY_ENDPOINT_OCCUPANTS.get((role, index))
+            if occupants is not None:
+                occupants.discard(session_id)
 
 
 async def aclose_active_llm_clients(session_id: str) -> None:
@@ -748,6 +760,16 @@ _ENDPOINT_COOLDOWN_UNTIL: dict[tuple[str, int], float] = {}
 # priority_failover 戦略で、通信エラーを検知した接続先を一時的に避ける秒数。
 _ENDPOINT_FAILOVER_COOLDOWN_SECONDS = 60.0
 
+# sticky 戦略専用の状態。(role, セッションID) -> 一度固定した接続先index。
+# 会話が終わる（forget_session() が呼ばれる）まで保持し、同一会話は必ず
+# 同じ接続先を使い続ける（sticky本来の目的＝KVキャッシュ専有のため、
+# 空き状況で毎回揺れ動かさない）。
+_STICKY_ASSIGNED_INDEX: dict[tuple[str, str], int] = {}
+# (role, index) -> その接続先に現在sticky固定されているセッションIDの集合。
+# 新規会話がsticky接続先を初めて選ぶ際、他会話が誰も固定していない接続先
+# （＝この集合が空）を優先するために使う（_select_endpoint参照）。
+_STICKY_ENDPOINT_OCCUPANTS: dict[tuple[str, int], set[str]] = {}
+
 
 def _select_endpoint(role: str, endpoints: tuple[LLMEndpoint, ...], strategy: str) -> LLMEndpoint:
     """config.ini [llm].main_routing_strategy / sub_routing_strategy に従って接続先を1つ選ぶ。
@@ -777,7 +799,25 @@ def _select_endpoint(role: str, endpoints: tuple[LLMEndpoint, ...], strategy: st
         # 会話（thread_id）単位で常に同じ接続先を選ぶ。llama.cpp はプロンプト
         # 先頭が同じだとKVキャッシュが効くため、同一会話を毎回同じサーバーに
         # 固定すると有利。
-        index = zlib.crc32(session_id.encode("utf-8")) % len(endpoints)
+        # 一度固定した接続先は forget_session() でこの会話が片付けられる
+        # まで変えない（既にKVキャッシュが載っている接続先から動かすと
+        # sticky本来の目的を損なうため、以降の呼び出しでは空き状況を見ない）。
+        if state_key in _STICKY_ASSIGNED_INDEX:
+            index = _STICKY_ASSIGNED_INDEX[state_key]
+        else:
+            # 初回選択時のみ、他のどの会話もsticky固定していない接続先
+            # （＝ _STICKY_ENDPOINT_OCCUPANTS が空）を優先する。複数の
+            # 空き接続先があるときはハッシュで決定的に選ぶ（同じ会話なら
+            # 毎回同じ計算結果になる）。空きが無ければ従来通り全接続先から
+            # ハッシュで選ぶ（衝突を許容する）。
+            occupied_indices = {i for (r, i), sessions in _STICKY_ENDPOINT_OCCUPANTS.items() if r == role and sessions}
+            free_indices = [i for i in range(len(endpoints)) if i not in occupied_indices]
+            if free_indices:
+                index = free_indices[zlib.crc32(session_id.encode("utf-8")) % len(free_indices)]
+            else:
+                index = zlib.crc32(session_id.encode("utf-8")) % len(endpoints)
+            _STICKY_ASSIGNED_INDEX[state_key] = index
+            _STICKY_ENDPOINT_OCCUPANTS.setdefault((role, index), set()).add(session_id)
     elif strategy == "priority_failover":
         # 先頭から順に見て、クールダウン中でない最初の接続先を使う。
         # 全滅時は安全側として先頭(0)へフォールバックする。
