@@ -33,6 +33,23 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 > `data/` 全体が除外されているため、Qwen Code からのファイル検知が不安定に
 > なっていた。これを避けるため、`.qwen/state/monitor-app-log/` 配下へ移動した。
 
+## .gitignore 問題への対策
+
+`.gitignore` で `data/` が除外されているため、Qwen Code の `glob` ツール等が
+`data/` 配下のファイルを検知できない（`.gitignore` 対象のファイルは
+`list_directory` や `glob` の結果に含まれない）。このスキルで `data/` 配下
+を扱う場合は以下のルールに従う。
+
+- **状態ファイル**: `.qwen/state/monitor-app-log/state.json` に保存する
+  （`.gitignore` で `state.json` が除外されている点に注意。`.qwen/` 配下で
+  かつ `state.json` 単独ファイルは追跡対象外として検知される）。
+- **ログファイル**: `data/logs/app_*.log` は `.gitignore` 対象のため
+  `glob` で検知できない。`list_directory` でも結果に含まれない。
+  代わりに `run_shell_command` で `dir data\logs\app_*.log` 等を呼び、
+  ファイル一覧を取得してから `read_file` で内容を読み取る。
+- **issue ディレクトリ**: プロジェクト直下の `issue/` は git 管理下にある
+  （`.gitignore` 対象外）ため、通常通りにアクセス可能。
+
 ## 手順
 
 ### 1. 自己スケジュールの確認・登録
@@ -64,8 +81,12 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 
 1. `log_dir` 配下の `app_*.log` を対象に、`last_checked` より新しい
    タイムスタンプの行のうち **`WARNING` / `ERROR` / `CRITICAL`** を抽出する
-   （Bashのgrep等で `%(levelname)s` 部分を条件に絞り込み、行頭の
-   `%(asctime)s` と `last_checked` を比較する）。
+   （`.gitignore` 対象のため `glob` では検知できない。`run_shell_command`
+   で `dir` コマンドを呼び、ファイル一覧を取得してから `read_file` で
+   内容を読み取る）。
+   - Windowsの場合: `dir /b /o-d data\logs\app_*.log` でファイル一覧を取得
+   - ファイル一覧を取得後、各ファイルについて `read_file` で全文読み込み、
+     `last_checked` 以降の行をフィルタリング（grep等）する。
 2. **特例**: ログレベルに関わらず、logger名 `src.context_compaction` の
    行（会話履歴の自動圧縮に関するログ。例:
    `会話履歴を圧縮しました: ...`〈INFO〉、

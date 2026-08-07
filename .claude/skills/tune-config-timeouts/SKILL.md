@@ -10,6 +10,26 @@ description: Locohane の config.ini の timeout系設定（[llm].request_timeou
 依存するため、実測ベンチマークに基づき環境ごとの適正値を算出し、必要であれば
 `config.ini` を更新するループを回す。
 
+## .gitignore 問題への対策
+
+`.gitignore` で `data/` が除外されているため、Qwen Code の `glob` ツール等が
+`data/` 配下のファイルを検知できない（`.gitignore` 対象のファイルは
+`list_directory` や `glob` の結果に含まれない）。このスキルで `data/` 配下
+を扱う場合は以下のルールに従う。
+
+- **状態ファイル**: `.qwen/state/tune-config-timeouts/state.json` に保存する
+  （`.gitignore` で `state.json` が除外されている点に注意。`.qwen/` 配下で
+  かつ `state.json` 単独ファイルは追跡対象外として検知される）。
+- **退避ディレクトリ**: `evals/history/config_timeouts/` は git 管理下にある
+  （`.gitignore` の `evals/results/` のみ除外。`evals/history/` は追跡対象）。
+- **評価対象ファイル**: `evals/run_all.py`, `evals/analyze_timing.py`,
+  `evals/timing_callbacks.py` は git 管理下にあるため通常通りにアクセス可能。
+- **config.ini**: プロジェクトルートにあり `.gitignore` 対象外のため問題なし。
+
+> **注意**: `data/` 配下のファイル（`data/checkpoints.sqlite` 等）を直接
+> 扱う場合は、`glob` ではなく `read_file` で絶対パスを指定するか、
+> `run_shell_command` で `ls` 等を呼ぶ必要がある。
+
 ## 対象スコープ
 
 チューニング対象は以下3項目のみ（すべて「LLM推論速度」または「スクリプト
