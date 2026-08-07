@@ -1224,6 +1224,39 @@ async def _finalize_orphaned_steps(steps: dict[str, cl.Step], reason: str) -> No
     steps.clear()
 
 
+async def _aclose_event_stream(event_stream) -> bool:
+    """astream_events() の非同期ジェネレータを、5秒のタイムアウト付きで閉じる。
+
+    async for が例外で中断された場合、明示的に aclose() しないと LangGraph
+    内部のバックグラウンドタスクや checkpointer のロックが残留しうる
+    （GC任せだと即座に aclose() される保証がない）。既にクローズ済みの
+    event_stream に対して呼んでも安全（PEP 525の仕様通り無害な no-op）。
+
+    ChatLlamaCpp._astream（src/llm.py）と同じ設計方針で asyncio.timeout() を使う:
+    asyncio.wait_for() は渡されたコルーチンを ensure_future で別タスクに
+    ラップするため、asyncio.CancelScope の「開いたのと同じタスクで閉じる」
+    制約を破りうる（2026-07-28 incident の直接原因）。asyncio.timeout() は
+    現在のタスクに直接タイムアウトを注入し新規タスクを生成しないため、
+    同一タスク制約を破らずにタイムアウトを維持できる。
+
+    Returns:
+        クローズに失敗した（タイムアウトまたは例外）場合 True。
+    """
+    try:
+        async with asyncio.timeout(5.0):
+            await event_stream.aclose()
+        return False
+    except TimeoutError:
+        logging.getLogger(__name__).warning(
+            "astream_events のクローズ(aclose)が5秒でタイムアウトしました",
+            exc_info=True,
+        )
+        return True
+    except Exception:
+        logging.getLogger(__name__).debug("astream_events のクローズ中に例外が発生しました", exc_info=True)
+        return True
+
+
 class _PlanDeniedInterrupt(Exception):
     """approve_plan が明示的に却下された直後、このターンを打ち切るための内部例外。
 
@@ -1893,6 +1926,23 @@ async def on_message(message: cl.Message) -> None:
                 await _send_answer(answer)
                 answer = None
             await _finalize_orphaned_steps(steps, "context_compaction")
+            # 重要: aupdate_state/_run_context_compaction（要約のLLM呼び出しを
+            # 含み、数十秒〜数分かかりうる）を呼ぶ前に、必ずこの event_stream を
+            # 閉じる。_CompactionCheckpoint は「直近のメインAIMessageのtool_calls
+            # に対応するToolMessageが全て返却済み」＝この一つ前のtool_callが
+            # 解決した瞬間に発火するため、まだ event_stream 自体は生きており、
+            # 閉じないまま放置すると、LangGraph側は agent→tools ノードの実行を
+            # バックグラウンドで継続してしまう（例: 次のtool_callとして
+            # dispatch_agentが新たに呼ばれ、その完了を待たずに以下の
+            # aupdate_state が同じチェックポイントを書き換える）。この競合により
+            # バックグラウンドで進行中だったツール呼び出しがLangGraph側で強制
+            # キャンセルされ、対応するToolMessageの無い孤立tool_callが生じて
+            # 次回モデル呼び出しでValueErrorになる不具合が本番で確認された
+            # （2026-08-07、dispatch_agent(verifier)で発生。ThinkingLoopDetected/
+            # GraphRecursionError等では既にfinallyでaclose()してから次の
+            # astream_events()を呼んでいたが、_CompactionCheckpointの経路だけ
+            # aclose()より前にaupdate_stateを呼んでいたのが原因）。
+            await _aclose_event_stream(event_stream)
             if exc.tool_messages:
                 await graph.aupdate_state(config, {"messages": exc.tool_messages}, as_node="tools")
             await _run_context_compaction(graph, config, thread_id, last_usage)
@@ -1987,33 +2037,14 @@ async def on_message(message: cl.Message) -> None:
             await _finalize_orphaned_steps(steps, "unclassified_error")
         finally:
             # astream_events() の非同期ジェネレータは、async for が
-            # ThinkingLoopDetected/GraphRecursionError で中断された場合、
+            # ThinkingLoopDetected/GraphRecursionError等で中断された場合、
             # 明示的に aclose() しないとLangGraph内部のバックグラウンド
             # タスクやcheckpointerのロックが残留しうる（GC任せだと即座に
             # aclose()される保証がない）。次のイテレーションで同じ
-            # thread_id に対し astream_events() を呼び直す前に必ず閉じる。
-            #
-            # ChatLlamaCpp._astream（src/llm.py）と同じ設計方針:
-            # asyncio.wait_for() は渡されたコルーチンを ensure_future で
-            # 別タスクにラップするため、asyncio.CancelScope の「開いたの
-            # 同じタスクで閉じる」制約を破りうる（2026-07-28 incident の
-            # 直接原因）。asyncio.timeout() は現在のタスクに直接タイム
-            # アウトを注入し新規タスクを生成しないため、同一タスク制約を
-            # 破らずにタイムアウトを維持できる（両箇所とも asyncio.timeout
-            # を使い、相互参照コメントを付けた）。
-            aclose_failed = False
-            try:
-                async with asyncio.timeout(5.0):
-                    await event_stream.aclose()
-            except TimeoutError:
-                aclose_failed = True
-                logging.getLogger(__name__).warning(
-                    "astream_events のクローズ(aclose)が5秒でタイムアウトしました",
-                    exc_info=True,
-                )
-            except Exception:
-                aclose_failed = True
-                logging.getLogger(__name__).debug("astream_events のクローズ中に例外が発生しました", exc_info=True)
+            # thread_id に対し astream_events() を呼び直す前に必ず閉じる
+            # （_CompactionCheckpoint経路は except 節内で既に閉じているため、
+            # ここでの呼び出しは _aclose_event_stream() 内の通り no-op になる）。
+            await _aclose_event_stream(event_stream)
             # ThinkingLoopDetected/GraphRecursionError以外（停止ボタンによる
             # CancelledError等、上のexcept節が捕捉しない中断）でも steps が
             # 未finalizeのまま残りうる。安全網として finally で必ず片付ける
