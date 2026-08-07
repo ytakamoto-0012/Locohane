@@ -220,13 +220,15 @@ Locohane/
 ├── requirements.txt        # pip 依存（バージョン固定）
 ├── app.py                  # Chainlit エントリ
 ├── app.bat                 # Windows用起動バッチ
+├── Locohane.lnk            # 起動用ショートカット
 ├── chainlit.md             # Chainlit ウェルカム画面
 ├── CLAUDE.md               # プロジェクト固有の追加指示（Claude Code 形式）
 ├── QWEN.md                 # プロジェクト固有の追加指示（Qwen Code 形式、内容はCLAUDE.md参照の1行）
 ├── LICENSE                 # 本プロジェクトのライセンス（MIT）
 ├── THIRD_PARTY_LICENSES.md # 依存OSSライセンス一覧（tools/gen_licenses.pyで再生成）
 ├── memo.md                 # 開発者向けメモ
-├── issue.md                # 既知の課題メモ
+├── issue.md                # 既知の課題メモ（手動管理）
+├── issue/                  # monitor-app-log スキルが app_*.log の異常検知時に自動起票するケース別Markdown
 ├── pytest.ini              # pytest設定
 ├── .env.example            # 環境変数サンプル
 ├── .gitignore              # Git除外設定
@@ -234,20 +236,17 @@ Locohane/
 │   ├── config.toml         # Chainlit設定
 │   └── translations/       # 多言語翻訳ファイル
 ├── .claude/
-│   └── skills/             # Claude Code用スキル（tune-prompt等）
-│       ├── setup-basic-config/
-│       ├── tune-config-timeouts/
-│       └── tune-prompt/
+│   └── skills/             # Claude Code用スキル（開発支援。アプリ実行時には使わない）
+│       ├── setup-basic-config/    # 環境依存パス（config.ini等）の対話設定
+│       ├── tune-config-timeouts/  # timeout系設定の実測自動チューニング
+│       ├── tune-prompt/           # system_prompt.md等のプロンプト資産自動チューニング
+│       └── monitor-app-log/       # app_*.log を定期監視し issue/ へ自動起票
+├── .qwen/                  # Qwen Code用の `.claude/` 相当ディレクトリ（settings.json・skills/等）
 ├── .locohane/                # project_locohane_dir（既定）。配下を起動時に自動検知
 │   ├── LOCOHANE.md.example  # LOCOHANE.md のサンプル（配置するとプロジェクト固有指示になる）
 │   ├── settings.json        # MCPサーバー接続設定
-│   ├── skills/              # skills_dir にマージ走査される追加スキル（同名は優先）
-│   │   ├── README.md
-│   │   ├── docx-tools/       # Word文書の読込・生成・編集（Track Changes対応）
-│   │   ├── excel-tools/      # xlsx/xls/xlsm読込・編集・数式再計算
-│   │   ├── pdf-tools/        # PDF読込・ページ画像化・PDF生成
-│   │   └── pptx-tools/       # PowerPoint読込・生成・テンプレート部分編集
-│   └── agents/              # agents_dir にマージ走査される追加エージェント種別（同名は優先）
+│   ├── skills/              # skills_dir にマージ走査される追加スキル置き場（同名は優先。現状は README.md のみで中身は空）
+│   └── agents/              # agents_dir にマージ走査される追加エージェント種別置き場（同名は優先。現状は README.txt のみで中身は空）
 ├── frontend/                # カスタムReactフロントエンド
 │   ├── src/
 │   │   ├── components/      # UIコンポーネント（AskFormBar, PlanCard, SidePanel等）
@@ -263,7 +262,9 @@ Locohane/
 │   ├── system_prompt.md     # メインエージェント用システムプロンプト
 │   ├── help.md              # help ツールが返すユーザー向けヘルプ
 │   ├── compaction_prompt.md # 会話履歴の自動要約指示
-│   └── subagent_common.md   # サブエージェント共通プロンプト
+│   ├── subagent_common.md   # サブエージェント共通プロンプト
+│   ├── handoff_prompt.md    # トークン上限接近時にLLMへ注入する打ち切り・引き継ぎ指示
+│   └── compressing_test/    # プロンプト圧縮の効果検証用ワークスペース（開発時の実験、tune-prompt関連）
 ├── tools/
 │   └── gen_licenses.py      # THIRD_PARTY_LICENSES.md 再生成スクリプト
 ├── evals/                   # プロンプト資産の自動評価・チューニングループ
@@ -274,7 +275,10 @@ Locohane/
 │   ├── headless_chainlit.py # Chainlitスタブ
 │   ├── timing_callbacks.py  # config_timeouts用の実測タイミング計測コールバック
 │   ├── analyze_timing.py    # 実測タイミング結果の集計・分析
+│   ├── analyze_investigation_order.py # チューニング検証用の一時的な集計スクリプト
 │   ├── tuning_log.md        # チューニング履歴
+│   ├── handoff_prompt.md    # tune-prompt再開時の引き継ぎメモ
+│   ├── handoff_config_timeouts_skill.md # config_timeoutsターゲット開発時の引き継ぎメモ
 │   ├── cases/               # 評価ケース（YAML）
 │   │   ├── system_prompt/   # システムプロンプト用ケース
 │   │   ├── system_prompt_scale/ # スケーリング用ケース
@@ -295,6 +299,7 @@ Locohane/
 │   ├── llm.py               # ChatOpenAI（llama-server接続）の構築
 │   ├── context_trim.py      # 古い ToolMessage の切り詰め
 │   ├── context_compaction.py # 会話履歴の自動要約・圧縮
+│   ├── main_token_guard.py  # メインエージェントのトークン量ガード・引継ぎプロンプト自動生成
 │   ├── subagent.py          # dispatch_agent の内部ReActループ
 │   ├── mcp_client.py        # MCPサーバー接続（stdio）・ツール変換
 │   ├── chat_log.py          # 会話ログのテキストファイル記録
@@ -304,16 +309,21 @@ Locohane/
 │   ├── log_rotation.py      # app.log の日時ローテーション
 │   └── uploads.py           # アップロードファイル管理
 ├── agents/
+│   ├── AGENTS_README.md     # エージェント種別定義（frontmatter）の書き方ガイド
 │   ├── explore.md           # 読み取り専用エージェント種別
+│   ├── explore-docs.md      # docx/xlsx/pptx/pdf等の文書調査に特化した読み取り専用エージェント種別
+│   ├── worker.md            # 承認済み計画に沿って読取り→書込みを内部完結させる書き込み可能エージェント種別
 │   └── verifier.md          # 成果物検証用エージェント種別
 ├── skills/
 │   ├── SKILLS_README.md    # スキル開発者向けガイド
-│   ├── word-counter/        # テキストの行数/単語数/文字数を数える（サンプル）
-│   ├── git-commit-style/    # コミットメッセージ規約（知識のみ）
-│   └── skill-creator/       # 新しいスキルの作成・既存スキルの改善・eval検証を行うメタスキル
+│   ├── skill-creator/       # 新しいスキルの作成・既存スキルの改善・eval検証を行うメタスキル
+│   ├── docx-tools/          # Word文書の読込・生成・編集（Track Changes対応）
+│   ├── excel-tools/         # xlsx/xls/xlsm読込・編集・数式再計算・VBAマクロ
+│   ├── pdf-tools/           # PDF読込・ページ画像化・PDF生成
+│   ├── pptx-tools/          # PowerPoint読込・生成・テンプレート部分編集
+│   └── web-search/          # Tavily APIによるWeb検索（要APIキー設定）
 │       # Read/Glob/Grep/json_query/list_path_memory はネイティブツール化済み
 │       # （src/file_tools.py、src/path_memory.py）。
-│       # office系（docx/excel/pptx）・pdf-tools は .locohane/skills/ 配下
 ├── tests/                   # pytestテストケース
 │   ├── conftest.py
 │   ├── fixtures/
@@ -325,6 +335,7 @@ Locohane/
     ├── logs_chat/           # 会話ログ（ユーザー発言＋AI応答）
     ├── memory/              # 永続メモリー（type別サブフォルダ＋MEMORY.md）
     ├── path_memory/         # パスメモリーレジストリ（.json）
+    ├── plans/               # create_plan が detail_markdown を渡した際の詳細計画Markdown
     └── temp/                # 一時ファイル
 ```
 
@@ -366,6 +377,7 @@ Locohane/
 | `data/uploads/` | Chainlit にアップロードされたファイル | アップロード資料が不要になったとき | フォルダ内を削除 |
 | `data/logs/app.log` | アプリの動作ログ | いつでも | ファイルを削除 |
 | `data/memory/` | 永続メモリー（`user`/`feedback`/`project`/`reference` サブフォルダ＋`MEMORY.md`索引） | 蓄積した記憶が不要になったとき | フォルダ内を削除（`MEMORY.md`は次回保存時に再生成される） |
+| `data/plans/` | `create_plan` が `detail_markdown` 引数を渡した場合の詳細計画Markdown（`[paths] plans_dir`） | 古い計画が不要になったとき | フォルダ内を削除 |
 | `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（`show_image`・回答本文への画像埋め込みが使う。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
 
 `data/uploads/` は `config.ini` の `[uploads] retention_days`（既定7日）を過ぎたファイルを
@@ -470,8 +482,8 @@ cd C:\DT_Python\Locohane
 C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 ```
 
-ブラウザで開き、例えば「このテキストの単語数を数えて」と送ると、
-`read_skill`（word-counter の本文読込）→ `run_script`（`count.py` 実行）が
+ブラウザで開き、例えば「この Excel ファイルの中身を要約して」と送ると、
+`read_skill`（excel-tools の本文読込）→ `run_script`（`read_excel.py` 実行）が
 **ステップとして可視化** され、結果がストリーミング表示される。
 
 ---
@@ -480,14 +492,14 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 
 | スキル | 配置場所 | 種別 | 内容 |
 |--------|----------|------|------|
-| `word-counter` | `skills/` | スクリプト実行を伴う | `scripts/count.py` でテキストの行数/単語数/文字数を数える。`run_script` の実演。 |
-| `git-commit-style` | `skills/` | 知識のみ | このプロジェクトのコミットメッセージ規約。スクリプトなし、本文の知識のみで回答。 |
 | `skill-creator` | `skills/` | スクリプト実行を伴う | 新しいスキルの作成・既存スキルの改善・description のトリガー精度最適化・evalハーネスによる検証を行うメタスキル。 |
-| `pdf-tools` | `.locohane/skills/` | スクリプト実行を伴う | PDFのテキスト抽出・ページ画像化（レイアウト/図表/スキャン内容の視覚把握）・PDF生成（日本語対応）。 |
-| `docx-tools` | `.locohane/skills/` | スクリプト実行を伴う | Word文書の読込・生成・編集（検索置換、Track Changes/変更履歴の付与・確定・却下を含む）。 |
-| `excel-tools` | `.locohane/skills/` | スクリプト実行を伴う | xlsx/xls/xlsmの読込・編集（グラフ・条件付き書式・データ検証を含む）・数式再計算・VBAマクロコードの読み込み/追加/上書き/削除・実行。 |
-| `pptx-tools` | `.locohane/skills/` | スクリプト実行を伴う | PowerPointの読込・生成（16:9テンプレート方式）・既存テンプレートの部分編集（デザインを保った差し替え・複製・削除・並び替え）。 |
-| `web-search` | `.locohane/skills/` | スクリプト実行を伴う | Tavily APIによるWeb検索。スキル専用の`scripts/.env`にTAVILY_API_KEY設定時のみ動作（既定では通信なし）。 |
+| `pdf-tools` | `skills/` | スクリプト実行を伴う | PDFのテキスト抽出・ページ画像化（レイアウト/図表/スキャン内容の視覚把握）・PDF生成（日本語対応）。 |
+| `docx-tools` | `skills/` | スクリプト実行を伴う | Word文書の読込・生成・編集（検索置換、Track Changes/変更履歴の付与・確定・却下を含む）。 |
+| `excel-tools` | `skills/` | スクリプト実行を伴う | xlsx/xls/xlsmの読込・編集（グラフ・条件付き書式・データ検証を含む）・数式再計算・VBAマクロコードの読み込み/追加/上書き/削除・実行。 |
+| `pptx-tools` | `skills/` | スクリプト実行を伴う | PowerPointの読込・生成（16:9テンプレート方式）・既存テンプレートの部分編集（デザインを保った差し替え・複製・削除・並び替え）。 |
+| `web-search` | `skills/` | スクリプト実行を伴う | Tavily APIによるWeb検索。スキル専用の`scripts/.env`にTAVILY_API_KEY設定時のみ動作（既定では通信なし）。 |
+
+`.locohane/skills/` はユーザー独自スキルの置き場（`skills/` とマージ走査、同名は優先）で、現状は使い方を示す `README.md` のみを含む。
 
 スキル開発の詳細な手順・規約は [`skills/SKILLS_README.md`](skills/SKILLS_README.md) を参照。
 
@@ -642,6 +654,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[paths]` | `system_prompt_path` | メインエージェント用システムプロンプトのテンプレート | `SYSTEM_PROMPT_PATH` |
 | `[paths]` | `checkpoint_db` | 会話状態 SQLite | `CHECKPOINT_DB` |
 | `[paths]` | `memory_dir` | 永続メモリーの保存先ルート | `MEMORY_DIR` |
+| `[paths]` | `plans_dir` | `create_plan` が `detail_markdown` を渡した際の詳細計画Markdownの保存先 | `PLANS_DIR` |
 | `[paths]` | `help_path` | `help` ツールが返すヘルプ本文Markdownのパス | `HELP_PATH` |
 | `[uploads]` | `dir` | アップロード保存先 | `UPLOAD_DIR` |
 | `[uploads]` | `retention_days` | アップロードファイルの保持日数（0以下で自動削除無効） | `UPLOAD_RETENTION_DAYS` |
