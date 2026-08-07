@@ -25,6 +25,9 @@ turns:
 
     ## 作り方
     ここに作り方を記述
+
+    ## 栄養情報
+    ここにWEBで調べた栄養情報を記述    
 expect:
   tool_called_any: [dispatch_agent, execute_python_code]
   tool_not_called: [analyze_image]
