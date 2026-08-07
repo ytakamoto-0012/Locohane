@@ -665,6 +665,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[scripts]` | `background_max_runtime_seconds` | `run_script_background` のジョブを強制終了するまでの上限秒 | `SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS` |
 | `[scripts]` | `background_job_retention_seconds` | `run_script_background` の完了済みジョブが `check_script_job` で未回収のまま残ってよい秒数 | `SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS` |
 | `[scripts]` | `background_min_poll_interval_seconds` | `check_script_job` を同一ジョブへ再度呼べるまでの最短間隔秒（0以下で無効化） | `SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS` |
+| `[scripts]` | `background_min_poll_message` | 上記間隔未満で呼ばれた際にLLMへ返すメッセージのテンプレート（`{wait_remaining}`/`{job_id}`/`{min_interval}` を埋め込み可）。空欄なら既定文言 | `SCRIPT_BACKGROUND_MIN_POLL_MESSAGE` |
 | `[file_tools_duplicate_guard]` | `enabled` | Read/Glob/Grep/json_query ツールの同一引数繰り返し呼び出しを防止するガードの有効/無効 | `FILE_TOOLS_DUPLICATE_GUARD_ENABLED` |
 | `[file_tools_duplicate_guard]` | `max_calls` | 同一シグネチャの呼び出しを許可する回数（既定1回） | `FILE_TOOLS_DUPLICATE_GUARD_MAX_CALLS` |
 | `[file_tools_duplicate_guard]` | `carry_over_to_main` | サブエージェント内の呼び出し履歴をメイン判定へ持ち越すかどうか | `FILE_TOOLS_DUPLICATE_GUARD_CARRY_OVER` |

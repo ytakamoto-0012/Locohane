@@ -256,6 +256,11 @@ class Config:
             「実行中」ステータスを返した直後、同じジョブへの次の
             check_script_job 呼び出しを許可するまでの最短間隔秒数
             （src/tools.py 参照）。0以下で無効化（強制なし）。
+        script_background_min_poll_message: 上記の最短間隔未満で
+            check_script_job が呼ばれた際にLLMへ返すメッセージのテンプレート。
+            .format() で {wait_remaining}/{job_id}/{min_interval} を
+            埋め込む。空欄なら DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE
+            を使う。
         script_plan_approval_exempt_scripts: run_script/run_script_background
             の計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト（{(スキル名, スクリプトファイル名), ...}）。
@@ -542,6 +547,7 @@ class Config:
     script_background_max_runtime_seconds: int
     script_background_job_retention_seconds: int
     script_background_min_poll_interval_seconds: int
+    script_background_min_poll_message: str
 
     # --- run_script/run_script_background の計画承認免除ホワイトリスト ---
     script_plan_approval_exempt_scripts: frozenset[tuple[str, str]]
@@ -806,6 +812,42 @@ def _as_message_list(value: str | None) -> list[str]:
 
 # [llm].main_url / sub_url が config.ini に無い場合の既定値（1件のみ）。
 _DEFAULT_LLM_URL = '[{"base_url": "http://localhost:8080/v1", "api_key": "dummy-not-used", "model": "local-model"}]'
+
+# [scripts].background_min_poll_message が空の場合に使う既定メッセージ。
+# check_script_job() が最短確認間隔未満での再呼び出しを検知した際にLLMへ
+# 返す文字列のテンプレート。.format() で {wait_remaining}/{job_id}/
+# {min_interval} を埋め込む（src/tools.py 参照）。
+DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE = (
+    "まだ確認間隔が短すぎます。あと約{wait_remaining}秒待ってから、"
+    "改めて check_script_job(job_id={job_id!r}) を呼び直してください"
+    "（最短確認間隔: {min_interval}秒）。"
+)
+
+
+def _validate_poll_message_template(text: str) -> str:
+    """[scripts].background_min_poll_message のテンプレート文字列を検証する。
+
+    {wait_remaining}/{job_id}/{min_interval} 以外のプレースホルダーや
+    書式指定の誤りを起動時に検出するため、ダミー値で実際に .format() を
+    試してみる。
+
+    Args:
+        text: config.ini または環境変数から得たテンプレート文字列。
+
+    Returns:
+        検証済みの文字列（そのまま）。
+
+    Raises:
+        ValueError: .format(wait_remaining=.., job_id=.., min_interval=..)
+            が失敗する場合（未知のプレースホルダー等）。
+    """
+    try:
+        text.format(wait_remaining=1, job_id="dummy", min_interval=1)
+    except (KeyError, IndexError, ValueError) as e:
+        raise ValueError(
+            f"[scripts].background_min_poll_message のプレースホルダーが不正です: {text!r} ({e})"
+        ) from e
+    return text
 
 
 def _as_llm_endpoints(value: str | None, key_name: str) -> tuple[LLMEndpoint, ...]:
@@ -1191,6 +1233,12 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS",
                 scripts.get("background_min_poll_interval_seconds", 20),
+            )
+        ),
+        script_background_min_poll_message=_validate_poll_message_template(
+            os.getenv(
+                "SCRIPT_BACKGROUND_MIN_POLL_MESSAGE",
+                scripts.get("background_min_poll_message", "") or DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE,
             )
         ),
         script_plan_approval_exempt_scripts=_parse_plan_approval_exempt_scripts(
