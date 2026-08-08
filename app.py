@@ -434,6 +434,43 @@ def _format_work_dir_status(resolved: str | None, status: WorkDirAccessStatus | 
     )
 
 
+def _build_work_dir_notice() -> str:
+    """作業ディレクトリの実際の絶対パスをLLMへ知らせるテキストブロックを組み立てる。
+
+    system_prompt はサーバー起動時に1回だけ組み立てられセッション単位の作業
+    ディレクトリを埋め込めず、サイドパネルの「📁作業ディレクトリ」表示
+    （_format_work_dir_status）はUI専用でLLMの会話コンテキストには含まれない。
+    そのため、この関数の戻り値を on_message から _build_human_message() 経由で
+    HumanMessage へ差し込み、LLMが絶対パスを推測で組み立てずに済むようにする。
+
+    Returns:
+        `[作業ディレクトリ]` で始まるテキストブロック。
+    """
+    work_dir = cl.user_session.get("work_dir")
+    if work_dir:
+        resolved = work_dir
+        status: WorkDirAccessStatus | None = cl.user_session.get("work_dir_access")
+    else:
+        resolved = str(_config.default_workdir)
+        status = None
+    if status is None or (status.exists and status.readable and status.writable):
+        state_label = "読み書き可能"
+    elif not status.exists:
+        state_label = f"存在しないためアクセス不可。既定フォルダ（{_config.default_workdir}）へ自動フォールバック"
+    elif not status.readable:
+        state_label = f"読み取り不可。既定フォルダ（{_config.default_workdir}）へ自動フォールバック"
+    else:
+        state_label = f"読み取り専用（書き込みは既定フォルダ {_config.default_workdir} へ自動フォールバック）"
+    return (
+        "[作業ディレクトリ]\n"
+        f"絶対パス: {resolved}（{state_label}）\n"
+        "Read/Glob/Grep/analyze_image でこの配下を扱う際は上記の絶対パスをそのまま使う。"
+        "サブフォルダ名しか分からない場合は Glob の path 引数を省略すれば自動的にこの"
+        "配下が検索対象になる（pattern 側にサブフォルダ名を含めてよい。例:"
+        ' pattern="**/images/**/*"）。パスを記憶や推測で組み立てない。'
+    )
+
+
 def _patch_chainlit_connection_successful_task_end() -> None:
     """Chainlit本体の connection_successful ハンドラが誤って task_end を
     発行してしまう不具合を、site-packages 無改変のまま上書き修正する。
@@ -859,6 +896,10 @@ async def on_chat_start() -> None:
     _rebuild_graph(thread_id)
     cl.user_session.set("work_dir", None)
     cl.user_session.set("work_dir_access", None)
+    # 次の on_message でLLMへ実際の作業ディレクトリ絶対パスを知らせるためのフラグ
+    # （system_prompt はサーバー起動時に1回だけ組み立てられるため、セッション単位で
+    # 変わる作業ディレクトリはそちらへ埋め込めない。HumanMessage側で伝える）。
+    cl.user_session.set("work_dir_notice_pending", True)
     # サイドパネル上部の「作業ディレクトリ」表示を初期状態（未設定）から出す。
     await cl.Message(content=_format_work_dir_status(None)).send()
     # Task Management ツール（create_plan/approve_plan/update_task_progress）の
@@ -976,6 +1017,7 @@ async def _apply_work_dir(raw: str) -> None:
     if not raw:
         cl.user_session.set("work_dir", None)
         cl.user_session.set("work_dir_access", None)
+        cl.user_session.set("work_dir_notice_pending", True)
         await cl.Message(content=_format_work_dir_status(None)).send()
         return
 
@@ -983,6 +1025,7 @@ async def _apply_work_dir(raw: str) -> None:
     status = probe_workdir_access(Path(resolved))
     cl.user_session.set("work_dir", resolved)
     cl.user_session.set("work_dir_access", status)
+    cl.user_session.set("work_dir_notice_pending", True)
     await cl.Message(content=_format_work_dir_status(resolved, status)).send()
 
 
@@ -1076,7 +1119,7 @@ def _save_uploads(message: cl.Message) -> list[str]:
     return saved
 
 
-def _build_human_message(user_text: str, saved_paths: list[str]) -> HumanMessage:
+def _build_human_message(user_text: str, saved_paths: list[str], work_dir_notice: str | None = None) -> HumanMessage:
     """アップロードファイルを踏まえて HumanMessage を組み立てる。
 
     画像ファイルは data URL 化して content のマルチモーダル要素として積み、
@@ -1086,6 +1129,11 @@ def _build_human_message(user_text: str, saved_paths: list[str]) -> HumanMessage
     Args:
         user_text: ユーザーが入力したメッセージ本文。
         saved_paths: _save_uploads() が返した保存先パスの一覧。
+        work_dir_notice: 作業ディレクトリの実際の絶対パスをLLMへ知らせる
+            テキストブロック（呼び出し元が「知らせる必要がある」と判断した
+            ターンのみ渡す。None なら何も追記しない）。ユーザーの画面上の
+            チャット吹き出し（message.content）ではなくLLM向けの
+            HumanMessage.content のみに追記されるため、UIには表示されない。
 
     Returns:
         画像添付が無ければ文字列 content の HumanMessage、あれば
@@ -1095,6 +1143,8 @@ def _build_human_message(user_text: str, saved_paths: list[str]) -> HumanMessage
     other_paths = [p for p in saved_paths if not is_image_file(p)]
 
     text = user_text
+    if work_dir_notice:
+        text += f"\n\n{work_dir_notice}"
     if other_paths:
         paths = "\n".join(f"- {p}" for p in other_paths)
         text += f"\n\n[アップロードされたファイルの保存先]\n{paths}"
@@ -1596,7 +1646,15 @@ async def on_message(message: cl.Message) -> None:
     # 保存先パスを本文に明示する（LLM が run_script に渡せるように）。
     saved = _save_uploads(message)
     processed_text = register_raw_unc_paths_in_text(message.content)
-    human_message = _build_human_message(processed_text, saved)
+    # スレッド開始時・作業ディレクトリ変更時（on_chat_start/_apply_work_dir が
+    # 立てるフラグ）のみ、実際の絶対パスをLLMへ知らせる（詳細は
+    # _build_work_dir_notice() docstring参照）。以降のターンは会話履歴に
+    # 残ったこのブロックを参照させるため、毎ターン注入はしない。
+    work_dir_notice: str | None = None
+    if cl.user_session.get("work_dir_notice_pending"):
+        cl.user_session.set("work_dir_notice_pending", False)
+        work_dir_notice = _build_work_dir_notice()
+    human_message = _build_human_message(processed_text, saved, work_dir_notice)
 
     inputs = {"messages": [human_message]}
     turn_totals = {"input": 0, "output": 0, "total": 0}  # このターンのトークン使用量
