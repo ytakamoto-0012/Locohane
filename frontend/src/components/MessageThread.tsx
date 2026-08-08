@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef } from 'react';
+import { useContext } from 'react';
 import { useRecoilValue } from 'recoil';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -78,12 +78,6 @@ function TypingIndicator() {
 }
 
 export function MessageThread({ messages, showTyping }: { messages: IStep[]; showTyping: boolean }) {
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [messages, showTyping]);
-
   if (messages.length === 0 && !showTyping) {
     return <div className="message-thread-empty">まだメッセージはありません。下の入力欄から話しかけてください。</div>;
   }
@@ -94,7 +88,6 @@ export function MessageThread({ messages, showTyping }: { messages: IStep[]; sho
         <MessageBubble key={step.id} step={step} />
       ))}
       {showTyping ? <TypingIndicator /> : null}
-      <div ref={bottomRef} />
     </div>
   );
 }

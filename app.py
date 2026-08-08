@@ -396,6 +396,12 @@ STARTER_PREFIX = "🚀 定型文\n"
 # STARTER_PREFIX/PLAN_PREFIX と同じ方式）。
 MAX_DISPLAY_MESSAGES_PREFIX = "📏 表示件数上限\n"
 
+# frontend/src/utils/messageTree.ts の MAX_DISPLAY_SIDE_STEPS_PREFIX と一致させる
+# （サイドパネルのStep一覧の表示件数上限をフロントエンドへ伝えるマーカー。
+# MAX_DISPLAY_MESSAGES_PREFIX と同様、表示専用の制限でありLLMへ渡す会話コンテキストや
+# 会話ログには一切影響しない）。
+MAX_DISPLAY_SIDE_STEPS_PREFIX = "🧰 サイドパネル表示件数上限\n"
+
 
 # public/settings/welcome.md が存在しない場合のフォールバック（{skills} はスキル一覧に置換される）。
 _WELCOME_TEMPLATE_DEFAULT = (
@@ -854,6 +860,12 @@ async def on_chat_start() -> None:
     # 表示専用の設定であり、これ自体がLLMへの会話コンテキストに影響することはない
     # （フロントエンド側で selectMainThread() のフィルタにより本メッセージ自体も除外される）。
     await cl.Message(content=MAX_DISPLAY_MESSAGES_PREFIX + json.dumps(_config.ui_max_display_messages)).send()
+
+    # サイドパネル（Step一覧）の表示件数上限をフロントエンドへ伝える（0=無制限も含め常に送信）。
+    # 表示専用の設定であり、これ自体がLLMへの会話コンテキストに影響することはない。
+    await cl.Message(
+        content=MAX_DISPLAY_SIDE_STEPS_PREFIX + json.dumps(_config.ui_max_display_side_steps)
+    ).send()
 
 
 @cl.on_chat_end

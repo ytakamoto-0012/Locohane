@@ -644,6 +644,10 @@ class Config:
     # 間引きであり、LLMへ渡す会話コンテキストや会話ログには影響しない
     # （frontend/src/App.tsx / messageTree.ts 参照）。
     ui_max_display_messages: int
+    # サイドパネル（右側、ツール呼び出し等のStep一覧）の描画件数上限（0 = 無制限）。
+    # 上記と同様、表示専用の間引きでありLLMへ渡す会話コンテキストや会話ログには
+    # 影響しない（frontend/src/App.tsx / messageTree.ts 参照）。
+    ui_max_display_side_steps: int
 
 
 def _resolve(base: Path, value: str) -> Path:
@@ -1514,6 +1518,9 @@ def load_config(config_path: Path | None = None) -> Config:
             )
         ),
         ui_max_display_messages=int(os.getenv("UI_MAX_DISPLAY_MESSAGES", ui.get("max_display_messages", 50))),
+        ui_max_display_side_steps=int(
+            os.getenv("UI_MAX_DISPLAY_SIDE_STEPS", ui.get("max_display_side_steps", 50))
+        ),
     )
 
     # .locohane/settings.json の "mcp" ブロックがあれば、config.ini/環境変数由来の
