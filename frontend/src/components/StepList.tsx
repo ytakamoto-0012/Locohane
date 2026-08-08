@@ -46,6 +46,17 @@ export function StepList({ steps }: { steps: IStep[] }) {
     setAutoScroll(distanceFromBottom <= BOTTOM_THRESHOLD_PX);
   };
 
+  // 上方向へのホイール操作があった時点で即座にオートスクロールを解除する。
+  // scroll イベントの distanceFromBottom 判定だけだと、ストリーミング中の
+  // ResizeObserver による強制スナップ(下記 useEffect)と競合し、閾値を
+  // 超えるまで押し戻されてしまうため、ユーザー操作を最優先で反映する
+  // (MessagePane.tsx と同じ方式)。
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (e.deltaY < 0) {
+      setAutoScroll(false);
+    }
+  };
+
   const handleScrollToBottomClick = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -56,7 +67,7 @@ export function StepList({ steps }: { steps: IStep[] }) {
   return (
     <div className="step-list-card">
       <div className="step-list-scroll-wrapper">
-        <div className="step-list-scroll" ref={scrollRef} onScroll={handleScroll}>
+        <div className="step-list-scroll" ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel}>
           {steps.length === 0 ? (
             <div className="step-list-empty">ツール呼び出しはまだありません。</div>
           ) : (

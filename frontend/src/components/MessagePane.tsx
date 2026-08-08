@@ -54,6 +54,16 @@ export function MessagePane({ messages, showTyping }: { messages: IStep[]; showT
     setAutoScroll(distanceFromBottom <= BOTTOM_THRESHOLD_PX);
   };
 
+  // 上方向へのホイール操作があった時点で即座にオートスクロールを解除する。
+  // scroll イベントの distanceFromBottom 判定だけだと、ストリーミング中の
+  // ResizeObserver による強制スナップ(下記 useEffect)と競合し、閾値を
+  // 超えるまで押し戻されてしまうため、ユーザー操作を最優先で反映する。
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (e.deltaY < 0) {
+      setAutoScroll(false);
+    }
+  };
+
   const handleScrollToBottomClick = () => {
     const el = containerRef.current;
     if (!el) return;
@@ -63,7 +73,7 @@ export function MessagePane({ messages, showTyping }: { messages: IStep[]; showT
 
   return (
     <div className="messages-scroll-wrapper">
-      <div className="messages-scroll" ref={containerRef} onScroll={handleScroll}>
+      <div className="messages-scroll" ref={containerRef} onScroll={handleScroll} onWheel={handleWheel}>
         <MessageThread messages={messages} showTyping={showTyping} />
       </div>
       {!autoScroll ? (
