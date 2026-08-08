@@ -1268,7 +1268,8 @@ def load_config(config_path: Path | None = None) -> Config:
                     '["docx-tools","read_docx.py"],["docx-tools","render_docx.py"],'
                     '["pdf-tools","read_pdf.py"],["pdf-tools","render_pdf_pages.py"],'
                     '["pptx-tools","read_pptx.py"],["pptx-tools","inspect_pptx.py"],'
-                    '["pptx-tools","render_pptx.py"]]',
+                    '["pptx-tools","render_pptx.py"],'
+                    '["web-search","search_web.py"]]',
                 ),
             )
         ),
