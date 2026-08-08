@@ -509,6 +509,69 @@ def _patch_chainlit_connection_successful_task_end() -> None:
     )
 
 
+def _register_socket_lifecycle_logging() -> None:
+    """WebSocketの接続・切断・再接続をINFOログに記録する（診断目的、動作変更なし）。
+
+    StepItem.tsx（フロント）の「完了」バッジは、そのStepに対する update_step
+    イベント（step.end 付き）を受信して初めて表示が切り替わる。ところが
+    chainlit/socket.py の emit_fn は `sio.emit(event, data, to=sid)` という
+    特定sid宛のfire-and-forgetで、確認応答も再送も無い。さらに
+    connection_successful（_patch_chainlit_connection_successful_task_end参照）は
+    進行中ターンの送信ボタン状態（task_start/task_end）は復元するが、
+    Stepツリーの再送は行わない。そのため、進行中ターンの最中に切断が起きると、
+    その切断中に発行されたStep完了更新（on_tool_end等）は再接続後も届かず、
+    フロント上でそのStepが「実行中」のまま固まる — という不具合が疑われている
+    （issue参照）。しかし従来、WebSocketの接続/切断/再接続はapp.log上に一切
+    記録が無く、実際に事象発生時刻と切断が相関しているか確認できなかった。
+    ここではまず相関を確認するため、接続イベント自体をログするに留める
+    （Stepツリーの再送などの恒久対策は別途）。
+    """
+    from chainlit.session import WebsocketSession as _WebsocketSession
+    from chainlit.socket import connect as _original_connect
+    from chainlit.socket import disconnect as _original_disconnect
+    from chainlit.socket import sio as _sio
+
+    logger = logging.getLogger(__name__)
+
+    @_sio.on("connect")  # pyright: ignore [reportOptionalCall]
+    async def _connect_logged(sid, environ, auth):
+        session_id = auth.get("sessionId") if isinstance(auth, dict) else None
+        existing = _WebsocketSession.get_by_id(session_id) if session_id else None
+        if existing is not None:
+            task = existing.current_task
+            task_active = task is not None and not task.done()
+            logger.info(
+                "WebSocket再接続: sid=%s thread_id=%s ターン進行中=%s"
+                "（進行中の再接続は、切断中に完了したStep更新がフロントに届かず"
+                "「実行中」のまま固まる不具合の疑いあり）",
+                sid,
+                existing.thread_id,
+                task_active,
+            )
+        else:
+            logger.info("WebSocket新規接続: sid=%s session_id=%s", sid, session_id)
+        return await _original_connect(sid, environ, auth)
+
+    @_sio.on("disconnect")  # pyright: ignore [reportOptionalCall]
+    async def _disconnect_logged(sid):
+        session = _WebsocketSession.get(sid)
+        if session is not None:
+            task = session.current_task
+            task_active = task is not None and not task.done()
+            logger.info(
+                "WebSocket切断: sid=%s thread_id=%s ターン進行中=%s"
+                "（進行中の切断は、以降のStep完了更新が再接続まで失われる可能性）",
+                sid,
+                session.thread_id,
+                task_active,
+            )
+        else:
+            logger.info("WebSocket切断: sid=%s（セッション不明）", sid)
+        return await _original_disconnect(sid)
+
+    logger.info("WebSocket接続/切断のライフサイクルログ記録を有効化しました。")
+
+
 async def _setup() -> None:
     """スキル走査・ツール初期化など、全セッション共有資源の構築を一度だけ行う（冪等）。
 
@@ -763,6 +826,9 @@ async def _setup() -> None:
 
     # 長時間ターン中の再接続で送信ボタンが誤って復活する不具合を防ぐ。
     _patch_chainlit_connection_successful_task_end()
+
+    # Stepの完了表示漏れ調査用: WebSocket接続/切断/再接続をログに残す。
+    _register_socket_lifecycle_logging()
 
     # LLM 同時実行数ガードを初期化する。
     init_llm_concurrency(_config.llm_max_concurrent_requests)
