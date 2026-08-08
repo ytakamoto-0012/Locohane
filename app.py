@@ -434,6 +434,44 @@ def _format_work_dir_status(resolved: str | None, status: WorkDirAccessStatus | 
     )
 
 
+def _patch_chainlit_connection_successful_task_end() -> None:
+    """Chainlit本体の connection_successful ハンドラが誤って task_end を
+    発行してしまう不具合を、site-packages 無改変のまま上書き修正する。
+
+    chainlit/socket.py の connection_successful は session.current_task の
+    状態を一切見ずに無条件で task_end() を送る。フロント（@chainlit/react-client）
+    は WebSocket が再接続するたびに connection_successful を送るため、
+    dispatch_agent の無期限待ち（[subagent].background_inline_wait_max_seconds=0）
+    のような分単位の長時間ターンの最中にネットワーク瞬断・スリープ復帰等で
+    再接続が起きると、バックエンドはターンを継続しているのにフロントの
+    送信ボタンだけが復活してしまう（ユーザーが実行中のターンへ新規メッセージを
+    送れてしまう不具合の原因）。
+
+    python-socketio の AsyncServer.on() はイベントハンドラを
+    self.handlers[namespace][event] = handler として単純に上書きするだけ
+    （socketio/base_server.py 参照）なので、chainlit.socket インポート後に
+    ここで再登録すれば安全に差し替えられる。元のハンドラ（resume_thread・
+    on_chat_start 起動等）はそのまま呼び出し、その直後に
+    session.current_task がまだ終わっていなければ task_start() を送り直して
+    フロントの表示（停止ボタン）を実態に合わせて復元する。
+    """
+    from chainlit.socket import connection_successful as _original_connection_successful
+    from chainlit.socket import init_ws_context as _init_ws_context
+    from chainlit.socket import sio as _sio
+
+    @_sio.on("connection_successful")  # pyright: ignore [reportOptionalCall]
+    async def _connection_successful_fixed(sid: str) -> None:
+        await _original_connection_successful(sid)
+        context = _init_ws_context(sid)
+        task = getattr(context.session, "current_task", None)
+        if task is not None and not task.done():
+            await context.emitter.task_start()
+
+    logging.getLogger(__name__).info(
+        "Chainlit connection_successful の task_end 誤発火を防ぐパッチを適用しました。"
+    )
+
+
 async def _setup() -> None:
     """スキル走査・ツール初期化など、全セッション共有資源の構築を一度だけ行う（冪等）。
 
@@ -685,6 +723,9 @@ async def _setup() -> None:
     # P0-3: httpcore の cancel scope breakage 検知フィルタを登録する。
     # _setup() は一度だけ呼ばれるため、ここで登録すれば十分（冪等処理あり）。
     _register_cancel_scope_watcher()
+
+    # 長時間ターン中の再接続で送信ボタンが誤って復活する不具合を防ぐ。
+    _patch_chainlit_connection_successful_task_end()
 
     # LLM 同時実行数ガードを初期化する。
     init_llm_concurrency(_config.llm_max_concurrent_requests)
