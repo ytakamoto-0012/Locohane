@@ -1,17 +1,15 @@
-"""dispatch_agent_background / check_dispatch_agent_job / stop_dispatch_agent_job の回帰テスト。
+"""dispatch_agent / check_dispatch_agent_job / stop_dispatch_agent_job の回帰テスト。
 
 設計変更の経緯: 当初は run_script_background と同じ「即座に job_id を返し、
 LLM自身が check_dispatch_agent_job でポーリングする」方式で実装したが、
 実運用でのフィードバックにより「LLMが自分でポーリングするとその都度トークンを
-消費する」問題が判明した。そのため dispatch_agent_background は現在、ジョブ完了
+消費する」問題が判明した。そのため dispatch_agent は現在、ジョブ完了
 まで（安全上限まで）ツール呼び出し内でブロックし、最終結果を1回のLLM往復で
 直接返す設計に変わっている。安全上限を超えた場合のみ、従来どおり job_id を
 返すフォールバック経路が残る。人間向けの進捗表示は cl.Message による直接push
 （LLM非経由・トークン消費ゼロ）に置き換わった。
 
-このファイルのテストはこの新しい契約を検証する。加えて、dispatch_agent 固有の
-懸念（_DISPATCH_AGENT_SEMAPHORES を同期版 dispatch_agent と共有できているか）
-も重点的に検証する。
+このファイルのテストはこの契約を検証する。
 """
 
 import asyncio
@@ -88,22 +86,26 @@ def _extract_job_id(text: str) -> str:
 async def test_normal_completion_returns_final_result_directly(monkeypatch, tmp_path) -> None:
     """安全上限内に終わる通常ケースでは、1回の呼び出しで最終結果がそのまま返る。"""
     _setup(monkeypatch, tmp_path=tmp_path)
+    tools.cl.user_session.set("main_agent_glob_call_count", {"glob": 1})
 
     async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
         return f"done:{task.splitlines()[-1]}"
 
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
 
-    result = await tools.dispatch_agent_background.ainvoke({"task": "investigate", "agent_type": "explore"})
+    result = await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
 
     assert result == "done:investigate"
     assert "job_id=" not in result
     assert tools._DISPATCH_AGENT_JOBS == {}  # 完了時点でレジストリから取り除かれている
+    # 安全上限フォールバックを経ない通常完了では、同一ターン内での
+    # 複数回delegateを妨げないよう従来通りガードカウンタがリセットされる。
+    assert tools.cl.user_session.get("main_agent_glob_call_count") is None
 
 
 @pytest.mark.asyncio
 async def test_background_dispatch_injects_work_dir_hint_into_task(monkeypatch, tmp_path) -> None:
-    """dispatch_agent と同じく、実際の作業ディレクトリをtaskの先頭に事実として与える。"""
+    """実際の作業ディレクトリをtaskの先頭に事実として与える。"""
     _setup(monkeypatch, tmp_path=tmp_path)
     captured: dict = {}
 
@@ -113,7 +115,7 @@ async def test_background_dispatch_injects_work_dir_hint_into_task(monkeypatch, 
 
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
 
-    await tools.dispatch_agent_background.ainvoke({"task": "investigate", "agent_type": "explore"})
+    await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
 
     expected_work_dir = tmp_path / "workdir"
     assert captured["task"] == f"作業ディレクトリ: {expected_work_dir}\n\ninvestigate"
@@ -132,7 +134,7 @@ async def test_safety_cap_fallback_returns_job_id_and_keeps_job_running(monkeypa
 
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
 
-    started = await tools.dispatch_agent_background.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
     assert "job_id=" in started
     job_id = _extract_job_id(started)
 
@@ -144,6 +146,37 @@ async def test_safety_cap_fallback_returns_job_id_and_keeps_job_running(monkeypa
     await job.runner_task
     result = await tools.check_dispatch_agent_job.ainvoke({"job_id": job_id})
     assert result == "done"
+
+
+@pytest.mark.asyncio
+async def test_fallback_completion_does_not_reset_main_agent_glob_guard(monkeypatch, tmp_path) -> None:
+    """安全上限フォールバック後にジョブが完了しても、別ターンのGlobガード
+    カウンタを横からリセットしない（cross-turnレースの回帰確認）。"""
+    _setup(monkeypatch, tmp_path=tmp_path)
+    monkeypatch.setattr(tools, "_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    gate = asyncio.Event()
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        await gate.wait()
+        return "done"
+
+    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+
+    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    assert "job_id=" in started
+    job_id = _extract_job_id(started)
+    job = tools._DISPATCH_AGENT_JOBS[job_id]
+
+    # フォールバック発生後、同一セッションで別の新しいターンが始まり、
+    # 既にGlobガード上限まで積んでいる状態を模す。
+    tools.cl.user_session.set("main_agent_glob_call_count", {"glob": 1})
+
+    gate.set()
+    await job.runner_task
+
+    assert job.turn_still_waiting is False
+    # 旧ジョブの完了によって新ターン側のカウンタが横から消されていないこと。
+    assert tools.cl.user_session.get("main_agent_glob_call_count") == {"glob": 1}
 
 
 @pytest.mark.asyncio
@@ -167,7 +200,7 @@ async def test_progress_is_pushed_without_llm_and_stops_after_completion(monkeyp
         gate.set()
 
     release_task = asyncio.create_task(_release_after_delay())
-    result = await tools.dispatch_agent_background.ainvoke({"task": "t", "agent_type": "explore"})
+    result = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
     await release_task
 
     assert result == "done"
@@ -191,7 +224,7 @@ async def test_cross_session_access_is_rejected(monkeypatch, tmp_path) -> None:
         return "done"
 
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
-    started = await tools.dispatch_agent_background.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
     job_id = _extract_job_id(started)
 
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession("session-b"))
@@ -216,7 +249,7 @@ async def test_poll_rate_limiting_rejects_too_soon(monkeypatch, tmp_path) -> Non
         return "done"
 
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
-    started = await tools.dispatch_agent_background.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
     job_id = _extract_job_id(started)
 
     first = await tools.check_dispatch_agent_job.ainvoke({"job_id": job_id})
@@ -241,7 +274,7 @@ async def test_stop_cancels_running_job_cleanly(monkeypatch, tmp_path) -> None:
         await asyncio.sleep(1000)  # stop_dispatch_agent_job にキャンセルされる想定
 
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
-    started = await tools.dispatch_agent_background.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
     job_id = _extract_job_id(started)
     await started_running.wait()
 
@@ -262,7 +295,7 @@ async def test_exception_inside_job_is_returned_as_error_not_lost(monkeypatch, t
         raise RuntimeError("boom")
 
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
-    result = await tools.dispatch_agent_background.ainvoke({"task": "t", "agent_type": "explore"})
+    result = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
 
     assert result == "エラー: サブエージェントの実行に失敗しました: boom"
     assert tools._DISPATCH_AGENT_JOBS == {}
@@ -280,46 +313,9 @@ async def test_exception_with_empty_str_falls_back_to_type_name(monkeypatch, tmp
         raise TimeoutError()  # str(TimeoutError()) == ""
 
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
-    result = await tools.dispatch_agent_background.ainvoke({"task": "t", "agent_type": "explore"})
+    result = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
 
     assert result == "エラー: サブエージェントの実行に失敗しました: TimeoutError"
-
-
-@pytest.mark.asyncio
-async def test_semaphore_shared_with_sync_dispatch_agent(monkeypatch, tmp_path) -> None:
-    """max_parallel=1 のとき、dispatch_agent_background と dispatch_agent が
-    同じセマフォを取り合い、同時実行数が1を超えないことを確認する。
-
-    元インシデント（llama-serverの--parallelスロット数超過によるチェック
-    ポイント破損）の再発防止に直結する、最も重要なテストケース。
-    """
-    _setup(monkeypatch, tmp_path=tmp_path)
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_MAX_PARALLEL", 1)
-
-    concurrent = 0
-    max_concurrent = 0
-    lock = asyncio.Lock()
-
-    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
-        nonlocal concurrent, max_concurrent
-        async with lock:
-            concurrent += 1
-            max_concurrent = max(max_concurrent, concurrent)
-        await asyncio.sleep(0.05)
-        async with lock:
-            concurrent -= 1
-        return f"done:{task.splitlines()[-1]}"
-
-    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
-
-    bg_result, sync_result = await asyncio.gather(
-        tools.dispatch_agent_background.ainvoke({"task": "bg", "agent_type": "explore"}),
-        tools.dispatch_agent.ainvoke({"task": "sync", "agent_type": "explore"}),
-    )
-
-    assert max_concurrent == 1
-    assert bg_result == "done:bg"
-    assert sync_result == "done:sync"
 
 
 def test_scratch_notes_path_for_run_is_isolated_per_run(monkeypatch, tmp_path) -> None:
@@ -331,10 +327,10 @@ def test_scratch_notes_path_for_run_is_isolated_per_run(monkeypatch, tmp_path) -
     assert "run-b" in path_b.name
 
 
-def test_new_tools_are_base_only_not_subagent() -> None:
-    assert tools.dispatch_agent_background in tools._BASE_TOOLS
+def test_dispatch_agent_family_is_base_only_not_subagent() -> None:
+    assert tools.dispatch_agent in tools._BASE_TOOLS
     assert tools.check_dispatch_agent_job in tools._BASE_TOOLS
     assert tools.stop_dispatch_agent_job in tools._BASE_TOOLS
-    assert tools.dispatch_agent_background not in tools._SUBAGENT_TOOLS
+    assert tools.dispatch_agent not in tools._SUBAGENT_TOOLS
     assert tools.check_dispatch_agent_job not in tools._SUBAGENT_TOOLS
     assert tools.stop_dispatch_agent_job not in tools._SUBAGENT_TOOLS

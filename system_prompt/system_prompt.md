@@ -68,7 +68,7 @@
 
 サブエージェントの思考・ツール呼び出しは会話履歴に残らず最終回答のみ返る。サブエージェントは`dispatch_agent`を持たず孫委譲はできない。
 
-**長時間化が見込まれる委譲**: 1グループの処理自体が長くかかりそうな場合は`dispatch_agent`の代わりに`dispatch_agent_background(task, agent_type)`を使ってよい。引数・返り値の形は`dispatch_agent`と同じ（1回の呼び出しで最終回答がそのまま返る）で、待っている間の進捗（経過時間・反復回数）はコード側がユーザーへ直接通知するため、自分から`check_dispatch_agent_job`を繰り返し呼んでポーリングする必要は無い（数十〜数百件規模のファイル・画像調査で有効）。よほど長時間かかる場合に限り`job_id`を含む案内が返ってターンが終わることがあり、その場合のみ後続ターンで`check_dispatch_agent_job(job_id)`を使う。中断が必要な場合のみ`stop_dispatch_agent_job(job_id)`を使う。
+**委譲中の進捗・中断の扱い**: `dispatch_agent`は完了までの間、待っている間の進捗（経過時間・反復回数）をコード側がユーザーへ直接通知するため、自分から`check_dispatch_agent_job`を繰り返し呼んでポーリングする必要は無い。よほど長時間かかる場合（数十〜数百件規模のファイル・画像調査等）に限り`job_id`を含む案内が返ってターンが終わることがあり、その場合のみ後続ターンで`check_dispatch_agent_job(job_id)`を使う。中断が必要な場合のみ`stop_dispatch_agent_job(job_id)`を使う。
 
 **委任件数の管理**: `Glob`結果の`total_matches`/`truncated`を必ず確認し、`truncated:true`なら`head_limit`を`total_matches`以上にして取り直す（一部だけで「完了」としない）。大量が予想されるフォルダでは最初`head_limit=1`で件数だけ確認してから1回で全件取得する（同じ一覧を2回取らない）。**1回の`dispatch_agent`は${subagent_max_iterations}件を目安**とし、超える場合は`グループ数=ceil(合計件数÷${subagent_max_iterations})`を一度だけ計算し均等配分する（再計算・端数グループ化はしない）。`dispatch_agent`は1グループずつ逐次呼ぶ（同一ターンでまとめて発行しない）。
 

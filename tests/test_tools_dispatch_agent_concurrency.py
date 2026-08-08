@@ -37,6 +37,20 @@ class _FakeUserSession:
         self._data[key] = value
 
 
+class _FakeMessage:
+    """tools.cl.Message の差し替え。dispatch_agent が内部で起動する進捗push
+    タスク（_push_dispatch_agent_progress）が cl.Message(...).send() を呼ぶため、
+    Chainlit実行コンテキスト無しでも動くよう差し替える
+    （test_tools_dispatch_agent.py の _FakeMessage と同じパターン）。
+    """
+
+    def __init__(self, content: str = "", **kwargs) -> None:
+        self.content = content
+
+    async def send(self) -> None:
+        pass
+
+
 def _setup(monkeypatch, tmp_path=None) -> None:
     monkeypatch.setattr(tools, "_LLM_CONFIG", object())
     monkeypatch.setattr(
@@ -45,9 +59,12 @@ def _setup(monkeypatch, tmp_path=None) -> None:
         {"explore": tools.ResolvedAgentType(description="", system_prompt="", tools=[])},
     )
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
+    monkeypatch.setattr(tools.cl, "Message", _FakeMessage)
     # 他テストが同じセッションキー（未設定時は None）で生成した Semaphore を
     # 再利用しないよう、辞書を空の状態から始める。
     monkeypatch.setattr(tools, "_DISPATCH_AGENT_SEMAPHORES", {})
+    # ジョブレジストリも他テストの残留状態を引き継がないよう空にしておく。
+    monkeypatch.setattr(tools, "_DISPATCH_AGENT_JOBS", {})
     if tmp_path is not None:
         workdir = tmp_path / "workdir"
         workdir.mkdir(exist_ok=True)
@@ -58,7 +75,7 @@ async def _dispatch_three(monkeypatch) -> tuple[list[str], int]:
     concurrent = 0
     max_concurrent = 0
 
-    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations):
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
         nonlocal concurrent, max_concurrent
         concurrent += 1
         max_concurrent = max(max_concurrent, concurrent)
@@ -120,7 +137,7 @@ async def test_dispatch_agent_max_parallel_is_independent_per_session(monkeypatc
     concurrent = 0
     max_concurrent = 0
 
-    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations):
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
         nonlocal concurrent, max_concurrent
         concurrent += 1
         max_concurrent = max(max_concurrent, concurrent)
@@ -159,7 +176,7 @@ async def test_dispatch_agent_injects_work_dir_hint_into_task(monkeypatch, tmp_p
     _setup(monkeypatch, tmp_path=tmp_path)
     captured: dict = {}
 
-    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations):
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
         captured["task"] = task
         return "ok"
 
@@ -179,7 +196,7 @@ async def test_dispatch_agent_hint_injection_is_swallowed_when_default_workdir_u
     _setup(monkeypatch)  # tmp_path を渡さない = _DEFAULT_WORKDIR は None のまま
     captured: dict = {}
 
-    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations):
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
         captured["task"] = task
         return "ok"
 

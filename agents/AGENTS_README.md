@@ -41,7 +41,7 @@ tools: read_skill, Read, Glob, run_script   # 任意。カンマ区切り文字�
 
 ## 3. `tools:` フィールドとツール名の解決
 
-サブエージェントに渡せるツールの実体は、`tools.py` の `_SUBAGENT_TOOLS` リスト（3340-3366行、メモリー系ツール定義より後に置く必要があるため `_BASE_TOOLS` 直前に配置）に列挙された固定セットのみ:
+サブエージェントに渡せるツールの実体は、`tools.py` の `_SUBAGENT_TOOLS` リスト（4011-4037行、メモリー系ツール定義より後に置く必要があるため `_BASE_TOOLS` 直前に配置）に列挙された固定セットのみ:
 
 ```
 read_skill, read_skill_file, provide_download, show_image,
@@ -67,12 +67,12 @@ read_memory, search_memory, list_memories
 
 ## 5. メインエージェントからの呼び出し方法
 
-メインエージェントは `dispatch_agent(task: str, agent_type: str)`（`tools.py` 2421-2487行）でサブエージェントに委譲する。
+メインエージェントは `dispatch_agent(task: str, agent_type: str)`（`tools.py` 2929-3016行）でサブエージェントに委譲する。
 
 - `agent_type` は `agents/*.md` の `name` と一致させる必須引数（既定値なし）。
-- 内部で `_AGENT_TYPES.get(agent_type)` を引き、解決済みツール・システムプロンプトを使って `run_subagent(task, resolved.tools, resolved.system_prompt, _LLM_CONFIG, _SUBAGENT_MAX_ITERATIONS)`（`subagent.py` 316行〜）を呼ぶ。サブエージェントは委譲元と**独立した ReAct ループ**（別の会話履歴）で動き、思考過程・途中のツール呼び出しは委譲元と共有されない。
+- 内部で `_AGENT_TYPES.get(agent_type)` を引き、`asyncio.create_task` で起動したバックグラウンドジョブ（`_run_dispatch_agent_job`、`tools.py` 2772行〜）の中で `run_subagent(task, resolved.tools, resolved.system_prompt, _LLM_CONFIG, job.max_iterations, on_iteration=..., llm_timeout_max_retries=...)`（`subagent.py` 365行〜）を呼ぶ。`dispatch_agent` 自身はこのジョブの完了を（安全上限まで）待ち続け、完了までの間チャットへ進捗を直接pushする。サブエージェントは委譲元と**独立した ReAct ループ**（別の会話履歴）で動き、思考過程・途中のツール呼び出しは委譲元と共有されない。
 - 委譲元に返るのは、サブエージェントが最後に返す「tool_calls を伴わないメッセージ」の content のみ。各 `agents/*.md` 本文が「最終回答を必ず書け、無言で終わるな」と強調しているのはこのため（空文字で終えると委譲元には何も伝わらない）。
-- `dispatch_agent` 実行中は `_IN_SUBAGENT` コンテキスト変数が `True` になる（2458行）。
+- ジョブ実行中は `_IN_SUBAGENT` コンテキスト変数が `True` になる（`_run_dispatch_agent_job` 内、`tools.py` 2803行）。
 
 ## 6. 画像をチャットメッセージ・Markdownテーブルへ埋め込む場合の注意
 

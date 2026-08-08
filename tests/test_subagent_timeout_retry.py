@@ -1,13 +1,12 @@
 """run_subagent の on_iteration コールバック・llm_timeout_max_retries の回帰テスト。
 
-背景: dispatch_agent_background（バックグラウンド実行）が「1回のLLM呼び出し
-タイムアウトでジョブ全体を諦めてしまう」既存の run_subagent の挙動
-（TimeoutError/httpx.TimeoutException を検知したら即座に打ち切りメッセージを
-返す、src/subagent.py の run_subagent 内 except 節）に対して耐性を持たせる
-ため、_invoke_with_timeout_retry を新設した。llm_timeout_max_retries=0
-（既定）では同期版 dispatch_agent と完全に同じ挙動（即座に打ち切り）である
-ことを固定化しつつ、正の値を渡した場合にモデル再構築・リトライで復旧できる
-ことを確認する。
+背景: dispatch_agent が「1回のLLM呼び出しタイムアウトでジョブ全体を諦めて
+しまう」既存の run_subagent の挙動（TimeoutError/httpx.TimeoutException を
+検知したら即座に打ち切りメッセージを返す、src/subagent.py の run_subagent 内
+except 節）に対して耐性を持たせるため、_invoke_with_timeout_retry を新設した。
+llm_timeout_max_retries=0（既定・明示的に指定しない呼び出し元向けの安全側
+デフォルト）では即座に打ち切ることを固定化しつつ、正の値を渡した場合に
+モデル再構築・リトライで復旧できることを確認する。
 """
 
 import pytest
@@ -78,8 +77,9 @@ async def test_on_iteration_called_with_iteration_and_max_iterations(monkeypatch
 
 @pytest.mark.asyncio
 async def test_default_zero_retries_truncates_immediately_on_timeout(monkeypatch) -> None:
-    """llm_timeout_max_retries 既定値0では、同期版dispatch_agentと同じく
-    初回のタイムアウトで即座に打ち切りメッセージを返す（回帰確認）。
+    """llm_timeout_max_retries 既定値0（明示的に指定しない呼び出し元向けの
+    安全側デフォルト）では、初回のタイムアウトで即座に打ち切りメッセージを
+    返す（回帰確認）。
     """
     fake_build_model, state = _make_fake_build_model(fail_times=1, final_message=_FINAL)
     monkeypatch.setattr(subagent, "build_model", fake_build_model)

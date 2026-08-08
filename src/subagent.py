@@ -256,17 +256,17 @@ async def _invoke_with_timeout_retry(
     """_invoke_with_empty_response_retry を呼び、LLM呼び出しタイムアウトを検知したら再試行する。
 
     run_subagent は元々、1回でも TimeoutError/httpx.TimeoutException が起きると
-    その反復までの内容を要約して即座に打ち切っていた（同期版 dispatch_agent は
-    人間がリアルタイムで待っているため、これは妥当な挙動）。しかし
-    dispatch_agent_background のように人間が待たずに裏側で長時間動く実行では、
+    その反復までの内容を要約して即座に打ち切っていた。しかし dispatch_agent の
+    ように長時間動くジョブがバックグラウンドタスクとして裏側で動き続ける実行では、
     数百件中のたった1回の一時的なタイムアウト（llama-serverの瞬間的な混雑等）
     で残り全件分の進捗を諦めてしまうのは本末転倒。max_retries>0 の場合のみ、
     _invoke_with_loop_retry と同じ「モデルを再構築してから同じ内容で再試行する」
     パターンで温存する。
 
     max_retries=0（既定）では従来どおり初回のタイムアウトで例外がそのまま
-    呼び出し元（run_subagent）へ伝播する。同期版 dispatch_agent はこの既定値を
-    渡すため挙動は完全に不変。
+    呼び出し元（run_subagent）へ伝播する。この既定値は明示的に retries を
+    指定しない呼び出し元向けの安全側デフォルトであり、dispatch_agent は
+    常に非ゼロの値を明示的に渡す（下記 llm_timeout_max_retries 参照）。
 
     Args:
         model: build_model() が構築した（bind_tools 済みの）モデル。
@@ -399,15 +399,16 @@ async def run_subagent(
         config: LLM 接続情報を含むアプリ設定。build_model 経由でモデル構築に使う。
         max_iterations: agent→tools の遷移を許す最大回数。
         on_iteration: 各反復で応答を得るたびに `(iteration, max_iterations)` を
-            渡して呼ぶ同期コールバック（省略可）。dispatch_agent_background が
+            渡して呼ぶ同期コールバック（省略可）。dispatch_agent が
             進捗表示（現在の反復回数）をジョブオブジェクトへ書き込むために使う。
             戻り値は無視する。例外は送出しない前提（呼び出し元の責任）。
         llm_timeout_max_retries: LLM呼び出しが [llm].request_timeout_seconds/
             stream_chunk_timeout_seconds に達した場合、モデルを再構築してから
-            同じ反復を再試行する最大回数。既定0＝従来どおり初回のタイムアウトで
-            即座に打ち切る（同期版 dispatch_agent 用）。dispatch_agent_background
-            は人間がリアルタイムで待たないため、より大きい値を渡して耐性を上げる
-            （_invoke_with_timeout_retry 参照）。
+            同じ反復を再試行する最大回数。既定0＝明示的に指定しない呼び出し元
+            向けの安全側デフォルト（初回のタイムアウトで即座に打ち切る）。
+            dispatch_agent は人間がターン内でリアルタイムに待つ間もジョブ自体は
+            バックグラウンドタスクとして動き続けるため、より大きい値を渡して
+            耐性を上げる（_invoke_with_timeout_retry 参照）。
 
     Returns:
         サブエージェントの最終回答テキスト。

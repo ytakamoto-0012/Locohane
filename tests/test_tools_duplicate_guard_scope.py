@@ -44,6 +44,19 @@ class _FakeUserSession:
         self._data[key] = value
 
 
+class _FakeMessage:
+    """tools.cl.Message の差し替え。dispatch_agent が内部で起動する進捗push
+    タスク（_push_dispatch_agent_progress）が cl.Message(...).send() を呼ぶため、
+    Chainlit実行コンテキスト無しでも動くよう差し替える。
+    """
+
+    def __init__(self, content: str = "", **kwargs) -> None:
+        self.content = content
+
+    async def send(self) -> None:
+        pass
+
+
 def _setup(monkeypatch, carry_over: bool) -> None:
     monkeypatch.setattr(
         tools, "_LLM_CONFIG", _Cfg(file_tools_duplicate_guard_carry_over_to_main=carry_over)
@@ -54,6 +67,8 @@ def _setup(monkeypatch, carry_over: bool) -> None:
         {"explore": tools.ResolvedAgentType(description="", system_prompt="", tools=[])},
     )
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
+    monkeypatch.setattr(tools.cl, "Message", _FakeMessage)
+    monkeypatch.setattr(tools, "_DISPATCH_AGENT_JOBS", {})
 
 
 def test_session_key_is_shared_when_carry_over_enabled(monkeypatch) -> None:
@@ -91,7 +106,7 @@ async def test_dispatch_agent_assigns_unique_run_id_per_call(monkeypatch) -> Non
     _setup(monkeypatch, carry_over=False)
     seen: list[str] = []
 
-    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations):
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
         # サブエージェント内から見えるキーを記録する。
         seen.append(tools._duplicate_guard_session_key("analyze_image_call_signatures"))
         await asyncio.sleep(0)

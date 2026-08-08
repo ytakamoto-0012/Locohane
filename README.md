@@ -195,7 +195,8 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `provide_download` | 既存のファイルをチャット画面にダウンロードボタンとして提示する |
 | `show_image` | 既存の画像ファイルをチャット画面にプレビュー表示する（LLM自身は内容を見ない。「表示して」「見せて」に）。回答本文（Markdownテーブルのセル等）の中に画像を組み込みたい場合はツールを使わず、回答テキストへ直接 `![説明](絶対パス)` と書けばよい（送信直前に自動でブラウザから取得可能なURLへ変換される。`app.py` の `_embed_local_images_as_session_urls`） |
 | `analyze_image` | 画像ファイルをLLMへ視覚情報として見せ、LLM自身が内容を解析・説明・判断する（Vision対応モデル向け） |
-| `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される |
+| `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される。完了までの間、進捗（経過時間・反復回数）をチャットへ直接通知しながら待つため、LLM自身がポーリングする必要は無い。設定した安全上限（`[subagent].background_inline_wait_max_seconds`）を超えてもなお完了しない場合のみ `job_id` を返してターンを終える |
+| `check_dispatch_agent_job` / `stop_dispatch_agent_job` | 上記の安全上限超過フォールバック時のみ使う、ジョブの状況確認・強制終了 |
 | `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ |
 | `get_plan_status` / `lock_plan_mode` | 現在 Plan Mode（書き込み系ツールがブロックされたロック状態）か Edit Automatically（承認済み計画を実行できる状態）かを確認し、後者から前者へユーザー承認なしに手動で戻す |
 | `AskUserQuestion` / `ask_user_choice` | 会話継続に必要な追加情報をユーザーへ質問（`AskUserQuestion` は自由記述。`labels` 省略時は単一入力、指定時は複数項目をまとめて提示。`ask_user_choice` は選択肢形式で、表示される選択肢には常に「✏️ その他（自由入力）」「❌ キャンセル」が自動で追加される） |
@@ -747,6 +748,12 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[subagent]` | `token_guard_soft_threshold` | ソフト警告（注意メッセージ注入）のトークン閾値 | `SUBAGENT_TOKEN_GUARD_SOFT_THRESHOLD` |
 | `[subagent]` | `token_guard_hard_threshold` | ハード打ち切りのトークン閾値 | `SUBAGENT_TOKEN_GUARD_HARD_THRESHOLD` |
 | `[subagent]` | `empty_response_max_retries` | 空応答の再試行回数 | `SUBAGENT_EMPTY_RESPONSE_MAX_RETRIES` |
+| `[subagent]` | `background_job_retention_seconds` | `dispatch_agent` のジョブが終了後、`check_dispatch_agent_job` で一度も取得されないまま残ってよい秒数 | `SUBAGENT_BACKGROUND_JOB_RETENTION_SECONDS` |
+| `[subagent]` | `background_min_poll_interval_seconds` | `check_dispatch_agent_job` を連続で呼べる最短間隔秒数。0以下で無効化 | `SUBAGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS` |
+| `[subagent]` | `background_min_poll_message` | 上記間隔未満で呼ばれた際にLLMへ返すメッセージのテンプレート（`{wait_remaining}`/`{job_id}`/`{min_interval}` を埋め込み可）。空欄なら既定文言 | `SUBAGENT_BACKGROUND_MIN_POLL_MESSAGE` |
+| `[subagent]` | `background_inline_wait_max_seconds` | `dispatch_agent` がジョブ完了をLLMを介さずコード側で待つ上限秒数。超過時のみ `job_id` を返してLLMへ制御を戻す | `SUBAGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS` |
+| `[subagent]` | `background_progress_push_interval_seconds` | 待機中、人間向けに経過秒数・反復回数・進捗メモをチャットへ直接送る間隔（秒） | `SUBAGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS` |
+| `[subagent]` | `background_llm_timeout_max_retries` | 実行中のLLM呼び出しがタイムアウトした場合、モデルを再構築して同じ反復を再試行する最大回数 | `SUBAGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES` |
 | `[user_response_timeouts]` | `approval_seconds` | `approve_plan`／`run_script`・`execute_python_code`の個別実行確認でユーザー応答を待つ秒数。`0`で無期限待ち | `APPROVAL_TIMEOUT_SECONDS` |
 | `[user_response_timeouts]` | `ask_user_question_seconds` | `AskUserQuestion`（自由記述質問。`labels`省略時は単一入力、指定時は複数項目フォーム）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_QUESTION_TIMEOUT_SECONDS` |
 | `[user_response_timeouts]` | `ask_user_choice_seconds` | `ask_user_choice`（選択肢質問）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_CHOICE_TIMEOUT_SECONDS` |
