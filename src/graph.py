@@ -248,6 +248,23 @@ def is_empty_final_message(messages: list) -> bool:
     return not content.strip()
 
 
+async def _remove_message_ids_if_present(graph, run_config: dict, ids: list[str]) -> None:
+    """指定した message id のうち、現在のグラフ状態に実在するものだけを RemoveMessage で取り除く。
+
+    app.py の同名ヘルパーと同じ理由づけ（蓄積したnudge idが、呼び出し元による
+    状態変更で既に無効化されていてもValueErrorを送出しないようにする）。
+    このモジュールは app.py 由来の _CheckpointerTimeout に依存しないため、
+    checkpointer操作の例外は個別に捕捉せずそのまま呼び出し元へ伝播させる。
+    """
+    if not ids:
+        return
+    state = await graph.aget_state(run_config)
+    live_ids = {m.id for m in (state.values.get("messages", []) if state else [])}
+    present = [i for i in ids if i in live_ids]
+    if present:
+        await graph.aupdate_state(run_config, {"messages": [RemoveMessage(id=i) for i in present]})
+
+
 async def ainvoke_ensuring_final_text(
     graph,
     inputs: dict,
@@ -320,8 +337,7 @@ async def ainvoke_ensuring_final_text(
             result = await graph.ainvoke(current_inputs, config=run_config)
         except ThinkingLoopDetected as exc:
             if loop_attempt >= loop_max_retries:
-                if remove_ids:
-                    await graph.aupdate_state(run_config, {"messages": [RemoveMessage(id=i) for i in remove_ids]})
+                await _remove_message_ids_if_present(graph, run_config, remove_ids)
                 raise
             logger.warning(
                 "LLM応答のループを検知（%d回目の再試行）: 直近テキスト=%r",
@@ -344,13 +360,12 @@ async def ainvoke_ensuring_final_text(
         current_inputs = {"messages": [HumanMessage(content=EMPTY_RESPONSE_NUDGE, id=nudge_id)]}
         empty_attempt += 1
 
-    if remove_ids:
-        # ループ検知・無言終了いずれの注意メッセージも機械的な注入であり、
-        # 会話履歴に残すとリトライのたびに全量再送されて長い会話ほど
-        # コンテキストを圧迫する（かつ「過去に失敗した」痕跡がモデル自身の
-        # 目に触れ続けることが、同種の失敗を誘発する自己参照的な悪循環に
-        # つながりうる）。thinking_loopのnudgeは元々ここで除去していたが、
-        # 無言終了のnudgeは対象外になっていた非対称性を解消する
-        # （tune-prompt iter22の長時間会話コンテキスト肥大化調査で発見）。
-        await graph.aupdate_state(run_config, {"messages": [RemoveMessage(id=i) for i in remove_ids]})
+    # ループ検知・無言終了いずれの注意メッセージも機械的な注入であり、
+    # 会話履歴に残すとリトライのたびに全量再送されて長い会話ほど
+    # コンテキストを圧迫する（かつ「過去に失敗した」痕跡がモデル自身の
+    # 目に触れ続けることが、同種の失敗を誘発する自己参照的な悪循環に
+    # つながりうる）。thinking_loopのnudgeは元々ここで除去していたが、
+    # 無言終了のnudgeは対象外になっていた非対称性を解消する
+    # （tune-prompt iter22の長時間会話コンテキスト肥大化調査で発見）。
+    await _remove_message_ids_if_present(graph, run_config, remove_ids)
     return result

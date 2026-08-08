@@ -37,7 +37,7 @@ class _FakeUserSession:
         self._data[key] = value
 
 
-def _setup(monkeypatch) -> None:
+def _setup(monkeypatch, tmp_path=None) -> None:
     monkeypatch.setattr(tools, "_LLM_CONFIG", object())
     monkeypatch.setattr(
         tools,
@@ -48,6 +48,10 @@ def _setup(monkeypatch) -> None:
     # 他テストが同じセッションキー（未設定時は None）で生成した Semaphore を
     # 再利用しないよう、辞書を空の状態から始める。
     monkeypatch.setattr(tools, "_DISPATCH_AGENT_SEMAPHORES", {})
+    if tmp_path is not None:
+        workdir = tmp_path / "workdir"
+        workdir.mkdir(exist_ok=True)
+        monkeypatch.setattr(tools, "_DEFAULT_WORKDIR", workdir)
 
 
 async def _dispatch_three(monkeypatch) -> tuple[list[str], int]:
@@ -60,7 +64,7 @@ async def _dispatch_three(monkeypatch) -> tuple[list[str], int]:
         max_concurrent = max(max_concurrent, concurrent)
         await asyncio.sleep(0.05)
         concurrent -= 1
-        return f"done:{task}"
+        return f"done:{task.splitlines()[-1]}"
 
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
 
@@ -122,7 +126,7 @@ async def test_dispatch_agent_max_parallel_is_independent_per_session(monkeypatc
         max_concurrent = max(max_concurrent, concurrent)
         await asyncio.sleep(0.05)
         concurrent -= 1
-        return f"done:{task}"
+        return f"done:{task.splitlines()[-1]}"
 
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
 
@@ -143,3 +147,45 @@ async def test_dispatch_agent_max_parallel_is_independent_per_session(monkeypatc
     # セッション間で待ち合っていなければ、2回分の asyncio.sleep(0.05) が
     # 並行して走るため約0.05秒。待ち合っていれば約0.1秒になるはず。
     assert elapsed < 0.09
+
+
+@pytest.mark.asyncio
+async def test_dispatch_agent_injects_work_dir_hint_into_task(monkeypatch, tmp_path) -> None:
+    """メインエージェントが推測したパスが誤っていても、サブエージェントが
+    照合できる本当の作業ディレクトリを、taskの先頭に事実として与える
+    （issue: 存在しないパスをtaskに書かれたサブエージェントが、work_dir外の
+    似た名前のフォルダを黙って採用してしまった件の再発防止）。
+    """
+    _setup(monkeypatch, tmp_path=tmp_path)
+    captured: dict = {}
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations):
+        captured["task"] = task
+        return "ok"
+
+    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+
+    await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
+
+    expected_work_dir = tmp_path / "workdir"
+    assert captured["task"] == f"作業ディレクトリ: {expected_work_dir}\n\ninvestigate"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_agent_hint_injection_is_swallowed_when_default_workdir_unset(monkeypatch) -> None:
+    """_DEFAULT_WORKDIR 未設定（init_tools() 未実行相当）でも、ヒント注入の
+    RuntimeError で dispatch_agent 自体を失敗させず、taskはヒント無しで渡る。
+    """
+    _setup(monkeypatch)  # tmp_path を渡さない = _DEFAULT_WORKDIR は None のまま
+    captured: dict = {}
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations):
+        captured["task"] = task
+        return "ok"
+
+    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+
+    result = await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
+
+    assert result == "ok"
+    assert captured["task"] == "investigate"

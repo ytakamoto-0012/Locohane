@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 import httpx
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -249,6 +250,57 @@ async def _invoke_with_empty_response_retry(model, messages: list, config: Confi
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+async def _invoke_with_timeout_retry(
+    model, messages: list, config: Config, tools: list[BaseTool], max_retries: int
+):
+    """_invoke_with_empty_response_retry を呼び、LLM呼び出しタイムアウトを検知したら再試行する。
+
+    run_subagent は元々、1回でも TimeoutError/httpx.TimeoutException が起きると
+    その反復までの内容を要約して即座に打ち切っていた（同期版 dispatch_agent は
+    人間がリアルタイムで待っているため、これは妥当な挙動）。しかし
+    dispatch_agent_background のように人間が待たずに裏側で長時間動く実行では、
+    数百件中のたった1回の一時的なタイムアウト（llama-serverの瞬間的な混雑等）
+    で残り全件分の進捗を諦めてしまうのは本末転倒。max_retries>0 の場合のみ、
+    _invoke_with_loop_retry と同じ「モデルを再構築してから同じ内容で再試行する」
+    パターンで温存する。
+
+    max_retries=0（既定）では従来どおり初回のタイムアウトで例外がそのまま
+    呼び出し元（run_subagent）へ伝播する。同期版 dispatch_agent はこの既定値を
+    渡すため挙動は完全に不変。
+
+    Args:
+        model: build_model() が構築した（bind_tools 済みの）モデル。
+        messages: これまでの会話履歴（変更しない）。
+        config: LLM 接続情報を含むアプリ設定。
+        tools: モデル再構築時に bind_tools へ渡す。
+        max_retries: タイムアウト時に再試行する最大回数。
+
+    Returns:
+        _invoke_with_empty_response_retry と同じ
+        (AIMessage, 使用したモデルインスタンス, 空応答のままリトライ上限に
+        達したかどうかの bool) のタプル。
+
+    Raises:
+        TimeoutError, httpx.TimeoutException: max_retries 回再試行してもなお
+            タイムアウトが解消しなかった場合。
+    """
+    current_model = model
+    for attempt in range(max_retries + 1):
+        try:
+            return await _invoke_with_empty_response_retry(current_model, messages, config, tools)
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            if attempt >= max_retries:
+                raise
+            logger.warning(
+                "dispatch_agent: LLM呼び出しがタイムアウトしたため再試行します" "(%d/%d回目): %s",
+                attempt + 1,
+                max_retries,
+                exc,
+            )
+            current_model = build_model(config, role="sub").bind_tools(tools)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _extract_total_tokens(response: AIMessage) -> int | None:
     """AIMessage.usage_metadata から total_tokens を取り出す。
 
@@ -316,6 +368,8 @@ async def run_subagent(
     system_prompt: str,
     config: Config,
     max_iterations: int,
+    on_iteration: Callable[[int, int], None] | None = None,
+    llm_timeout_max_retries: int = 0,
 ) -> str:
     """独立した ReAct ループでタスクを処理し、最終回答のテキストのみを返す。
 
@@ -344,6 +398,16 @@ async def run_subagent(
         system_prompt: サブエージェント用のシステムプロンプト全文。
         config: LLM 接続情報を含むアプリ設定。build_model 経由でモデル構築に使う。
         max_iterations: agent→tools の遷移を許す最大回数。
+        on_iteration: 各反復で応答を得るたびに `(iteration, max_iterations)` を
+            渡して呼ぶ同期コールバック（省略可）。dispatch_agent_background が
+            進捗表示（現在の反復回数）をジョブオブジェクトへ書き込むために使う。
+            戻り値は無視する。例外は送出しない前提（呼び出し元の責任）。
+        llm_timeout_max_retries: LLM呼び出しが [llm].request_timeout_seconds/
+            stream_chunk_timeout_seconds に達した場合、モデルを再構築してから
+            同じ反復を再試行する最大回数。既定0＝従来どおり初回のタイムアウトで
+            即座に打ち切る（同期版 dispatch_agent 用）。dispatch_agent_background
+            は人間がリアルタイムで待たないため、より大きい値を渡して耐性を上げる
+            （_invoke_with_timeout_retry 参照）。
 
     Returns:
         サブエージェントの最終回答テキスト。
@@ -359,7 +423,9 @@ async def run_subagent(
 
     for iteration in range(1, max_iterations + 1):
         try:
-            response, model, empty_retries_exhausted = await _invoke_with_empty_response_retry(model, messages, config, tools)
+            response, model, empty_retries_exhausted = await _invoke_with_timeout_retry(
+                model, messages, config, tools, llm_timeout_max_retries
+            )
         except (TimeoutError, httpx.TimeoutException) as exc:
             logger.warning(
                 "dispatch_agent: LLM呼び出しがタイムアウトしたため打ち切り(iter=%d): %s",
@@ -369,6 +435,8 @@ async def run_subagent(
             return _build_truncation_message(f"LLM呼び出しがタイムアウトした({exc})", messages)
         messages.append(response)
         logger.info("subagent iter=%d ai=%r", iteration, str(response.content)[:500])
+        if on_iteration is not None:
+            on_iteration(iteration, max_iterations)
 
         tool_calls = getattr(response, "tool_calls", None)
         if not tool_calls:

@@ -587,6 +587,12 @@ async def _setup() -> None:
         script_background_job_retention_seconds=_config.script_background_job_retention_seconds,
         script_background_min_poll_interval_seconds=_config.script_background_min_poll_interval_seconds,
         script_background_min_poll_message=_config.script_background_min_poll_message,
+        dispatch_agent_background_job_retention_seconds=_config.subagent_background_job_retention_seconds,
+        dispatch_agent_background_min_poll_interval_seconds=_config.subagent_background_min_poll_interval_seconds,
+        dispatch_agent_background_min_poll_message=_config.subagent_background_min_poll_message,
+        dispatch_agent_background_inline_wait_max_seconds=_config.subagent_background_inline_wait_max_seconds,
+        dispatch_agent_background_progress_push_interval_seconds=_config.subagent_background_progress_push_interval_seconds,
+        dispatch_agent_background_llm_timeout_max_retries=_config.subagent_background_llm_timeout_max_retries,
         plan_approval_exempt_scripts=_config.script_plan_approval_exempt_scripts,
         plans_dir=_config.plans_dir,
     )
@@ -1359,6 +1365,37 @@ async def _repair_orphaned_tool_calls(graph, config: dict) -> int:
     return len(orphaned)
 
 
+async def _remove_message_ids_if_present(graph, config: dict, ids: list[str]) -> None:
+    """指定した message id のうち、現在のグラフ状態に実在するものだけを RemoveMessage で取り除く。
+
+    loop_nudge_ids / empty_nudge_ids は ThinkingLoopDetected・無言終了リトライの
+    たびに機械的な HumanMessage の id を蓄積するが、蓄積後に
+    _run_context_compaction が発火すると、圧縮対象は要約に置き換わり、保持された
+    直近メッセージも新しい uuid.uuid4() を振った複製へ置き換わる
+    （context_compaction.py 参照）。この場合、蓄積済みのidはどちらも現在のstate
+    にもう存在しない「幽霊id」になる。存在しないidを RemoveMessage(id=...) で
+    渡すと langgraph の add_messages リデューサが ValueError を送出し、
+    on_message のこの経路はどの except 節にも保護されていないため、そのまま
+    Chainlitの外側まで伝播して未処理エラーになっていた
+    （本番ログ: app.py:2103 のトレースバック）。ここで現在のstateに実在する
+    idだけへ絞り込み、安全に無視できるようにする。
+    """
+    if not ids:
+        return
+    try:
+        state = await graph.aget_state(config)
+    except _CheckpointerTimeout:
+        logging.getLogger(__name__).debug(
+            "nudgeメッセージ除去中にcheckpointer操作がタイムアウトしました",
+            exc_info=True,
+        )
+        return
+    live_ids = {m.id for m in (state.values.get("messages", []) if state else [])}
+    present = [i for i in ids if i in live_ids]
+    if present:
+        await graph.aupdate_state(config, {"messages": [RemoveMessage(id=i) for i in present]})
+
+
 def _messages_summary(messages: list) -> str:
     """メッセージリストの概要を文字列化する（role + content冒頭120文字）。"""
     parts = []
@@ -1893,8 +1930,7 @@ async def on_message(message: cl.Message) -> None:
                     "処理を打ち切りました。タスクを分割するか、別のアプローチを試してください。"
                 )
             ).send()
-            if loop_nudge_ids:
-                await graph.aupdate_state(config, {"messages": [RemoveMessage(id=i) for i in loop_nudge_ids]})
+            await _remove_message_ids_if_present(graph, config, loop_nudge_ids)
             return
         except _PlanDeniedInterrupt as e:
             # 却下メッセージの送信・thinking/answerの確定は on_tool_end 内で
@@ -2093,8 +2129,7 @@ async def on_message(message: cl.Message) -> None:
                 attempt += 1  # for range(total_retries + 1) の暗黙インクリメント相当
                 continue
             await cl.Message(content=(f"生成がループし、{loop_max_retries}回リトライしましたが" "改善しなかったため停止しました。")).send()
-            if loop_nudge_ids:
-                await graph.aupdate_state(config, {"messages": [RemoveMessage(id=i) for i in loop_nudge_ids]})
+            await _remove_message_ids_if_present(graph, config, loop_nudge_ids)
             return
 
         if turn_broken_exc is not None:
@@ -2151,9 +2186,7 @@ async def on_message(message: cl.Message) -> None:
     # 会話が完了した後は履歴に残さず取り除く（残すと長い会話ほど全量再送で
     # コンテキストを圧迫し、過去の失敗の痕跡がモデル自身の目に触れ続けることに
     # なる）。
-    remove_ids = loop_nudge_ids + empty_nudge_ids
-    if remove_ids:
-        await graph.aupdate_state(config, {"messages": [RemoveMessage(id=i) for i in remove_ids]})
+    await _remove_message_ids_if_present(graph, config, loop_nudge_ids + empty_nudge_ids)
 
     # 会話ログ（[chat_log].enabled=true の場合のみ、on_chat_start で
     # cl.user_session["chat_log_path"] が設定済み）。ユーザー発言と

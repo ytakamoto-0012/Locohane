@@ -577,6 +577,12 @@ class Config:
     subagent_token_guard_soft_warning_text: str
     subagent_token_guard_hard_threshold: int
     subagent_empty_response_max_retries: int
+    subagent_background_job_retention_seconds: int
+    subagent_background_min_poll_interval_seconds: int
+    subagent_background_min_poll_message: str
+    subagent_background_inline_wait_max_seconds: int
+    subagent_background_progress_push_interval_seconds: int
+    subagent_background_llm_timeout_max_retries: int
 
     # --- ユーザー応答待ちタイムアウト（Chainlit の Ask*Message） ---
     approval_timeout_seconds: int
@@ -820,6 +826,17 @@ _DEFAULT_LLM_URL = '[{"base_url": "http://localhost:8080/v1", "api_key": "dummy-
 DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE = (
     "まだ確認間隔が短すぎます。あと約{wait_remaining}秒待ってから、"
     "改めて check_script_job(job_id={job_id!r}) を呼び直してください"
+    "（最短確認間隔: {min_interval}秒）。"
+)
+
+# [subagent].background_min_poll_message が空の場合に使う既定メッセージ。
+# check_dispatch_agent_job() が最短確認間隔未満での再呼び出しを検知した際に
+# LLMへ返す文字列のテンプレート。プレースホルダーは
+# DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE と同じ
+# （.format() で {wait_remaining}/{job_id}/{min_interval} を埋め込む）。
+DEFAULT_DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE = (
+    "まだ確認間隔が短すぎます。あと約{wait_remaining}秒待ってから、"
+    "改めて check_dispatch_agent_job(job_id={job_id!r}) を呼び直してください"
     "（最短確認間隔: {min_interval}秒）。"
 )
 
@@ -1330,6 +1347,42 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "SUBAGENT_EMPTY_RESPONSE_MAX_RETRIES",
                 subagent.get("empty_response_max_retries", 2),
+            )
+        ),
+        subagent_background_job_retention_seconds=int(
+            os.getenv(
+                "SUBAGENT_BACKGROUND_JOB_RETENTION_SECONDS",
+                subagent.get("background_job_retention_seconds", 1800),
+            )
+        ),
+        subagent_background_min_poll_interval_seconds=int(
+            os.getenv(
+                "SUBAGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS",
+                subagent.get("background_min_poll_interval_seconds", 60),
+            )
+        ),
+        subagent_background_min_poll_message=_validate_poll_message_template(
+            os.getenv(
+                "SUBAGENT_BACKGROUND_MIN_POLL_MESSAGE",
+                subagent.get("background_min_poll_message", "") or DEFAULT_DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE,
+            )
+        ),
+        subagent_background_inline_wait_max_seconds=int(
+            os.getenv(
+                "SUBAGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS",
+                subagent.get("background_inline_wait_max_seconds", 1800),
+            )
+        ),
+        subagent_background_progress_push_interval_seconds=int(
+            os.getenv(
+                "SUBAGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS",
+                subagent.get("background_progress_push_interval_seconds", 20),
+            )
+        ),
+        subagent_background_llm_timeout_max_retries=int(
+            os.getenv(
+                "SUBAGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES",
+                subagent.get("background_llm_timeout_max_retries", 3),
             )
         ),
         approval_timeout_seconds=int(os.getenv("APPROVAL_TIMEOUT_SECONDS", timeouts.get("approval_seconds", 300))),

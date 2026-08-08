@@ -69,7 +69,12 @@ from langgraph.prebuilt import ToolNode
 
 from . import file_tools, memory, path_memory
 from .agent_types import AgentType
-from .config import Config, DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE, expand_config_vars
+from .config import (
+    Config,
+    DEFAULT_DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE,
+    DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE,
+    expand_config_vars,
+)
 from .images import image_followup_message, is_image_file, to_data_url
 from .llm import get_current_session
 from .subagent import is_truncated_result, run_subagent
@@ -224,6 +229,12 @@ _DEFAULT_WORKDIR: Path | None = None
 _LLM_CONFIG: Config | None = None
 _AGENT_TYPES: dict[str, ResolvedAgentType] = {}
 _SUBAGENT_MAX_ITERATIONS: int = 6
+_DISPATCH_AGENT_BACKGROUND_JOB_RETENTION_SECONDS: int = 1800
+_DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS: int = 20
+_DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE: str = DEFAULT_DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE
+_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS: int = 1800
+_DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS: int = 20
+_DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES: int = 3
 _MEMORY_ROOT: Path | None = None
 _PLANS_DIR: Path | None = None
 _HELP_PATH: Path | None = None
@@ -282,6 +293,12 @@ def init_tools(
     script_background_job_retention_seconds: int = 1800,
     script_background_min_poll_interval_seconds: int = 20,
     script_background_min_poll_message: str = DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE,
+    dispatch_agent_background_job_retention_seconds: int = 1800,
+    dispatch_agent_background_min_poll_interval_seconds: int = 20,
+    dispatch_agent_background_min_poll_message: str = DEFAULT_DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE,
+    dispatch_agent_background_inline_wait_max_seconds: int = 1800,
+    dispatch_agent_background_progress_push_interval_seconds: int = 20,
+    dispatch_agent_background_llm_timeout_max_retries: int = 3,
     plan_approval_exempt_scripts: Iterable[tuple[str, str]] = (),
     plans_dir: Path | None = None,
 ) -> None:
@@ -373,6 +390,35 @@ def init_tools(
             .format() で {wait_remaining}（あと何秒待つべきか）/
             {job_id}（対象ジョブID、repr形式）/{min_interval}（設定値
             そのもの）を埋め込める。
+        dispatch_agent_background_job_retention_seconds: dispatch_agent_background の
+            ジョブが終了後、check_dispatch_agent_job で一度も取得されないまま
+            registry に残ってよい秒数（config.ini の
+            [subagent].background_job_retention_seconds 由来）。
+        dispatch_agent_background_min_poll_interval_seconds: check_dispatch_agent_job が
+            「実行中」ステータスを返した直後、同じジョブへの次の
+            check_dispatch_agent_job 呼び出しを許可するまでの最短間隔秒数
+            （config.ini の [subagent].background_min_poll_interval_seconds 由来。
+            script_background_min_poll_interval_seconds と同じ理由でサーバー側強制）。
+            0以下を指定すると強制を無効化する。
+        dispatch_agent_background_min_poll_message: 上記の最短間隔未満で
+            check_dispatch_agent_job が呼ばれた際にLLMへ返すメッセージの
+            テンプレート（config.ini の [subagent].background_min_poll_message 由来）。
+            プレースホルダーは script_background_min_poll_message と同じ。
+        dispatch_agent_background_inline_wait_max_seconds: dispatch_agent_background
+            がジョブ完了をLLMを介さずコード側で待つ上限秒数（config.ini の
+            [subagent].background_inline_wait_max_seconds 由来）。この秒数を
+            超えてもまだ実行中の場合のみ job_id を返してLLMへ制御を戻す。
+            ジョブ自体はこの上限に達してもキャンセルされず動き続ける。
+            0以下を指定すると無期限に待つ（フォールバック経路が事実上無効になる）。
+        dispatch_agent_background_progress_push_interval_seconds: 上記の待機中、
+            人間向けに経過秒数・反復回数・進捗メモ末尾をチャットへ直接送る間隔
+            （秒）。cl.Message送信のみでLLM呼び出しを伴わずトークンを消費しない
+            （config.ini の [subagent].background_progress_push_interval_seconds 由来）。
+        dispatch_agent_background_llm_timeout_max_retries: dispatch_agent_background
+            実行中のLLM呼び出しがタイムアウトした場合、モデルを再構築してから
+            同じ反復を再試行する最大回数（config.ini の
+            [subagent].background_llm_timeout_max_retries 由来）。同期版
+            dispatch_agent はこの設定を使わず常に即座に打ち切る現行動作のまま。
         plan_approval_exempt_scripts: run_script/run_script_background の
             計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト。(skill_name, script_filename) の
@@ -389,6 +435,10 @@ def init_tools(
     global _CODE_EXEC_ENABLED
     global _SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS, _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS
     global _SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS, _SCRIPT_BACKGROUND_MIN_POLL_MESSAGE
+    global _DISPATCH_AGENT_BACKGROUND_JOB_RETENTION_SECONDS, _DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS
+    global _DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE
+    global _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS, _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS
+    global _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES
     global _DEFAULT_WORKDIR, _LLM_CONFIG, _AGENT_TYPES, _SUBAGENT_MAX_ITERATIONS
     global _MEMORY_ROOT
     global _PLANS_DIR
@@ -409,6 +459,12 @@ def init_tools(
     _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS = script_background_job_retention_seconds
     _SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS = script_background_min_poll_interval_seconds
     _SCRIPT_BACKGROUND_MIN_POLL_MESSAGE = script_background_min_poll_message
+    _DISPATCH_AGENT_BACKGROUND_JOB_RETENTION_SECONDS = dispatch_agent_background_job_retention_seconds
+    _DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS = dispatch_agent_background_min_poll_interval_seconds
+    _DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE = dispatch_agent_background_min_poll_message
+    _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS = dispatch_agent_background_inline_wait_max_seconds
+    _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS = dispatch_agent_background_progress_push_interval_seconds
+    _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES = dispatch_agent_background_llm_timeout_max_retries
     _PLAN_APPROVAL_EXEMPT_SCRIPTS = set(plan_approval_exempt_scripts)
     _DEFAULT_WORKDIR = Path(default_workdir).resolve()
     _LLM_CONFIG = llm_config
@@ -548,6 +604,29 @@ def _resolve_path_memory_tokens_in_text(text: str) -> str:
         return token if error else resolved
 
     return _PATH_MEMORY_TEXT_TOKEN_RE.sub(_replace, text)
+
+
+def _task_with_work_dir_hint(task: str) -> str:
+    """dispatch_agent の task 文の先頭に、実際の作業ディレクトリを事実として付与する。
+
+    委譲元（メインエージェント）が task 文中に書いたパスは、モデルの記憶からの
+    書き起こしで誤っていたり未検証だったりしうる（本番実例: 存在しない
+    "E:\\akiyo\\レシピ\\md" を渡され、サブエージェントが自力でGlobして偶然
+    見つけた無関係な "E:\\akiyo\\md" を答えとして扱ってしまった）。サブエージェントは
+    メインエージェントの会話文脈を一切持たないため、この事実を照合する独自の
+    手掛かりを持たない。_resolve_workdir() が返す確認済みの作業ディレクトリを
+    task 本文の先頭へ機械的に付与することで、サブエージェント自身のツール呼び出しの
+    挙動やプロンプト内指示への追従性に頼らず、常に正しいground truthを与える。
+
+    _resolve_workdir() は init_tools() 未実行時のみ RuntimeError を送出するが、
+    ヒント注入1つの失敗で dispatch_agent 全体を失敗させないよう、ここで
+    握りつぶして task をそのまま返す。
+    """
+    try:
+        work_dir = _resolve_workdir()
+    except RuntimeError:
+        return task
+    return f"作業ディレクトリ: {work_dir}\n\n{task}"
 
 
 _RAW_UNC_PATH_RE = re.compile(r"\\\\[A-Za-z0-9_.\-]+(?:\\[A-Za-z0-9_.\-]+)+")
@@ -1206,6 +1285,21 @@ def _resolve_exec_workdir() -> tuple[Path, bool]:
         return fallback_d, True
 
 
+def _scratch_notes_path_for_run(run_id: str) -> Path:
+    """write_scratch_note が書き込むスクラッチファイルの絶対パスを、
+    指定した run_id から直接決める（_SUBAGENT_RUN_ID を読まない版）。
+
+    dispatch_agent_background のジョブを起動したツール呼び出しとは別の
+    非同期コンテキスト（check_dispatch_agent_job / stop_dispatch_agent_job）
+    から、同じジョブのスクラッチノートを参照するために使う。呼び出し元は
+    事前にジョブの thread_id が現在のセッションと一致することを確認して
+    いる前提（_resolve_exec_workdir() は cl.user_session から thread_id を
+    読むため、一致していなければ別セッションのディレクトリを指してしまう）。
+    """
+    workdir, _ = _resolve_exec_workdir()
+    return workdir / f"_scratch_notes_{run_id}.md"
+
+
 def _scratch_notes_path() -> Path:
     """write_scratch_note が書き込むスクラッチファイルの絶対パスを決める。
 
@@ -1215,9 +1309,7 @@ def _scratch_notes_path() -> Path:
     ファイル名はこの関数が決め打ちするため、呼び出し側が任意パスを
     指定することはできない。
     """
-    workdir, _ = _resolve_exec_workdir()
-    run_id = _SUBAGENT_RUN_ID.get() or "_main"
-    return workdir / f"_scratch_notes_{run_id}.md"
+    return _scratch_notes_path_for_run(_SUBAGENT_RUN_ID.get() or "_main")
 
 
 @tool
@@ -2613,6 +2705,7 @@ async def dispatch_agent(task: str, agent_type: str) -> str:
         available = ", ".join(sorted(_AGENT_TYPES)) or "（登録なし）"
         return f"エラー: 不明な agent_type '{agent_type}' です。利用可能: {available}"
     task = _resolve_path_memory_tokens_in_text(task)
+    task = _task_with_work_dir_hint(task)
     logger.info("dispatch_agent: task=%r agent_type=%r", task, agent_type)
     token = _IN_SUBAGENT.set(True)
     # 重複ガードの集合をこの実行専用にするためのID（_duplicate_guard_session_key 参照）。
@@ -2670,6 +2763,413 @@ def _append_scratch_note_hint(result: str) -> str:
         f"書き残しています。Read で {path} を確認すると、打ち切り前に整理された"
         "内容が得られます。]"
     )
+
+
+@dataclass
+class _DispatchAgentJob:
+    """dispatch_agent_background で起動したジョブの状態。
+
+    モジュールレベルの _DISPATCH_AGENT_JOBS に job_id をキーとして保持する。
+    _BackgroundJob（run_script_background 用）とは別のデータクラスにする。
+    サブプロセスを持たず（process/stdout_chunks 等が不要）、代わりに
+    run_subagent 専用の run_id（_SUBAGENT_RUN_ID に相当）を持つ点が異なる。
+    """
+
+    thread_id: str
+    run_id: str  # このジョブ専用の _SUBAGENT_RUN_ID・_IN_SUBAGENT の値
+    agent_type: str
+    task_preview: str  # ログ・状況確認表示専用（task 先頭一部。全文は保持しない）
+    started_at: float  # time.monotonic()
+    status: str  # "running" | "completed" | "killed" | "error"
+    result: str | None
+    error_message: str | None
+    max_iterations: int  # run_subagent に渡した反復上限（進捗表示用に保持）
+    runner_task: "asyncio.Task | None" = None
+    # run_subagent の on_iteration コールバックが更新する、現在の反復回数
+    # （進捗push・check_dispatch_agent_job の running 分岐の表示に使う）。
+    current_iteration: int = 0
+    # check_dispatch_agent_job が直前に「実行中」ステータスを返した時刻
+    # （time.monotonic()）。_BackgroundJob.last_polled_at と同じ理由づけ
+    # （連続呼び出しの最短間隔をサーバー側で強制するため）。
+    last_polled_at: float | None = None
+
+
+# dispatch_agent_background のジョブレジストリ。_BACKGROUND_JOBS と同じ理由で
+# プロセス内メモリのみで永続化はしない（アプリ再起動でジョブは失われるが、
+# その内部で走っていた run_subagent 自体も再起動で失われるため実害はない）。
+_DISPATCH_AGENT_JOBS: dict[str, _DispatchAgentJob] = {}
+
+
+def _format_dispatch_agent_progress(job: "_DispatchAgentJob", job_id: str) -> str:
+    """dispatch_agent_background ジョブの実行中の状況を表す文字列を組み立てる。
+
+    _push_dispatch_agent_progress（人間向けのUI直接push）と
+    check_dispatch_agent_job の running 分岐（フォールバック経路でのLLM向け
+    応答）の両方から呼ぶ、表示フォーマット共通化のためのヘルパー。
+    """
+    elapsed = int(time.monotonic() - job.started_at)
+    parts = [f"実行中です（経過 {elapsed} 秒・反復 {job.current_iteration}/{job.max_iterations} 回・job_id={job_id}）。"]
+    note_path = _scratch_notes_path_for_run(job.run_id)
+    if note_path.is_file():
+        note_tail = note_path.read_text(encoding="utf-8", errors="replace")[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
+        if note_tail:
+            parts.append(f"[進捗メモ（末尾）]\n{note_tail}")
+    return "\n".join(parts)
+
+
+async def _push_dispatch_agent_progress(job: "_DispatchAgentJob", job_id: str) -> None:
+    """dispatch_agent_background の実行中、人間向けに進捗をチャットへ直接pushする。
+
+    cl.Message送信のみでLLM呼び出しを一切伴わないため、トークンを消費しない。
+    「LLM自身がcheck_dispatch_agent_jobを繰り返し呼ぶとその都度LLM推論コストが
+    かかる」というフィードバックを受け、dispatch_agent_background 自体は
+    ジョブ完了までLLMに戻らずブロックする設計に変えた（_run_dispatch_agent_job
+    参照）。その間も人間が「動いているか」を確認できるよう、この関数が
+    代わりに進捗を伝える。
+
+    contextvarベースのChainlitセッションコンテキストは asyncio.create_task
+    生成時点でコピーされる。このタスクは dispatch_agent_background の
+    ツール呼び出しがまだ生きている（＝元のセッションコンテキストの中にいる）
+    間に生成されるため、cl.Message(...).send() が正しいセッションへ届く。
+
+    _run_dispatch_agent_job の finally で確実にキャンセルされる想定
+    （ループ条件（job.status=="running"）だけに頼ると、ジョブ完了後も
+    次の asyncio.sleep が明けるまでタスクが残留してしまうため）。
+    """
+    while job.status == "running":
+        await asyncio.sleep(_DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS)
+        if job.status != "running":
+            break
+        await cl.Message(content=_format_dispatch_agent_progress(job, job_id)).send()
+
+
+async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: str, resolved: "ResolvedAgentType") -> None:
+    """dispatch_agent_background のランナータスク本体。
+
+    現在の dispatch_agent（同期版）の try/except/finally の中身をそのまま
+    移設したもの。asyncio.create_task() はタスク生成時点のコンテキストを
+    コピーし、以後タスク内部の contextvar.set()/reset() は呼び出し元
+    （dispatch_agent_background）へは伝播しない。そのため _IN_SUBAGENT /
+    _SUBAGENT_RUN_ID の設定・セマフォ確保・run_subagent() 呼び出し・
+    _append_scratch_note_hint・main_agent_glob_call_count のリセットは、
+    このタスクの中で行う必要がある（呼び出し元側で行っても、値が呼び出し元の
+    コンテキストにしか残らずこのタスクの中からは見えない）。
+
+    dispatch_agent_background は起動後、このタスクの完了を（安全上限まで）
+    同じツール呼び出し内で待ち続ける設計だが、それでも run_subagent 自体は
+    このタスクとして独立させておく。理由: (1) 安全上限を超えた場合に
+    dispatch_agent_background 側だけ制御をLLMへ返しつつ、このタスクは
+    裏側で動き続けさせる必要がある（asyncio.shield で保護）。(2) 進捗push
+    タスク（_push_dispatch_agent_progress）と並行させる必要がある。
+
+    例外はここで確定的に捕捉し job.status="error" へ変換する。fire-and-forget
+    の asyncio.Task 内で未捕捉の例外は「Task exception was never retrieved」
+    という警告だけを残して静かに失われ、回収経路が無くなるため
+    （_run_background_job と同じ理由）。asyncio.CancelledError
+    （stop_dispatch_agent_job による task.cancel()）はここで握りつぶさず
+    そのまま伝播させる。stop_dispatch_agent_job が先に status="killed" を
+    設定済みのため、下記の各分岐は「killed を上書きしない」ガードを持つ
+    （_run_background_job の status!="killed" ガードと同じレース対策）。
+    """
+    token = _IN_SUBAGENT.set(True)
+    run_id_token = _SUBAGENT_RUN_ID.set(job.run_id)
+    progress_task = asyncio.create_task(_push_dispatch_agent_progress(job, job_id))
+
+    def _on_iteration(iteration: int, max_iterations: int) -> None:
+        job.current_iteration = iteration
+
+    try:
+        sem = _get_session_semaphore(_DISPATCH_AGENT_SEMAPHORES, _DISPATCH_AGENT_MAX_PARALLEL)
+        if sem is not None:
+            async with sem:
+                result = await run_subagent(
+                    task,
+                    resolved.tools,
+                    resolved.system_prompt,
+                    _LLM_CONFIG,
+                    job.max_iterations,
+                    on_iteration=_on_iteration,
+                    llm_timeout_max_retries=_DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES,
+                )
+        else:
+            result = await run_subagent(
+                task,
+                resolved.tools,
+                resolved.system_prompt,
+                _LLM_CONFIG,
+                job.max_iterations,
+                on_iteration=_on_iteration,
+                llm_timeout_max_retries=_DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES,
+            )
+        result = _append_scratch_note_hint(result)
+        if job.status != "killed":
+            job.result = result
+            job.status = "completed"
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001 - fire-and-forgetタスクの例外を消さず確定的に捕捉する
+        logger.exception("dispatch_agent_background 失敗 (run_id=%s)", job.run_id)
+        if job.status != "killed":
+            job.status = "error"
+            # str(e) が空文字列になる例外がある（例: asyncio.TimeoutError()）。
+            # 「エラー: サブエージェントの実行に失敗しました: 」のように原因が
+            # 一切分からない文言になっていた実例が本番ログで確認された
+            # （issue/20260808_022438_dispatch_agent_background_failure.md）。
+            # 空の場合は例外の型名で補い、必ず何らかの手がかりを残す。
+            job.error_message = str(e) or type(e).__name__
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+        _IN_SUBAGENT.reset(token)
+        _SUBAGENT_RUN_ID.reset(run_id_token)
+        # 委譲が完了するたびに main_agent_glob_guard のカウンタをリセットする。
+        # 1ターン内で複数回「調査→delegate」を繰り返す正当なケースを妨げないため。
+        cl.user_session.set("main_agent_glob_call_count", None)
+
+
+def _finalize_dispatch_agent_job_result(job: "_DispatchAgentJob", job_id: str) -> str:
+    """終端状態（completed/killed/error）のジョブを最終結果文字列へ整形し、レジストリから取り除く。
+
+    dispatch_agent_background（安全上限内に完了した場合）と
+    check_dispatch_agent_job（終端状態を取得した場合）の両方から呼ぶ、
+    ワンショット取得（一度取得したら同じ job_id は再利用できない）の共通処理。
+    """
+    if job.status == "completed":
+        result = job.result or ""
+    elif job.status == "killed":
+        result = f"stop_dispatch_agent_job により強制終了されました。\n{job.result or '（強制終了時点で最終回答は未生成でした）'}"
+    else:  # "error"
+        result = f"エラー: サブエージェントの実行に失敗しました: {job.error_message}"
+    _DISPATCH_AGENT_JOBS.pop(job_id, None)
+    return result
+
+
+def _purge_stale_dispatch_agent_jobs() -> None:
+    """完了済みのまま check_dispatch_agent_job で回収されなかったジョブを掃除する。
+
+    専用のクリーンアップループは持たず、dispatch_agent_background の呼び出しの
+    度に opportunistic に走らせる（_purge_stale_background_jobs と同じ方針）。
+    """
+    now = time.monotonic()
+    stale = [
+        job_id
+        for job_id, job in _DISPATCH_AGENT_JOBS.items()
+        if job.status != "running" and now - job.started_at > _DISPATCH_AGENT_BACKGROUND_JOB_RETENTION_SECONDS
+    ]
+    for job_id in stale:
+        _DISPATCH_AGENT_JOBS.pop(job_id, None)
+
+
+def _dispatch_agent_job_started_message(job_id: str) -> str:
+    """dispatch_agent_background が安全上限（background_inline_wait_max_seconds）に
+    達してもなおジョブが終わっていない場合に、フォールバックとしてLLMへ返す案内文。
+
+    通常はこの文言に到達しない（dispatch_agent_background 自身がジョブ完了まで
+    ツール呼び出し内で待ち続け、最終結果を直接返すため）。到達するのは、
+    設定された安全上限を超えるほど長時間のジョブだけである。
+    _background_job_started_message と同じ理由づけ（処理時間の長さ自体は
+    打ち切る理由にならないことを明記し、モデルの自発的な早期キャンセルを防ぐ）。
+    """
+    return (
+        f"バックグラウンドで実行中です（job_id={job_id}）。長時間かかっているため、"
+        "いったんこのターンを終えて制御を返します（ジョブ自体は裏側で動き続けます）。\n"
+        "完了確認・結果取得には check_dispatch_agent_job（job_id指定）を使うこと。"
+        "処理に時間がかかっていること自体は打ち切る理由にはならない。"
+        "ユーザーから明示的に中断・キャンセルを指示された場合にのみ"
+        "stop_dispatch_agent_job（job_id指定）を使うこと。"
+    )
+
+
+def _resolve_dispatch_agent_job(job_id: str) -> "_DispatchAgentJob | str":
+    """job_id を現在のセッション所有のジョブへ解決する（他セッションは拒否）。
+
+    _resolve_job と同じ方針。
+    """
+    job = _DISPATCH_AGENT_JOBS.get(job_id)
+    if job is None:
+        return f"エラー: job_id '{job_id}' は見つかりません（既に取得済みか、無効なIDです）。"
+    thread_id = cl.user_session.get("thread_id") or ""
+    if job.thread_id != thread_id:
+        return f"エラー: job_id '{job_id}' は現在のセッションのものではありません。"
+    return job
+
+
+@tool
+async def dispatch_agent_background(task: str, agent_type: str) -> str:
+    """タスクを独立したサブエージェントへ委譲する。dispatch_agent と異なり、
+    完了までの間、人間向けにチャットへ直接進捗（経過時間・反復回数・進捗メモ）を
+    通知しながら待つ。数十〜数百件規模のファイル・画像等、完了までに長時間
+    かかることが見込まれる委譲作業向け。
+
+    このターン自体は（下記の安全上限に達しない限り）dispatch_agent と同じく
+    完了までブロックされる（Chainlit UI上は「実行中」表示が続く）。ただし
+    dispatch_agent と違い、待っている間にLLM自身を何度も呼び直してポーリング
+    する必要は無い（進捗はコード側が直接チャットへ送るため、LLMの呼び出し
+    回数・トークン消費は増えない）。1回の呼び出しでサブエージェントの最終回答が
+    そのまま返る点は dispatch_agent と同じ。
+    引数・agent_type の解決・利用可能な種別・エラー時の扱いは dispatch_agent と同じ。
+
+    設定した安全上限（[subagent].background_inline_wait_max_seconds）を超えても
+    なお完了しない場合に限り、job_id を含む案内文を返してこのターンを終える
+    （ジョブ自体は裏側で動き続ける）。この場合のみ、後続ターンで
+    check_dispatch_agent_job（結果取得）・stop_dispatch_agent_job（明示的な
+    中断指示があった場合のみ）を使う。
+
+    Args:
+        task: サブエージェントに依頼したいタスクの説明（dispatch_agent と同じ形式）。
+        agent_type: 使用するサブエージェントの種別名（dispatch_agent と同じ）。
+
+    Returns:
+        通常はサブエージェントの最終回答テキスト（dispatch_agent と同じ形式）。
+        安全上限に達した場合のみ job_id を含む案内文字列。init_tools() が
+        未実行、または agent_type が不明な場合は起動前に「エラー: ...」を返す
+        （この場合 job は作られない）。
+    """
+    if _LLM_CONFIG is None:
+        return "エラー: init_tools() が未実行です"
+    resolved = _AGENT_TYPES.get(agent_type)
+    if resolved is None:
+        available = ", ".join(sorted(_AGENT_TYPES)) or "（登録なし）"
+        return f"エラー: 不明な agent_type '{agent_type}' です。利用可能: {available}"
+    task = _resolve_path_memory_tokens_in_text(task)
+    task = _task_with_work_dir_hint(task)
+    logger.info("dispatch_agent_background: task=%r agent_type=%r", task, agent_type)
+
+    _purge_stale_dispatch_agent_jobs()
+
+    job = _DispatchAgentJob(
+        thread_id=cl.user_session.get("thread_id") or "",
+        run_id=uuid.uuid4().hex,
+        agent_type=agent_type,
+        task_preview=task[:200],
+        started_at=time.monotonic(),
+        status="running",
+        result=None,
+        error_message=None,
+        max_iterations=_SUBAGENT_MAX_ITERATIONS,
+    )
+    job_id = uuid.uuid4().hex[:12]
+    job.runner_task = asyncio.create_task(_run_dispatch_agent_job(job, job_id, task, resolved))
+    _DISPATCH_AGENT_JOBS[job_id] = job
+
+    # asyncio.shield: このwait_forがタイムアウトして例外を送出しても、
+    # job.runner_task 自体はキャンセルされず裏側で動き続ける
+    # （安全上限超過時のフォールバック挙動の要）。0以下は無期限待ち。
+    wait_timeout = _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS if _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS > 0 else None
+    try:
+        await asyncio.wait_for(asyncio.shield(job.runner_task), timeout=wait_timeout)
+    except asyncio.TimeoutError:
+        logger.info(
+            "dispatch_agent_background: 安全上限(%s秒)に達したため job_id を返してターンを終えます: job_id=%s",
+            wait_timeout,
+            job_id,
+        )
+        return _dispatch_agent_job_started_message(job_id)
+
+    return _finalize_dispatch_agent_job_result(job, job_id)
+
+
+@tool
+async def check_dispatch_agent_job(job_id: str) -> str:
+    """dispatch_agent_background で起動したジョブの状況・結果を確認する。
+
+    通常は dispatch_agent_background 自身がジョブ完了まで待ってから最終回答を
+    直接返すため、このツールを呼ぶ必要は無い。呼ぶのは、dispatch_agent_background
+    が安全上限に達して job_id を返した場合（＝よほど長時間のジョブ）のみ。
+
+    実行中であれば経過秒数・反復回数と、対象サブエージェントが write_scratch_note で
+    書き残した進捗メモ（あれば、末尾最大4000文字）を返す。完了・強制終了・
+    エラーのいずれかで終わっていれば最終回答（dispatch_agent と同じ形式の
+    テキスト）を返し、以降は同じ job_id を指定できなくなる（登録から削除
+    される）。他セッションが起動した job_id は参照できない。
+
+    サブエージェントの内部進捗を取得する手段はスクラッチノート以外に無い。
+    agent_type によっては（write_scratch_note を持たない種別、または一度も
+    書いていない場合）実行中の進捗欄が空のままとなるが、これは異常ではない。
+
+    実行中が返ってきた場合、数秒間隔で連続して呼び直さないこと。経過を
+    ユーザーへ一言伝えたらそのターンを終えて次のユーザー発言を待つか、
+    十分な間隔（数十秒〜）を空けてから改めて呼ぶこと。処理に時間が
+    かかっていること自体は異常でも打ち切る理由でもない。この指示に反して
+    短い間隔で呼び直した場合はサーバー側で拒否され、「まだ確認間隔が
+    短すぎます」のような拒否メッセージが返る。
+
+    Args:
+        job_id: dispatch_agent_background の戻り値に含まれるID。
+
+    Returns:
+        状況または最終結果を表す文字列。job_id が不明・他セッションのもので
+        ある場合、または直前の「実行中」応答から
+        [subagent].background_min_poll_interval_seconds 未満しか経っていない
+        場合は「エラー: ...」/拒否メッセージ形式の文字列。
+    """
+    resolved = _resolve_dispatch_agent_job(job_id)
+    if isinstance(resolved, str):
+        return resolved
+    job = resolved
+
+    if job.status == "running":
+        now = time.monotonic()
+        if (
+            _DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS > 0
+            and job.last_polled_at is not None
+            and (now - job.last_polled_at) < _DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS
+        ):
+            wait_remaining = int(_DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS - (now - job.last_polled_at)) + 1
+            return _DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE.format(
+                wait_remaining=wait_remaining,
+                job_id=job_id,
+                min_interval=_DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS,
+            )
+        job.last_polled_at = now
+        return _format_dispatch_agent_progress(job, job_id)
+
+    return _finalize_dispatch_agent_job_result(job, job_id)
+
+
+@tool
+async def stop_dispatch_agent_job(job_id: str) -> str:
+    """dispatch_agent_background で起動したジョブを強制終了する。
+
+    ユーザーから明示的に中断・キャンセル・停止を指示された場合にのみ使う
+    こと。処理に時間がかかっていること自体（check_dispatch_agent_job が
+    実行中を返し続けること）は、自分の判断で打ち切ってよい理由にはならない。
+    他セッションが起動した job_id は操作できない。
+
+    Args:
+        job_id: dispatch_agent_background の戻り値に含まれるID。
+
+    Returns:
+        強制終了結果を表す文字列。job_id が不明・他セッションのものである、
+        または既に終了済みの場合は「エラー: ...」形式の文字列。
+    """
+    resolved = _resolve_dispatch_agent_job(job_id)
+    if isinstance(resolved, str):
+        return resolved
+    job = resolved
+
+    if job.status != "running":
+        return f"エラー: job_id '{job_id}' は既に終了しています（status={job.status}）。" "check_dispatch_agent_job で結果を取得してください。"
+
+    job.status = "killed"
+    if job.runner_task is not None:
+        job.runner_task.cancel()
+        try:
+            await job.runner_task
+        except asyncio.CancelledError:
+            pass
+
+    note_path = _scratch_notes_path_for_run(job.run_id)
+    tail = ""
+    if note_path.is_file():
+        tail = note_path.read_text(encoding="utf-8", errors="replace")[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
+    _DISPATCH_AGENT_JOBS.pop(job_id, None)
+    if tail:
+        return f"強制終了しました。サブエージェントの実行を中断しました。\n[強制終了時点の進捗メモ（末尾）]\n{tail}"
+    return "強制終了しました。サブエージェントの実行を中断しました。"
 
 
 _VALID_TASK_STATUSES = ("pending", "in_progress", "completed")
@@ -3618,6 +4118,9 @@ _BASE_TOOLS: list[BaseTool] = [
     json_query,
     list_path_memory,
     dispatch_agent,
+    dispatch_agent_background,
+    check_dispatch_agent_job,
+    stop_dispatch_agent_job,
     ask_user_question,
     ask_user_choice,
     create_plan,

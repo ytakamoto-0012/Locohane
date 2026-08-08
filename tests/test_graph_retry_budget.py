@@ -8,6 +8,8 @@
 観測されたため、予算を独立させた。
 """
 
+from types import SimpleNamespace
+
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -16,22 +18,40 @@ from src.llm import ThinkingLoopDetected
 
 
 class _FakeGraph:
-    """ainvoke の戻り値／例外をシナリオで差し替えられるスタブ。"""
+    """ainvoke の戻り値／例外をシナリオで差し替えられるスタブ。
 
-    def __init__(self, scenario: list):
+    aget_state/aupdate_state は、_remove_message_ids_if_present が現在の
+    state上に実在するidだけを絞り込む挙動を検証できるよう、ainvoke に渡された
+    nudge メッセージのidを「生存id」として追跡し、aupdate_state で消し込む。
+    simulate_all_ids_stale=True の場合は、コンテキスト圧縮等で蓄積済みのnudge id
+    がすべて無効化された状況を模擬し、常に生存idが無い（=空の）stateを返す。
+    """
+
+    def __init__(self, scenario: list, simulate_all_ids_stale: bool = False):
         self._scenario = list(scenario)
         self.calls = 0
         self.updated_states: list = []
+        self._live_ids: set[str] = set()
+        self._simulate_all_ids_stale = simulate_all_ids_stale
 
     async def ainvoke(self, inputs, config=None):
         self.calls += 1
+        for m in (inputs or {}).get("messages", []):
+            if getattr(m, "id", None):
+                self._live_ids.add(m.id)
         item = self._scenario.pop(0) if self._scenario else {"messages": [AIMessage(content="ok")]}
         if isinstance(item, Exception):
             raise item
         return item
 
+    async def aget_state(self, config):
+        ids = () if self._simulate_all_ids_stale else self._live_ids
+        return SimpleNamespace(values={"messages": [SimpleNamespace(id=i) for i in ids]})
+
     async def aupdate_state(self, config, values):
         self.updated_states.append(values)
+        for m in values.get("messages", []):
+            self._live_ids.discard(getattr(m, "id", None))
 
 
 def _empty() -> dict:
@@ -104,3 +124,21 @@ async def test_total_attempts_are_bounded() -> None:
     )
 
     assert graph.calls <= 5, "初回 + (max_retries + loop_max_retries) を超えないこと"
+
+
+@pytest.mark.asyncio
+async def test_stale_nudge_ids_are_not_removed_via_removemessage() -> None:
+    """nudge idが（コンテキスト圧縮等で）既に無効化されている場合、
+    存在しないidをRemoveMessageへ渡さず無視すること
+    （本番incident app.py:2103 と同種のバグの回帰防止）。"""
+    graph = _FakeGraph(
+        [ThinkingLoopDetected("l1"), ThinkingLoopDetected("l2"), ThinkingLoopDetected("l3")],
+        simulate_all_ids_stale=True,
+    )
+
+    with pytest.raises(ThinkingLoopDetected):
+        await ainvoke_ensuring_final_text(
+            graph, {"messages": []}, {}, max_retries=2, loop_max_retries=2
+        )
+
+    assert graph.updated_states == [], "生存しないidに対してaupdate_stateを呼ばないこと"
