@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useAuth, useChatSession, useChatMessages, useChatData } from '@chainlit/react-client';
 import { Header } from './components/Header';
 import { LoginForm } from './components/LoginForm';
-import { MessageThread } from './components/MessageThread';
+import { MessagePane } from './components/MessagePane';
 import { SidePanel } from './components/SidePanel';
 import { Composer } from './components/Composer';
 import { AskActionBar } from './components/AskActionBar';
@@ -18,7 +18,8 @@ import {
   selectLatestWorkDir,
   selectLatestPlan,
   selectLatestStarters,
-  selectLatestMaxDisplayMessages
+  selectLatestMaxDisplayMessages,
+  selectLatestMaxDisplaySideSteps
 } from './utils/messageTree';
 import './styles.css';
 
@@ -52,6 +53,13 @@ function App() {
       ? mainMessages.slice(-maxDisplayMessages)
       : mainMessages;
 
+  // サイドパネル（Step一覧）も同様に表示専用の間引きを適用する。
+  const maxDisplaySideSteps = selectLatestMaxDisplaySideSteps(messages);
+  const displaySideSteps =
+    maxDisplaySideSteps && maxDisplaySideSteps > 0
+      ? sideSteps.slice(-maxDisplaySideSteps)
+      : sideSteps;
+
   const lastMain = mainMessages[mainMessages.length - 1];
   // 送信直後〜最終回答のストリーミング開始までの「空白時間」を可視化する。
   // 既に回答トークンが届き始めていれば streaming カーソル側で表現されるため不要。
@@ -64,9 +72,7 @@ function App() {
     <div className="app-shell">
       <div className="main-column">
         <Header />
-        <div className="messages-scroll">
-          <MessageThread messages={displayMessages} showTyping={showTyping} />
-        </div>
+        <MessagePane messages={displayMessages} showTyping={showTyping} />
         <AskActionBar />
         <AskFormBar />
         <AskChoiceFormBar />
@@ -77,7 +83,7 @@ function App() {
         )}
         <Composer plan={plan} />
       </div>
-      <SidePanel sideSteps={sideSteps} tokenUsage={tokenUsage} workDir={workDir} plan={plan} />
+      <SidePanel sideSteps={displaySideSteps} tokenUsage={tokenUsage} workDir={workDir} plan={plan} />
     </div>
   );
 }

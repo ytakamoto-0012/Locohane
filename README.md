@@ -803,6 +803,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[mcp]` | `connect_timeout_seconds` | 1サーバーあたりの起動（プロセス起動+initialize+tools/list）のタイムアウト秒数 | `MCP_CONNECT_TIMEOUT_SECONDS` |
 | `[mcp]` | `call_timeout_seconds` | MCPツール（tools/call）1回あたりのタイムアウト秒数 | `MCP_CALL_TIMEOUT_SECONDS` |
 | `[ui]` | `max_display_messages` | チャット画面に描画するメッセージの最大件数（表示専用の間引き、`0`で無制限） | `UI_MAX_DISPLAY_MESSAGES` |
+| `[ui]` | `max_display_side_steps` | サイドパネルに描画するツール呼び出し等のStepの最大件数（表示専用の間引き、`0`で無制限） | `UI_MAX_DISPLAY_SIDE_STEPS` |
 
 環境変数が設定されていれば `config.ini` の値より優先される（詳細は `src/config.py` を参照）。
 

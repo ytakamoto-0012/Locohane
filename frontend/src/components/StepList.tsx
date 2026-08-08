@@ -1,9 +1,22 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { IStep } from '@chainlit/react-client';
 import { StepItem } from './StepItem';
+import { Icon } from './Icon';
+
+// 最下部からこの距離(px)以内であれば「最下部にいる」とみなす。MessagePane.tsx と同じ値。
+const BOTTOM_THRESHOLD_PX = 64;
 
 export function StepList({ steps }: { steps: IStep[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+  // ResizeObserver のコールバックや scroll ハンドラは古いクロージャを
+  // 参照し続けるため、最新値は ref 経由で読む（MessagePane.tsx と同じ方式）。
+  const autoScrollRef = useRef(true);
+
+  useEffect(() => {
+    autoScrollRef.current = autoScroll;
+  }, [autoScroll]);
+
   // stream_token による Step 内容の更新だけでなく、ユーザーが完了済み
   // StepItem を手動で開閉したときの高さ変化（StepItem 内部の useState で
   // StepList 側は再レンダーされない）にも追従させたいため、依存配列で
@@ -14,6 +27,7 @@ export function StepList({ steps }: { steps: IStep[] }) {
     const el = scrollRef.current;
     if (!el) return;
     const scrollToBottom = () => {
+      if (!autoScrollRef.current) return;
       el.scrollTop = el.scrollHeight;
     };
     scrollToBottom();
@@ -25,18 +39,45 @@ export function StepList({ steps }: { steps: IStep[] }) {
     return () => ro.disconnect();
   }, [steps]);
 
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setAutoScroll(distanceFromBottom <= BOTTOM_THRESHOLD_PX);
+  };
+
+  const handleScrollToBottomClick = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    setAutoScroll(true);
+  };
+
   return (
     <div className="step-list-card">
-      <div className="step-list-scroll" ref={scrollRef}>
-        {steps.length === 0 ? (
-          <div className="step-list-empty">ツール呼び出しはまだありません。</div>
-        ) : (
-          <div className="step-list">
-            {steps.map((step) => (
-              <StepItem key={step.id} step={step} />
-            ))}
-          </div>
-        )}
+      <div className="step-list-scroll-wrapper">
+        <div className="step-list-scroll" ref={scrollRef} onScroll={handleScroll}>
+          {steps.length === 0 ? (
+            <div className="step-list-empty">ツール呼び出しはまだありません。</div>
+          ) : (
+            <div className="step-list">
+              {steps.map((step) => (
+                <StepItem key={step.id} step={step} />
+              ))}
+            </div>
+          )}
+        </div>
+        {!autoScroll ? (
+          <button
+            type="button"
+            className="scroll-to-bottom-button"
+            onClick={handleScrollToBottomClick}
+            aria-label="最新のStepへスクロール"
+            title="最新のStepへ"
+          >
+            <Icon name="arrow-down" size={16} />
+          </button>
+        ) : null}
       </div>
     </div>
   );

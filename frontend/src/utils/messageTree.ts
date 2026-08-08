@@ -16,6 +16,8 @@ export const PLAN_PREFIX = '📋 実行計画\n';
 export const STARTER_PREFIX = '🚀 定型文\n';
 /** app.py の MAX_DISPLAY_MESSAGES_PREFIX と一致させる（メインスレッドの表示件数上限）。 */
 export const MAX_DISPLAY_MESSAGES_PREFIX = '📏 表示件数上限\n';
+/** app.py の MAX_DISPLAY_SIDE_STEPS_PREFIX と一致させる（サイドパネルのStep一覧の表示件数上限）。 */
+export const MAX_DISPLAY_SIDE_STEPS_PREFIX = '🧰 サイドパネル表示件数上限\n';
 
 function flattenAll(nodes: IStep[]): IStep[] {
   const out: IStep[] = [];
@@ -56,6 +58,10 @@ export function isMaxDisplayMessagesMessage(step: IStep): boolean {
   return isPrefixedStatusMessage(step, MAX_DISPLAY_MESSAGES_PREFIX);
 }
 
+export function isMaxDisplaySideStepsMessage(step: IStep): boolean {
+  return isPrefixedStatusMessage(step, MAX_DISPLAY_SIDE_STEPS_PREFIX);
+}
+
 /** メインカラムに表示する、ユーザー発言とアシスタントの最終回答のみ。 */
 export function selectMainThread(messages: IStep[]): IStep[] {
   return flattenAll(messages).filter(
@@ -65,7 +71,8 @@ export function selectMainThread(messages: IStep[]): IStep[] {
       !isWorkDirMessage(s) &&
       !isPlanMessage(s) &&
       !isStarterMessage(s) &&
-      !isMaxDisplayMessagesMessage(s)
+      !isMaxDisplayMessagesMessage(s) &&
+      !isMaxDisplaySideStepsMessage(s)
   );
 }
 
@@ -133,6 +140,19 @@ export function selectLatestMaxDisplayMessages(messages: IStep[]): number | unde
   if (!latest || typeof latest.output !== 'string') return undefined;
   try {
     const parsed = JSON.parse(latest.output.slice(MAX_DISPLAY_MESSAGES_PREFIX.length));
+    return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** サイドパネルのStep一覧の表示件数上限(cl.Messageとして届く、JSON数値)を1件だけ取り出す。取得不可/0なら無制限。 */
+export function selectLatestMaxDisplaySideSteps(messages: IStep[]): number | undefined {
+  const limitMessages = flattenAll(messages).filter(isMaxDisplaySideStepsMessage);
+  const latest = limitMessages[limitMessages.length - 1];
+  if (!latest || typeof latest.output !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(latest.output.slice(MAX_DISPLAY_SIDE_STEPS_PREFIX.length));
     return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : undefined;
   } catch {
     return undefined;
