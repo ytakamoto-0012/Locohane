@@ -507,42 +507,42 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 - メモリ: 32GB
 - GPU: NVIDIA GeForce RTX 5060 Ti（専用GPUメモリ 16.0GB）
 
-### llama-server 起動パラメータ例
+### llama-server 起動コマンド例
 
-上記ハードウェアに合わせて以下のパラメータで `llama-server` を起動している。
+上記ハードウェアに合わせて以下の引数で `llama-server` を起動している。
 
 ```
-model         = .\models\unsloth\Qwen3.6-35B-A3B-GGUF\Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
-mmproj        = .\models\unsloth\Qwen3.6-35B-A3B-GGUF\mmproj-F16.gguf
-n-cpu-moe     = 25
-n-gpu-layers  = 99
-threads       = 10
-threads-batch = 10
-threads-http  = 4
-models-max    = 1
-parallel      = 2
-batch-size    = 4096
-ubatch-size   = 2048
-ctx-size      = 256000
-n-predict     = 32000
-temp          = 0.6
-top-p         = 0.95
-top-k         = 20
-min-p         = 0.0
-presence-penalty = 0
-repeat-penalty   = 1.0
-cache-reuse   = 256
-cache-ram     = -1
-swa-full      = true
-cache-type-k  = q8_0
-cache-type-v  = q8_0
-flash-attn    = on
-jinja         = true
-no-mmap       = true
-mlock         = true
-reasoning-format = deepseek
-reasoning-budget = 8192
-reasoning-budget-message = **Wait, I am overthinking this. I should answer now.**
+  --model .\models\unsloth\Qwen3.6-35B-A3B-GGUF\Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+  --mmproj .\models\unsloth\Qwen3.6-35B-A3B-GGUF\mmproj-F16.gguf
+  --n-cpu-moe 25
+  --n-gpu-layers 99
+  --threads 10
+  --threads-batch 10
+  --threads-http 4
+  --models-max 1
+  --parallel 2
+  --batch-size 4096
+  --ubatch-size 2048
+  --ctx-size 256000
+  --n-predict 32000
+  --temp 0.6
+  --top-p 0.95
+  --top-k 20
+  --min-p 0.0
+  --presence-penalty 0
+  --repeat-penalty 1.0
+  --cache-reuse 256
+  --cache-ram -1
+  --swa-full
+  --cache-type-k q8_0
+  --cache-type-v q8_0
+  --flash-attn on
+  --jinja
+  --no-mmap
+  --mlock
+  --reasoning-format deepseek
+  --reasoning-budget 8192
+  --reasoning-budget-message "**Wait, I am overthinking this. I should answer now.**"
 ```
 
 - `n-cpu-moe`/`n-gpu-layers` はGPUの専用メモリ容量（16GB）に収まるよう調整したMoEオフロード設定。
