@@ -471,6 +471,29 @@ def _build_work_dir_notice() -> str:
     )
 
 
+async def _resync_live_steps() -> None:
+    """再接続時、進行中ターンのStepツリーを現在の状態でフロントへ再送する。
+
+    chainlit/socket.py の emit_fn は `sio.emit(event, data, to=sid)` という
+    特定sid宛のfire-and-forgetで、確認応答も再送も無い。そのため、進行中
+    ターンの最中に切断が起きると、その切断ウィンドウ中に発行されたStep完了
+    更新（on_tool_end のstep.update()等）は再接続後も届かず、StepItem.tsx側は
+    「実行中」のまま固まる（issue参照。06:42:34切断→dispatch_agent完了→
+    06:42:55再接続、という実例で確認済み）。on_message側で
+    cl.user_session["live_steps"]/["live_thinking"] に進行中Stepを常時
+    ミラーしてあるので、再接続のタイミングでそれらを現在の状態のまま
+    update()し直し、フロントの表示を実態に合わせる。
+    cl.Step.send()はpersisted済みだとno-opになりうるため、必ずupdate()を使う
+    （update()にはそのガードが無く、常に再emitされる）。
+    """
+    thinking: cl.Step | None = cl.user_session.get("live_thinking")
+    if thinking is not None:
+        await thinking.update()
+    steps: dict[str, cl.Step] = cl.user_session.get("live_steps") or {}
+    for step in list(steps.values()):
+        await step.update()
+
+
 def _patch_chainlit_connection_successful_task_end() -> None:
     """Chainlit本体の connection_successful ハンドラが誤って task_end を
     発行してしまう不具合を、site-packages 無改変のまま上書き修正する。
@@ -482,7 +505,8 @@ def _patch_chainlit_connection_successful_task_end() -> None:
     のような分単位の長時間ターンの最中にネットワーク瞬断・スリープ復帰等で
     再接続が起きると、バックエンドはターンを継続しているのにフロントの
     送信ボタンだけが復活してしまう（ユーザーが実行中のターンへ新規メッセージを
-    送れてしまう不具合の原因）。
+    送れてしまう不具合の原因）。あわせて _resync_live_steps() を呼び、
+    切断中に失われたStep完了更新をフロントへ再送する。
 
     python-socketio の AsyncServer.on() はイベントハンドラを
     self.handlers[namespace][event] = handler として単純に上書きするだけ
@@ -503,6 +527,7 @@ def _patch_chainlit_connection_successful_task_end() -> None:
         task = getattr(context.session, "current_task", None)
         if task is not None and not task.done():
             await context.emitter.task_start()
+            await _resync_live_steps()
 
     logging.getLogger(__name__).info(
         "Chainlit connection_successful の task_end 誤発火を防ぐパッチを適用しました。"
@@ -1383,6 +1408,31 @@ def _is_dispatch_agent_truncated(tool_name: str, content: object) -> bool:
     return tool_name == "dispatch_agent" and is_truncated_result(content)
 
 
+async def _close_thinking(thinking: cl.Step | None, *, stopped_reason: str | None = None) -> None:
+    """thinking Step（<think>ブロックの可視化用）を確定させる。
+
+    「思考中」Stepが「実行中」のまま固まる不具合の調査用に、閉じた事実を
+    Step idとともにログする（issue参照）。次回同じ現象が起きた際、該当
+    Step idがここに出ていなければPython側の閉じ忘れ、出ていればWebSocket
+    配信側の問題と切り分けられる。呼び出し元は戻り値を thinking へ代入する
+    （`thinking = await _close_thinking(thinking)`）。
+    """
+    if thinking is None:
+        return None
+    if stopped_reason is not None:
+        thinking.metadata = {"stopped_reason": stopped_reason}
+    thinking.end = utc_now()
+    await thinking.update()
+    cl.user_session.set("live_thinking", None)
+    logging.getLogger(__name__).info(
+        "thinking Step確定: step_id=%s stopped_reason=%s [%s]",
+        thinking.id,
+        stopped_reason,
+        describe_current_task(),
+    )
+    return None
+
+
 async def _finalize_orphaned_steps(steps: dict[str, cl.Step], reason: str) -> None:
     """ThinkingLoopDetected/GraphRecursionError で打ち切られた際、on_tool_end が
     届かないまま steps に残っている進行中Step（dispatch_agent等）を確定させる。
@@ -1758,6 +1808,12 @@ async def on_message(message: cl.Message) -> None:
         answer: cl.Message | None = None  # ツール呼び出しごとに区切って新規発行する
         thinking: cl.Step | None = None  # <think> ブロック（reasoning_content）を表示するStep
         steps: dict[str, cl.Step] = {}  # run_id -> Step（ツール開始/終了を対応付け）
+        # 再接続時のStep再同期（_resync_live_steps参照）用に、進行中Stepの
+        # 集合を user_session からも参照できるようにする。steps は同じ辞書
+        # オブジェクトを終始mutateするため、ここで1回セットすれば以降の
+        # 追加・削除も自動的に反映される。
+        cl.user_session.set("live_steps", steps)
+        cl.user_session.set("live_thinking", None)
         # コンテキスト圧縮の安全点検知用: メインエージェントのtool_call idの
         # 集合と、対応する返却済みToolMessage。サブエージェント（dispatch_agent
         # 内部）呼び出しは対象外（_is_subagent_call参照）。
@@ -1816,6 +1872,13 @@ async def on_message(message: cl.Message) -> None:
                             )
                             thinking.start = utc_now()
                             await thinking.send()
+                            cl.user_session.set("live_thinking", thinking)
+                            logging.getLogger(__name__).info(
+                                "thinking Step生成: step_id=%s parent_id=%s [%s]",
+                                thinking.id,
+                                thinking.parent_id,
+                                describe_current_task(),
+                            )
                         await thinking.stream_token(reasoning)
 
                     if chunk.content:
@@ -1834,21 +1897,15 @@ async def on_message(message: cl.Message) -> None:
                                     describe_current_task(),
                                 )
                             retry_first_chunk_start = None  # 2回目以降は計測しない
-                        if thinking is not None:
-                            # 思考が終わり本回答が始まったのでStepを確定させる。
-                            thinking.end = utc_now()
-                            await thinking.update()
-                            thinking = None
+                        # 思考が終わり本回答が始まったのでStepを確定させる。
+                        thinking = await _close_thinking(thinking)
                         if answer is None:
                             answer = cl.Message(content="")
                         await answer.stream_token(chunk.content)
 
                 elif kind == "on_tool_start":
                     # ここまでの思考/回答があれば確定送信し、次のテキストは新しい Message に分ける。
-                    if thinking is not None:
-                        thinking.end = utc_now()
-                        await thinking.update()
-                        thinking = None
+                    thinking = await _close_thinking(thinking)
                     if answer is not None:
                         await _send_answer(answer)
                         answer = None
@@ -1914,10 +1971,7 @@ async def on_message(message: cl.Message) -> None:
                     # 打ち切りを圧縮継続で握りつぶしてはならないため。
                     if event["name"] == "approve_plan" and cl.user_session.get("plan_denied_just_now"):
                         cl.user_session.set("plan_denied_just_now", False)
-                        if thinking is not None:
-                            thinking.end = utc_now()
-                            await thinking.update()
-                            thinking = None
+                        thinking = await _close_thinking(thinking)
                         if answer is not None:
                             await _send_answer(answer)
                             answer = None
@@ -2030,15 +2084,11 @@ async def on_message(message: cl.Message) -> None:
                 exc.snippet,
                 describe_current_task(),
             )
-            if thinking is not None:
-                # ループ検知による打ち切りである旨をフロントへ伝える。StepItem.tsx
-                # 側はこの metadata を見て「完了」ではなく「停止」バッジを表示する
-                # （デフォルトでは end のみ設定された Step は他の正常完了Stepと
-                # 見分けが付かず「完了」と誤表示されていたため）。
-                thinking.metadata = {"stopped_reason": "loop_detected"}
-                thinking.end = utc_now()
-                await thinking.update()
-                thinking = None
+            # ループ検知による打ち切りである旨をフロントへ伝える。StepItem.tsx
+            # 側はこの metadata を見て「完了」ではなく「停止」バッジを表示する
+            # （デフォルトでは end のみ設定された Step は他の正常完了Stepと
+            # 見分けが付かず「完了」と誤表示されていたため）。
+            thinking = await _close_thinking(thinking, stopped_reason="loop_detected")
             if answer is not None:
                 await _send_answer(answer)
                 answer = None
@@ -2059,10 +2109,7 @@ async def on_message(message: cl.Message) -> None:
             # 接続先を一時的にクールダウンし、次回 build_model() で次点の
             # 接続先へ切り替わるようにする（他戦略では実質無視される）。
             mark_last_endpoint_failed("main")
-            if thinking is not None:
-                thinking.end = utc_now()
-                await thinking.update()
-                thinking = None
+            thinking = await _close_thinking(thinking)
             if answer is not None:
                 await _send_answer(answer)
                 answer = None
@@ -2082,10 +2129,7 @@ async def on_message(message: cl.Message) -> None:
                 exc,
                 describe_current_task(),
             )
-            if thinking is not None:
-                thinking.end = utc_now()
-                await thinking.update()
-                thinking = None
+            thinking = await _close_thinking(thinking)
             if answer is not None:
                 await _send_answer(answer)
                 answer = None
@@ -2093,10 +2137,7 @@ async def on_message(message: cl.Message) -> None:
         except GraphRecursionError:
             # メインの ReAct ループが recursion_limit（config.ini [graph]）に達した場合。
             # ここまでの思考/回答があれば確定送信してから、打ち切りを明示する。
-            if thinking is not None:
-                thinking.end = utc_now()
-                await thinking.update()
-                thinking = None
+            thinking = await _close_thinking(thinking)
             if answer is not None:
                 await _send_answer(answer)
                 answer = None
@@ -2132,10 +2173,7 @@ async def on_message(message: cl.Message) -> None:
                 "on_message: ループ内の安全な区切りでコンテキスト圧縮の条件を" "満たしたため、ターン内でグラフ実行を一時中断して圧縮します [%s]",
                 describe_current_task(),
             )
-            if thinking is not None:
-                thinking.end = utc_now()
-                await thinking.update()
-                thinking = None
+            thinking = await _close_thinking(thinking)
             if answer is not None:
                 await _send_answer(answer)
                 answer = None
@@ -2241,10 +2279,7 @@ async def on_message(message: cl.Message) -> None:
                 describe_current_task(),
                 exc_info=True,
             )
-            if thinking is not None:
-                thinking.end = utc_now()
-                await thinking.update()
-                thinking = None
+            thinking = await _close_thinking(thinking)
             if answer is not None:
                 await _send_answer(answer)
                 answer = None
@@ -2337,9 +2372,7 @@ async def on_message(message: cl.Message) -> None:
             await cl.Message(content="通信エラーのため中断しました。 少し待って「続けて」と送信してください。").send()
             return
 
-        if thinking is not None:
-            thinking.end = utc_now()
-            await thinking.update()
+        thinking = await _close_thinking(thinking)
         if answer is not None:
             await _send_answer(answer)
 
