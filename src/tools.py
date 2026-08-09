@@ -1613,36 +1613,36 @@ def grep_tool(
     pattern: str,
     path: str = "",
     glob: str = "",
-    output_mode: str = "files_with_matches",
     case_insensitive: bool = False,
     context: int = 0,
     head_limit: int = 50,
 ) -> str:
-    """指定ファイル・ディレクトリ配下のテキストから正規表現で検索する。
+    """指定ファイル・ディレクトリ配下のテキストから正規表現で検索し、マッチした行番号・内容を返す。
 
     読み取り専用のため、計画の有無に関わらずいつでも呼んでよい。
+    ファイル名ではなくファイルの中身（テキスト）を検索する（ファイル名検索は `Glob` を使うこと）。
 
     Args:
         pattern: 検索する正規表現。
         path: 検索対象の絶対パス（ファイルまたはディレクトリ、`@N` 可）。
             省略時は作業ディレクトリ配下を検索する。
-        glob: ディレクトリ検索時にファイル名を絞り込むglobパターン（省略可、例: "*.py"）。
-        output_mode: "files_with_matches"（既定、マッチしたファイル一覧）/
-            "content"（マッチ行の内容）/ "count"（ファイルごとのマッチ数）。
+        glob: 検索前にファイル名で対象を絞り込むglobパターン（省略可、例: "*.py"）。
+            ディレクトリ検索時のみ有効。マッチ結果には現れない事前フィルタ。
         case_insensitive: True で大文字小文字を無視する。
-        context: "content" モード時、マッチ行の前後何行を含めるか（既定0）。
-        head_limit: 返却件数の上限（既定50）。
+        context: マッチ行の前後何行を含めるか（既定0）。
+        head_limit: 返却するマッチ件数の上限（既定50）。
 
     Returns:
-        output_mode に応じた形状のJSON文字列（`path_memory` 付き）。
-        マッチが1件も無い場合は `{"matched": false, ...}`。
+        `{"matched", "total_matches", "returned", "truncated",
+        "matches": [{"path", "line", "text"}, ...], "path_memory"}` 形状のJSON文字列。
+        マッチが1件も無い場合は `{"matched": false, "files": [], "matches": [], "counts": []}`。
         正規表現が不正・対象パスが存在しない場合は例外を送出せず
         「エラー: ...」形式の文字列を返す。
     """
     base, error = _resolve_file_tools_path(path)
     if error:
         return f"エラー: {error}"
-    signature = f"Grep\x00{pattern}\x00{base}\x00{glob}\x00{output_mode}\x00" f"{case_insensitive}\x00{context}\x00{head_limit}"
+    signature = f"Grep\x00{pattern}\x00{base}\x00{glob}\x00" f"{case_insensitive}\x00{context}\x00{head_limit}"
     dup_error = _check_file_tools_duplicate("Grep", signature)
     if dup_error:
         return dup_error
@@ -1651,7 +1651,7 @@ def grep_tool(
             base,
             pattern,
             glob=glob,
-            output_mode=output_mode,
+            output_mode="content",
             case_insensitive=case_insensitive,
             context=context,
             head_limit=head_limit,
@@ -1659,12 +1659,7 @@ def grep_tool(
     except ValueError as e:
         return f"エラー: {e}"
     if result["matched"]:
-        if output_mode == "files_with_matches":
-            paths = result["files"]
-        elif output_mode == "count":
-            paths = [c["path"] for c in result["counts"]]
-        else:
-            paths = list(dict.fromkeys(m["path"] for m in result["matches"]))
+        paths = list(dict.fromkeys(m["path"] for m in result["matches"]))
         path_memory = _register_path_memory(paths)
         if path_memory:
             result["path_memory"] = path_memory

@@ -223,7 +223,7 @@ def grep_search(
     base: Path,
     pattern: str,
     glob: str = "",
-    output_mode: str = "files_with_matches",
+    output_mode: str = "content",
     case_insensitive: bool = False,
     context: int = 0,
     head_limit: int = 50,

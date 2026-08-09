@@ -101,7 +101,7 @@ class TestGrepSearch:
         (tmp_path / "a.py").write_text("TODO: fix\n", encoding="utf-8")
         (tmp_path / "b.py").write_text("nothing here\n", encoding="utf-8")
 
-        result = file_tools.grep_search(tmp_path, "TODO", glob="*.py")
+        result = file_tools.grep_search(tmp_path, "TODO", glob="*.py", output_mode="files_with_matches")
 
         assert result["matched"] is True
         assert result["total_files"] == 1

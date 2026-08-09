@@ -130,12 +130,12 @@ class TestGrepTool:
     def test_content_mode(self, file_tools_env) -> None:
         (file_tools_env / "a.py").write_text("before\nTODO: fix\nafter\n", encoding="utf-8")
 
-        result = json.loads(
-            tools.grep_tool.func(pattern="TODO", output_mode="content", context=1)
-        )
+        result = json.loads(tools.grep_tool.func(pattern="TODO", context=1))
 
         assert result["matched"] is True
         assert "path_memory" in result
+        lines = [m["line"] for m in result["matches"]]
+        assert lines == [1, 2, 3]
 
     def test_no_match_has_no_path_memory_key(self, file_tools_env) -> None:
         (file_tools_env / "a.py").write_text("nothing\n", encoding="utf-8")
