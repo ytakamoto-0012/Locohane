@@ -55,6 +55,7 @@ read_memory, search_memory, list_memories
 ```
 
 - メモリー系6ツールは `_SUBAGENT_TOOLS` に含まれてはいるが、実際に各サブエージェントへ渡るかは `agents/*.md` 側の `tools:` 次第。`explore`/`explore-docs` は読み込み系（`read_memory`/`search_memory`/`list_memories`）のみ、`worker` は全6ツール（フルアクセス）、`verifier` は含めていない。
+- **`write_scratch_note` は全サブエージェント種別に共通で付与する必須ツール**（既存4種別＝`explore`/`explore-docs`/`worker`/`verifier` すべてに付与済み）。`system_prompt/subagent_common.md`（4節参照）がトークン上限による打ち切り対策として `write_scratch_note` の使い方を**全エージェント共通の注意事項として無条件に**説明する構成になっているため、`tools:` に含めないエージェント種別を作ると、本文には登場するのに実際には呼べないツールについてのガイダンスだけが渡ることになる。新規に種別を追加する場合も `tools:` に必ず含めること（8節参照）。
 
 - `Read`/`Glob`/`Grep` のように大文字始まりでfrontmatterに書く名前は、Python側の関数名（`read_tool`等）とは別に `@tool("Read")` のようにデコレータ引数で明示された `.name` 属性。frontmatterには **`.name` の方**（`Read`/`Glob`/`Grep`）を書く。
 - `_resolve_agent_types()`（378-417行）が `tool_lookup = {t.name: t for t in _SUBAGENT_TOOLS}`（395行）を作り、frontmatterの `tools:` に書かれた名前と突き合わせて解決する。**未知のツール名は例外を出さず警告してスキップ**（405-409行）— 誤字に気づきにくいので、追加・変更時はアプリ起動ログを必ず確認すること。
@@ -63,7 +64,7 @@ read_memory, search_memory, list_memories
 ## 4. `{{skills}}` プレースホルダーと共通注意事項の自動連結
 
 - `app.py` 525-527行。`scan_agent_types()` の後、`render_skills_block(skills)`（`src/skills.py`、`name: description` 形式のスキル一覧）を各エージェントの `system_prompt` 内の `{{skills}}` へ `str.replace` で差し込む（`dataclasses.replace` でイミュータブルに更新）。**スキルの本文そのものは含まれず、一覧のみ**（skills側の progressive disclosure 第1段階と同じ扱い）。
-- `app.py` 550行。`system_prompt/subagent_common.md`（作業量・トークン上限に達した際の振る舞いを指示する共通文）を**全エージェントの system_prompt 末尾に自動連結**する。個々の `agents/*.md` 側で同様の注意書きを重複して書く必要はない。
+- `app.py` 550行。`system_prompt/subagent_common.md`（作業量・トークン上限に達した際の振る舞いに加え、`write_scratch_note` での途中経過の書き残し方・最終回答を生データの羅列にせず簡潔にまとめる指示を含む共通文）を**全エージェントの system_prompt 末尾に自動連結**する。個々の `agents/*.md` 側で同様の注意書きを重複して書く必要はない。
 
 ## 5. メインエージェントからの呼び出し方法
 
@@ -135,7 +136,7 @@ read_memory, search_memory, list_memories
 ## 8. 新しいサブエージェント種別を追加する手順
 
 1. `agents/<agent-name>.md` を作成（frontmatter必須、`name` はファイル名(stem)と一致）。
-2. `tools:` に必要なツール名を `_SUBAGENT_TOOLS`（3節参照）の中から選んでカンマ区切りで列挙する（省略時は全ツール継承）。
+2. `tools:` に必要なツール名を `_SUBAGENT_TOOLS`（3節参照）の中から選んでカンマ区切りで列挙する（省略時は全ツール継承）。**`write_scratch_note` は全種別共通の必須ツールなので、`tools:` を明示的に列挙する場合は必ず含めること**（省略して全ツール継承する場合は自動的に含まれるため対応不要）。
 3. 本文に、委譲元から見た役割・使ってよい/いけないツールの区別・手順・最終回答で書くべき内容（および書いてはいけない内容）を明記する。既存4種別（`explore`＝読み取り専用の汎用調査、`explore-docs`＝Office文書/PDF調査に特化、`verifier`＝成果物の検証専用、`worker`＝計画承認後の書き込み実作業）を参考にする。
 4. **アプリを再起動する**（`app.py` の `_setup()` は起動後1回しか `scan_agent_types()` を呼ばない冪等関数のため、ホットリロードは無い。新規チャットセッションを開いただけでは再スキャンされない）。起動ログの `エージェント種別発見: <name>` を確認する。
 5. 実際にチャットから、メインエージェントが `dispatch_agent(agent_type="<agent-name>", ...)` を正しく呼び出し、サブエージェントが意図した最終回答を返すことを確認する。
