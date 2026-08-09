@@ -34,4 +34,24 @@
 
 初回検知。340枚の画像を一度に処理する大規模バッチタスクでは、Glob上限の制約とLLMの委譲ループが組み合わさって失敗しやすい傾向がある。
 
+## 追記（2026-08-09 00:50）
+
+00:25:00以降の `app_20260809_002425.log` でも同一事案が再発。
+00:38:05 に ThinkingLoopDetected が3回目のリトライで発火し、
+00:44:11 にリトライ後の初回チャンク受信まで366秒（6分6秒）という
+過去最悪クラスの遅延を記録した（対象ログ:
+`data/logs/app_20260809_002425.log`）。
+
+```
+2026-08-09 00:38:05,135 WARNING src.llm: LLM応答のループを検知したため生成を打ち切ります（直近テキスト: '_9047, IMG_4120, IMG_9076, IMG_2959, IMG_2961, IMG_2958, IMG_2960, IMG_2957, IMG_3004 の11件が未処理です。\n\n合計206件の画像を処理する必要があります。\n\nでは、workerに委譲する準備をしましょう。まず、imagesフォルダ内の画像ファイルの絶対パス一覧を取得する必要があります。\n\n実は、workerに委譲する際に、画像ファイルの絶対パスを直接渡すのではなく、worker自身がimagesフォルダ内でGlobしてファイルを見つけさせることができます。\n\nつまり、workerに委譲する際に、以下の情報を渡せばよいです：\n- imagesフォルダの絶対パス: E:\\akiyo\\レシピ\\images\n- mdフォルダの絶対パス: E:\\akiyo\\レシピ\\md\n- 処理対象の画像ファイル名一覧（ファイル'） [name='Task-92775' id=2453188404688 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0]
+2026-08-09 00:38:05,141 WARNING app.py: LLM応答のループを検知（1回目の再試行）: 直近テキスト='_9047, IMG_4120, IMG_9076, IMG_2959, IMG_2961, IMG_2958, IMG_2960, IMG_2957, IMG_3004 の11件が未処理です。\n\n合計206件の画像を処理する必要があります。\n\nでは、workerに委譲する準備をしましょう。まず、imagesフォルダ内の画像ファイルの絶対パス一覧を取得する必要があります。\n\n実は、workerに委譲する際に、画像ファイルの絶対パスを直接渡すのではなく、worker自身がimagesフォルダ内でGlobしてファイルを見つけさせることができます。\n\nつまり、workerに委譲する際に、以下の情報を渡せばよいです：\n- imagesフォルダの絶対パス: E:\\akiyo\\レシピ\\images\n- mdフォルダの絶対パス: E:\\akiyo\\レシピ\\md\n- 処理対象の画像ファイル名一覧（ファイル' [name='Task-118' id=2453094929424 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0]
+2026-08-09 00:38:05,513 WARNING app.py: ThinkingLoopDetected: リトライ前にLLMグラフを再構築しました [name='Task-118' id=2453094929424 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0]
+2026-08-09 00:38:05,517 WARNING app.py: on_message: リトライ3回目開始 [name='Task-118' id=2453094929424 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-09 00:44:11,101 WARNING app.py: リトライ後の初回チャンク受信まで366秒（異常遅延） [name='Task-118' id=2453094929424 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+```
+
+366秒は過去最悪の575秒に次ぐ極端な遅延。レシピ画像変換バッチ処理
+（206件）で ThinkingLoopDetected が発火し、リトライ後に llama-server
+のスロットが詰まった可能性。
+
 ## ユーザー回答

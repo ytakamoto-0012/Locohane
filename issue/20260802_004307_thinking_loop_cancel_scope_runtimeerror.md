@@ -111,6 +111,27 @@ it was entered in')`）が再発した。ただし反復パターンが前例と
 - `RuntimeError` の発生は今回ログ範囲では未確認
 - `Task-89355`（id=2511404871568）で発生
 
+## 追記（2026-08-09 00:50）
+
+00:25:00以降の `app_20260809_002425.log` で同一事案が再発。
+レシピ画像変換バッチ処理（206件）中に LLM 応答のループを検知し、
+ThinkingLoopDetected が3回目のリトライで発火した（対象ログ:
+`data/logs/app_20260809_002425.log`）。
+
+```
+2026-08-09 00:38:05,135 WARNING src.llm: LLM応答のループを検知したため生成を打ち切ります（直近テキスト: '_9047, IMG_4120, IMG_9076, IMG_2959, IMG_2961, IMG_2958, IMG_2960, IMG_2957, IMG_3004 の11件が未処理です。\n\n合計206件の画像を処理する必要があります。\n\nでは、workerに委譲する準備をしましょう。まず、imagesフォルダ内の画像ファイルの絶対パス一覧を取得する必要があります。\n\n実は、workerに委譲する際に、画像ファイルの絶対パスを直接渡すのではなく、worker自身がimagesフォルダ内でGlobしてファイルを見つけさせることができます。\n\nつまり、workerに委譲する際に、以下の情報を渡せばよいです：\n- imagesフォルダの絶対パス: E:\\akiyo\\レシピ\\images\n- mdフォルダの絶対パス: E:\\akiyo\\レシピ\\md\n- 処理対象の画像ファイル名一覧（ファイル'） [name='Task-92775' id=2453188404688 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0]
+2026-08-09 00:38:05,141 WARNING app.py: LLM応答のループを検知（1回目の再試行）: 直近テキスト='_9047, IMG_4120, IMG_9076, IMG_2959, IMG_2961, IMG_2958, IMG_2960, IMG_2957, IMG_3004 の11件が未処理です。\n\n合計206件の画像を処理する必要があります。\n\nでは、workerに委譲する準備をしましょう。まず、imagesフォルダ内の画像ファイルの絶対パス一覧を取得する必要があります。\n\n実は、workerに委譲する際に、画像ファイルの絶対パスを直接渡すのではなく、worker自身がimagesフォルダ内でGlobしてファイルを見つけさせることができます。\n\nつまり、workerに委譲する際に、以下の情報を渡せばよいです：\n- imagesフォルダの絶対パス: E:\\akiyo\\レシピ\\images\n- mdフォルダの絶対パス: E:\\akiyo\\レシピ\\md\n- 処理対象の画像ファイル名一覧（ファイル' [name='Task-118' id=2453094929424 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0]
+2026-08-09 00:38:05,513 WARNING app.py: ThinkingLoopDetected: リトライ前にLLMグラフを再構築しました [name='Task-118' id=2453094929424 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0]
+2026-08-09 00:38:05,517 WARNING app.py: on_message: リトライ3回目開始 [name='Task-118' id=2453094929424 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+```
+
+前例との違い:
+- 反復テキストが画像ファイル名列挙ではなく「委譲戦略の検討」の反復
+  （workerに委譲する際の引数について同じ内容を繰り返している）
+- 206件の大規模バッチ処理で発生
+- `Task-92775` と `Task-118` の2つのタスクでループ検知
+- この後、366秒のスロット詰まり遅延に発展（別issue参照）
+
 ## 追記（2026-08-02 12:30）
 
 同一事案（LLM応答のループ検知 → サブエージェントのリトライ）が
