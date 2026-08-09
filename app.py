@@ -478,11 +478,18 @@ async def _resync_live_steps() -> None:
     特定sid宛のfire-and-forgetで、確認応答も再送も無い。そのため、進行中
     ターンの最中に切断が起きると、その切断ウィンドウ中に発行されたStep完了
     更新（on_tool_end のstep.update()等）は再接続後も届かず、StepItem.tsx側は
-    「実行中」のまま固まる（issue参照。06:42:34切断→dispatch_agent完了→
-    06:42:55再接続、という実例で確認済み）。on_message側で
-    cl.user_session["live_steps"]/["live_thinking"] に進行中Stepを常時
-    ミラーしてあるので、再接続のタイミングでそれらを現在の状態のまま
-    update()し直し、フロントの表示を実態に合わせる。
+    「実行中」のまま固まる（issue参照。実例1: 06:42:34切断→dispatch_agent
+    完了→06:42:55再接続。実例2: thinking Step生成10:11:55→切断→切断中の
+    10:15:58に確定→10:16:03再接続、という順序で「確定」自体が切断ウィンドウ
+    中に発生し再接続後も届かなかったケースも確認済み）。
+
+    on_message側で cl.user_session["live_steps"]/["live_thinking"] に
+    このターンで触れたStepをミラーしてあるが、closeイベントの送信成否を
+    Python側では検知できない（fire-and-forgetのため）ので、closeした
+    Stepもそのままターン終了まで参照を残す（_close_thinking/on_tool_end
+    参照）。そのため、ここでは「まだ開いているか」に関わらず、追跡中の
+    Step全件を無条件でupdate()し直す。既に正しく届いているStepへの
+    再送は冪等（同じ状態で上書きするだけ）なので害はない。
     cl.Step.send()はpersisted済みだとno-opになりうるため、必ずupdate()を使う
     （update()にはそのガードが無く、常に再emitされる）。
     """
@@ -1416,6 +1423,14 @@ async def _close_thinking(thinking: cl.Step | None, *, stopped_reason: str | Non
     Step idがここに出ていなければPython側の閉じ忘れ、出ていればWebSocket
     配信側の問題と切り分けられる。呼び出し元は戻り値を thinking へ代入する
     （`thinking = await _close_thinking(thinking)`）。
+
+    cl.user_session["live_thinking"] はここでNoneへ戻さない（あえて）。
+    このupdate()呼び出し自体がWebSocket切断中に発生し、確定通知がフロントへ
+    届かないまま消えるケースが実測で確認されている（生成→切断→切断中に
+    確定→再接続、という順序で完了通知だけが失われる）。Noneへ戻すと
+    _resync_live_steps() が次の再接続時にこのStepを再送できなくなるため、
+    次に新しい thinking Step が生成されて上書きされるまではそのまま
+    参照を残しておく（再送は冪等なので、既に届いている場合も無害）。
     """
     if thinking is None:
         return None
@@ -1423,7 +1438,6 @@ async def _close_thinking(thinking: cl.Step | None, *, stopped_reason: str | Non
         thinking.metadata = {"stopped_reason": stopped_reason}
     thinking.end = utc_now()
     await thinking.update()
-    cl.user_session.set("live_thinking", None)
     logging.getLogger(__name__).info(
         "thinking Step確定: step_id=%s stopped_reason=%s [%s]",
         thinking.id,
@@ -1807,12 +1821,19 @@ async def on_message(message: cl.Message) -> None:
     while True:
         answer: cl.Message | None = None  # ツール呼び出しごとに区切って新規発行する
         thinking: cl.Step | None = None  # <think> ブロック（reasoning_content）を表示するStep
-        steps: dict[str, cl.Step] = {}  # run_id -> Step（ツール開始/終了を対応付け）
-        # 再接続時のStep再同期（_resync_live_steps参照）用に、進行中Stepの
-        # 集合を user_session からも参照できるようにする。steps は同じ辞書
-        # オブジェクトを終始mutateするため、ここで1回セットすれば以降の
-        # 追加・削除も自動的に反映される。
-        cl.user_session.set("live_steps", steps)
+        steps: dict[str, cl.Step] = {}  # run_id -> Step（ツール開始/終了を対応付け。_resolve_parent_id/_is_subagent_callが「まだ完了していない祖先」の判定に使うため、on_tool_endで必ずpopする）
+        # 再接続時のStep再同期（_resync_live_steps参照）用に、このターンで
+        # 触れた全Step（完了済みも含む）を steps とは別に保持する。steps は
+        # on_tool_end で pop される（_resolve_parent_id 等の「現在開いている
+        # 祖先」判定に使うため）が、closeイベント自体が切断中に失われる
+        # ケース（実例確認済み: 生成10:11:55→切断→確定10:15:58→再接続10:16:03、
+        # 確定がちょうど切断ウィンドウ中に発生し再接続後もフロントに届か
+        # なかった）に対応するには、closeの成否に関わらずターン終了まで
+        # 参照を残し、再接続のたびに現在の状態で再送し続ける必要がある
+        # （再送は冪等: 既に届いている場合はフロント側で同じ状態を上書き
+        # するだけで害はない）。
+        resync_steps: dict[str, cl.Step] = {}
+        cl.user_session.set("live_steps", resync_steps)
         cl.user_session.set("live_thinking", None)
         # コンテキスト圧縮の安全点検知用: メインエージェントのtool_call idの
         # 集合と、対応する返却済みToolMessage。サブエージェント（dispatch_agent
@@ -1919,6 +1940,7 @@ async def on_message(message: cl.Message) -> None:
                     step.input = event["data"].get("input")
                     await step.send()
                     steps[event["run_id"]] = step
+                    resync_steps[event["run_id"]] = step
 
                 elif kind == "on_tool_end":
                     step = steps.pop(event["run_id"], None)
