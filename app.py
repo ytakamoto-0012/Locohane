@@ -2299,6 +2299,12 @@ async def on_message(message: cl.Message) -> None:
             # 未finalizeのまま残りうる。安全網として finally で必ず片付ける
             # （空dictなら _finalize_orphaned_steps は何もしない）。
             await _finalize_orphaned_steps(steps, "interrupted")
+            # thinking も同じ理由で未クローズのまま残りうる（本番実測:
+            # ThinkingLoopDetectedリトライ中に停止ボタンでCancelledErrorが
+            # 発生し、except asyncio.CancelledError節はraiseするのみで
+            # thinkingを閉じないため、フロント側で「実行中」のまま固着した）。
+            # steps と同じ安全網パターンで必ず閉じる。
+            thinking = await _close_thinking(thinking, stopped_reason="interrupted")
 
         # P2: ThinkingLoopDetected のグラフ再構築・nudge注入を finally 後へ延期。
         # これにより「aclose→rebuild→新リクエスト」の順序が保証される。
