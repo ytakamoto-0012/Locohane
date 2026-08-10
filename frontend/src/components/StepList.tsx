@@ -10,12 +10,17 @@ export function StepList({ steps }: { steps: IStep[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   // ResizeObserver のコールバックや scroll ハンドラは古いクロージャを
-  // 参照し続けるため、最新値は ref 経由で読む（MessagePane.tsx と同じ方式）。
+  // 参照し続けるため、最新値は ref 経由で読む。ref の更新を useEffect
+  // (レンダー確定後)に任せると、その反映前に stream_token による
+  // ResizeObserver コールバックが割り込んで古い値のまま強制スナップして
+  // しまうことがあるため、setAutoScrollBoth で state と同時に同期更新する
+  // (MessagePane.tsx と同じ方式)。
   const autoScrollRef = useRef(true);
 
-  useEffect(() => {
-    autoScrollRef.current = autoScroll;
-  }, [autoScroll]);
+  const setAutoScrollBoth = (value: boolean) => {
+    autoScrollRef.current = value;
+    setAutoScroll(value);
+  };
 
   // stream_token による Step 内容の更新だけでなく、ユーザーが完了済み
   // StepItem を手動で開閉したときの高さ変化（StepItem 内部の useState で
@@ -43,7 +48,7 @@ export function StepList({ steps }: { steps: IStep[] }) {
     const el = scrollRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setAutoScroll(distanceFromBottom <= BOTTOM_THRESHOLD_PX);
+    setAutoScrollBoth(distanceFromBottom <= BOTTOM_THRESHOLD_PX);
   };
 
   // 上方向へのホイール操作があった時点で即座にオートスクロールを解除する。
@@ -53,7 +58,7 @@ export function StepList({ steps }: { steps: IStep[] }) {
   // (MessagePane.tsx と同じ方式)。
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (e.deltaY < 0) {
-      setAutoScroll(false);
+      setAutoScrollBoth(false);
     }
   };
 
@@ -61,7 +66,7 @@ export function StepList({ steps }: { steps: IStep[] }) {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-    setAutoScroll(true);
+    setAutoScrollBoth(true);
   };
 
   return (
