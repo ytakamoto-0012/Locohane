@@ -3,8 +3,15 @@ import type { IStep } from '@chainlit/react-client';
 import { MessageThread } from './MessageThread';
 import { Icon } from './Icon';
 
-// 最下部からこの距離(px)以内であれば「最下部にいる」とみなす。
-const BOTTOM_THRESHOLD_PX = 64;
+// ほぼ最下部(この距離px以内)まで戻ってきたときだけオートスクロールを再開する。
+// 「解除」は handleWheel が即座に行うため、ここは狭く保つ。64px 等の広い
+// 閾値を再開判定にも使うと、ホイールで解除した直後(まだ最下部から数十px
+// しか離れていない)に handleScroll がすぐ再開してしまい、解除が事実上
+// 無効化されてしまう。
+const AUTO_SCROLL_ENGAGE_THRESHOLD_PX = 4;
+// wheel イベントを伴わない移動(スクロールバードラッグ、キーボード操作等)で
+// 最下部からこの距離(px)を超えて離れたら解除する。
+const AUTO_SCROLL_DISENGAGE_THRESHOLD_PX = 64;
 
 export function MessagePane({ messages, showTyping }: { messages: IStep[]; showTyping: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,17 +58,24 @@ export function MessagePane({ messages, showTyping }: { messages: IStep[]; showT
     return () => ro.disconnect();
   }, [messages, showTyping]);
 
+  // 再開は「ほぼ最下部に戻ったとき」のみ、解除は「大きく離れたとき」のみ
+  // 行う非対称な判定。中間の範囲(ENGAGE〜DISENGATEの間)では現状を維持し、
+  // handleWheel による解除直後の中途半端な位置で勝手に再開されないようにする。
   const handleScroll = () => {
     const el = containerRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setAutoScrollBoth(distanceFromBottom <= BOTTOM_THRESHOLD_PX);
+    if (distanceFromBottom <= AUTO_SCROLL_ENGAGE_THRESHOLD_PX) {
+      setAutoScrollBoth(true);
+    } else if (distanceFromBottom > AUTO_SCROLL_DISENGAGE_THRESHOLD_PX) {
+      setAutoScrollBoth(false);
+    }
   };
 
   // 上方向へのホイール操作があった時点で即座にオートスクロールを解除する。
-  // scroll イベントの distanceFromBottom 判定だけだと、ストリーミング中の
-  // ResizeObserver による強制スナップ(下記 useEffect)と競合し、閾値を
-  // 超えるまで押し戻されてしまうため、ユーザー操作を最優先で反映する。
+  // handleScroll の距離判定だけに頼ると、ストリーミング中の ResizeObserver
+  // による強制スナップ(下記 useEffect)と競合し、閾値を超えるまで押し戻され
+  // てしまうため、ユーザー操作を最優先で反映する。
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (e.deltaY < 0) {
       setAutoScrollBoth(false);
