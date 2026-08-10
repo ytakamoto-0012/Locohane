@@ -6,6 +6,11 @@
 - `@N` パスメモリーの解決・登録
 - 重複呼び出しガード（config.ini [file_tools_duplicate_guard]）
 - pydantic スキーマに args/kwargs 予約語衝突が無いこと
+
+read_skill/read_skill_file/get_tool_source への重複呼び出しガード適用
+（2026-08-10 issue: コンテキスト圧縮でメッセージ履歴から過去の読み込み結果が
+消えた後もLLMが同じ大きいSKILL.mdを何度も読み直すthrashingの対策）も
+このファイルで検証する。
 """
 
 import json
@@ -176,6 +181,77 @@ class TestJsonQuery:
 
         assert not first.startswith("エラー:")
         assert not second.startswith("エラー:")
+
+
+@pytest.fixture
+def skill_tools_env(tmp_path, monkeypatch):
+    """read_skill/read_skill_file/get_tool_source の重複ガードテスト用環境。
+
+    file_tools_env と同じ cl.user_session/_LLM_CONFIG のモックに加え、
+    _SKILLS_ROOTS を一時ディレクトリへ差し替える（test_tools_script_resolution.py
+    の skills_root フィクスチャと同じ方式）。
+    """
+    root = tmp_path / "skills"
+    root.mkdir()
+    monkeypatch.setattr(tools, "_SKILLS_ROOTS", [root])
+    monkeypatch.setattr(tools, "_LLM_CONFIG", None)
+    monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
+    return root
+
+
+class TestReadSkillDuplicateGuard:
+    def test_duplicate_call_is_blocked(self, skill_tools_env) -> None:
+        skill_dir = skill_tools_env / "demo-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\n---\nbody", encoding="utf-8")
+
+        first = tools.read_skill.func(skill_name="demo-skill")
+        second = tools.read_skill.func(skill_name="demo-skill")
+
+        assert not first.startswith("エラー:")
+        assert second.startswith("エラー:")
+        assert "上限" in second
+
+    def test_different_skill_name_is_not_treated_as_duplicate(self, skill_tools_env) -> None:
+        for name in ("skill-a", "skill-b"):
+            skill_dir = skill_tools_env / name
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\n---\nbody", encoding="utf-8")
+
+        first = tools.read_skill.func(skill_name="skill-a")
+        second = tools.read_skill.func(skill_name="skill-b")
+
+        assert not first.startswith("エラー:")
+        assert not second.startswith("エラー:")
+
+
+class TestReadSkillFileDuplicateGuard:
+    def test_duplicate_call_is_blocked(self, skill_tools_env) -> None:
+        skill_dir = skill_tools_env / "demo-skill"
+        skill_dir.mkdir()
+        (skill_dir / "references").mkdir()
+        (skill_dir / "references" / "notes.md").write_text("notes", encoding="utf-8")
+
+        first = tools.read_skill_file.func(relative_path="demo-skill/references/notes.md")
+        second = tools.read_skill_file.func(relative_path="demo-skill/references/notes.md")
+
+        assert not first.startswith("エラー:")
+        assert second.startswith("エラー:")
+        assert "上限" in second
+
+
+class TestGetToolSourceDuplicateGuard:
+    def test_duplicate_call_is_blocked(self, skill_tools_env) -> None:
+        scripts_dir = skill_tools_env / "demo-skill" / "scripts"
+        scripts_dir.mkdir(parents=True)
+        (scripts_dir / "count.py").write_text("print('hi')", encoding="utf-8")
+
+        first = tools.get_tool_source.func(skill_name="demo-skill", script_filename="count.py")
+        second = tools.get_tool_source.func(skill_name="demo-skill", script_filename="count.py")
+
+        assert not first.startswith("エラー:")
+        assert second.startswith("エラー:")
+        assert "上限" in second
 
 
 class TestListPathMemory:

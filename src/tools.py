@@ -792,12 +792,18 @@ def _check_main_agent_glob_limit() -> str | None:
 
 
 def _check_file_tools_duplicate(tool_label: str, signature: str) -> str | None:
-    """Read/Glob/Grep/json_query 共通の重複呼び出しガード。
+    """Read/Glob/Grep/json_query/read_skill/read_skill_file/get_tool_source 共通の重複呼び出しガード。
 
     旧 _run_script_impl の file-tools 分岐（読み取り専用スキルのため、
     同一引数での再実行は結果が変わらないと保証できる）を汎用化したもの。
     config.ini [file_tools_duplicate_guard] の enabled/max_calls/
     carry_over_to_main をそのまま参照する。
+
+    read_skill/read_skill_file はコンテキスト圧縮でメッセージ履歴から
+    過去の実行結果が消えた後もLLMが同じ大きいSKILL.md等を何度も読み直す
+    thrashingを防ぐ目的でも使う（2026-08-10 issue参照）。この記録は
+    cl.user_session（LLMへ送るメッセージ履歴とは別のサーバー側状態）に
+    残るため、圧縮でメッセージ履歴が消えてもガードの記憶自体は消えない。
 
     Args:
         tool_label: エラー文言に出すツール名（例: "Read"）。
@@ -949,6 +955,9 @@ def read_skill(skill_name: str) -> str:
         return f"エラー: {e}"
     if not skill_md.is_file():
         return f"エラー: スキル '{skill_name}' の SKILL.md が見つかりません。"
+    dup_error = _check_file_tools_duplicate("read_skill", f"read_skill\x00{skill_name}")
+    if dup_error:
+        return dup_error
     logger.info("read_skill: %s", skill_name)
     return skill_md.read_text(encoding="utf-8")
 
@@ -978,6 +987,9 @@ def read_skill_file(relative_path: str) -> str:
             "（read_skill_file は skills ディレクトリ配下限定です。作業ディレクトリ配下の"
             "ファイルを読みたい場合は Read ツールを使ってください）"
         )
+    dup_error = _check_file_tools_duplicate("read_skill_file", f"read_skill_file\x00{path}")
+    if dup_error:
+        return dup_error
     logger.info("read_skill_file: %s", relative_path)
     return path.read_text(encoding="utf-8", errors="replace")
 
@@ -1078,6 +1090,11 @@ def get_tool_source(skill_name: str, script_filename: str) -> str:
         script_path = _resolve_script_filename(skill_name, script_filename)
     except ValueError as e:
         return f"エラー: {e}"
+    dup_error = _check_file_tools_duplicate(
+        "get_tool_source", f"get_tool_source\x00{skill_name}\x00{script_filename}"
+    )
+    if dup_error:
+        return dup_error
     logger.info("get_tool_source: %s/%s", skill_name, script_filename)
     return str(script_path)
 

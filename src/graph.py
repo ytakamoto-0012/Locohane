@@ -222,7 +222,7 @@ def build_graph(config: Config, system_prompt: str, checkpointer):
 
 
 def is_empty_final_message(messages: list) -> bool:
-    """直近メッセージが「無言終了」（tool_calls も content も空の AIMessage）かを判定する。
+    """直近メッセージが「無言終了」（tool_calls も、意味のある本文も無い AIMessage）かを判定する。
 
     小型ローカルモデルは、長い会話の末に thinking が長引いた・コンテキストが
     逼迫した等の理由で、ツール呼び出しも最終回答テキストも無いまま応答を
@@ -230,12 +230,19 @@ def is_empty_final_message(messages: list) -> bool:
     ケースで実際に再現した）。system_prompt.md の文言強化だけでは解消しない
     ため、コード側でも検知してリトライできるようにする。
 
+    高負荷時には content が完全な空文字列ではなく「…」のような記号のみの
+    退化応答になることもある（2026-08-10 issue: サーバー高負荷下で
+    `content='…'` を返しターンがそのまま終了し、ユーザーには「…」としか
+    表示されなかった）。そのため単純な空文字列判定ではなく、英数字・各言語
+    の文字（`str.isalnum()` は日本語の漢字・ひらがな・カタカナも True を
+    返す）を一切含まない場合も「空」とみなす。
+
     Args:
         messages: MessagesState の "messages" リスト。
 
     Returns:
-        直近メッセージが AIMessage かつ tool_calls が無く、content が
-        空白のみ（または空）の場合に True。
+        直近メッセージが AIMessage かつ tool_calls が無く、content に
+        意味のある文字（英数字・各言語の文字）が一つも含まれない場合に True。
     """
     if not messages:
         return False
@@ -245,7 +252,10 @@ def is_empty_final_message(messages: list) -> bool:
     if getattr(last, "tool_calls", None):
         return False
     content = last.content if isinstance(last.content, str) else str(last.content)
-    return not content.strip()
+    stripped = content.strip()
+    if not stripped:
+        return True
+    return not any(ch.isalnum() for ch in stripped)
 
 
 async def _remove_message_ids_if_present(graph, run_config: dict, ids: list[str]) -> None:
