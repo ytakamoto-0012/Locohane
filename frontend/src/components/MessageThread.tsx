@@ -52,7 +52,14 @@ function MessageBubble({ step }: { step: IStep }) {
       {!isUser ? <div className="avatar avatar--assistant">AI</div> : null}
       <div className={`message-bubble ${isUser ? 'message-bubble--user' : 'message-bubble--assistant'}`}>
         <div className="message-bubble-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{step.output || ''}</ReactMarkdown>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />
+            }}
+          >
+            {step.output || ''}
+          </ReactMarkdown>
           {step.streaming ? <span className="streaming-cursor" /> : null}
         </div>
         <MessageElements messageId={step.id} />
