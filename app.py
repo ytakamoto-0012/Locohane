@@ -362,6 +362,19 @@ def _accumulate_usage(totals: dict, usage: dict) -> None:
 TOKEN_USAGE_PREFIX = "🔢 トークン使用量\n"
 
 
+def _token_usage_level(total: int) -> str | None:
+    """「リクエスト1回あたり」行の合計トークン数から強調表示レベルを判定する。
+
+    config.ini [ui].token_usage_warn_threshold/token_usage_alert_threshold と
+    比較する（累計行は会話が進むほど必ず閾値超過するため対象外。この行のみに適用）。
+    """
+    if _config.ui_token_usage_alert_threshold > 0 and total >= _config.ui_token_usage_alert_threshold:
+        return "alert"
+    if _config.ui_token_usage_warn_threshold > 0 and total >= _config.ui_token_usage_warn_threshold:
+        return "warn"
+    return None
+
+
 def _format_token_usage(call: dict, cumulative_main: dict, cumulative: dict) -> str:
     """直近のリクエスト1回分・メインエージェント累計・会話累計（メイン+サブ合算）を、
     サイドパネルの TokenUsageCard（表形式）表示用に JSON 化する。
@@ -372,7 +385,7 @@ def _format_token_usage(call: dict, cumulative_main: dict, cumulative: dict) -> 
     """
     payload = {
         "rows": [
-            {"label": "リクエスト1回あたり", **call},
+            {"label": "リクエスト1回あたり", **call, "level": _token_usage_level(call["total"])},
             {"label": "メインエージェント累計", **cumulative_main},
             {"label": "会話累計（サブエージェント含む）", **cumulative},
         ]

@@ -5,9 +5,24 @@ _is_subagent_call() は、event["parent_ids"] に現在開いている（steps�
 （サブエージェント）由来のイベントかを判定する。
 """
 
+import dataclasses
 import json
 
-from app import TOKEN_USAGE_PREFIX, _format_token_usage, _is_subagent_call
+import app
+from app import TOKEN_USAGE_PREFIX, _format_token_usage, _is_subagent_call, _token_usage_level
+
+
+def _with_thresholds(monkeypatch, warn: int, alert: int) -> None:
+    """app._config（frozen dataclass）の閾値だけを差し替えたコピーに一時的に入れ替える。"""
+    monkeypatch.setattr(
+        app,
+        "_config",
+        dataclasses.replace(
+            app._config,
+            ui_token_usage_warn_threshold=warn,
+            ui_token_usage_alert_threshold=alert,
+        ),
+    )
 
 
 class _FakeStep:
@@ -46,9 +61,35 @@ def test_format_token_usage_includes_all_three_tiers() -> None:
     payload = json.loads(text[len(TOKEN_USAGE_PREFIX) :])
     rows = {row["label"]: row for row in payload["rows"]}
 
-    assert rows["リクエスト1回あたり"] == {"label": "リクエスト1回あたり", **call}
+    assert rows["リクエスト1回あたり"] == {"label": "リクエスト1回あたり", **call, "level": None}
     assert rows["メインエージェント累計"] == {"label": "メインエージェント累計", **cumulative_main}
     assert rows["会話累計（サブエージェント含む）"] == {
         "label": "会話累計（サブエージェント含む）",
         **cumulative,
     }
+
+
+def test_token_usage_level_none_below_thresholds(monkeypatch) -> None:
+    _with_thresholds(monkeypatch, warn=48000, alert=64000)
+
+    assert _token_usage_level(1000) is None
+
+
+def test_token_usage_level_warn_between_thresholds(monkeypatch) -> None:
+    _with_thresholds(monkeypatch, warn=48000, alert=64000)
+
+    assert _token_usage_level(48000) == "warn"
+    assert _token_usage_level(63999) == "warn"
+
+
+def test_token_usage_level_alert_at_or_above_alert_threshold(monkeypatch) -> None:
+    _with_thresholds(monkeypatch, warn=48000, alert=64000)
+
+    assert _token_usage_level(64000) == "alert"
+    assert _token_usage_level(100000) == "alert"
+
+
+def test_token_usage_level_disabled_when_thresholds_zero(monkeypatch) -> None:
+    _with_thresholds(monkeypatch, warn=0, alert=0)
+
+    assert _token_usage_level(1_000_000) is None

@@ -1,11 +1,15 @@
 import type { IStep } from '@chainlit/react-client';
 import { TOKEN_USAGE_PREFIX } from '../utils/messageTree';
 
+/** app.py の _token_usage_level と一致させる（"warn"=オレンジ太字, "alert"=赤太字）。 */
+type TokenUsageLevel = 'warn' | 'alert' | null;
+
 interface TokenUsageRow {
   label: string;
   input: number;
   output: number;
   total: number;
+  level?: TokenUsageLevel;
 }
 
 interface TokenUsagePayload {
@@ -38,7 +42,10 @@ export function TokenUsageCard({ step }: { step: IStep | undefined }) {
         </thead>
         <tbody>
           {payload.rows.map((row) => (
-            <tr key={row.label}>
+            <tr
+              key={row.label}
+              className={row.level ? `token-usage-row-${row.level}` : undefined}
+            >
               <td>{row.label}</td>
               <td>{fmt(row.input)}</td>
               <td>{fmt(row.output)}</td>

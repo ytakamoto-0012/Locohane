@@ -648,6 +648,14 @@ class Config:
     # 上記と同様、表示専用の間引きでありLLMへ渡す会話コンテキストや会話ログには
     # 影響しない（frontend/src/App.tsx / messageTree.ts 参照）。
     ui_max_display_side_steps: int
+    # トークン使用量カード（TokenUsageCard）の「リクエスト1回あたり」行で、
+    # 直近1回のLLM呼び出しの合計トークン数（total）がこの値以上になったら、
+    # 該当行をオレンジ太字で強調表示する（0以下で無効。frontend/src/components/
+    # TokenUsageCard.tsx 参照）。
+    ui_token_usage_warn_threshold: int
+    # 上記と同じ判定対象で、この値以上になったら赤太字で強調表示する
+    # （warn_threshold より優先。0以下で無効）。
+    ui_token_usage_alert_threshold: int
 
 
 def _resolve(base: Path, value: str) -> Path:
@@ -1520,6 +1528,12 @@ def load_config(config_path: Path | None = None) -> Config:
         ui_max_display_messages=int(os.getenv("UI_MAX_DISPLAY_MESSAGES", ui.get("max_display_messages", 50))),
         ui_max_display_side_steps=int(
             os.getenv("UI_MAX_DISPLAY_SIDE_STEPS", ui.get("max_display_side_steps", 50))
+        ),
+        ui_token_usage_warn_threshold=int(
+            os.getenv("UI_TOKEN_USAGE_WARN_THRESHOLD", ui.get("token_usage_warn_threshold", 48000))
+        ),
+        ui_token_usage_alert_threshold=int(
+            os.getenv("UI_TOKEN_USAGE_ALERT_THRESHOLD", ui.get("token_usage_alert_threshold", 64000))
         ),
     )
 

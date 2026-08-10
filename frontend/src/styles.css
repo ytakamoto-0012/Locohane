@@ -909,6 +909,16 @@
   border-bottom: 1px solid var(--border);
 }
 
+.token-usage-row-warn td {
+  color: #f97316;
+  font-weight: 700;
+}
+
+.token-usage-row-alert td {
+  color: #ef4444;
+  font-weight: 700;
+}
+
 .plan-card {
   background: var(--surface);
   border: 1px solid var(--border);
