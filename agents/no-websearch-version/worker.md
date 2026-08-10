@@ -87,7 +87,7 @@ tools: read_skill, read_skill_file, get_tool_source, check_work_dir_status, anal
 
 | 作りたいもの | 使うスキル | 呼び出し方 |
 |---|---|---|
-| xlsx（Excel） | `excel-tools` | `edit_excel.py`（`run_script`） |
+| xlsx（Excel） | `excel-edit` | `edit_excel.py`（`run_script`） |
 | docx（Word） | `docx-tools` | `create_docx.py`/`edit_docx.py`（`run_script`） |
 | pptx（PowerPoint） | `pptx-tools` | `create_pptx.py`/`edit_pptx.py`（`run_script`） |
 

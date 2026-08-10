@@ -1509,7 +1509,7 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
     Agent Skills 標準の progressive disclosure における第3段階（Execute）に相当する。
     書き込み系ツールのため、create_plan/approve_plan で計画が承認済みでない
     限り実行できない（未承認の場合はエラーを返す）。ただし副作用のない
-    読み取り専用スクリプト（一部は事前に例外登録されている。例: excel-tools の
+    読み取り専用スクリプト（一部は事前に例外登録されている。例: excel-vba-read の
     read_vba.py）はこの承認チェックを免除される。
 
     Args:

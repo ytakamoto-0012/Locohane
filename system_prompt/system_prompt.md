@@ -41,7 +41,7 @@
 
 | 作りたいもの | 使うスキル | 呼び出し方 |
 |---|---|---|
-| xlsx | `excel-tools` | `edit_excel.py`(`run_script`) |
+| xlsx | `excel-edit` | `edit_excel.py`(`run_script`) |
 | docx | `docx-tools` | `create_docx.py`/`edit_docx.py`(`run_script`) |
 | pptx | `pptx-tools` | `create_pptx.py`/`edit_pptx.py`(`run_script`) |
 

@@ -20,7 +20,7 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 | 調べたいファイル | 使うスキル・スクリプト |
 |---|---|
 | docx（Word） | `docx-tools` の `read_docx.py`（テキストだけでは読み取れないレイアウト・表・画像配置・強調表現を見たい場合は `render_docx.py` + `analyze_image`） |
-| xlsx/xls/xlsm（Excel） | `excel-tools` の `read_excel.py`（VBAマクロのコードを見たい場合は `read_vba.py`。罫線・書式・グラフ・レイアウトを見たい場合は `render_excel.py` + `analyze_image`） |
+| xlsx/xls/xlsm（Excel） | `excel-read` の `read_excel.py`（VBAマクロのコードを見たい場合は `excel-vba-read` の `read_vba.py`。罫線・書式・グラフ・レイアウトを見たい場合は `excel-render` の `render_excel.py` + `analyze_image`） |
 | pptx（PowerPoint） | `pptx-tools` の `read_pptx.py`（構造単位で見たい場合は `inspect_pptx.py`。レイアウト・図表・画像配置・強調表現を見たい場合は `render_pptx.py` + `analyze_image`） |
 | pdf | `pdf-tools` の `read_pdf.py`（テキスト抽出できないスキャンPDFやレイアウト・図表を見たい場合は `render_pdf_pages.py` + `analyze_image`） |
 | Web検索（文書内の固有名詞・最新情報の裏取り） | `web-search` の `search_web.py` |

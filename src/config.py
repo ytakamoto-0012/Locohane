@@ -1275,8 +1275,8 @@ def load_config(config_path: Path | None = None) -> Config:
                 "SCRIPT_PLAN_APPROVAL_EXEMPT_SCRIPTS",
                 scripts.get(
                     "plan_approval_exempt_scripts",
-                    '[["excel-tools","read_vba.py"],["excel-tools","read_excel.py"],'
-                    '["excel-tools","render_excel.py"],'
+                    '[["excel-vba-read","read_vba.py"],["excel-read","read_excel.py"],'
+                    '["excel-render","render_excel.py"],'
                     '["docx-tools","read_docx.py"],["docx-tools","render_docx.py"],'
                     '["pdf-tools","read_pdf.py"],["pdf-tools","render_pdf_pages.py"],'
                     '["pptx-tools","read_pptx.py"],["pptx-tools","inspect_pptx.py"],'

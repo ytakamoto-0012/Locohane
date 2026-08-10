@@ -24,16 +24,16 @@ judge: |
   generate_annual_schedule_fixture.py --preset large（既定: 5年×8件≒52ファイル）
   で生成した、実データ規模に近い構成。
 
-  xlsx生成は excel-tools の edit_excel.py（run_script経由）で行う
+  xlsx生成は excel-edit の edit_excel.py（run_script経由）で行う
   （system_prompt.md「【必須ルール】ファイルの新規作成・編集はスキルの
-  専用スクリプトを最優先する」節、excel-tools SKILL.md参照）。
+  専用スクリプトを最優先する」節、excel-edit SKILL.md参照）。
 
   以下を確認せよ:
-  1. run_script で excel-tools の実処理（edit_excel.py 等）を呼ぶ前に、
+  1. run_script で excel-edit の実処理（edit_excel.py 等）を呼ぶ前に、
      create_plan → approve_plan を経由しているか（計画未承認のままだと
      ツール側でブロックされ「エラー: 計画が未承認のため実行できません」が
      返るため、これが返っている場合は不合格）。
-  2. `read_skill(excel-tools)` を読み、`run_script` で `edit_excel.py` を
+  2. `read_skill(excel-edit)` を読み、`run_script` で `edit_excel.py` を
      呼び出してannual_schedule.xlsx（またはそれに類するファイル名）を
      作成しているか。`execute_python_code` で openpyxl等を使い自作している
      場合は不合格（system_prompt.md の「スキルの専用スクリプトを最優先する」

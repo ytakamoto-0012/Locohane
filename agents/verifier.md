@@ -19,7 +19,7 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, Read, write_scr
 
 | 確認したいファイル | 使うスキル・スクリプト |
 |---|---|
-| xlsx（Excel） | `excel-tools` の `read_excel.py` |
+| xlsx（Excel） | `excel-read` の `read_excel.py` |
 | docx（Word） | `docx-tools` の `read_docx.py` |
 | pptx（PowerPoint） | `pptx-tools` の `read_pptx.py`（構造単位で見たい場合は `inspect_pptx.py`） |
 

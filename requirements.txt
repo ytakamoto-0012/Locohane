@@ -37,7 +37,8 @@ pypdf==6.11.0
 pypdfium2==4.30.0
 reportlab==4.5.1
 
-# --- excel-tools スキル（xlsx/xlsm読み書き: openpyxl / レガシーxls読み込み: xlrd /
+# --- excel-read/excel-edit/excel-recalc/excel-vba-read/excel-vba-edit/excel-render
+#     スキル（xlsx/xlsm読み書き: openpyxl / レガシーxls読み込み: xlrd /
 #     VBAマクロコード読み取り: oletools（Excel本体不要） / VBAマクロコード書き込み・
 #     実行・数式再計算: pywin32（Excel COM経由、recalc_excel.py/edit_vba.py）） ---
 openpyxl==3.1.5
