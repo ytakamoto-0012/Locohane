@@ -1277,10 +1277,10 @@ def load_config(config_path: Path | None = None) -> Config:
                     "plan_approval_exempt_scripts",
                     '[["excel-vba-read","read_vba.py"],["excel-read","read_excel.py"],'
                     '["excel-render","render_excel.py"],'
-                    '["docx-tools","read_docx.py"],["docx-tools","render_docx.py"],'
+                    '["docx-read","read_docx.py"],["docx-render","render_docx.py"],'
                     '["pdf-tools","read_pdf.py"],["pdf-tools","render_pdf_pages.py"],'
-                    '["pptx-tools","read_pptx.py"],["pptx-tools","inspect_pptx.py"],'
-                    '["pptx-tools","render_pptx.py"],'
+                    '["pptx-read","read_pptx.py"],["pptx-inspect","inspect_pptx.py"],'
+                    '["pptx-render","render_pptx.py"],'
                     '["web-search","search_web.py"]]',
                 ),
             )

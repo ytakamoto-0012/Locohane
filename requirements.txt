@@ -46,10 +46,12 @@ xlrd==2.0.2
 oletools
 pywin32==311
 
-# --- docx-tools スキル（Word文書（.docx）の読み込み・生成） ---
+# --- docx-read/docx-create/docx-edit/docx-render
+#     スキル（Word文書（.docx）の読み込み・生成・編集） ---
 python-docx==1.2.0
 
-# --- pptx-tools スキル（PowerPoint文書（.pptx）の読み込み・生成） ---
+# --- pptx-read/pptx-create/pptx-inspect/pptx-edit/pptx-render
+#     スキル（PowerPoint文書（.pptx）の読み込み・生成・編集） ---
 python-pptx==1.0.2
 
 # openai は langchain-openai が要求する 2.x 系。src/llm.py が直接 import するため明示ピン。

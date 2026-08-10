@@ -20,8 +20,8 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, Read, write_scr
 | 確認したいファイル | 使うスキル・スクリプト |
 |---|---|
 | xlsx（Excel） | `excel-read` の `read_excel.py` |
-| docx（Word） | `docx-tools` の `read_docx.py` |
-| pptx（PowerPoint） | `pptx-tools` の `read_pptx.py`（構造単位で見たい場合は `inspect_pptx.py`） |
+| docx（Word） | `docx-read` の `read_docx.py` |
+| pptx（PowerPoint） | `pptx-read` の `read_pptx.py`（構造単位で見たい場合は `pptx-inspect` の `inspect_pptx.py`） |
 
 手順:
 1. `read_skill`で該当スキルの本文を読み、読み込み専用スクリプトの引数を

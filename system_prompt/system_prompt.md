@@ -42,8 +42,8 @@
 | 作りたいもの | 使うスキル | 呼び出し方 |
 |---|---|---|
 | xlsx | `excel-edit` | `edit_excel.py`(`run_script`) |
-| docx | `docx-tools` | `create_docx.py`/`edit_docx.py`(`run_script`) |
-| pptx | `pptx-tools` | `create_pptx.py`/`edit_pptx.py`(`run_script`) |
+| docx | `docx-create`/`docx-edit` | `create_docx.py`/`edit_docx.py`(`run_script`) |
+| pptx | `pptx-create`/`pptx-edit` | `create_pptx.py`/`edit_pptx.py`(`run_script`) |
 
 **xlsx/docx/pptxの生成・編集作業は自分（メインエージェント）で直接行わず`worker`へ丸ごと委譲する**。1成果物でも呼び出しが数十回に及び、自分で行うと会話履歴にすべて積み上がりトークン上限で停止する。「読み取り→設計→専用スクリプトで書き出し」までを1回の`dispatch_agent(agent_type="worker")`にまとめ、完了報告（成功/失敗・ファイル名）だけを受け取る（詳細はTask Delegation節）。
 

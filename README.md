@@ -318,7 +318,10 @@ Locohane/
 ├── skills/
 │   ├── SKILLS_README.md    # スキル開発者向けガイド
 │   ├── skill-creator/       # 新しいスキルの作成・既存スキルの改善・eval検証を行うメタスキル
-│   ├── docx-tools/          # Word文書の読込・生成・編集（Track Changes対応）
+│   ├── docx-read/           # docx読込専用（段落・表・文書プロパティ・Track Changes有無）
+│   ├── docx-create/         # docx新規生成（見出し/段落/表/画像/ページ設定等）
+│   ├── docx-edit/           # 既存docxの編集（検索置換・Track Changes・段落追加削除）
+│   ├── docx-render/         # Word文書ページの画像化
 │   ├── excel-read/          # xlsx/xls/xlsm読込専用（シート一覧・セルデータ）
 │   ├── excel-edit/          # xlsx/xlsm新規作成・編集（セル/書式/行列/グラフ等）
 │   ├── excel-recalc/        # xlsx/xlsm/xls数式再計算・エラーセル検出
@@ -326,7 +329,11 @@ Locohane/
 │   ├── excel-vba-edit/      # xlsm VBAマクロコード追加/上書き/削除・実行
 │   ├── excel-render/        # Excelシートの画像化
 │   ├── pdf-tools/           # PDF読込・ページ画像化・PDF生成
-│   ├── pptx-tools/          # PowerPoint読込・生成・テンプレート部分編集
+│   ├── pptx-read/           # pptx読込専用（テキスト・表・発表者ノート抽出）
+│   ├── pptx-create/         # pptx新規生成（16:9テンプレート方式）
+│   ├── pptx-inspect/        # 既存pptxテンプレートの構造読取（shape_index把握）
+│   ├── pptx-edit/           # 既存pptxテンプレートの部分編集（デザイン保持）
+│   ├── pptx-render/         # PowerPointスライドの画像化
 │   └── web-search/          # Tavily APIによるWeb検索（要APIキー設定）
 │       # Read/Glob/Grep/json_query/list_path_memory はネイティブツール化済み
 │       # （src/file_tools.py、src/path_memory.py）。
@@ -561,14 +568,21 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 |--------|----------|------|------|
 | `skill-creator` | `skills/` | スクリプト実行を伴う | 新しいスキルの作成・既存スキルの改善・description のトリガー精度最適化・evalハーネスによる検証を行うメタスキル。 |
 | `pdf-tools` | `skills/` | スクリプト実行を伴う | PDFのテキスト抽出・ページ画像化（レイアウト/図表/スキャン内容の視覚把握）・PDF生成（日本語対応）。 |
-| `docx-tools` | `skills/` | スクリプト実行を伴う | Word文書の読込・生成・編集（検索置換、Track Changes/変更履歴の付与・確定・却下を含む）。 |
+| `docx-read` | `skills/` | スクリプト実行を伴う | docxの読込専用（段落・表・文書プロパティ・Track Changes有無の取得）。 |
+| `docx-create` | `skills/` | スクリプト実行を伴う | docxの新規生成（見出し/段落/箇条書き/表/画像/ページ設定/ヘッダーフッター等）。 |
+| `docx-edit` | `skills/` | スクリプト実行を伴う | 既存docxの編集（検索置換、Track Changes/変更履歴の付与・確定・却下を含む）。 |
+| `docx-render` | `skills/` | スクリプト実行を伴う | Word文書ページの画像化（レイアウト・表・画像配置・強調表現の視覚把握）。 |
 | `excel-read` | `skills/` | スクリプト実行を伴う | xlsx/xls/xlsmの読込専用（シート一覧・セルデータ）。 |
 | `excel-edit` | `skills/` | スクリプト実行を伴う | xlsx/xlsmの新規作成・編集（セル/書式/行列/グラフ・条件付き書式・データ検証を含む）。 |
 | `excel-recalc` | `skills/` | スクリプト実行を伴う | xlsx/xlsm/xlsの数式再計算・エラーセル検出。 |
 | `excel-vba-read` | `skills/` | スクリプト実行を伴う | xlsm/xlsのVBAマクロコードの読み込み専用。 |
 | `excel-vba-edit` | `skills/` | スクリプト実行を伴う | xlsmのVBAマクロコードの追加/上書き/削除・実行。 |
 | `excel-render` | `skills/` | スクリプト実行を伴う | Excelシートの画像化（罫線・書式・グラフ・レイアウトの視覚把握）。 |
-| `pptx-tools` | `skills/` | スクリプト実行を伴う | PowerPointの読込・生成（16:9テンプレート方式）・既存テンプレートの部分編集（デザインを保った差し替え・複製・削除・並び替え）。 |
+| `pptx-read` | `skills/` | スクリプト実行を伴う | pptxの読込専用（スライドのタイトル・本文・表・発表者ノートの抽出）。 |
+| `pptx-create` | `skills/` | スクリプト実行を伴う | pptxの新規生成（16:9テンプレート方式）。 |
+| `pptx-inspect` | `skills/` | スクリプト実行を伴う | 既存pptxテンプレートの構造読取専用（`pptx-edit`前の`shape_index`把握）。 |
+| `pptx-edit` | `skills/` | スクリプト実行を伴う | 既存pptxテンプレートの部分編集（デザインを保った差し替え・複製・削除・並び替え）。 |
+| `pptx-render` | `skills/` | スクリプト実行を伴う | PowerPointスライドの画像化（レイアウト・図表・画像配置・強調表現の視覚把握）。 |
 | `web-search` | `skills/` | スクリプト実行を伴う | Tavily APIによるWeb検索。スキル専用の`scripts/.env`にTAVILY_API_KEY設定時のみ動作（既定では通信なし）。 |
 
 `.locohane/skills/` はユーザー独自スキルの置き場（`skills/` とマージ走査、同名は優先）で、現状は使い方を示す `README.md` のみを含む。

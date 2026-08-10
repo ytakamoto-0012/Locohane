@@ -14,7 +14,7 @@
   LLMへ視覚情報として渡し、それ以外はパスをメッセージへ明示。
 - ツール結果に生成ファイルの output_path（src/files.py 参照）が含まれる場合、
   画像なら cl.Image でインラインプレビュー、それ以外は cl.File でダウンロード
-  可能な添付を自動送信する（pdf-tools/pptx-tools 等のファイル生成スキル、
+  可能な添付を自動送信する（pdf-tools/pptx-create 等のファイル生成スキル、
   provide_download・show_image ツールに共通で効く）。
 
 会話状態は AsyncSqliteSaver（config.checkpoint_db）で永続化。thread_id はセッション毎。

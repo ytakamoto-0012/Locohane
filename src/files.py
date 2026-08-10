@@ -1,7 +1,7 @@
 """ツール実行結果から生成ファイルのパスを抽出する共通ヘルパー。
 
 app.py（Chainlit UIへのダウンロード添付表示）から使う。ファイルを生成する
-各スキルのスクリプト（例: pdf-tools/create_pdf.py, pptx-tools/create_pptx.py）は
+各スキルのスクリプト（例: pdf-tools/create_pdf.py, pptx-create/create_pptx.py）は
 正常終了時のJSON出力に "output_path" キー（生成した絶対パス、単一ファイル）
 または "output_paths" キー（絶対パスのリスト、複数ファイル）を含める慣習が
 あり（skills/SKILLS_README.md 参照）、run_script はその標準出力を含む文字列を

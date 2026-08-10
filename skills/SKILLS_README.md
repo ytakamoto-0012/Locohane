@@ -93,7 +93,7 @@ JSON化は必須ではない（`git-commit-style` のように知識のみでス
 
 ### 4-4. ファイルを生成するスキルの追加規約: `output_path` / `output_paths`
 
-`pdf-tools`/`pptx-tools` のように、スクリプトが新規ファイル（PDF/PPTX/DOCX/XLSX等）を
+`pdf-tools`/`pptx-create` のように、スクリプトが新規ファイル（PDF/PPTX/DOCX/XLSX等）を
 生成する場合は、正常終了時のJSON出力に **`output_path` キー（生成した絶対パスの文字列）を
 必ず含める**こと。1回の実行で複数ファイルを生成し、それらをまとめて1メッセージの
 ダウンロードボタン列として見せたい場合は、代わりに **`output_paths` キー（絶対パスの
