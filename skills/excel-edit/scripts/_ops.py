@@ -137,9 +137,13 @@ def op_set_range(wb, op: dict) -> None:
 
 def op_set_style(wb, op: dict) -> None:
     ws = _sheet(wb, op["sheet"])
-    for row in ws[op["range"]]:
-        for cell in row:
-            apply_style(cell, op.get("style"))
+    # ws[range] は単一セル指定（例"A1"）だとCellを、複数セル範囲だと
+    # タプルのタプルを返し戻り値の型が揺れるため、range_boundariesで
+    # 座標に正規化してcell()で個別に取得する（set_rangeと同じ方式）。
+    min_col, min_row, max_col, max_row = range_boundaries(op["range"])
+    for row in range(min_row, max_row + 1):
+        for col in range(min_col, max_col + 1):
+            apply_style(ws.cell(row=row, column=col), op.get("style"))
 
 
 def _format_table_range(ws, min_row: int, max_row: int, min_col: int, max_col: int, opts: dict) -> None:
