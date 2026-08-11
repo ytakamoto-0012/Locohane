@@ -10,9 +10,30 @@ PDFへ結合する。実データの特徴（テキスト層を持たない＝py
 取れず、render_pdf_pages.py + analyze_image で画像として読む必要がある
 （実データと同じ制約をエージェント評価に課すための意図的な設計）。
 
+**複数ファイルに分割する理由**: 実データを実際に開いて確認したところ、
+E:\\共有\\勉強-課題\\英検\\３級 には6個のPDFがあったが、これは6冊の別内容の本
+ではなく、同じ1冊（市販の「でる順パス単 英検3級」相当）をスマホで色々な
+タイミングで撮影した写真を、見出し語番号がバラバラな順序のまま6個のPDFへ
+書き出したもの（例: 1個のPDFにSection1の0001~0100の一部ページと、別の
+PDFにもSection1の別ページが混在。ファイル名 excited.pdf / でる度.pdf 等も
+中身のヒントにはならない連番でも通し番号でもない命名）。単語帳PDFが1個で
+完結する保証はなく、対象語がどのファイルの何ページ目にあるかはファイルを
+開いて中身を確認するまで分からない、というのが実際の使われ方である。
+1ファイルに全300語をきれいに収めた最初のフィクスチャ（このスクリプトの旧版）
+はこの「複数ファイルにまたがって散らばっている」実態を再現できておらず
+不十分だったため、複数ファイル構成に変更した。
+
 単語データは合計300語（見出し番号0001~0300）。1ページ8語 x 38ページ
-（最終ページのみ4語）。エージェント側の作業ディレクトリにはPDFのみを置き、
-正解データ（answer key）はワークディレクトリの外（フィクスチャと同階層の
+（最終ページのみ4語）分を作った上で、2ページ単位のかたまりを
+`NUM_FILES`（既定6）個のPDFファイルへ順繰りに割り振る（実際の6ファイル
+構成に合わせた既定値）。そのため学習計画の「1回目のテスト（単語1~40）」
+だけを見ても、対象語は複数ファイルに分散して収録される（既定パラメータでは
+3ファイルにまたがる）。各ファイルの名前は、そのファイルの最初のページの
+先頭単語（英語, 小文字）+ ".pdf"（実データの excited.pdf 等が本文中の一単語
+らしき名前だったのを再現した命名規則）とし、通し番号やSection番号のような
+中身を示唆する名前は使わない。エージェント側の作業ディレクトリには
+これら複数のPDFのみを置き、正解データ（answer key、各語がどのファイルの
+何ページ目にあるかを含む）はワークディレクトリの外（フィクスチャと同階層の
 兄弟ファイル）に保存する。エージェントが誤って正解データを直接読んで
 カンニングしないようにするため、また、judge（人間役のClaudeCode）が
 生成された問題PDFの内容を正解と突き合わせて捏造の有無を確認できるようにする
@@ -32,8 +53,14 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "英検3級語彙"
-PDF_FILENAME = "英検3級_でる順単語帳_サンプル.pdf"
 ANSWER_KEY_PATH = Path(__file__).resolve().parent / "英検3級語彙_answer_key.json"
+
+# 実データ（E:\共有\勉強-課題\英検\３級）が6個のPDFに分散していたことに合わせた既定値。
+NUM_FILES = 6
+# 何ページ連続で同じファイルに割り振ってからローテーションするか。
+# 38ページ・6ファイルの既定値では、対象語1~40（先頭5ページ）が
+# ちょうど3ファイルにまたがって分散する（多すぎず少なすぎない分散具合）。
+PAGES_PER_FILE_CHUNK = 2
 
 _JP_FONT_PATH = Path(r"C:\Windows\Fonts\meiryo.ttc")
 _JP_BOLD_FONT_PATH = Path(r"C:\Windows\Fonts\meiryob.ttc")
@@ -296,38 +323,92 @@ def _render_page(entries: list[dict], page_no: int, total_pages: int) -> Image.I
     return img
 
 
-def build_fixture(seed: int = 42, total: int = 300, out_dir: Path | None = None) -> Path:
+def _assign_pages_to_files(pages: list[list[dict]], num_files: int, chunk_size: int) -> list[list[list[dict]]]:
+    """ページ（8語ずつのかたまり）を、chunk_size 連続ページごとに num_files 個の
+    ファイルへ順繰りに割り振る。同じチャンク内は元の連続順を保つが、チャンク間は
+    ファイルをまたいで飛び飛びになる（実データのスキャン写真が撮影タイミングごとに
+    別ファイルへ散らばっていた状態を再現）。
+    """
+    buckets: list[list[list[dict]]] = [[] for _ in range(num_files)]
+    for page_idx, page_entries in enumerate(pages):
+        chunk_idx = page_idx // chunk_size
+        file_idx = chunk_idx % num_files
+        buckets[file_idx].append(page_entries)
+    return [b for b in buckets if b]
+
+
+def build_fixture(
+    seed: int = 42,
+    total: int = 300,
+    num_files: int = NUM_FILES,
+    chunk_size: int = PAGES_PER_FILE_CHUNK,
+    out_dir: Path | None = None,
+) -> list[Path]:
     words = _build_word_list(seed=seed, total=total)
 
     root = out_dir or FIXTURE_ROOT
     root.mkdir(parents=True, exist_ok=True)
+    for stale in root.glob("*.pdf"):
+        stale.unlink()
 
-    pages: list[dict] = [words[i : i + ENTRIES_PER_PAGE] for i in range(0, len(words), ENTRIES_PER_PAGE)]
-    total_pages = len(pages)
+    pages: list[list[dict]] = [words[i : i + ENTRIES_PER_PAGE] for i in range(0, len(words), ENTRIES_PER_PAGE)]
+    file_page_groups = _assign_pages_to_files(pages, num_files=num_files, chunk_size=chunk_size)
 
-    images = [_render_page(page_entries, page_no + 1, total_pages) for page_no, page_entries in enumerate(pages)]
+    pdf_paths: list[Path] = []
+    manifest: list[dict] = []
+    used_names: set[str] = set()
+    for file_pages in file_page_groups:
+        local_total = len(file_pages)
+        images = [_render_page(page_entries, i + 1, local_total) for i, page_entries in enumerate(file_pages)]
 
-    pdf_path = root / PDF_FILENAME
-    images[0].save(str(pdf_path), save_all=True, append_images=images[1:], format="PDF")
+        first_word = file_pages[0][0]["word"]
+        name = f"{first_word}.pdf"
+        suffix = 2
+        while name in used_names:
+            name = f"{first_word}_{suffix}.pdf"
+            suffix += 1
+        used_names.add(name)
+
+        pdf_path = root / name
+        images[0].save(str(pdf_path), save_all=True, append_images=images[1:], format="PDF")
+        pdf_paths.append(pdf_path)
+
+        head_nos: list[int] = []
+        for local_page_idx, page_entries in enumerate(file_pages):
+            for entry in page_entries:
+                entry["source_file"] = name
+                entry["page_in_source_file"] = local_page_idx + 1
+                head_nos.append(entry["head_no"])
+        manifest.append({"file": name, "pages": local_total, "head_nos": sorted(head_nos)})
 
     ANSWER_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
     ANSWER_KEY_PATH.write_text(
-        json.dumps({"pdf_path": str(pdf_path), "words": words}, ensure_ascii=False, indent=2),
+        json.dumps({"files": manifest, "words": words}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
-    return pdf_path
+    return pdf_paths
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--total", type=int, default=300)
+    parser.add_argument("--num-files", type=int, default=NUM_FILES)
+    parser.add_argument("--chunk-size", type=int, default=PAGES_PER_FILE_CHUNK)
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args()
 
-    pdf_path = build_fixture(seed=args.seed, total=args.total, out_dir=args.out_dir)
-    print(f"生成完了: {pdf_path}")
+    pdf_paths = build_fixture(
+        seed=args.seed,
+        total=args.total,
+        num_files=args.num_files,
+        chunk_size=args.chunk_size,
+        out_dir=args.out_dir,
+    )
+    print(f"生成完了: {len(pdf_paths)}個のPDF")
+    for p in pdf_paths:
+        print(f"  {p}")
     print(f"正解データ: {ANSWER_KEY_PATH}")
 
 

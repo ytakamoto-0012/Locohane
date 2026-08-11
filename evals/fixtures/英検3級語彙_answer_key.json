@@ -1,5 +1,342 @@
 {
-  "pdf_path": "C:\\DT_Python\\Locohane\\evals\\fixtures\\英検3級語彙\\英検3級_でる順単語帳_サンプル.pdf",
+  "files": [
+    {
+      "file": "hotel.pdf",
+      "pages": 8,
+      "head_nos": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        193,
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        200,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        289,
+        290,
+        291,
+        292,
+        293,
+        294,
+        295,
+        296,
+        297,
+        298,
+        299,
+        300
+      ]
+    },
+    {
+      "file": "fruit.pdf",
+      "pages": 6,
+      "head_nos": [
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        209,
+        210,
+        211,
+        212,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218,
+        219,
+        220,
+        221,
+        222,
+        223,
+        224
+      ]
+    },
+    {
+      "file": "vacation.pdf",
+      "pages": 6,
+      "head_nos": [
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        225,
+        226,
+        227,
+        228,
+        229,
+        230,
+        231,
+        232,
+        233,
+        234,
+        235,
+        236,
+        237,
+        238,
+        239,
+        240
+      ]
+    },
+    {
+      "file": "explain.pdf",
+      "pages": 6,
+      "head_nos": [
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158,
+        159,
+        160,
+        241,
+        242,
+        243,
+        244,
+        245,
+        246,
+        247,
+        248,
+        249,
+        250,
+        251,
+        252,
+        253,
+        254,
+        255,
+        256
+      ]
+    },
+    {
+      "file": "decide.pdf",
+      "pages": 6,
+      "head_nos": [
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        161,
+        162,
+        163,
+        164,
+        165,
+        166,
+        167,
+        168,
+        169,
+        170,
+        171,
+        172,
+        173,
+        174,
+        175,
+        176,
+        257,
+        258,
+        259,
+        260,
+        261,
+        262,
+        263,
+        264,
+        265,
+        266,
+        267,
+        268,
+        269,
+        270,
+        271,
+        272
+      ]
+    },
+    {
+      "file": "dark.pdf",
+      "pages": 6,
+      "head_nos": [
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        177,
+        178,
+        179,
+        180,
+        181,
+        182,
+        183,
+        184,
+        185,
+        186,
+        187,
+        188,
+        189,
+        190,
+        191,
+        192,
+        273,
+        274,
+        275,
+        276,
+        277,
+        278,
+        279,
+        280,
+        281,
+        282,
+        283,
+        284,
+        285,
+        286,
+        287,
+        288
+      ]
+    }
+  ],
   "words": [
     {
       "word": "hotel",
@@ -8,7 +345,9 @@
       "meaning_ja": "ホテル",
       "example_en": "I like the hotel.",
       "example_ja": "私はそのホテルが好きです。",
-      "head_no": 1
+      "head_no": 1,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "necessary",
@@ -17,7 +356,9 @@
       "meaning_ja": "必要",
       "example_en": "That movie is very necessary.",
       "example_ja": "あの映画はとても必要です。",
-      "head_no": 2
+      "head_no": 2,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "key",
@@ -26,7 +367,9 @@
       "meaning_ja": "鍵",
       "example_en": "I have a key.",
       "example_ja": "私は鍵を持っています。",
-      "head_no": 3
+      "head_no": 3,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "outside",
@@ -35,7 +378,9 @@
       "meaning_ja": "外で",
       "example_en": "Please do it outside.",
       "example_ja": "それを外でやってください。",
-      "head_no": 4
+      "head_no": 4,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "library",
@@ -44,7 +389,9 @@
       "meaning_ja": "図書館",
       "example_en": "I like the library.",
       "example_ja": "私はその図書館が好きです。",
-      "head_no": 5
+      "head_no": 5,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "buy",
@@ -53,7 +400,9 @@
       "meaning_ja": "買う",
       "example_en": "We need to buy it soon.",
       "example_ja": "すぐにそれを買う必要があります。",
-      "head_no": 6
+      "head_no": 6,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "sea",
@@ -62,7 +411,9 @@
       "meaning_ja": "海",
       "example_en": "This is my sea.",
       "example_ja": "これは私の海です。",
-      "head_no": 7
+      "head_no": 7,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "juice",
@@ -71,7 +422,9 @@
       "meaning_ja": "ジュース",
       "example_en": "This is my juice.",
       "example_ja": "これは私のジュースです。",
-      "head_no": 8
+      "head_no": 8,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "famous",
@@ -80,7 +433,9 @@
       "meaning_ja": "有名",
       "example_en": "This bag is very famous.",
       "example_ja": "このかばんはとても有名です。",
-      "head_no": 9
+      "head_no": 9,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "teach",
@@ -89,7 +444,9 @@
       "meaning_ja": "教える",
       "example_en": "Can you teach it?",
       "example_ja": "それを教えることができますか？",
-      "head_no": 10
+      "head_no": 10,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "bring",
@@ -98,7 +455,9 @@
       "meaning_ja": "持ってくる",
       "example_en": "We need to bring it soon.",
       "example_ja": "すぐにそれを持ってくる必要があります。",
-      "head_no": 11
+      "head_no": 11,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "young",
@@ -107,7 +466,9 @@
       "meaning_ja": "若い",
       "example_en": "The weather today is very young.",
       "example_ja": "今日の天気はとても若いです。",
-      "head_no": 12
+      "head_no": 12,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "sunny",
@@ -116,7 +477,9 @@
       "meaning_ja": "晴れた",
       "example_en": "That movie is very sunny.",
       "example_ja": "あの映画はとても晴れたです。",
-      "head_no": 13
+      "head_no": 13,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "far",
@@ -125,7 +488,9 @@
       "meaning_ja": "遠い",
       "example_en": "This bag is very far.",
       "example_ja": "このかばんはとても遠いです。",
-      "head_no": 14
+      "head_no": 14,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "return",
@@ -134,7 +499,9 @@
       "meaning_ja": "戻る",
       "example_en": "I will return it tomorrow.",
       "example_ja": "明日それを戻るつもりです。",
-      "head_no": 15
+      "head_no": 15,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "tea",
@@ -143,7 +510,9 @@
       "meaning_ja": "お茶",
       "example_en": "I like the tea.",
       "example_ja": "私はそのお茶が好きです。",
-      "head_no": 16
+      "head_no": 16,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "fruit",
@@ -152,7 +521,9 @@
       "meaning_ja": "果物",
       "example_en": "I have a fruit.",
       "example_ja": "私は果物を持っています。",
-      "head_no": 17
+      "head_no": 17,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "rich",
@@ -161,7 +532,9 @@
       "meaning_ja": "裕福",
       "example_en": "This bag is very rich.",
       "example_ja": "このかばんはとても裕福です。",
-      "head_no": 18
+      "head_no": 18,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "animal",
@@ -170,7 +543,9 @@
       "meaning_ja": "動物",
       "example_en": "This is my animal.",
       "example_ja": "これは私の動物です。",
-      "head_no": 19
+      "head_no": 19,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "gentle",
@@ -179,7 +554,9 @@
       "meaning_ja": "優しい",
       "example_en": "That movie is very gentle.",
       "example_ja": "あの映画はとても優しいです。",
-      "head_no": 20
+      "head_no": 20,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "introduce",
@@ -188,7 +565,9 @@
       "meaning_ja": "紹介する",
       "example_en": "I will introduce it tomorrow.",
       "example_ja": "明日それを紹介するつもりです。",
-      "head_no": 21
+      "head_no": 21,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "tired",
@@ -197,7 +576,9 @@
       "meaning_ja": "疲れた",
       "example_en": "The weather today is very tired.",
       "example_ja": "今日の天気はとても疲れたです。",
-      "head_no": 22
+      "head_no": 22,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "near",
@@ -206,7 +587,9 @@
       "meaning_ja": "近い",
       "example_en": "The weather today is very near.",
       "example_ja": "今日の天気はとても近いです。",
-      "head_no": 23
+      "head_no": 23,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "usually",
@@ -215,7 +598,9 @@
       "meaning_ja": "いつも",
       "example_en": "Please do it usually.",
       "example_ja": "それをいつもやってください。",
-      "head_no": 24
+      "head_no": 24,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "brave",
@@ -224,7 +609,9 @@
       "meaning_ja": "勇敢",
       "example_en": "This bag is very brave.",
       "example_ja": "このかばんはとても勇敢です。",
-      "head_no": 25
+      "head_no": 25,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "loudly",
@@ -233,7 +620,9 @@
       "meaning_ja": "大声で",
       "example_en": "Please do it loudly.",
       "example_ja": "それを大声でやってください。",
-      "head_no": 26
+      "head_no": 26,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "lunch",
@@ -242,7 +631,9 @@
       "meaning_ja": "昼食",
       "example_en": "I have a lunch.",
       "example_ja": "私は昼食を持っています。",
-      "head_no": 27
+      "head_no": 27,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "share",
@@ -251,7 +642,9 @@
       "meaning_ja": "分け合う",
       "example_en": "I will share it tomorrow.",
       "example_ja": "明日それを分け合うつもりです。",
-      "head_no": 28
+      "head_no": 28,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "easily",
@@ -260,7 +653,9 @@
       "meaning_ja": "簡単に",
       "example_en": "Please do it easily.",
       "example_ja": "それを簡単にやってください。",
-      "head_no": 29
+      "head_no": 29,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "meal",
@@ -269,7 +664,9 @@
       "meaning_ja": "食事",
       "example_en": "I like the meal.",
       "example_ja": "私はその食事が好きです。",
-      "head_no": 30
+      "head_no": 30,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "math",
@@ -278,7 +675,9 @@
       "meaning_ja": "数学",
       "example_en": "I like the math.",
       "example_ja": "私はその数学が好きです。",
-      "head_no": 31
+      "head_no": 31,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "happily",
@@ -287,7 +686,9 @@
       "meaning_ja": "幸せに",
       "example_en": "Please do it happily.",
       "example_ja": "それを幸せにやってください。",
-      "head_no": 32
+      "head_no": 32,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "vacation",
@@ -296,7 +697,9 @@
       "meaning_ja": "休暇",
       "example_en": "I like the vacation.",
       "example_ja": "私はその休暇が好きです。",
-      "head_no": 33
+      "head_no": 33,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "fine",
@@ -305,7 +708,9 @@
       "meaning_ja": "元気",
       "example_en": "This bag is very fine.",
       "example_ja": "このかばんはとても元気です。",
-      "head_no": 34
+      "head_no": 34,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "fast",
@@ -314,7 +719,9 @@
       "meaning_ja": "速い",
       "example_en": "This bag is very fast.",
       "example_ja": "このかばんはとても速いです。",
-      "head_no": 35
+      "head_no": 35,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "cook",
@@ -323,7 +730,9 @@
       "meaning_ja": "料理する",
       "example_en": "We need to cook it soon.",
       "example_ja": "すぐにそれを料理する必要があります。",
-      "head_no": 36
+      "head_no": 36,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "plan",
@@ -332,7 +741,9 @@
       "meaning_ja": "計画する",
       "example_en": "I will plan it tomorrow.",
       "example_ja": "明日それを計画するつもりです。",
-      "head_no": 37
+      "head_no": 37,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "wash",
@@ -341,7 +752,9 @@
       "meaning_ja": "洗う",
       "example_en": "I will wash it tomorrow.",
       "example_ja": "明日それを洗うつもりです。",
-      "head_no": 38
+      "head_no": 38,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "honest",
@@ -350,7 +763,9 @@
       "meaning_ja": "正直",
       "example_en": "That movie is very honest.",
       "example_ja": "あの映画はとても正直です。",
-      "head_no": 39
+      "head_no": 39,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "season",
@@ -359,7 +774,9 @@
       "meaning_ja": "季節",
       "example_en": "I like the season.",
       "example_ja": "私はその季節が好きです。",
-      "head_no": 40
+      "head_no": 40,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "build",
@@ -368,7 +785,9 @@
       "meaning_ja": "建てる",
       "example_en": "Can you build it?",
       "example_ja": "それを建てることができますか？",
-      "head_no": 41
+      "head_no": 41,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "fresh",
@@ -377,7 +796,9 @@
       "meaning_ja": "新鮮",
       "example_en": "The weather today is very fresh.",
       "example_ja": "今日の天気はとても新鮮です。",
-      "head_no": 42
+      "head_no": 42,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "wet",
@@ -386,7 +807,9 @@
       "meaning_ja": "濡れた",
       "example_en": "This bag is very wet.",
       "example_ja": "このかばんはとても濡れたです。",
-      "head_no": 43
+      "head_no": 43,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "weather",
@@ -395,7 +818,9 @@
       "meaning_ja": "天気",
       "example_en": "I have a weather.",
       "example_ja": "私は天気を持っています。",
-      "head_no": 44
+      "head_no": 44,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "confident",
@@ -404,7 +829,9 @@
       "meaning_ja": "自信がある",
       "example_en": "The weather today is very confident.",
       "example_ja": "今日の天気はとても自信があるです。",
-      "head_no": 45
+      "head_no": 45,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "enjoy",
@@ -413,7 +840,9 @@
       "meaning_ja": "楽しむ",
       "example_en": "Can you enjoy it?",
       "example_ja": "それを楽しむことができますか？",
-      "head_no": 46
+      "head_no": 46,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "especially",
@@ -422,7 +851,9 @@
       "meaning_ja": "特に",
       "example_en": "Please do it especially.",
       "example_ja": "それを特にやってください。",
-      "head_no": 47
+      "head_no": 47,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "carefully",
@@ -431,7 +862,9 @@
       "meaning_ja": "注意深く",
       "example_en": "Please do it carefully.",
       "example_ja": "それを注意深くやってください。",
-      "head_no": 48
+      "head_no": 48,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "explain",
@@ -440,7 +873,9 @@
       "meaning_ja": "説明する",
       "example_en": "Can you explain it?",
       "example_ja": "それを説明することができますか？",
-      "head_no": 49
+      "head_no": 49,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "airport",
@@ -449,7 +884,9 @@
       "meaning_ja": "空港",
       "example_en": "I like the airport.",
       "example_ja": "私はその空港が好きです。",
-      "head_no": 50
+      "head_no": 50,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "driver",
@@ -458,7 +895,9 @@
       "meaning_ja": "運転手",
       "example_en": "This is my driver.",
       "example_ja": "これは私の運転手です。",
-      "head_no": 51
+      "head_no": 51,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "laugh",
@@ -467,7 +906,9 @@
       "meaning_ja": "笑う",
       "example_en": "We need to laugh it soon.",
       "example_ja": "すぐにそれを笑う必要があります。",
-      "head_no": 52
+      "head_no": 52,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "bicycle",
@@ -476,7 +917,9 @@
       "meaning_ja": "自転車",
       "example_en": "I like the bicycle.",
       "example_ja": "私はその自転車が好きです。",
-      "head_no": 53
+      "head_no": 53,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "soon",
@@ -485,7 +928,9 @@
       "meaning_ja": "もうすぐ",
       "example_en": "Please do it soon.",
       "example_ja": "それをもうすぐやってください。",
-      "head_no": 54
+      "head_no": 54,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "sky",
@@ -494,7 +939,9 @@
       "meaning_ja": "空",
       "example_en": "I like the sky.",
       "example_ja": "私はその空が好きです。",
-      "head_no": 55
+      "head_no": 55,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "bed",
@@ -503,7 +950,9 @@
       "meaning_ja": "ベッド",
       "example_en": "This is my bed.",
       "example_ja": "これは私のベッドです。",
-      "head_no": 56
+      "head_no": 56,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "pass",
@@ -512,7 +961,9 @@
       "meaning_ja": "合格する",
       "example_en": "I will pass it tomorrow.",
       "example_ja": "明日それを合格するつもりです。",
-      "head_no": 57
+      "head_no": 57,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "glad",
@@ -521,7 +972,9 @@
       "meaning_ja": "うれしい",
       "example_en": "That movie is very glad.",
       "example_ja": "あの映画はとてもうれしいです。",
-      "head_no": 58
+      "head_no": 58,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "chair",
@@ -530,7 +983,9 @@
       "meaning_ja": "いす",
       "example_en": "I have a chair.",
       "example_ja": "私はいすを持っています。",
-      "head_no": 59
+      "head_no": 59,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "pretty",
@@ -539,7 +994,9 @@
       "meaning_ja": "かわいい",
       "example_en": "That movie is very pretty.",
       "example_ja": "あの映画はとてもかわいいです。",
-      "head_no": 60
+      "head_no": 60,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "finish",
@@ -548,7 +1005,9 @@
       "meaning_ja": "終える",
       "example_en": "I will finish it tomorrow.",
       "example_ja": "明日それを終えるつもりです。",
-      "head_no": 61
+      "head_no": 61,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "win",
@@ -557,7 +1016,9 @@
       "meaning_ja": "勝つ",
       "example_en": "We need to win it soon.",
       "example_ja": "すぐにそれを勝つ必要があります。",
-      "head_no": 62
+      "head_no": 62,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "remember",
@@ -566,7 +1027,9 @@
       "meaning_ja": "覚えている",
       "example_en": "I will remember it tomorrow.",
       "example_ja": "明日それを覚えているつもりです。",
-      "head_no": 63
+      "head_no": 63,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "dangerous",
@@ -575,7 +1038,9 @@
       "meaning_ja": "危険",
       "example_en": "The weather today is very dangerous.",
       "example_ja": "今日の天気はとても危険です。",
-      "head_no": 64
+      "head_no": 64,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "decide",
@@ -584,7 +1049,9 @@
       "meaning_ja": "決める",
       "example_en": "We need to decide it soon.",
       "example_ja": "すぐにそれを決める必要があります。",
-      "head_no": 65
+      "head_no": 65,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "catch",
@@ -593,7 +1060,9 @@
       "meaning_ja": "捕まえる",
       "example_en": "I will catch it tomorrow.",
       "example_ja": "明日それを捕まえるつもりです。",
-      "head_no": 66
+      "head_no": 66,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "move",
@@ -602,7 +1071,9 @@
       "meaning_ja": "引っ越す",
       "example_en": "We need to move it soon.",
       "example_ja": "すぐにそれを引っ越す必要があります。",
-      "head_no": 67
+      "head_no": 67,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "coffee",
@@ -611,7 +1082,9 @@
       "meaning_ja": "コーヒー",
       "example_en": "I have a coffee.",
       "example_ja": "私はコーヒーを持っています。",
-      "head_no": 68
+      "head_no": 68,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "rain",
@@ -620,7 +1093,9 @@
       "meaning_ja": "雨",
       "example_en": "This is my rain.",
       "example_ja": "これは私の雨です。",
-      "head_no": 69
+      "head_no": 69,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "playground",
@@ -629,7 +1104,9 @@
       "meaning_ja": "運動場",
       "example_en": "This is my playground.",
       "example_ja": "これは私の運動場です。",
-      "head_no": 70
+      "head_no": 70,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "different",
@@ -638,7 +1115,9 @@
       "meaning_ja": "違う",
       "example_en": "This bag is very different.",
       "example_ja": "このかばんはとても違うです。",
-      "head_no": 71
+      "head_no": 71,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "strong",
@@ -647,7 +1126,9 @@
       "meaning_ja": "強い",
       "example_en": "That movie is very strong.",
       "example_ja": "あの映画はとても強いです。",
-      "head_no": 72
+      "head_no": 72,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "subject",
@@ -656,7 +1137,9 @@
       "meaning_ja": "教科",
       "example_en": "This is my subject.",
       "example_ja": "これは私の教科です。",
-      "head_no": 73
+      "head_no": 73,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "umbrella",
@@ -665,7 +1148,9 @@
       "meaning_ja": "傘",
       "example_en": "This is my umbrella.",
       "example_ja": "これは私の傘です。",
-      "head_no": 74
+      "head_no": 74,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "hungry",
@@ -674,7 +1159,9 @@
       "meaning_ja": "お腹が空いた",
       "example_en": "That movie is very hungry.",
       "example_ja": "あの映画はとてもお腹が空いたです。",
-      "head_no": 75
+      "head_no": 75,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "snow",
@@ -683,7 +1170,9 @@
       "meaning_ja": "雪",
       "example_en": "I like the snow.",
       "example_ja": "私はその雪が好きです。",
-      "head_no": 76
+      "head_no": 76,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "uniform",
@@ -692,7 +1181,9 @@
       "meaning_ja": "制服",
       "example_en": "I like the uniform.",
       "example_ja": "私はその制服が好きです。",
-      "head_no": 77
+      "head_no": 77,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "test",
@@ -701,7 +1192,9 @@
       "meaning_ja": "テスト",
       "example_en": "I like the test.",
       "example_ja": "私はそのテストが好きです。",
-      "head_no": 78
+      "head_no": 78,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "horse",
@@ -710,7 +1203,9 @@
       "meaning_ja": "馬",
       "example_en": "I have a horse.",
       "example_ja": "私は馬を持っています。",
-      "head_no": 79
+      "head_no": 79,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "pencil",
@@ -719,7 +1214,9 @@
       "meaning_ja": "鉛筆",
       "example_en": "This is my pencil.",
       "example_ja": "これは私の鉛筆です。",
-      "head_no": 80
+      "head_no": 80,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "dark",
@@ -728,7 +1225,9 @@
       "meaning_ja": "暗い",
       "example_en": "That movie is very dark.",
       "example_ja": "あの映画はとても暗いです。",
-      "head_no": 81
+      "head_no": 81,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "already",
@@ -737,7 +1236,9 @@
       "meaning_ja": "すでに",
       "example_en": "Please do it already.",
       "example_ja": "それをすでにやってください。",
-      "head_no": 82
+      "head_no": 82,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "feed",
@@ -746,7 +1247,9 @@
       "meaning_ja": "えさをやる",
       "example_en": "I will feed it tomorrow.",
       "example_ja": "明日それをえさをやるつもりです。",
-      "head_no": 83
+      "head_no": 83,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "gym",
@@ -755,7 +1258,9 @@
       "meaning_ja": "体育館",
       "example_en": "This is my gym.",
       "example_ja": "これは私の体育館です。",
-      "head_no": 84
+      "head_no": 84,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "special",
@@ -764,7 +1269,9 @@
       "meaning_ja": "特別",
       "example_en": "The weather today is very special.",
       "example_ja": "今日の天気はとても特別です。",
-      "head_no": 85
+      "head_no": 85,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "heavy",
@@ -773,7 +1280,9 @@
       "meaning_ja": "重い",
       "example_en": "This bag is very heavy.",
       "example_ja": "このかばんはとても重いです。",
-      "head_no": 86
+      "head_no": 86,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "friend",
@@ -782,7 +1291,9 @@
       "meaning_ja": "友達",
       "example_en": "I have a friend.",
       "example_ja": "私は友達を持っています。",
-      "head_no": 87
+      "head_no": 87,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "cousin",
@@ -791,7 +1302,9 @@
       "meaning_ja": "いとこ",
       "example_en": "I like the cousin.",
       "example_ja": "私はそのいとこが好きです。",
-      "head_no": 88
+      "head_no": 88,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 1
     },
     {
       "word": "bus",
@@ -800,7 +1313,9 @@
       "meaning_ja": "バス",
       "example_en": "I have a bus.",
       "example_ja": "私はバスを持っています。",
-      "head_no": 89
+      "head_no": 89,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "keep",
@@ -809,7 +1324,9 @@
       "meaning_ja": "保つ",
       "example_en": "Can you keep it?",
       "example_ja": "それを保つことができますか？",
-      "head_no": 90
+      "head_no": 90,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "draw",
@@ -818,7 +1335,9 @@
       "meaning_ja": "描く",
       "example_en": "We need to draw it soon.",
       "example_ja": "すぐにそれを描く必要があります。",
-      "head_no": 91
+      "head_no": 91,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "sad",
@@ -827,7 +1346,9 @@
       "meaning_ja": "悲しい",
       "example_en": "This bag is very sad.",
       "example_ja": "このかばんはとても悲しいです。",
-      "head_no": 92
+      "head_no": 92,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "moon",
@@ -836,7 +1357,9 @@
       "meaning_ja": "月",
       "example_en": "This is my moon.",
       "example_ja": "これは私の月です。",
-      "head_no": 93
+      "head_no": 93,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "hardworking",
@@ -845,7 +1368,9 @@
       "meaning_ja": "勤勉",
       "example_en": "The weather today is very hardworking.",
       "example_ja": "今日の天気はとても勤勉です。",
-      "head_no": 94
+      "head_no": 94,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "shout",
@@ -854,7 +1379,9 @@
       "meaning_ja": "叫ぶ",
       "example_en": "I will shout it tomorrow.",
       "example_ja": "明日それを叫ぶつもりです。",
-      "head_no": 95
+      "head_no": 95,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "invent",
@@ -863,7 +1390,9 @@
       "meaning_ja": "発明する",
       "example_en": "Can you invent it?",
       "example_ja": "それを発明することができますか？",
-      "head_no": 96
+      "head_no": 96,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 2
     },
     {
       "word": "bag",
@@ -872,7 +1401,9 @@
       "meaning_ja": "かばん",
       "example_en": "I have a bag.",
       "example_ja": "私はかばんを持っています。",
-      "head_no": 97
+      "head_no": 97,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "wallet",
@@ -881,7 +1412,9 @@
       "meaning_ja": "財布",
       "example_en": "I like the wallet.",
       "example_ja": "私はその財布が好きです。",
-      "head_no": 98
+      "head_no": 98,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "kick",
@@ -890,7 +1423,9 @@
       "meaning_ja": "蹴る",
       "example_en": "Can you kick it?",
       "example_ja": "それを蹴ることができますか？",
-      "head_no": 99
+      "head_no": 99,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "bathroom",
@@ -899,7 +1434,9 @@
       "meaning_ja": "浴室",
       "example_en": "I like the bathroom.",
       "example_ja": "私はその浴室が好きです。",
-      "head_no": 100
+      "head_no": 100,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "worried",
@@ -908,7 +1445,9 @@
       "meaning_ja": "心配",
       "example_en": "That movie is very worried.",
       "example_ja": "あの映画はとても心配です。",
-      "head_no": 101
+      "head_no": 101,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "angry",
@@ -917,7 +1456,9 @@
       "meaning_ja": "怒った",
       "example_en": "That movie is very angry.",
       "example_ja": "あの映画はとても怒ったです。",
-      "head_no": 102
+      "head_no": 102,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "hurry",
@@ -926,7 +1467,9 @@
       "meaning_ja": "急ぐ",
       "example_en": "I will hurry it tomorrow.",
       "example_ja": "明日それを急ぐつもりです。",
-      "head_no": 103
+      "head_no": 103,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "write",
@@ -935,7 +1478,9 @@
       "meaning_ja": "書く",
       "example_en": "Can you write it?",
       "example_ja": "それを書くことができますか？",
-      "head_no": 104
+      "head_no": 104,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "sleepy",
@@ -944,7 +1489,9 @@
       "meaning_ja": "眠い",
       "example_en": "This bag is very sleepy.",
       "example_ja": "このかばんはとても眠いです。",
-      "head_no": 105
+      "head_no": 105,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "need",
@@ -953,7 +1500,9 @@
       "meaning_ja": "必要とする",
       "example_en": "I will need it tomorrow.",
       "example_ja": "明日それを必要とするつもりです。",
-      "head_no": 106
+      "head_no": 106,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "deep",
@@ -962,7 +1511,9 @@
       "meaning_ja": "深い",
       "example_en": "This bag is very deep.",
       "example_ja": "このかばんはとても深いです。",
-      "head_no": 107
+      "head_no": 107,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "terrible",
@@ -971,7 +1522,9 @@
       "meaning_ja": "ひどい",
       "example_en": "The weather today is very terrible.",
       "example_ja": "今日の天気はとてもひどいです。",
-      "head_no": 108
+      "head_no": 108,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "believe",
@@ -980,7 +1533,9 @@
       "meaning_ja": "信じる",
       "example_en": "Can you believe it?",
       "example_ja": "それを信じることができますか？",
-      "head_no": 109
+      "head_no": 109,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "rude",
@@ -989,7 +1544,9 @@
       "meaning_ja": "失礼",
       "example_en": "This bag is very rude.",
       "example_ja": "このかばんはとても失礼です。",
-      "head_no": 110
+      "head_no": 110,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "watch",
@@ -998,7 +1555,9 @@
       "meaning_ja": "見る",
       "example_en": "We need to watch it soon.",
       "example_ja": "すぐにそれを見る必要があります。",
-      "head_no": 111
+      "head_no": 111,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "exercise",
@@ -1007,7 +1566,9 @@
       "meaning_ja": "運動する",
       "example_en": "I will exercise it tomorrow.",
       "example_ja": "明日それを運動するつもりです。",
-      "head_no": 112
+      "head_no": 112,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "spring",
@@ -1016,7 +1577,9 @@
       "meaning_ja": "春",
       "example_en": "I have a spring.",
       "example_ja": "私は春を持っています。",
-      "head_no": 113
+      "head_no": 113,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "ugly",
@@ -1025,7 +1588,9 @@
       "meaning_ja": "醜い",
       "example_en": "The weather today is very ugly.",
       "example_ja": "今日の天気はとても醜いです。",
-      "head_no": 114
+      "head_no": 114,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "learn",
@@ -1034,7 +1599,9 @@
       "meaning_ja": "学ぶ",
       "example_en": "We need to learn it soon.",
       "example_ja": "すぐにそれを学ぶ必要があります。",
-      "head_no": 115
+      "head_no": 115,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "thick",
@@ -1043,7 +1610,9 @@
       "meaning_ja": "厚い",
       "example_en": "This bag is very thick.",
       "example_ja": "このかばんはとても厚いです。",
-      "head_no": 116
+      "head_no": 116,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "delicious",
@@ -1052,7 +1621,9 @@
       "meaning_ja": "おいしい",
       "example_en": "This bag is very delicious.",
       "example_ja": "このかばんはとてもおいしいです。",
-      "head_no": 117
+      "head_no": 117,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "roof",
@@ -1061,7 +1632,9 @@
       "meaning_ja": "屋根",
       "example_en": "This is my roof.",
       "example_ja": "これは私の屋根です。",
-      "head_no": 118
+      "head_no": 118,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "brother",
@@ -1070,7 +1643,9 @@
       "meaning_ja": "兄弟",
       "example_en": "I have a brother.",
       "example_ja": "私は兄弟を持っています。",
-      "head_no": 119
+      "head_no": 119,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "slow",
@@ -1079,7 +1654,9 @@
       "meaning_ja": "遅い",
       "example_en": "That movie is very slow.",
       "example_ja": "あの映画はとても遅いです。",
-      "head_no": 120
+      "head_no": 120,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "lend",
@@ -1088,7 +1665,9 @@
       "meaning_ja": "貸す",
       "example_en": "We need to lend it soon.",
       "example_ja": "すぐにそれを貸す必要があります。",
-      "head_no": 121
+      "head_no": 121,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "science",
@@ -1097,7 +1676,9 @@
       "meaning_ja": "理科",
       "example_en": "I have a science.",
       "example_ja": "私は理科を持っています。",
-      "head_no": 122
+      "head_no": 122,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "borrow",
@@ -1106,7 +1687,9 @@
       "meaning_ja": "借りる",
       "example_en": "I will borrow it tomorrow.",
       "example_ja": "明日それを借りるつもりです。",
-      "head_no": 123
+      "head_no": 123,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "cloud",
@@ -1115,7 +1698,9 @@
       "meaning_ja": "雲",
       "example_en": "This is my cloud.",
       "example_ja": "これは私の雲です。",
-      "head_no": 124
+      "head_no": 124,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "excited",
@@ -1124,7 +1709,9 @@
       "meaning_ja": "わくわくした",
       "example_en": "This bag is very excited.",
       "example_ja": "このかばんはとてもわくわくしたです。",
-      "head_no": 125
+      "head_no": 125,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "forget",
@@ -1133,7 +1720,9 @@
       "meaning_ja": "忘れる",
       "example_en": "Can you forget it?",
       "example_ja": "それを忘れることができますか？",
-      "head_no": 126
+      "head_no": 126,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "empty",
@@ -1142,7 +1731,9 @@
       "meaning_ja": "空",
       "example_en": "This bag is very empty.",
       "example_ja": "このかばんはとても空です。",
-      "head_no": 127
+      "head_no": 127,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "airplane",
@@ -1151,7 +1742,9 @@
       "meaning_ja": "飛行機",
       "example_en": "I like the airplane.",
       "example_ja": "私はその飛行機が好きです。",
-      "head_no": 128
+      "head_no": 128,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "paint",
@@ -1160,7 +1753,9 @@
       "meaning_ja": "描く",
       "example_en": "I will paint it tomorrow.",
       "example_ja": "明日それを描くつもりです。",
-      "head_no": 129
+      "head_no": 129,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "hike",
@@ -1169,7 +1764,9 @@
       "meaning_ja": "ハイキングする",
       "example_en": "We need to hike it soon.",
       "example_ja": "すぐにそれをハイキングする必要があります。",
-      "head_no": 130
+      "head_no": 130,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "count",
@@ -1178,7 +1775,9 @@
       "meaning_ja": "数える",
       "example_en": "We need to count it soon.",
       "example_ja": "すぐにそれを数える必要があります。",
-      "head_no": 131
+      "head_no": 131,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "notebook",
@@ -1187,7 +1786,9 @@
       "meaning_ja": "ノート",
       "example_en": "I like the notebook.",
       "example_ja": "私はそのノートが好きです。",
-      "head_no": 132
+      "head_no": 132,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "safely",
@@ -1196,7 +1797,9 @@
       "meaning_ja": "安全に",
       "example_en": "Please do it safely.",
       "example_ja": "それを安全にやってください。",
-      "head_no": 133
+      "head_no": 133,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "sister",
@@ -1205,7 +1808,9 @@
       "meaning_ja": "姉妹",
       "example_en": "This is my sister.",
       "example_ja": "これは私の姉妹です。",
-      "head_no": 134
+      "head_no": 134,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "wait",
@@ -1214,7 +1819,9 @@
       "meaning_ja": "待つ",
       "example_en": "Can you wait it?",
       "example_ja": "それを待つことができますか？",
-      "head_no": 135
+      "head_no": 135,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "careful",
@@ -1223,7 +1830,9 @@
       "meaning_ja": "注意深い",
       "example_en": "That movie is very careful.",
       "example_ja": "あの映画はとても注意深いです。",
-      "head_no": 136
+      "head_no": 136,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "beautiful",
@@ -1232,7 +1841,9 @@
       "meaning_ja": "美しい",
       "example_en": "This bag is very beautiful.",
       "example_ja": "このかばんはとても美しいです。",
-      "head_no": 137
+      "head_no": 137,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "family",
@@ -1241,7 +1852,9 @@
       "meaning_ja": "家族",
       "example_en": "This is my family.",
       "example_ja": "これは私の家族です。",
-      "head_no": 138
+      "head_no": 138,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "garden",
@@ -1250,7 +1863,9 @@
       "meaning_ja": "庭",
       "example_en": "I have a garden.",
       "example_ja": "私は庭を持っています。",
-      "head_no": 139
+      "head_no": 139,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "station",
@@ -1259,7 +1874,9 @@
       "meaning_ja": "駅",
       "example_en": "This is my station.",
       "example_ja": "これは私の駅です。",
-      "head_no": 140
+      "head_no": 140,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "wall",
@@ -1268,7 +1885,9 @@
       "meaning_ja": "壁",
       "example_en": "I like the wall.",
       "example_ja": "私はその壁が好きです。",
-      "head_no": 141
+      "head_no": 141,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "cat",
@@ -1277,7 +1896,9 @@
       "meaning_ja": "猫",
       "example_en": "I have a cat.",
       "example_ja": "私は猫を持っています。",
-      "head_no": 142
+      "head_no": 142,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "cheap",
@@ -1286,7 +1907,9 @@
       "meaning_ja": "安い",
       "example_en": "The weather today is very cheap.",
       "example_ja": "今日の天気はとても安いです。",
-      "head_no": 143
+      "head_no": 143,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "wind",
@@ -1295,7 +1918,9 @@
       "meaning_ja": "風",
       "example_en": "I have a wind.",
       "example_ja": "私は風を持っています。",
-      "head_no": 144
+      "head_no": 144,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "dictionary",
@@ -1304,7 +1929,9 @@
       "meaning_ja": "辞書",
       "example_en": "This is my dictionary.",
       "example_ja": "これは私の辞書です。",
-      "head_no": 145
+      "head_no": 145,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "expensive",
@@ -1313,7 +1940,9 @@
       "meaning_ja": "高価",
       "example_en": "That movie is very expensive.",
       "example_ja": "あの映画はとても高価です。",
-      "head_no": 146
+      "head_no": 146,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "leaf",
@@ -1322,7 +1951,9 @@
       "meaning_ja": "葉",
       "example_en": "I like the leaf.",
       "example_ja": "私はその葉が好きです。",
-      "head_no": 147
+      "head_no": 147,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "water",
@@ -1331,7 +1962,9 @@
       "meaning_ja": "水をやる",
       "example_en": "Can you water it?",
       "example_ja": "それを水をやることができますか？",
-      "head_no": 148
+      "head_no": 148,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "really",
@@ -1340,7 +1973,9 @@
       "meaning_ja": "本当に",
       "example_en": "Please do it really.",
       "example_ja": "それを本当にやってください。",
-      "head_no": 149
+      "head_no": 149,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "favorite",
@@ -1349,7 +1984,9 @@
       "meaning_ja": "お気に入り",
       "example_en": "That movie is very favorite.",
       "example_ja": "あの映画はとてもお気に入りです。",
-      "head_no": 150
+      "head_no": 150,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "salty",
@@ -1358,7 +1995,9 @@
       "meaning_ja": "しょっぱい",
       "example_en": "That movie is very salty.",
       "example_ja": "あの映画はとてもしょっぱいです。",
-      "head_no": 151
+      "head_no": 151,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "hope",
@@ -1367,7 +2006,9 @@
       "meaning_ja": "望む",
       "example_en": "We need to hope it soon.",
       "example_ja": "すぐにそれを望む必要があります。",
-      "head_no": 152
+      "head_no": 152,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "farmer",
@@ -1376,7 +2017,9 @@
       "meaning_ja": "農家",
       "example_en": "I have a farmer.",
       "example_ja": "私は農家を持っています。",
-      "head_no": 153
+      "head_no": 153,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "discover",
@@ -1385,7 +2028,9 @@
       "meaning_ja": "発見する",
       "example_en": "We need to discover it soon.",
       "example_ja": "すぐにそれを発見する必要があります。",
-      "head_no": 154
+      "head_no": 154,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "similar",
@@ -1394,7 +2039,9 @@
       "meaning_ja": "似ている",
       "example_en": "That movie is very similar.",
       "example_ja": "あの映画はとても似ているです。",
-      "head_no": 155
+      "head_no": 155,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "practice",
@@ -1403,7 +2050,9 @@
       "meaning_ja": "練習する",
       "example_en": "Can you practice it?",
       "example_ja": "それを練習することができますか？",
-      "head_no": 156
+      "head_no": 156,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "improve",
@@ -1412,7 +2061,9 @@
       "meaning_ja": "改善する",
       "example_en": "We need to improve it soon.",
       "example_ja": "すぐにそれを改善する必要があります。",
-      "head_no": 157
+      "head_no": 157,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "summer",
@@ -1421,7 +2072,9 @@
       "meaning_ja": "夏",
       "example_en": "This is my summer.",
       "example_ja": "これは私の夏です。",
-      "head_no": 158
+      "head_no": 158,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "polite",
@@ -1430,7 +2083,9 @@
       "meaning_ja": "礼儀正しい",
       "example_en": "The weather today is very polite.",
       "example_ja": "今日の天気はとても礼儀正しいです。",
-      "head_no": 159
+      "head_no": 159,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "leave",
@@ -1439,7 +2094,9 @@
       "meaning_ja": "出発する",
       "example_en": "We need to leave it soon.",
       "example_ja": "すぐにそれを出発する必要があります。",
-      "head_no": 160
+      "head_no": 160,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "listen",
@@ -1448,7 +2105,9 @@
       "meaning_ja": "聞く",
       "example_en": "I will listen it tomorrow.",
       "example_ja": "明日それを聞くつもりです。",
-      "head_no": 161
+      "head_no": 161,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "send",
@@ -1457,7 +2116,9 @@
       "meaning_ja": "送る",
       "example_en": "Can you send it?",
       "example_ja": "それを送ることができますか？",
-      "head_no": 162
+      "head_no": 162,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "sun",
@@ -1466,7 +2127,9 @@
       "meaning_ja": "太陽",
       "example_en": "I like the sun.",
       "example_ja": "私はその太陽が好きです。",
-      "head_no": 163
+      "head_no": 163,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "exam",
@@ -1475,7 +2138,9 @@
       "meaning_ja": "試験",
       "example_en": "I have a exam.",
       "example_ja": "私は試験を持っています。",
-      "head_no": 164
+      "head_no": 164,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "choose",
@@ -1484,7 +2149,9 @@
       "meaning_ja": "選ぶ",
       "example_en": "I will choose it tomorrow.",
       "example_ja": "明日それを選ぶつもりです。",
-      "head_no": 165
+      "head_no": 165,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "neighbor",
@@ -1493,7 +2160,9 @@
       "meaning_ja": "近所の人",
       "example_en": "I have a neighbor.",
       "example_ja": "私は近所の人を持っています。",
-      "head_no": 166
+      "head_no": 166,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "solve",
@@ -1502,7 +2171,9 @@
       "meaning_ja": "解決する",
       "example_en": "I will solve it tomorrow.",
       "example_ja": "明日それを解決するつもりです。",
-      "head_no": 167
+      "head_no": 167,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "soft",
@@ -1511,7 +2182,9 @@
       "meaning_ja": "柔らかい",
       "example_en": "This bag is very soft.",
       "example_ja": "このかばんはとても柔らかいです。",
-      "head_no": 168
+      "head_no": 168,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "shy",
@@ -1520,7 +2193,9 @@
       "meaning_ja": "内気",
       "example_en": "That movie is very shy.",
       "example_ja": "あの映画はとても内気です。",
-      "head_no": 169
+      "head_no": 169,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "birthday",
@@ -1529,7 +2204,9 @@
       "meaning_ja": "誕生日",
       "example_en": "This is my birthday.",
       "example_ja": "これは私の誕生日です。",
-      "head_no": 170
+      "head_no": 170,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "parent",
@@ -1538,7 +2215,9 @@
       "meaning_ja": "親",
       "example_en": "I like the parent.",
       "example_ja": "私はその親が好きです。",
-      "head_no": 171
+      "head_no": 171,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "plant",
@@ -1547,7 +2226,9 @@
       "meaning_ja": "植える",
       "example_en": "We need to plant it soon.",
       "example_ja": "すぐにそれを植える必要があります。",
-      "head_no": 172
+      "head_no": 172,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "healthy",
@@ -1556,7 +2237,9 @@
       "meaning_ja": "健康",
       "example_en": "The weather today is very healthy.",
       "example_ja": "今日の天気はとても健康です。",
-      "head_no": 173
+      "head_no": 173,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "ticket",
@@ -1565,7 +2248,9 @@
       "meaning_ja": "チケット",
       "example_en": "I have a ticket.",
       "example_ja": "私はチケットを持っています。",
-      "head_no": 174
+      "head_no": 174,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "fall",
@@ -1574,7 +2259,9 @@
       "meaning_ja": "落ちる",
       "example_en": "We need to fall it soon.",
       "example_ja": "すぐにそれを落ちる必要があります。",
-      "head_no": 175
+      "head_no": 175,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "weak",
@@ -1583,7 +2270,9 @@
       "meaning_ja": "弱い",
       "example_en": "The weather today is very weak.",
       "example_ja": "今日の天気はとても弱いです。",
-      "head_no": 176
+      "head_no": 176,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "artist",
@@ -1592,7 +2281,9 @@
       "meaning_ja": "芸術家",
       "example_en": "I like the artist.",
       "example_ja": "私はその芸術家が好きです。",
-      "head_no": 177
+      "head_no": 177,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "wide",
@@ -1601,7 +2292,9 @@
       "meaning_ja": "広い",
       "example_en": "That movie is very wide.",
       "example_ja": "あの映画はとても広いです。",
-      "head_no": 178
+      "head_no": 178,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "carry",
@@ -1610,7 +2303,9 @@
       "meaning_ja": "運ぶ",
       "example_en": "I will carry it tomorrow.",
       "example_ja": "明日それを運ぶつもりです。",
-      "head_no": 179
+      "head_no": 179,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "table",
@@ -1619,7 +2314,9 @@
       "meaning_ja": "テーブル",
       "example_en": "I like the table.",
       "example_ja": "私はそのテーブルが好きです。",
-      "head_no": 180
+      "head_no": 180,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "lose",
@@ -1628,7 +2325,9 @@
       "meaning_ja": "負ける",
       "example_en": "Can you lose it?",
       "example_ja": "それを負けることができますか？",
-      "head_no": 181
+      "head_no": 181,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "wonderful",
@@ -1637,7 +2336,9 @@
       "meaning_ja": "素晴らしい",
       "example_en": "This bag is very wonderful.",
       "example_ja": "このかばんはとても素晴らしいです。",
-      "head_no": 182
+      "head_no": 182,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "spend",
@@ -1646,7 +2347,9 @@
       "meaning_ja": "使う",
       "example_en": "Can you spend it?",
       "example_ja": "それを使うことができますか？",
-      "head_no": 183
+      "head_no": 183,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "exciting",
@@ -1655,7 +2358,9 @@
       "meaning_ja": "わくわくする",
       "example_en": "The weather today is very exciting.",
       "example_ja": "今日の天気はとてもわくわくするです。",
-      "head_no": 184
+      "head_no": 184,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 3
     },
     {
       "word": "engineer",
@@ -1664,7 +2369,9 @@
       "meaning_ja": "技術者",
       "example_en": "I have a engineer.",
       "example_ja": "私は技術者を持っています。",
-      "head_no": 185
+      "head_no": 185,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "scientist",
@@ -1673,7 +2380,9 @@
       "meaning_ja": "科学者",
       "example_en": "I like the scientist.",
       "example_ja": "私はその科学者が好きです。",
-      "head_no": 186
+      "head_no": 186,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "history",
@@ -1682,7 +2391,9 @@
       "meaning_ja": "歴史",
       "example_en": "This is my history.",
       "example_ja": "これは私の歴史です。",
-      "head_no": 187
+      "head_no": 187,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "begin",
@@ -1691,7 +2402,9 @@
       "meaning_ja": "始める",
       "example_en": "Can you begin it?",
       "example_ja": "それを始めることができますか？",
-      "head_no": 188
+      "head_no": 188,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "rabbit",
@@ -1700,7 +2413,9 @@
       "meaning_ja": "うさぎ",
       "example_en": "This is my rabbit.",
       "example_ja": "これは私のうさぎです。",
-      "head_no": 189
+      "head_no": 189,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "phone",
@@ -1709,7 +2424,9 @@
       "meaning_ja": "電話",
       "example_en": "This is my phone.",
       "example_ja": "これは私の電話です。",
-      "head_no": 190
+      "head_no": 190,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "together",
@@ -1718,7 +2435,9 @@
       "meaning_ja": "一緒に",
       "example_en": "Please do it together.",
       "example_ja": "それを一緒にやってください。",
-      "head_no": 191
+      "head_no": 191,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "sell",
@@ -1727,7 +2446,9 @@
       "meaning_ja": "売る",
       "example_en": "Can you sell it?",
       "example_ja": "それを売ることができますか？",
-      "head_no": 192
+      "head_no": 192,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 4
     },
     {
       "word": "money",
@@ -1736,7 +2457,9 @@
       "meaning_ja": "お金",
       "example_en": "This is my money.",
       "example_ja": "これは私のお金です。",
-      "head_no": 193
+      "head_no": 193,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "doctor",
@@ -1745,7 +2468,9 @@
       "meaning_ja": "医者",
       "example_en": "This is my doctor.",
       "example_ja": "これは私の医者です。",
-      "head_no": 194
+      "head_no": 194,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "autumn",
@@ -1754,7 +2479,9 @@
       "meaning_ja": "秋",
       "example_en": "I like the autumn.",
       "example_ja": "私はその秋が好きです。",
-      "head_no": 195
+      "head_no": 195,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "understand",
@@ -1763,7 +2490,9 @@
       "meaning_ja": "理解する",
       "example_en": "We need to understand it soon.",
       "example_ja": "すぐにそれを理解する必要があります。",
-      "head_no": 196
+      "head_no": 196,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "student",
@@ -1772,7 +2501,9 @@
       "meaning_ja": "生徒",
       "example_en": "I like the student.",
       "example_ja": "私はその生徒が好きです。",
-      "head_no": 197
+      "head_no": 197,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "winter",
@@ -1781,7 +2512,9 @@
       "meaning_ja": "冬",
       "example_en": "I have a winter.",
       "example_ja": "私は冬を持っています。",
-      "head_no": 198
+      "head_no": 198,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "music",
@@ -1790,7 +2523,9 @@
       "meaning_ja": "音楽",
       "example_en": "I like the music.",
       "example_ja": "私はその音楽が好きです。",
-      "head_no": 199
+      "head_no": 199,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "meet",
@@ -1799,7 +2534,9 @@
       "meaning_ja": "会う",
       "example_en": "We need to meet it soon.",
       "example_ja": "すぐにそれを会う必要があります。",
-      "head_no": 200
+      "head_no": 200,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "foolish",
@@ -1808,7 +2545,9 @@
       "meaning_ja": "愚か",
       "example_en": "That movie is very foolish.",
       "example_ja": "あの映画はとても愚かです。",
-      "head_no": 201
+      "head_no": 201,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "computer",
@@ -1817,7 +2556,9 @@
       "meaning_ja": "コンピューター",
       "example_en": "I like the computer.",
       "example_ja": "私はそのコンピューターが好きです。",
-      "head_no": 202
+      "head_no": 202,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "invite",
@@ -1826,7 +2567,9 @@
       "meaning_ja": "招待する",
       "example_en": "We need to invite it soon.",
       "example_ja": "すぐにそれを招待する必要があります。",
-      "head_no": 203
+      "head_no": 203,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "cool",
@@ -1835,7 +2578,9 @@
       "meaning_ja": "涼しい",
       "example_en": "This bag is very cool.",
       "example_ja": "このかばんはとても涼しいです。",
-      "head_no": 204
+      "head_no": 204,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "answer",
@@ -1844,7 +2589,9 @@
       "meaning_ja": "答える",
       "example_en": "I will answer it tomorrow.",
       "example_ja": "明日それを答えるつもりです。",
-      "head_no": 205
+      "head_no": 205,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "breakfast",
@@ -1853,7 +2600,9 @@
       "meaning_ja": "朝食",
       "example_en": "I like the breakfast.",
       "example_ja": "私はその朝食が好きです。",
-      "head_no": 206
+      "head_no": 206,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "bird",
@@ -1862,7 +2611,9 @@
       "meaning_ja": "鳥",
       "example_en": "This is my bird.",
       "example_ja": "これは私の鳥です。",
-      "head_no": 207
+      "head_no": 207,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "textbook",
@@ -1871,7 +2622,9 @@
       "meaning_ja": "教科書",
       "example_en": "I have a textbook.",
       "example_ja": "私は教科書を持っています。",
-      "head_no": 208
+      "head_no": 208,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "same",
@@ -1880,7 +2633,9 @@
       "meaning_ja": "同じ",
       "example_en": "That movie is very same.",
       "example_ja": "あの映画はとても同じです。",
-      "head_no": 209
+      "head_no": 209,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "again",
@@ -1889,7 +2644,9 @@
       "meaning_ja": "再び",
       "example_en": "Please do it again.",
       "example_ja": "それを再びやってください。",
-      "head_no": 210
+      "head_no": 210,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "gift",
@@ -1898,7 +2655,9 @@
       "meaning_ja": "贈り物",
       "example_en": "I have a gift.",
       "example_ja": "私は贈り物を持っています。",
-      "head_no": 211
+      "head_no": 211,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "spicy",
@@ -1907,7 +2666,9 @@
       "meaning_ja": "辛い",
       "example_en": "The weather today is very spicy.",
       "example_ja": "今日の天気はとても辛いです。",
-      "head_no": 212
+      "head_no": 212,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "busy",
@@ -1916,7 +2677,9 @@
       "meaning_ja": "忙しい",
       "example_en": "This bag is very busy.",
       "example_ja": "このかばんはとても忙しいです。",
-      "head_no": 213
+      "head_no": 213,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "still",
@@ -1925,7 +2688,9 @@
       "meaning_ja": "まだ",
       "example_en": "Please do it still.",
       "example_ja": "それをまだやってください。",
-      "head_no": 214
+      "head_no": 214,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "art",
@@ -1934,7 +2699,9 @@
       "meaning_ja": "美術",
       "example_en": "I have a art.",
       "example_ja": "私は美術を持っています。",
-      "head_no": 215
+      "head_no": 215,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "vegetable",
@@ -1943,7 +2710,9 @@
       "meaning_ja": "野菜",
       "example_en": "This is my vegetable.",
       "example_ja": "これは私の野菜です。",
-      "head_no": 216
+      "head_no": 216,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "high",
@@ -1952,7 +2721,9 @@
       "meaning_ja": "高い",
       "example_en": "That movie is very high.",
       "example_ja": "あの映画はとても高いです。",
-      "head_no": 217
+      "head_no": 217,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "bake",
@@ -1961,7 +2732,9 @@
       "meaning_ja": "焼く",
       "example_en": "Can you bake it?",
       "example_ja": "それを焼くことができますか？",
-      "head_no": 218
+      "head_no": 218,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "guest",
@@ -1970,7 +2743,9 @@
       "meaning_ja": "お客",
       "example_en": "I like the guest.",
       "example_ja": "私はそのお客が好きです。",
-      "head_no": 219
+      "head_no": 219,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "recently",
@@ -1979,7 +2754,9 @@
       "meaning_ja": "最近",
       "example_en": "Please do it recently.",
       "example_ja": "それを最近やってください。",
-      "head_no": 220
+      "head_no": 220,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "bread",
@@ -1988,7 +2765,9 @@
       "meaning_ja": "パン",
       "example_en": "I have a bread.",
       "example_ja": "私はパンを持っています。",
-      "head_no": 221
+      "head_no": 221,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "insect",
@@ -1997,7 +2776,9 @@
       "meaning_ja": "昆虫",
       "example_en": "I like the insect.",
       "example_ja": "私はその昆虫が好きです。",
-      "head_no": 222
+      "head_no": 222,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "interesting",
@@ -2006,7 +2787,9 @@
       "meaning_ja": "面白い",
       "example_en": "This bag is very interesting.",
       "example_ja": "このかばんはとても面白いです。",
-      "head_no": 223
+      "head_no": 223,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "amazing",
@@ -2015,7 +2798,9 @@
       "meaning_ja": "驚くべき",
       "example_en": "That movie is very amazing.",
       "example_ja": "あの映画はとても驚くべきです。",
-      "head_no": 224
+      "head_no": 224,
+      "source_file": "fruit.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "river",
@@ -2024,7 +2809,9 @@
       "meaning_ja": "川",
       "example_en": "I like the river.",
       "example_ja": "私はその川が好きです。",
-      "head_no": 225
+      "head_no": 225,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "sing",
@@ -2033,7 +2820,9 @@
       "meaning_ja": "歌う",
       "example_en": "We need to sing it soon.",
       "example_ja": "すぐにそれを歌う必要があります。",
-      "head_no": 226
+      "head_no": 226,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "cute",
@@ -2042,7 +2831,9 @@
       "meaning_ja": "かわいい",
       "example_en": "The weather today is very cute.",
       "example_ja": "今日の天気はとてもかわいいです。",
-      "head_no": 227
+      "head_no": 227,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "nervous",
@@ -2051,7 +2842,9 @@
       "meaning_ja": "緊張した",
       "example_en": "This bag is very nervous.",
       "example_ja": "このかばんはとても緊張したです。",
-      "head_no": 228
+      "head_no": 228,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "restaurant",
@@ -2060,7 +2853,9 @@
       "meaning_ja": "レストラン",
       "example_en": "This is my restaurant.",
       "example_ja": "これは私のレストランです。",
-      "head_no": 229
+      "head_no": 229,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "free",
@@ -2069,7 +2864,9 @@
       "meaning_ja": "暇",
       "example_en": "That movie is very free.",
       "example_ja": "あの映画はとても暇です。",
-      "head_no": 230
+      "head_no": 230,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "sour",
@@ -2078,7 +2875,9 @@
       "meaning_ja": "すっぱい",
       "example_en": "The weather today is very sour.",
       "example_ja": "今日の天気はとてもすっぱいです。",
-      "head_no": 231
+      "head_no": 231,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "teacher",
@@ -2087,7 +2886,9 @@
       "meaning_ja": "先生",
       "example_en": "This is my teacher.",
       "example_ja": "これは私の先生です。",
-      "head_no": 232
+      "head_no": 232,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "lake",
@@ -2096,7 +2897,9 @@
       "meaning_ja": "湖",
       "example_en": "I have a lake.",
       "example_ja": "私は湖を持っています。",
-      "head_no": 233
+      "head_no": 233,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "festival",
@@ -2105,7 +2908,9 @@
       "meaning_ja": "祭り",
       "example_en": "I have a festival.",
       "example_ja": "私は祭りを持っています。",
-      "head_no": 234
+      "head_no": 234,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "hot",
@@ -2114,7 +2919,9 @@
       "meaning_ja": "暑い",
       "example_en": "The weather today is very hot.",
       "example_ja": "今日の天気はとても暑いです。",
-      "head_no": 235
+      "head_no": 235,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "school",
@@ -2123,7 +2930,9 @@
       "meaning_ja": "学校",
       "example_en": "I have a school.",
       "example_ja": "私は学校を持っています。",
-      "head_no": 236
+      "head_no": 236,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "milk",
@@ -2132,7 +2941,9 @@
       "meaning_ja": "牛乳",
       "example_en": "This is my milk.",
       "example_ja": "これは私の牛乳です。",
-      "head_no": 237
+      "head_no": 237,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "flower",
@@ -2141,7 +2952,9 @@
       "meaning_ja": "花",
       "example_en": "I have a flower.",
       "example_ja": "私は花を持っています。",
-      "head_no": 238
+      "head_no": 238,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "study",
@@ -2150,7 +2963,9 @@
       "meaning_ja": "勉強する",
       "example_en": "I will study it tomorrow.",
       "example_ja": "明日それを勉強するつもりです。",
-      "head_no": 239
+      "head_no": 239,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "nurse",
@@ -2159,7 +2974,9 @@
       "meaning_ja": "看護師",
       "example_en": "I like the nurse.",
       "example_ja": "私はその看護師が好きです。",
-      "head_no": 240
+      "head_no": 240,
+      "source_file": "vacation.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "party",
@@ -2168,7 +2985,9 @@
       "meaning_ja": "パーティー",
       "example_en": "This is my party.",
       "example_ja": "これは私のパーティーです。",
-      "head_no": 241
+      "head_no": 241,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "narrow",
@@ -2177,7 +2996,9 @@
       "meaning_ja": "狭い",
       "example_en": "The weather today is very narrow.",
       "example_ja": "今日の天気はとても狭いです。",
-      "head_no": 242
+      "head_no": 242,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "zoo",
@@ -2186,7 +3007,9 @@
       "meaning_ja": "動物園",
       "example_en": "I like the zoo.",
       "example_ja": "私はその動物園が好きです。",
-      "head_no": 243
+      "head_no": 243,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "ship",
@@ -2195,7 +3018,9 @@
       "meaning_ja": "船",
       "example_en": "I have a ship.",
       "example_ja": "私は船を持っています。",
-      "head_no": 244
+      "head_no": 244,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "often",
@@ -2204,7 +3029,9 @@
       "meaning_ja": "よく",
       "example_en": "Please do it often.",
       "example_ja": "それをよくやってください。",
-      "head_no": 245
+      "head_no": 245,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "boring",
@@ -2213,7 +3040,9 @@
       "meaning_ja": "退屈",
       "example_en": "That movie is very boring.",
       "example_ja": "あの映画はとても退屈です。",
-      "head_no": 246
+      "head_no": 246,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "full",
@@ -2222,7 +3051,9 @@
       "meaning_ja": "満杯",
       "example_en": "The weather today is very full.",
       "example_ja": "今日の天気はとても満杯です。",
-      "head_no": 247
+      "head_no": 247,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "holiday",
@@ -2231,7 +3062,9 @@
       "meaning_ja": "休日",
       "example_en": "This is my holiday.",
       "example_ja": "これは私の休日です。",
-      "head_no": 248
+      "head_no": 248,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "protect",
@@ -2240,7 +3073,9 @@
       "meaning_ja": "守る",
       "example_en": "We need to protect it soon.",
       "example_ja": "すぐにそれを守る必要があります。",
-      "head_no": 249
+      "head_no": 249,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "dinner",
@@ -2249,7 +3084,9 @@
       "meaning_ja": "夕食",
       "example_en": "This is my dinner.",
       "example_ja": "これは私の夕食です。",
-      "head_no": 250
+      "head_no": 250,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "train",
@@ -2258,7 +3095,9 @@
       "meaning_ja": "電車",
       "example_en": "This is my train.",
       "example_ja": "これは私の電車です。",
-      "head_no": 251
+      "head_no": 251,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "dry",
@@ -2267,7 +3106,9 @@
       "meaning_ja": "乾いた",
       "example_en": "That movie is very dry.",
       "example_ja": "あの映画はとても乾いたです。",
-      "head_no": 252
+      "head_no": 252,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "star",
@@ -2276,7 +3117,9 @@
       "meaning_ja": "星",
       "example_en": "I have a star.",
       "example_ja": "私は星を持っています。",
-      "head_no": 253
+      "head_no": 253,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "park",
@@ -2285,7 +3128,9 @@
       "meaning_ja": "公園",
       "example_en": "This is my park.",
       "example_ja": "これは私の公園です。",
-      "head_no": 254
+      "head_no": 254,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "smile",
@@ -2294,7 +3139,9 @@
       "meaning_ja": "ほほえむ",
       "example_en": "Can you smile it?",
       "example_ja": "それをほほえむことができますか？",
-      "head_no": 255
+      "head_no": 255,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "wish",
@@ -2303,7 +3150,9 @@
       "meaning_ja": "願う",
       "example_en": "Can you wish it?",
       "example_ja": "それを願うことができますか？",
-      "head_no": 256
+      "head_no": 256,
+      "source_file": "explain.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "loud",
@@ -2312,7 +3161,9 @@
       "meaning_ja": "うるさい",
       "example_en": "The weather today is very loud.",
       "example_ja": "今日の天気はとてもうるさいです。",
-      "head_no": 257
+      "head_no": 257,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "cafeteria",
@@ -2321,7 +3172,9 @@
       "meaning_ja": "食堂",
       "example_en": "I have a cafeteria.",
       "example_ja": "私は食堂を持っています。",
-      "head_no": 258
+      "head_no": 258,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "low",
@@ -2330,7 +3183,9 @@
       "meaning_ja": "低い",
       "example_en": "The weather today is very low.",
       "example_ja": "今日の天気はとても低いです。",
-      "head_no": 259
+      "head_no": 259,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "clearly",
@@ -2339,7 +3194,9 @@
       "meaning_ja": "はっきりと",
       "example_en": "Please do it clearly.",
       "example_ja": "それをはっきりとやってください。",
-      "head_no": 260
+      "head_no": 260,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "important",
@@ -2348,7 +3205,9 @@
       "meaning_ja": "重要",
       "example_en": "This bag is very important.",
       "example_ja": "このかばんはとても重要です。",
-      "head_no": 261
+      "head_no": 261,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "join",
@@ -2357,7 +3216,9 @@
       "meaning_ja": "参加する",
       "example_en": "I will join it tomorrow.",
       "example_ja": "明日それを参加するつもりです。",
-      "head_no": 262
+      "head_no": 262,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "thin",
@@ -2366,7 +3227,9 @@
       "meaning_ja": "薄い",
       "example_en": "That movie is very thin.",
       "example_ja": "あの映画はとても薄いです。",
-      "head_no": 263
+      "head_no": 263,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "suddenly",
@@ -2375,7 +3238,9 @@
       "meaning_ja": "突然",
       "example_en": "Please do it suddenly.",
       "example_ja": "それを突然やってください。",
-      "head_no": 264
+      "head_no": 264,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "bright",
@@ -2384,7 +3249,9 @@
       "meaning_ja": "明るい",
       "example_en": "This bag is very bright.",
       "example_ja": "このかばんはとても明るいです。",
-      "head_no": 265
+      "head_no": 265,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "sometimes",
@@ -2393,7 +3260,9 @@
       "meaning_ja": "時々",
       "example_en": "Please do it sometimes.",
       "example_ja": "それを時々やってください。",
-      "head_no": 266
+      "head_no": 266,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "mountain",
@@ -2402,7 +3271,9 @@
       "meaning_ja": "山",
       "example_en": "This is my mountain.",
       "example_ja": "これは私の山です。",
-      "head_no": 267
+      "head_no": 267,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "writer",
@@ -2411,7 +3282,9 @@
       "meaning_ja": "作家",
       "example_en": "This is my writer.",
       "example_ja": "これは私の作家です。",
-      "head_no": 268
+      "head_no": 268,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "quietly",
@@ -2420,7 +3293,9 @@
       "meaning_ja": "静かに",
       "example_en": "Please do it quietly.",
       "example_ja": "それを静かにやってください。",
-      "head_no": 269
+      "head_no": 269,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "guess",
@@ -2429,7 +3304,9 @@
       "meaning_ja": "推測する",
       "example_en": "Can you guess it?",
       "example_ja": "それを推測することができますか？",
-      "head_no": 270
+      "head_no": 270,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "clean",
@@ -2438,7 +3315,9 @@
       "meaning_ja": "掃除する",
       "example_en": "Can you clean it?",
       "example_ja": "それを掃除することができますか？",
-      "head_no": 271
+      "head_no": 271,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "quiet",
@@ -2447,7 +3326,9 @@
       "meaning_ja": "静か",
       "example_en": "That movie is very quiet.",
       "example_ja": "あの映画はとても静かです。",
-      "head_no": 272
+      "head_no": 272,
+      "source_file": "decide.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "thirsty",
@@ -2456,7 +3337,9 @@
       "meaning_ja": "喉が渇いた",
       "example_en": "The weather today is very thirsty.",
       "example_ja": "今日の天気はとても喉が渇いたです。",
-      "head_no": 273
+      "head_no": 273,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "lazy",
@@ -2465,7 +3348,9 @@
       "meaning_ja": "怠惰",
       "example_en": "That movie is very lazy.",
       "example_ja": "あの映画はとても怠惰です。",
-      "head_no": 274
+      "head_no": 274,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "lonely",
@@ -2474,7 +3359,9 @@
       "meaning_ja": "寂しい",
       "example_en": "This bag is very lonely.",
       "example_ja": "このかばんはとても寂しいです。",
-      "head_no": 275
+      "head_no": 275,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "order",
@@ -2483,7 +3370,9 @@
       "meaning_ja": "注文する",
       "example_en": "We need to order it soon.",
       "example_ja": "すぐにそれを注文する必要があります。",
-      "head_no": 276
+      "head_no": 276,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "proud",
@@ -2492,7 +3381,9 @@
       "meaning_ja": "誇りに思っている",
       "example_en": "This bag is very proud.",
       "example_ja": "このかばんはとても誇りに思っているです。",
-      "head_no": 277
+      "head_no": 277,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "museum",
@@ -2501,7 +3392,9 @@
       "meaning_ja": "博物館",
       "example_en": "I have a museum.",
       "example_ja": "私は博物館を持っています。",
-      "head_no": 278
+      "head_no": 278,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "door",
@@ -2510,7 +3403,9 @@
       "meaning_ja": "ドア",
       "example_en": "I have a door.",
       "example_ja": "私はドアを持っています。",
-      "head_no": 279
+      "head_no": 279,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "slowly",
@@ -2519,7 +3414,9 @@
       "meaning_ja": "ゆっくり",
       "example_en": "Please do it slowly.",
       "example_ja": "それをゆっくりやってください。",
-      "head_no": 280
+      "head_no": 280,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 5
     },
     {
       "word": "hurt",
@@ -2528,7 +3425,9 @@
       "meaning_ja": "傷つける",
       "example_en": "Can you hurt it?",
       "example_ja": "それを傷つけることができますか？",
-      "head_no": 281
+      "head_no": 281,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "later",
@@ -2537,7 +3436,9 @@
       "meaning_ja": "後で",
       "example_en": "Please do it later.",
       "example_ja": "それを後でやってください。",
-      "head_no": 282
+      "head_no": 282,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "rice",
@@ -2546,7 +3447,9 @@
       "meaning_ja": "米",
       "example_en": "I like the rice.",
       "example_ja": "私はその米が好きです。",
-      "head_no": 283
+      "head_no": 283,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "sweet",
@@ -2555,7 +3458,9 @@
       "meaning_ja": "甘い",
       "example_en": "That movie is very sweet.",
       "example_ja": "あの映画はとても甘いです。",
-      "head_no": 284
+      "head_no": 284,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "useful",
@@ -2564,7 +3469,9 @@
       "meaning_ja": "役に立つ",
       "example_en": "The weather today is very useful.",
       "example_ja": "今日の天気はとても役に立つです。",
-      "head_no": 285
+      "head_no": 285,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "throw",
@@ -2573,7 +3480,9 @@
       "meaning_ja": "投げる",
       "example_en": "We need to throw it soon.",
       "example_ja": "すぐにそれを投げる必要があります。",
-      "head_no": 286
+      "head_no": 286,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "prepare",
@@ -2582,7 +3491,9 @@
       "meaning_ja": "準備する",
       "example_en": "We need to prepare it soon.",
       "example_ja": "すぐにそれを準備する必要があります。",
-      "head_no": 287
+      "head_no": 287,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "happy",
@@ -2591,7 +3502,9 @@
       "meaning_ja": "幸せ",
       "example_en": "The weather today is very happy.",
       "example_ja": "今日の天気はとても幸せです。",
-      "head_no": 288
+      "head_no": 288,
+      "source_file": "dark.pdf",
+      "page_in_source_file": 6
     },
     {
       "word": "curious",
@@ -2600,7 +3513,9 @@
       "meaning_ja": "好奇心が強い",
       "example_en": "The weather today is very curious.",
       "example_ja": "今日の天気はとても好奇心が強いです。",
-      "head_no": 289
+      "head_no": 289,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 7
     },
     {
       "word": "bitter",
@@ -2609,7 +3524,9 @@
       "meaning_ja": "苦い",
       "example_en": "This bag is very bitter.",
       "example_ja": "このかばんはとても苦いです。",
-      "head_no": 290
+      "head_no": 290,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 7
     },
     {
       "word": "fish",
@@ -2618,7 +3535,9 @@
       "meaning_ja": "魚",
       "example_en": "I like the fish.",
       "example_ja": "私はその魚が好きです。",
-      "head_no": 291
+      "head_no": 291,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 7
     },
     {
       "word": "grow",
@@ -2627,7 +3546,9 @@
       "meaning_ja": "育てる",
       "example_en": "I will grow it tomorrow.",
       "example_ja": "明日それを育てるつもりです。",
-      "head_no": 292
+      "head_no": 292,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 7
     },
     {
       "word": "classroom",
@@ -2636,7 +3557,9 @@
       "meaning_ja": "教室",
       "example_en": "I have a classroom.",
       "example_ja": "私は教室を持っています。",
-      "head_no": 293
+      "head_no": 293,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 7
     },
     {
       "word": "speak",
@@ -2645,7 +3568,9 @@
       "meaning_ja": "話す",
       "example_en": "Can you speak it?",
       "example_ja": "それを話すことができますか？",
-      "head_no": 294
+      "head_no": 294,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 7
     },
     {
       "word": "singer",
@@ -2654,7 +3579,9 @@
       "meaning_ja": "歌手",
       "example_en": "I have a singer.",
       "example_ja": "私は歌手を持っています。",
-      "head_no": 295
+      "head_no": 295,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 7
     },
     {
       "word": "beach",
@@ -2663,7 +3590,9 @@
       "meaning_ja": "浜辺",
       "example_en": "I have a beach.",
       "example_ja": "私は浜辺を持っています。",
-      "head_no": 296
+      "head_no": 296,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 7
     },
     {
       "word": "collect",
@@ -2672,7 +3601,9 @@
       "meaning_ja": "集める",
       "example_en": "I will collect it tomorrow.",
       "example_ja": "明日それを集めるつもりです。",
-      "head_no": 297
+      "head_no": 297,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 8
     },
     {
       "word": "dirty",
@@ -2681,7 +3612,9 @@
       "meaning_ja": "汚い",
       "example_en": "This bag is very dirty.",
       "example_ja": "このかばんはとても汚いです。",
-      "head_no": 298
+      "head_no": 298,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 8
     },
     {
       "word": "friendly",
@@ -2690,7 +3623,9 @@
       "meaning_ja": "友好的",
       "example_en": "The weather today is very friendly.",
       "example_ja": "今日の天気はとても友好的です。",
-      "head_no": 299
+      "head_no": 299,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 8
     },
     {
       "word": "smart",
@@ -2699,7 +3634,9 @@
       "meaning_ja": "賢い",
       "example_en": "This bag is very smart.",
       "example_ja": "このかばんはとても賢いです。",
-      "head_no": 300
+      "head_no": 300,
+      "source_file": "hotel.pdf",
+      "page_in_source_file": 8
     }
   ]
 }
