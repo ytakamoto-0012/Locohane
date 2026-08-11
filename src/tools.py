@@ -755,42 +755,6 @@ def _resolve_file_tools_path(raw: str) -> tuple[Path | None, str | None]:
     return p, None
 
 
-def _check_main_agent_glob_limit() -> str | None:
-    """メインエージェント自身によるGlobの連打を防ぎ、dispatch_agentへの委譲を促すガード。
-
-    system_prompt.md は「ファイル・フォルダ調査は必ず dispatch_agent へ委譲し、
-    自分でやってよい例外は対象ルート直下だけを見る1回だけの Glob」と指示しているが、
-    プロンプト文だけでは小型ローカルモデルの遵守が不確実なため（Globを引数を変えて
-    3〜4回連打する等）、_check_file_tools_duplicate の完全一致ガードとは別に、
-    呼び出し回数そのものをコード側で強制する。
-
-    サブエージェント（dispatch_agent経由）内部でのGlobは調査そのものが役目のため
-    対象外（_IN_SUBAGENT が True の間はガードしない）。app.py の on_message と
-    dispatch_agent の finally でカウンタをリセットするため、1ターン内で複数回
-    delegateすること自体は妨げない。[main_agent_glob_guard] の enabled/max_calls
-    で調整可能（max_calls=0 または enabled=false で実質無効化できる）。
-
-    Returns:
-        上限に達していればエラー文字列、そうでなければ None。
-    """
-    cfg = _LLM_CONFIG
-    guard_enabled = cfg.main_agent_glob_guard_enabled if cfg else True
-    if not guard_enabled:
-        return None
-    if _IN_SUBAGENT.get():
-        return None
-    guard_max_calls = cfg.main_agent_glob_guard_max_calls if cfg else 1
-    if _record_and_check_duplicate("main_agent_glob_call_count", "glob", guard_max_calls):
-        return (
-            "エラー: Glob はメインエージェントとして既に呼び出し上限"
-            f"（{guard_max_calls}回）に達しています"
-            "（対象ルート直下の確認用の例外のみ）。これ以上フォルダを深掘りせず、"
-            "残りの調査は dispatch_agent（explore/explore-docs/worker）へ"
-            "委譲してください。"
-        )
-    return None
-
-
 def _check_file_tools_duplicate(tool_label: str, signature: str) -> str | None:
     """Read/Glob/Grep/json_query/read_skill/read_skill_file/get_tool_source 共通の重複呼び出しガード。
 
@@ -1605,9 +1569,6 @@ def glob_tool(pattern: str, path: str = "", head_limit: int = 200) -> str:
     base, error = _resolve_file_tools_path(path)
     if error:
         return f"エラー: {error}"
-    limit_error = _check_main_agent_glob_limit()
-    if limit_error:
-        return limit_error
     dup_error = _check_file_tools_duplicate("Glob", f"Glob\x00{pattern}\x00{base}\x00{head_limit}")
     if dup_error:
         return dup_error
@@ -1755,6 +1716,10 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
     (skill_name, script_filename) が config.ini の
     [scripts].plan_approval_exempt_scripts に登録されている場合は
     計画未承認でも実行できる。
+
+    メインエージェント自身の直接呼び出し回数ガード（[main_agent_tool_guard]）は
+    ここではなく ImageAwareToolNode.invoke/ainvoke（_guard_main_agent_tool_limit）
+    側でツール実行前にかかるため、ここには現れない。
 
     Returns:
         検証に成功すれば (cmd, workdir) のタプル。失敗すれば
@@ -2744,10 +2709,10 @@ class _DispatchAgentJob:
     # そのため「dispatch_agent()側で完了後にTrueにする」という実装は間に合わず、
     # 逆に「初期値Trueで、フォールバック検知時にのみ即座にFalseへ落とす」という
     # 向きでなければ正しく機能しない。True のときのみ、_run_dispatch_agent_job の
-    # finally節でmain_agent_glob_call_countのリセットを行ってよい（結果を受け取る
-    # のがまだ同じターンだと保証できるため）。False の場合にリセットすると、その間に
-    # 同一セッションで始まった別の新しいターンのGlobガードカウンタを横から
-    # 無効化してしまう。
+    # finally節でmain_agent_tool_guard_call_countのリセットを行ってよい（結果を
+    # 受け取るのがまだ同じターンだと保証できるため）。False の場合にリセットすると、
+    # その間に同一セッションで始まった別の新しいターンのツールガードカウンタを
+    # 横から無効化してしまう。
     turn_still_waiting: bool = True
 
 
@@ -2807,7 +2772,7 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
     タスク内部の contextvar.set()/reset() は呼び出し元（dispatch_agent）へは
     伝播しない。そのため _IN_SUBAGENT / _SUBAGENT_RUN_ID の設定・セマフォ確保・
     run_subagent() 呼び出し・_append_scratch_note_hint・
-    main_agent_glob_call_count のリセットは、このタスクの中で行う必要がある
+    main_agent_tool_guard_call_count のリセットは、このタスクの中で行う必要がある
     （呼び出し元側で行っても、値が呼び出し元のコンテキストにしか残らず
     このタスクの中からは見えない）。
 
@@ -2881,14 +2846,14 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
             pass
         _IN_SUBAGENT.reset(token)
         _SUBAGENT_RUN_ID.reset(run_id_token)
-        # 委譲が完了するたびに main_agent_glob_guard のカウンタをリセットする。
+        # 委譲が完了するたびに main_agent_tool_guard のカウンタをリセットする。
         # 1ターン内で複数回「調査→delegate」を繰り返す正当なケースを妨げないため。
         # ただし、安全上限フォールバックや停止ボタン等で呼び出し元のターンが
         # 既に終わっている場合（turn_still_waiting=False）はリセットしない。
         # ターンが終わっている＝同一セッションで別の新しいターンが既に進行中の
-        # 可能性があり、そちらのGlobガードカウンタを横から無効化してしまうため。
+        # 可能性があり、そちらのガードカウンタを横から無効化してしまうため。
         if job.turn_still_waiting:
-            cl.user_session.set("main_agent_glob_call_count", None)
+            cl.user_session.set("main_agent_tool_guard_call_count", None)
 
 
 def _finalize_dispatch_agent_job_result(job: "_DispatchAgentJob", job_id: str) -> str:
@@ -3825,6 +3790,104 @@ def _guard_awaiting_approve_plan(input):  # noqa: A002
     }
 
 
+def _guard_main_agent_tool_limit(input):  # noqa: A002
+    """[main_agent_tool_guard] に登録済みのツールを、メインエージェントが直接
+    呼べる回数を制限し、dispatch_agentへの委譲を促すガード。
+
+    旧実装は Glob専用（_check_main_agent_glob_limit）・run_script専用
+    （旧 _check_main_agent_run_script_limit）と対象ごとにコードを決め打ちして
+    いたが、実際にトークン上限へ追い込んだ主因は run_script の連打ではなく
+    その後 analyze_image をメインエージェント自身が委譲せずページ数分連打した
+    ことだった（英検3級PDF調査、2026-08-10）。ビルトインツールを一切問わず
+    任意の名前を登録できるよう、ImageAwareToolNode.invoke/ainvoke の共通
+    差し込みポイント（_guard_awaiting_approve_plan と同じ場所）でツール名
+    そのものを判定する汎用ガードに統合し、Globガードもここへ統合済み
+    （既定の [main_agent_tool_guard].entries に ["Glob", 1] を含める）。
+
+    登録形式（[main_agent_tool_guard].entries）の各要素は
+    [対象, max_calls] の2要素で、対象は2種類を許容する:
+      - 文字列1件（例: "Glob", "analyze_image"）: そのツール名の呼び出し
+        そのものを引数を問わず対象にする。
+      - [スキル名, スクリプトファイル名] の2要素（例:
+        ["pdf-tools","render_pdf_pages.py"]）: name が run_script/
+        run_script_background で、かつ args の skill_name/script_filename が
+        一致する場合のみ対象にする。
+    max_calls はエントリごとに個別指定する（ツールごとに許容回数を変えたい
+    ケースがあるため、旧実装のような全体共通の1値ではない）。0以下を指定すると
+    「1回も呼べない（完全ブロック）」を意味する。他の呼び出し回数ガード
+    （_check_file_tools_duplicate が使う _record_and_check_duplicate）は
+    0以下を「無制限（ガード無効）」として扱うが、本ガードは対象を明示的に
+    登録するホワイトリスト方式であり、「登録した上で無制限にする」は
+    「そもそも登録しない」のと同義で意味を成さない。そのため0以下を
+    _record_and_check_duplicate へ委譲せず、ここで先に「常時ブロック」として
+    扱う（このガード固有の意味論であり、他の呼び出し回数ガードには影響しない）。
+
+    サブエージェント（dispatch_agent経由）内部での呼び出しは対象外
+    （_IN_SUBAGENT が True の間はガードしない。調査そのものが役目のため）。
+
+    Args:
+        input: ImageAwareToolNode.invoke/ainvoke がそのまま受け取った入力
+            （_extract_tool_call_from_node_input 参照）。
+
+    Returns:
+        上限に達していればブロックする結果（{"messages": [ToolMessage]}）、
+        そうでなければ None（呼び出し側は通常通りツールを実行してよい）。
+    """
+    cfg = _LLM_CONFIG
+    guard_enabled = cfg.main_agent_tool_guard_enabled if cfg else False
+    if not guard_enabled:
+        return None
+    if _IN_SUBAGENT.get():
+        return None
+    entries = cfg.main_agent_tool_guard_entries if cfg else frozenset()
+    if not entries:
+        return None
+    entries_by_key = dict(entries)
+    call = _extract_tool_call_from_node_input(input)
+    if not call:
+        return None
+    name = call.get("name")
+    args = call.get("args") or {}
+    signature: str | None = None
+    guard_max_calls: int | None = None
+    if name in entries_by_key:
+        signature = name
+        guard_max_calls = entries_by_key[name]
+    elif name in ("run_script", "run_script_background"):
+        pair = (args.get("skill_name"), args.get("script_filename"))
+        if pair in entries_by_key:
+            signature = f"{name}:{pair[0]}/{pair[1]}"
+            guard_max_calls = entries_by_key[pair]
+    if signature is None:
+        return None
+    if guard_max_calls > 0 and not _record_and_check_duplicate("main_agent_tool_guard_call_count", signature, guard_max_calls):
+        return None
+    content = (
+        f"エラー: {name} はメインエージェントとして呼び出しを禁止されています"
+        "（max_calls=0）。"
+        if guard_max_calls <= 0
+        else (
+            f"エラー: {name} はメインエージェントとして既に呼び出し上限"
+            f"（{guard_max_calls}回）に達しています。"
+        )
+    )
+    # agent_type一覧はagents/*.mdの走査結果（_AGENT_TYPES）から動的に組み立てる。
+    # 種別を文言へ決め打ちすると、将来 agent_type が増減しても案内が追従せず、
+    # 存在しない/古い種別へ誘導してしまう（dispatch_agentの不明agent_typeエラー
+    # メッセージと同じ組み立て方、2972行目付近参照）。
+    available_agent_types = ", ".join(sorted(_AGENT_TYPES)) or "dispatch_agentのagent_type一覧を確認"
+    return {
+        "messages": [
+            ToolMessage(
+                content=(f"{content}これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: {available_agent_types}）へ委譲してください。"),
+                name=name,
+                tool_call_id=call.get("id"),
+                status="error",
+            )
+        ]
+    }
+
+
 class ImageAwareToolNode(ToolNode):
     """analyze_image の実行結果（画像）を、後続の HumanMessage として自動追加する ToolNode。
 
@@ -3852,7 +3915,7 @@ class ImageAwareToolNode(ToolNode):
         call_args = _extract_tool_call_from_node_input(input)
         if call_args:
             call_args = call_args.get("args", {})
-        blocked = _guard_awaiting_approve_plan(input)
+        blocked = _guard_awaiting_approve_plan(input) or _guard_main_agent_tool_limit(input)
         if blocked is not None:
             _log_tool_results_debug(blocked, call_args)
             return _with_image_followups(blocked)
@@ -3865,7 +3928,7 @@ class ImageAwareToolNode(ToolNode):
         call_args = _extract_tool_call_from_node_input(input)
         if call_args:
             call_args = call_args.get("args", {})
-        blocked = _guard_awaiting_approve_plan(input)
+        blocked = _guard_awaiting_approve_plan(input) or _guard_main_agent_tool_limit(input)
         if blocked is not None:
             _log_tool_results_debug(blocked, call_args)
             return _with_image_followups(blocked)

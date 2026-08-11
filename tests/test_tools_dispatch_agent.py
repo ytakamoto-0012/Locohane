@@ -86,7 +86,7 @@ def _extract_job_id(text: str) -> str:
 async def test_normal_completion_returns_final_result_directly(monkeypatch, tmp_path) -> None:
     """安全上限内に終わる通常ケースでは、1回の呼び出しで最終結果がそのまま返る。"""
     _setup(monkeypatch, tmp_path=tmp_path)
-    tools.cl.user_session.set("main_agent_glob_call_count", {"glob": 1})
+    tools.cl.user_session.set("main_agent_tool_guard_call_count", {"Glob": 1})
 
     async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
         return f"done:{task.splitlines()[-1]}"
@@ -100,7 +100,7 @@ async def test_normal_completion_returns_final_result_directly(monkeypatch, tmp_
     assert tools._DISPATCH_AGENT_JOBS == {}  # 完了時点でレジストリから取り除かれている
     # 安全上限フォールバックを経ない通常完了では、同一ターン内での
     # 複数回delegateを妨げないよう従来通りガードカウンタがリセットされる。
-    assert tools.cl.user_session.get("main_agent_glob_call_count") is None
+    assert tools.cl.user_session.get("main_agent_tool_guard_call_count") is None
 
 
 @pytest.mark.asyncio
@@ -149,8 +149,8 @@ async def test_safety_cap_fallback_returns_job_id_and_keeps_job_running(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_fallback_completion_does_not_reset_main_agent_glob_guard(monkeypatch, tmp_path) -> None:
-    """安全上限フォールバック後にジョブが完了しても、別ターンのGlobガード
+async def test_fallback_completion_does_not_reset_main_agent_tool_guard(monkeypatch, tmp_path) -> None:
+    """安全上限フォールバック後にジョブが完了しても、別ターンのツールガード
     カウンタを横からリセットしない（cross-turnレースの回帰確認）。"""
     _setup(monkeypatch, tmp_path=tmp_path)
     monkeypatch.setattr(tools, "_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
@@ -168,15 +168,15 @@ async def test_fallback_completion_does_not_reset_main_agent_glob_guard(monkeypa
     job = tools._DISPATCH_AGENT_JOBS[job_id]
 
     # フォールバック発生後、同一セッションで別の新しいターンが始まり、
-    # 既にGlobガード上限まで積んでいる状態を模す。
-    tools.cl.user_session.set("main_agent_glob_call_count", {"glob": 1})
+    # 既にツールガード上限まで積んでいる状態を模す。
+    tools.cl.user_session.set("main_agent_tool_guard_call_count", {"Glob": 1})
 
     gate.set()
     await job.runner_task
 
     assert job.turn_still_waiting is False
     # 旧ジョブの完了によって新ターン側のカウンタが横から消されていないこと。
-    assert tools.cl.user_session.get("main_agent_glob_call_count") == {"glob": 1}
+    assert tools.cl.user_session.get("main_agent_tool_guard_call_count") == {"Glob": 1}
 
 
 @pytest.mark.asyncio

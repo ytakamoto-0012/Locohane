@@ -30,7 +30,7 @@ class _Cfg:
 
 
 class _FakeUserSession:
-    """dispatch_agent の finally が main_agent_glob_guard カウンタをリセットする際に
+    """dispatch_agent の finally が main_agent_tool_guard カウンタをリセットする際に
     触れる cl.user_session を、Chainlit実行コンテキスト無しでも動くよう差し替える。
     """
 

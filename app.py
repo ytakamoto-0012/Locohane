@@ -1772,9 +1772,9 @@ async def on_message(message: cl.Message) -> None:
     # 限定されたスコープであるべきなので、新しいメッセージを受け取るたびに
     # 前回（放置されて完了しなかった計画など）の承認状態を持ち越さない。
     cl.user_session.set("plan_approved", False)
-    # main_agent_glob_guard（src/tools.py の _check_main_agent_glob_limit）の
+    # main_agent_tool_guard（src/tools.py の _guard_main_agent_tool_limit）の
     # カウンタも同様に、新しいターンでは前回の消費分を持ち越さない。
-    cl.user_session.set("main_agent_glob_call_count", None)
+    cl.user_session.set("main_agent_tool_guard_call_count", None)
     # dispatch_agent 経由でこのタスクから派生するサブエージェントの
     # build_model() 呼び出しも、このセッションへ紐づけて登録されるようにする
     # （src/llm.py の set_current_session / _CURRENT_SESSION_ID 参照）。

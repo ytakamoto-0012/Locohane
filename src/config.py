@@ -274,15 +274,33 @@ class Config:
             （dispatch_agent）内での呼び出し履歴を、メインエージェントの重複
             判定へ持ち越すかどうか。True なら両者で呼び出し集合を共有し、
             False なら別々に管理する（src/tools.py の _IN_SUBAGENT 参照）。
-        main_agent_glob_guard_enabled: メインエージェント自身が Glob を
-            呼べる回数を制限するガード機能の有効/無効。system_prompt.md の
-            「調査は dispatch_agent へ委譲し、自分でやってよい例外は対象
-            ルート直下だけを見る1回だけの Glob」というルールをコード側で
-            裏付ける（サブエージェント内部の Glob は対象外）。
-        main_agent_glob_guard_max_calls: メインエージェントが1ターン
-            （新しいユーザーメッセージ、または1回の dispatch_agent 委譲
-            完了）あたり何回まで Glob を呼べるか。0 を指定すると無制限
-            （ガード事実上無効）になる。
+        main_agent_tool_guard_enabled: メインエージェント自身が
+            main_agent_tool_guard_entries に登録済みのツールを直接呼び出せる
+            回数を制限するガード機能の有効/無効。plan_approval_exempt_scripts
+            は計画承認を免除するだけで直接呼び出し自体は妨げないため、
+            render_pdf_pages.py→analyze_image のような「1件の重い調査」を
+            メインエージェントが委譲せず自分で最後まで実行し続けてトークン
+            上限に達する事例（src/tools.py の _guard_main_agent_tool_limit
+            参照）を防ぐための汎用ガード。ビルトインツール名（Glob・
+            analyze_image 等）も run_script 配下のスキルスクリプトも同じ
+            リストへ登録できる（旧・Glob専用ガード main_agent_glob_guard は
+            本ガードへ統合済み。既定で ["Glob", 1] を登録し、従来と同じ挙動を
+            引き継ぐ）。
+        main_agent_tool_guard_entries: 本ガードの対象エントリの集合
+            （frozenset[tuple[str | tuple[str, str], int]]）。各要素は
+            (対象, max_calls) のペア。対象が文字列1件（例: "Glob",
+            "analyze_image"）ならビルトインツール名そのもの、2要素タプル
+            （例: ("pdf-tools", "render_pdf_pages.py")）なら
+            run_script/run_script_background 経由で呼ばれる
+            (スキル名, スクリプトファイル名) の組を表す。max_calls は
+            エントリごとに個別指定でき、メインエージェントが1ターンあたり
+            そのエントリを何回まで直接呼び出せるかを表す（0以下はそのエントリを
+            完全ブロックする＝1回も呼び出せない。本ガードはホワイトリスト方式の
+            ため「登録した上で無制限」は意味を成さず、他の呼び出し回数ガード
+            （_record_and_check_duplicate）とは0の意味が逆になる点に注意）。
+            plan_approval_exempt_scripts とは独立したリストで、
+            ここに登録されていないツール・スクリプトはガード対象外。空集合
+            なら本ガード自体が事実上無効（何も登録されていないため）。
         graph_impl: ReAct ループの実装切替。"handwritten"（手書き
             StateGraph）または "prebuilt"（LangGraph の
             create_react_agent）。build_graph() が参照する。
@@ -557,9 +575,12 @@ class Config:
     file_tools_duplicate_guard_max_calls: int
     file_tools_duplicate_guard_carry_over_to_main: bool
 
-    # --- メインエージェント自身のGlob呼び出し上限ガード（src/tools.py の _check_main_agent_glob_limit） ---
-    main_agent_glob_guard_enabled: bool
-    main_agent_glob_guard_max_calls: int
+    # --- メインエージェント自身の任意ツール直接呼び出し回数ガード（ビルトインツール名・
+    #     run_script配下のスキルスクリプトの両方を、エントリごとの max_calls 付きで
+    #     登録できる。Glob専用だった旧ガードもここへ統合済み。src/tools.py の
+    #     _guard_main_agent_tool_limit） ---
+    main_agent_tool_guard_enabled: bool
+    main_agent_tool_guard_entries: frozenset[tuple[str | tuple[str, str], int]]
 
     # --- グラフ実装切替 ---
     graph_impl: str
@@ -1034,6 +1055,67 @@ def _parse_plan_approval_exempt_scripts(value: str | None) -> frozenset[tuple[st
     return frozenset(entries)
 
 
+def _parse_main_agent_tool_guard_entries(value: str | None) -> frozenset[tuple[str | tuple[str, str], int]]:
+    """config.ini の [main_agent_tool_guard].entries をパースする。
+
+    各要素は [対象, max_calls] の2要素配列。max_calls をエントリごとに
+    個別指定できるようにするため、plan_approval_exempt_scripts のような
+    「対象だけの集合」ではなく「対象→上限回数」のペアの集合として持つ。
+    対象（1つ目の要素）はさらに次の2種類のいずれかを許容する
+    （メインエージェント自身の直接呼び出しを制限したい対象が、ビルトイン
+    ツール名単体の場合と run_script 配下のスキルスクリプトの場合の
+    両方があるため）:
+      - 文字列1件（例: "Glob", "analyze_image"）: ビルトインツール名そのもの。
+      - [スキル名, スクリプトファイル名] の2要素配列（例:
+        ["pdf-tools","render_pdf_pages.py"]）: run_script/
+        run_script_background 経由で呼ばれるスキルスクリプト。
+    例: entries = [["Glob", 1], ["analyze_image", 2], [["pdf-tools","render_pdf_pages.py"], 1]]
+    Python風のリストリテラルを ast.literal_eval で読む（末尾カンマ等の
+    緩い記法も許容するため）。
+
+    Args:
+        value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
+            空欄・None なら空集合を返す。
+
+    Returns:
+        {(対象, max_calls), ...} の frozenset。対象はツール名の文字列、または
+        (スキル名, スクリプトファイル名) のタプル。
+
+    Raises:
+        ValueError: リストとして解釈できない場合、各要素が [対象, max_calls] の
+            2要素でない場合、対象が文字列でも2要素配列でもない場合、または
+            max_calls が整数でない場合。
+    """
+    if not value or not value.strip():
+        return frozenset()
+    text = value.strip()
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(f"main_agent_tool_guard.entries はPythonのリスト形式で指定してください: {text!r}") from e
+    if not isinstance(parsed, list):
+        raise ValueError(f"main_agent_tool_guard.entries はリスト（配列）形式で指定してください: {text!r}")
+    entries: set[tuple[str | tuple[str, str], int]] = set()
+    for item in parsed:
+        if not (isinstance(item, (list, tuple)) and len(item) == 2):
+            raise ValueError(f"main_agent_tool_guard.entries の各要素は [対象, max_calls] の2要素にしてください: {item!r}")
+        target, max_calls = item
+        key: str | tuple[str, str]
+        if isinstance(target, str):
+            key = target
+        elif isinstance(target, (list, tuple)) and len(target) == 2:
+            key = (str(target[0]), str(target[1]))
+        else:
+            raise ValueError(
+                "main_agent_tool_guard.entries の対象はツール名の文字列、または"
+                f"[スキル名, スクリプトファイル名] の2要素にしてください: {target!r}"
+            )
+        if not isinstance(max_calls, int) or isinstance(max_calls, bool):
+            raise ValueError(f"main_agent_tool_guard.entries の max_calls は整数にしてください: {max_calls!r}")
+        entries.add((key, max_calls))
+    return frozenset(entries)
+
+
 def render_plan_approval_exempt_scripts_block(entries: frozenset[tuple[str, str]]) -> str:
     """system_prompt.md の {{plan_approval_exempt_scripts}} へ差し込むテキストを組み立てる。
 
@@ -1125,7 +1207,7 @@ def load_config(config_path: Path | None = None) -> Config:
     chat_starters = parser["chat_starters"] if parser.has_section("chat_starters") else {}
     scripts = parser["scripts"] if parser.has_section("scripts") else {}
     file_tools_duplicate_guard = parser["file_tools_duplicate_guard"] if parser.has_section("file_tools_duplicate_guard") else {}
-    main_agent_glob_guard = parser["main_agent_glob_guard"] if parser.has_section("main_agent_glob_guard") else {}
+    main_agent_tool_guard = parser["main_agent_tool_guard"] if parser.has_section("main_agent_tool_guard") else {}
     graph = parser["graph"] if parser.has_section("graph") else {}
     subagent = parser["subagent"] if parser.has_section("subagent") else {}
     timeouts = parser["user_response_timeouts"] if parser.has_section("user_response_timeouts") else {}
@@ -1303,16 +1385,16 @@ def load_config(config_path: Path | None = None) -> Config:
                 file_tools_duplicate_guard.get("carry_over_to_main", True),
             )
         ),
-        main_agent_glob_guard_enabled=_as_bool(
+        main_agent_tool_guard_enabled=_as_bool(
             os.getenv(
-                "MAIN_AGENT_GLOB_GUARD_ENABLED",
-                main_agent_glob_guard.get("enabled", True),
+                "MAIN_AGENT_TOOL_GUARD_ENABLED",
+                main_agent_tool_guard.get("enabled", True),
             )
         ),
-        main_agent_glob_guard_max_calls=int(
+        main_agent_tool_guard_entries=_parse_main_agent_tool_guard_entries(
             os.getenv(
-                "MAIN_AGENT_GLOB_GUARD_MAX_CALLS",
-                main_agent_glob_guard.get("max_calls", 1),
+                "MAIN_AGENT_TOOL_GUARD_ENTRIES",
+                main_agent_tool_guard.get("entries", '[["Glob", 1]]'),
             )
         ),
         graph_impl=os.getenv("GRAPH_IMPL", graph.get("implementation", "handwritten")),
