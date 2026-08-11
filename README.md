@@ -782,6 +782,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[user_response_timeouts]` | `ask_user_question_seconds` | `AskUserQuestion`（自由記述質問。`labels`省略時は単一入力、指定時は複数項目フォーム）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_QUESTION_TIMEOUT_SECONDS` |
 | `[user_response_timeouts]` | `ask_user_choice_seconds` | `ask_user_choice`（選択肢質問）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_CHOICE_TIMEOUT_SECONDS` |
 | `[plan]` | `allow_badge_unlock` | Plan Mode バッジの双方向切り替えを許可するか | `PLAN_ALLOW_BADGE_UNLOCK` |
+| `[plan]` | `reset_approval_on_recreate` | 承認済み（Edit Automatically）状態で`create_plan`を再度呼んだ際、`plan_approved`を無条件でリセットしてPlan Modeへ戻すか。`false`なら承認状態を維持したままstepsだけ差し替える | `PLAN_RESET_APPROVAL_ON_RECREATE` |
 | `[default_workdir]` | `dir` | エージェントの既定の作業ディレクトリ（`run_script` の cwd 等） | `DEFAULT_WORKDIR` |
 | `[default_workdir]` | `retention_days` | 上記 `dir` 配下のファイル保持日数（0以下で自動削除無効） | `DEFAULT_WORKDIR_RETENTION_DAYS` |
 | `[default_workdir]` | `cleanup_interval_hours` | default_workdir 自動削除チェック間隔（時間） | `DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS` |

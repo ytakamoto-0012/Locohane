@@ -377,6 +377,13 @@ class Config:
             Automatically → Plan Mode 方向（ロック）のクリックのみ有効になり、
             ロック解除は approve_plan（ユーザー承認フロー）経由に限定される
             （config.ini の [plan].allow_badge_unlock 由来）。
+        plan_reset_approval_on_recreate: 既に Edit Automatically（計画承認済み）の
+            状態で create_plan が再度呼ばれた際、plan_approved を強制的に
+            False へ戻す（Plan Mode へ戻す）か。True（既定）なら常に戻し
+            approve_plan による再承認を必須にする。False なら承認済み状態を
+            維持したまま steps だけ差し替える（未承認状態からの呼び出しは
+            この設定に関わらず常に Plan Mode のまま）。
+            （config.ini の [plan].reset_approval_on_recreate 由来）。
         thinking_loop_guard_enabled: LLM応答（thinking/本文）のストリーミング中に
             反復ループを検知したら生成を打ち切って再試行する機能の有効/無効。
         thinking_loop_guard_window_chars: ループ検知の判定対象に使う
@@ -612,6 +619,7 @@ class Config:
 
     # --- Plan Mode / Edit Automatically バッジ（送信ボタン付近のUI） ---
     plan_badge_allow_unlock: bool
+    plan_reset_approval_on_recreate: bool
 
     # --- LLM応答の反復ループ検知（src/llm.py の ChatLlamaCpp） ---
     thinking_loop_guard_enabled: bool
@@ -1484,6 +1492,9 @@ def load_config(config_path: Path | None = None) -> Config:
         ask_user_question_timeout_seconds=int(os.getenv("ASK_USER_QUESTION_TIMEOUT_SECONDS", timeouts.get("ask_user_question_seconds", 60))),
         ask_user_choice_timeout_seconds=int(os.getenv("ASK_USER_CHOICE_TIMEOUT_SECONDS", timeouts.get("ask_user_choice_seconds", 90))),
         plan_badge_allow_unlock=_as_bool(os.getenv("PLAN_BADGE_ALLOW_UNLOCK", plan_section.get("allow_badge_unlock", True))),
+        plan_reset_approval_on_recreate=_as_bool(
+            os.getenv("PLAN_RESET_APPROVAL_ON_RECREATE", plan_section.get("reset_approval_on_recreate", True))
+        ),
         thinking_loop_guard_enabled=_as_bool(os.getenv("THINKING_LOOP_GUARD_ENABLED", thinking_loop_guard.get("enabled", True))),
         thinking_loop_guard_window_chars=int(os.getenv("THINKING_LOOP_GUARD_WINDOW_CHARS", thinking_loop_guard.get("window_chars", 600))),
         thinking_loop_guard_check_interval_chars=int(

@@ -784,6 +784,7 @@ async def _setup() -> None:
         dispatch_agent_background_llm_timeout_max_retries=_config.subagent_background_llm_timeout_max_retries,
         plan_approval_exempt_scripts=_config.script_plan_approval_exempt_scripts,
         plans_dir=_config.plans_dir,
+        plan_reset_approval_on_recreate=_config.plan_reset_approval_on_recreate,
     )
 
     # チェックポインタ（会話状態の永続化）。接続はアプリ寿命で保持する。

@@ -250,6 +250,7 @@ _APPROVAL_TIMEOUT_SECONDS: int = 300
 _ASK_USER_QUESTION_TIMEOUT_SECONDS: int = 60
 _ASK_USER_CHOICE_TIMEOUT_SECONDS: int = 90
 _PLAN_BADGE_ALLOW_UNLOCK: bool = True
+_PLAN_RESET_APPROVAL_ON_RECREATE: bool = True
 
 # run_script は本来「書き込み系ツール」として一律に計画承認を要求するが、
 # 副作用のない純粋な読み取り専用スクリプトはここに (skill_name, script_filename)
@@ -305,6 +306,7 @@ def init_tools(
     dispatch_agent_background_llm_timeout_max_retries: int = 3,
     plan_approval_exempt_scripts: Iterable[tuple[str, str]] = (),
     plans_dir: Path | None = None,
+    plan_reset_approval_on_recreate: bool = True,
 ) -> None:
     """ツールが使う設定を注入する（app 起動時に一度だけ呼ぶ）。
 
@@ -431,6 +433,13 @@ def init_tools(
             Markdownを書き出す保存先ディレクトリ（config.ini の
             [paths].plans_dir 由来）。None の場合は detail_markdown を
             渡してもファイル保存をスキップする。
+        plan_reset_approval_on_recreate: 既に Edit Automatically（計画承認済み）
+            の状態で create_plan が再度呼ばれた際、plan_approved を強制的に
+            False へ戻す（Plan Mode へ戻す）か。True（既定）なら常に戻し
+            approve_plan による再承認を必須にする。False なら承認済み状態を
+            維持したまま steps だけ差し替える（未承認状態からの呼び出しは
+            この設定に関わらず常に Plan Mode のまま）。
+            （config.ini の [plan].reset_approval_on_recreate 由来）。
 
     Returns:
         None。副作用としてモジュール globals を更新するのみ。
@@ -451,6 +460,7 @@ def init_tools(
     global _APPROVAL_TIMEOUT_SECONDS, _ASK_USER_QUESTION_TIMEOUT_SECONDS
     global _ASK_USER_CHOICE_TIMEOUT_SECONDS
     global _PLAN_BADGE_ALLOW_UNLOCK
+    global _PLAN_RESET_APPROVAL_ON_RECREATE
     global _DISPATCH_AGENT_MAX_PARALLEL
     global _TOOL_CALL_MAX_PARALLEL
     global _PLAN_APPROVAL_EXEMPT_SCRIPTS
@@ -486,6 +496,7 @@ def init_tools(
     _ASK_USER_QUESTION_TIMEOUT_SECONDS = ask_user_question_timeout_seconds
     _ASK_USER_CHOICE_TIMEOUT_SECONDS = ask_user_choice_timeout_seconds
     _PLAN_BADGE_ALLOW_UNLOCK = plan_badge_allow_unlock
+    _PLAN_RESET_APPROVAL_ON_RECREATE = plan_reset_approval_on_recreate
     _DISPATCH_AGENT_MAX_PARALLEL = dispatch_agent_max_parallel
     _TOOL_CALL_MAX_PARALLEL = graph_tool_max_parallel
     # 設定値の変更（再初期化）に追従できるよう、以前の値で生成済みの
@@ -3222,6 +3233,15 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     このツールでステップ一覧を提示する。作成しただけでは書き込み系ツールの
     ブロックは解除されない。承認を得るには続けて approve_plan を呼ぶこと。
 
+    既に approve_plan で承認済み（Edit Automatically）の状態でこのツールを
+    再度呼んで steps を差し替えると、config.ini の
+    [plan].reset_approval_on_recreate が既定の true の場合、承認状態は
+    無条件で失われ Plan Mode（未承認）へ戻る。この場合、続けて approve_plan
+    を呼び直さない限り書き込み系ツールは再びブロックされる（false に設定
+    されている環境では承認状態が維持され、approve_plan の呼び直しは不要）。
+    戻り値のテキストで「作成しました（要approve_plan）」か「更新しました
+    （承認維持）」かを都度確認できる。
+
     run_script_background/execute_python_code_background でバックグラウンド
     ジョブを扱う場合、「起動」と「完了確認」を同じステップにまとめないこと。
     ジョブを起動しただけではまだ処理は終わっていないため、起動ステップを
@@ -3260,15 +3280,28 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
         if not isinstance(s, dict) or not s.get("content") or not s.get("activeForm"):
             return f"エラー: steps[{i}] には content と activeForm の両方を" f"文字列で指定してください: {s!r}"
     plan = [{"content": s["content"], "activeForm": s["activeForm"], "status": "pending"} for s in steps]
+    # 既に承認済み（Edit Automatically）だった場合にこの呼び出しでも承認状態を
+    # 維持するかは config.ini の [plan].reset_approval_on_recreate で切り替え可能
+    # （既定 True＝従来通り常にリセットして Plan Mode へ戻す）。未承認状態からの
+    # 呼び出しは元々 False なので、この設定に関わらず結果は変わらない。
+    still_approved = bool(cl.user_session.get("plan_approved")) and not _PLAN_RESET_APPROVAL_ON_RECREATE
     cl.user_session.set("plan", plan)
-    cl.user_session.set("plan_approved", False)
-    cl.user_session.set("awaiting_approve_plan_call", True)
-    message = cl.Message(content=_render_plan_payload(plan))
+    cl.user_session.set("plan_approved", still_approved)
+    cl.user_session.set("awaiting_approve_plan_call", not still_approved)
+    message = cl.Message(content=_render_plan_payload(plan, approved=still_approved))
     await message.send()
     cl.user_session.set("plan_message", message)
-    logger.info("create_plan: %d steps, detail_markdown=%d chars", len(steps), len(detail_markdown or ""))
+    logger.info(
+        "create_plan: %d steps, detail_markdown=%d chars, still_approved=%s",
+        len(steps),
+        len(detail_markdown or ""),
+        still_approved,
+    )
 
-    result = f"計画を作成しました（全{len(steps)}件）。approve_plan でユーザーの承認を得てください。"
+    if still_approved:
+        result = f"計画を更新しました（全{len(steps)}件）。承認済み状態を維持しているため、approve_plan を呼ばずに書き込み系ツールを続行できます。"
+    else:
+        result = f"計画を作成しました（全{len(steps)}件）。approve_plan でユーザーの承認を得てください。"
     if detail_markdown and detail_markdown.strip():
         # プレフィックス無しの通常メッセージとして送る（PLAN_PREFIX 付きの
         # チェックリストと違い、messageTree.ts の selectMainThread でサイドパネル
