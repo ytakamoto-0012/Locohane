@@ -1744,6 +1744,50 @@ async def _run_context_compaction(
     return True
 
 
+async def _run_context_compaction_visible(
+    graph,
+    config: dict,
+    thread_id: str,
+    last_usage: dict | None,
+    steps: dict[str, cl.Step],
+) -> bool:
+    """_run_context_compaction をユーザーに見える形（Step表示）で実行するラッパー。
+
+    要約LLM呼び出しは会話が長いほど時間がかかり（実測: 62件の要約で初回チャンク
+    まで約97秒）、その間ターンが完了しないため、何も表示しないとユーザーには
+    「タスクは終わったはずなのに思考中のまま止まっている」ように見える
+    （2026-08-12、issue/20260812_124500_post_turn_compaction_97s_ux_delay.md
+    参照）。should_compact() の判定自体は一瞬で終わり、実際に圧縮が発火する
+    ときだけ時間がかかるため、Stepは「発火が決まった後」にのみ表示する
+    （圧縮不要な大多数のターンでは何も表示されない）。
+    """
+    try:
+        state = await graph.aget_state(config)
+        messages = state.values.get("messages", []) if state else []
+        cumulative_main = cl.user_session.get("token_usage_cumulative_main")
+        will_compact = should_compact(cumulative_main, last_usage, len(messages), _config)
+    except Exception:
+        # 状態取得に失敗した場合、Step表示の要否だけ判定できないが、
+        # 圧縮の実処理自体は _run_context_compaction 内で同じ失敗に対する
+        # 自己修復（今回はスキップして次ターンに委ねる）を既に持っているため、
+        # ここでは例外を伝播させずそちらに委譲する。
+        logging.getLogger(__name__).exception("コンテキスト圧縮: Step表示要否の判定に失敗したため通常経路にフォールバックします")
+        return await _run_context_compaction(graph, config, thread_id, last_usage)
+    if not will_compact:
+        return await _run_context_compaction(graph, config, thread_id, last_usage)
+
+    step = cl.Step(name="会話履歴を整理中", type="tool", parent_id=_resolve_parent_id({}, steps))
+    step.start = utc_now()
+    await step.send()
+    try:
+        compacted = await _run_context_compaction(graph, config, thread_id, last_usage)
+    finally:
+        step.output = "整理しました" if compacted else "対象外だったためスキップしました"
+        step.end = utc_now()
+        await step.update()
+    return compacted
+
+
 @cl.on_message
 async def on_message(message: cl.Message) -> None:
     """Chainlit がユーザーからのメッセージを受け取るたびに呼ばれるフック。
@@ -2246,7 +2290,7 @@ async def on_message(message: cl.Message) -> None:
             await _aclose_event_stream(event_stream)
             if exc.tool_messages:
                 await graph.aupdate_state(config, {"messages": exc.tool_messages}, as_node="tools")
-            await _run_context_compaction(graph, config, thread_id, last_usage)
+            await _run_context_compaction_visible(graph, config, thread_id, last_usage, steps)
             # 圧縮後に新しいツール呼び出しが続く場合に備え、安全点検知用
             # 変数をリセットする。
             pending_main_tool_ids.clear()
@@ -2475,4 +2519,7 @@ async def on_message(message: cl.Message) -> None:
     # ターン完了直後の状態で改めて判定する（ループ内で発火しなかった場合の
     # 最終防衛ライン）。_run_context_compaction は進行中のグラフ実行が
     # 完全に終わった後のこのタイミングでも安全に呼べる。
-    await _run_context_compaction(graph, config, thread_id, last_usage)
+    # ユーザーへの返信は既に送信済みだが、要約LLM呼び出しに数十秒〜数分
+    # かかりうる（実測97秒）ため、_run_context_compaction_visible で
+    # Stepを表示し「思考中のまま何も起きていないように見える」状態を防ぐ。
+    await _run_context_compaction_visible(graph, config, thread_id, last_usage, steps)

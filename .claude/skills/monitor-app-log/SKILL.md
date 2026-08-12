@@ -18,7 +18,9 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 
 ## 状態ファイル
 
-`.qwen/skills/monitor-app-log/state.json`（このSKILL.mdと同じディレクトリ）:
+`.qwen/state/monitor-app-log/state.json`（プロジェクトルート基準。過去の
+記述ミスで「このSKILL.mdと同じディレクトリ」としていたが、実際の運用では
+このパスが使われている。2026-08-12訂正）:
 
 ```json
 {"last_checked": "2026-08-01T22:50:00", "cron_job_id": "xxxxx"}
@@ -79,7 +81,22 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 具体的な操作・出力」を `## 推定原因` に記載する。上限自体の調整は最終手段とし、
 まずはプロンプトの圧縮・ツール結果の省略・会話設計の見直し等の根本対策を
 検討すべきである。
-3. 該当行が一つも無ければ、issueファイルは作成せずそのまま終了する
+3. **WARNING行がエラー内容を欠落させている場合の実体確認**: `src.subagent` /
+   `src.tools` の `subagent tool=...` / `tool_result: name=...` 系WARNING行は、
+   同一イベントに対して `WARNING` と `DEBUG` の両方が出力されるが、**`WARNING`
+   側は内容が途中で切り詰められ、`DEBUG`側にのみ完全な内容が入っていることが
+   ある**（実例: `run_script(edit_excel.py)` 失敗時、WARNING行は
+   `-> [終了コード] 1` のみで終わり、直後・同時刻の同一 `args=` を持つDEBUG行に
+   `[終了コード] 1\n[標準エラー]\nTraceback ...` というTraceback全文が入って
+   いた。2026-08-12調査、[issue/20260812_121000_excel_edit_mergedcell_attributeerror.md](../../../issue/20260812_121000_excel_edit_mergedcell_attributeerror.md)参照）。
+   WARNING行の `->` 以降が `[終了コード] N`（N≠0）で終わっている、または
+   内容が不自然に短く実際のエラー本文が読み取れない場合は、**同一ファイル内で
+   同時刻・同一 `args=` プレフィックスを持つ `DEBUG` レベルの重複行**を探し、
+   そちらの完全な内容を `## ログ引用`・`## エラー原文` に使う（`config.ini`
+   の `[log].level` がDEBUG以上であれば同一ファイルに存在する）。これを怠ると、
+   エラーの実体（Traceback等）を欠いたまま `## 推定原因` が「未検証」で
+   埋没してしまう。
+4. 該当行が一つも無ければ、issueファイルは作成せずそのまま終了する
    （`state.json` の `last_checked` 更新は行う）。
 
 ### 4. 事案のグルーピング
