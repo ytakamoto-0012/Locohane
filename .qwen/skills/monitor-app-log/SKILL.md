@@ -18,7 +18,9 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 
 ## 状態ファイル
 
-`.qwen/state/monitor-app-log/state.json`:
+`.qwen/state/monitor-app-log/state.json`（プロジェクトルート基準。過去の
+記述ミスで「このSKILL.mdと同じディレクトリ」としていたが、実際の運用では
+このパスが使われている。2026-08-12訂正）:
 
 ```json
 {"last_checked": "2026-08-01T22:50:00", "cron_job_id": "xxxxx"}
@@ -28,27 +30,6 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
   ファイルが無い/壊れている場合は**現在時刻**で初期化する
   （過去ログの一括バックフィルはしない。監視開始時点より先のみが対象）。
 - `cron_job_id`: このスキルが自己登録した `CronCreate` のジョブID。
-
-> **注意**: 元々は `data/temp/state.json` に保存していたが、`.gitignore` で
-> `data/` 全体が除外されているため、Qwen Code からのファイル検知が不安定に
-> なっていた。これを避けるため、`.qwen/state/monitor-app-log/` 配下へ移動した。
-
-## .gitignore 問題への対策
-
-`.gitignore` で `data/` が除外されているため、Qwen Code の `glob` ツール等が
-`data/` 配下のファイルを検知できない（`.gitignore` 対象のファイルは
-`list_directory` や `glob` の結果に含まれない）。このスキルで `data/` 配下
-を扱う場合は以下のルールに従う。
-
-- **状態ファイル**: `.qwen/state/monitor-app-log/state.json` に保存する
-  （`.gitignore` で `state.json` が除外されている点に注意。`.qwen/` 配下で
-  かつ `state.json` 単独ファイルは追跡対象外として検知される）。
-- **ログファイル**: `data/logs/app_*.log` は `.gitignore` 対象のため
-  `glob` で検知できない。`list_directory` でも結果に含まれない。
-  代わりに `run_shell_command` で `dir data\logs\app_*.log` 等を呼び、
-  ファイル一覧を取得してから `read_file` で内容を読み取る。
-- **issue ディレクトリ**: プロジェクト直下の `issue/` は git 管理下にある
-  （`.gitignore` 対象外）ため、通常通りにアクセス可能。
 
 ## 手順
 
@@ -104,7 +85,22 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 具体的な操作・出力」を `## 推定原因` に記載する。上限自体の調整は最終手段とし、
 まずはプロンプトの圧縮・ツール結果の省略・会話設計の見直し等の根本対策を
 検討すべきである。
-3. 該当行が一つも無ければ、issueファイルは作成せずそのまま終了する
+3. **WARNING行がエラー内容を欠落させている場合の実体確認**: `src.subagent` /
+   `src.tools` の `subagent tool=...` / `tool_result: name=...` 系WARNING行は、
+   同一イベントに対して `WARNING` と `DEBUG` の両方が出力されるが、**`WARNING`
+   側は内容が途中で切り詰められ、`DEBUG`側にのみ完全な内容が入っていることが
+   ある**（実例: `run_script(edit_excel.py)` 失敗時、WARNING行は
+   `-> [終了コード] 1` のみで終わり、直後・同時刻の同一 `args=` を持つDEBUG行に
+   `[終了コード] 1\n[標準エラー]\nTraceback ...` というTraceback全文が入って
+   いた。2026-08-12調査、[issue/20260812_121000_excel_edit_mergedcell_attributeerror.md](../../../issue/20260812_121000_excel_edit_mergedcell_attributeerror.md)参照）。
+   WARNING行の `->` 以降が `[終了コード] N`（N≠0）で終わっている、または
+   内容が不自然に短く実際のエラー本文が読み取れない場合は、**同一ファイル内で
+   同時刻・同一 `args=` プレフィックスを持つ `DEBUG` レベルの重複行**を探し、
+   そちらの完全な内容を `## ログ引用`・`## エラー原文` に使う（`config.ini`
+   の `[log].level` がDEBUG以上であれば同一ファイルに存在する）。これを怠ると、
+   エラーの実体（Traceback等）を欠いたまま `## 推定原因` が「未検証」で
+   埋没してしまう。
+4. 該当行が一つも無ければ、issueファイルは作成せずそのまま終了する
    （`state.json` の `last_checked` 更新は行う）。
 
 ### 4. 事案のグルーピング
