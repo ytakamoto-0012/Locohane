@@ -1,7 +1,9 @@
 """edit_docx.py が適用する「操作（op）」のディスパッチ実装。
 
-各関数は (doc, op_dict) を受け取り、python-docx の Document へ副作用を
-適用する。戻り値は呼び出し元へ報告する結果（dict）または None。
+各関数は (DocEditContext, op_dict) を受け取り、python-docx の Document へ
+副作用を適用する。戻り値は呼び出し元へ報告する結果（dict）または None。
+DocEditContextは段落indexを「このopsバッチ開始時点の番号」として解決し、
+delete_paragraphによる段落数の変化を自動追跡する（詳細はクラス docstring 参照）。
 
 run_script からは直接実行されない。edit_docx.py から import して使う。
 """
@@ -30,6 +32,38 @@ from _track_changes import (
 )
 
 
+class DocEditContext:
+    """opsバッチ全体で共有する状態。
+
+    `index`/`paragraph_index`は常に「このopsバッチを開始した時点（＝直前の
+    docx-readが見せていたはずの状態）の段落番号」として解決する。
+    `delete_paragraph`で段落数が変わっても、それより後のopで毎回シフト量を
+    手計算する必要が無い（pptx-editのスライド番号解決と同じ考え方。
+    Excel編集での行挿入後の絶対行番号ズレ事故と同根の問題への対応）。
+    """
+
+    def __init__(self, doc):
+        self.doc = doc
+        # 段落のXML要素(<w:p>)は削除されない限り同一オブジェクトのままなので、
+        # Python識別性でのlist.index()による生存追跡が可能。
+        self._original_paragraph_elements = [p._p for p in doc.paragraphs]
+
+    def get_paragraph(self, index: int):
+        idx = int(index)
+        total = len(self._original_paragraph_elements)
+        if not (0 <= idx < total):
+            raise ValueError(f"存在しないindexです: {index}（このopsバッチ開始時点の総段落数: {total}）")
+        element = self._original_paragraph_elements[idx]
+        live_elements = [p._p for p in self.doc.paragraphs]
+        try:
+            live_idx = live_elements.index(element)
+        except ValueError:
+            raise ValueError(
+                f"段落{index}は、この呼び出し内の先行する操作（delete_paragraph等）で既に削除されています"
+            )
+        return self.doc.paragraphs[live_idx]
+
+
 def _apply_plain_replace_to_run(run, old_text: str, new_text: str, occurrence: str) -> int:
     text = run.text
     if old_text not in text:
@@ -39,7 +73,8 @@ def _apply_plain_replace_to_run(run, old_text: str, new_text: str, occurrence: s
     return count
 
 
-def op_find_replace(doc, op: dict) -> dict:
+def op_find_replace(ctx: DocEditContext, op: dict) -> dict:
+    doc = ctx.doc
     old_text = op["old_text"]
     if not old_text:
         raise ValueError("old_text は空文字列にできません")
@@ -51,14 +86,10 @@ def op_find_replace(doc, op: dict) -> dict:
     author = op.get("author") or DEFAULT_AUTHOR
     date = op.get("date") or now_iso()
 
-    paragraphs = doc.paragraphs
     if op.get("paragraph_index") is not None:
-        idx = int(op["paragraph_index"])
-        if not (0 <= idx < len(paragraphs)):
-            raise ValueError(f"存在しないparagraph_indexです: {idx}（総段落数: {len(paragraphs)}）")
-        targets = [paragraphs[idx]]
+        targets = [ctx.get_paragraph(op["paragraph_index"])]
     else:
-        targets = paragraphs
+        targets = doc.paragraphs
 
     replaced = 0
     for para in targets:
@@ -84,7 +115,7 @@ def op_find_replace(doc, op: dict) -> dict:
     return {"op": "find_replace", "replaced_count": replaced}
 
 
-def op_append_block(doc, op: dict) -> dict:
+def op_append_block(ctx: DocEditContext, op: dict) -> dict:
     block = op["block"]
     if not isinstance(block, dict):
         raise ValueError("block はオブジェクトである必要があります")
@@ -92,7 +123,7 @@ def op_append_block(doc, op: dict) -> dict:
     if handler is None:
         raise ValueError(f"未対応のblock typeです: {block.get('type')!r}（対応: {sorted(BLOCK_HANDLERS)}）")
     theme = resolve_theme(op.get("theme"))
-    handler(doc, block, theme)
+    handler(ctx.doc, block, theme)
     return {"op": "append_block", "block_type": block.get("type")}
 
 
@@ -104,7 +135,7 @@ _ALIGN_MAP = {
 }
 
 
-def op_set_paragraph_style(doc, op: dict) -> dict:
+def op_set_paragraph_style(ctx: DocEditContext, op: dict) -> dict:
     """既存段落を明示的に再配色・再配置する（ユーザーが見た目の変更を明示的に頼んだ場合のみ使う）。
 
     `role`（"heading"/"callout"）+ `theme` で定番の見た目を指定するか、
@@ -115,11 +146,8 @@ def op_set_paragraph_style(doc, op: dict) -> dict:
     明示キーはroleから導いた既定値より優先される。
     """
     index = op["index"]
-    paragraphs = doc.paragraphs
     idx = int(index)
-    if not (0 <= idx < len(paragraphs)):
-        raise ValueError(f"存在しないindexです: {index}（総段落数: {len(paragraphs)}）")
-    para = paragraphs[idx]
+    para = ctx.get_paragraph(index)
 
     style = dict(op)
     role = op.get("role")
@@ -168,7 +196,7 @@ def op_set_paragraph_style(doc, op: dict) -> dict:
     return {"op": "set_paragraph_style", "index": idx}
 
 
-def op_set_table_style(doc, op: dict) -> dict:
+def op_set_table_style(ctx: DocEditContext, op: dict) -> dict:
     """既存の表の行を明示的に再配色する（ユーザーが見た目の変更を明示的に頼んだ場合のみ使う）。
 
     既定では見出し行（0行目）のみを対象にする。`row`（0始まり行番号）または
@@ -179,7 +207,7 @@ def op_set_table_style(doc, op: dict) -> dict:
     from docx.shared import RGBColor
 
     table_index = op["table_index"]
-    tables = doc.tables
+    tables = ctx.doc.tables
     idx = int(table_index)
     if not (0 <= idx < len(tables)):
         raise ValueError(f"存在しないtable_indexです: {table_index}（総表数: {len(tables)}）")
@@ -221,7 +249,7 @@ def op_set_table_style(doc, op: dict) -> dict:
     return {"op": "set_table_style", "table_index": idx}
 
 
-def op_delete_paragraph(doc, op: dict) -> dict:
+def op_delete_paragraph(ctx: DocEditContext, op: dict) -> dict:
     index = op["index"]
     if op.get("track_changes"):
         raise ValueError(
@@ -229,22 +257,19 @@ def op_delete_paragraph(doc, op: dict) -> dict:
             "変更履歴として残したい場合は、段落内の全文をfind_replaceでtrack_changes:trueにより"
             "空文字へ置換してください（段落自体は残り、中身の削除のみが変更履歴になります）"
         )
-    paragraphs = doc.paragraphs
-    idx = int(index)
-    if not (0 <= idx < len(paragraphs)):
-        raise ValueError(f"存在しないindexです: {index}（総段落数: {len(paragraphs)}）")
-    p_element = paragraphs[idx]._p
+    para = ctx.get_paragraph(index)
+    p_element = para._p
     p_element.getparent().remove(p_element)
-    return {"op": "delete_paragraph", "deleted_index": idx}
+    return {"op": "delete_paragraph", "deleted_index": int(index)}
 
 
-def op_accept_all_changes(doc, op: dict) -> dict:
-    result = accept_all_changes(doc)
+def op_accept_all_changes(ctx: DocEditContext, op: dict) -> dict:
+    result = accept_all_changes(ctx.doc)
     return {"op": "accept_all_changes", **result}
 
 
-def op_reject_all_changes(doc, op: dict) -> dict:
-    result = reject_all_changes(doc)
+def op_reject_all_changes(ctx: DocEditContext, op: dict) -> dict:
+    result = reject_all_changes(ctx.doc)
     return {"op": "reject_all_changes", **result}
 
 
@@ -259,9 +284,9 @@ OP_HANDLERS = {
 }
 
 
-def apply_op(doc, op: dict) -> dict | None:
+def apply_op(ctx: DocEditContext, op: dict) -> dict | None:
     op_name = op.get("op")
     handler = OP_HANDLERS.get(op_name)
     if handler is None:
         raise ValueError(f"未対応のopです: {op_name!r}（対応op: {sorted(OP_HANDLERS)}）")
-    return handler(doc, op)
+    return handler(ctx, op)

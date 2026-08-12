@@ -5,6 +5,8 @@ create_docx.py の _add_page_number_field と同じ「OxmlElement + qn() で
 要素を直接組み立てる」イディオムで実装する。
 
 run_script からは直接実行されない。_ops.py から import して使う。
+実体は skills/docx-read/scripts/_track_changes.py にも同一内容を複製している
+（read_docx.py の count_revisions 用。変更する場合は両方に反映すること）。
 """
 
 from __future__ import annotations

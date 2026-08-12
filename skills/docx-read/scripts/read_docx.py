@@ -71,6 +71,21 @@ def main() -> int:
 
     tables = [[[cell.text for cell in row.cells] for row in table.rows] for table in doc.tables]
 
+    # paragraphsとtablesは別々のフラットリストで返るため、両者の文書内での
+    # 前後関係（どの段落とどの表が隣接しているか）が分からない。表の直前/直後に
+    # 段落を挿入したい等、位置関係が必要な編集の判断材料として、本文（body）
+    # 直下の子要素を文書順に並べたインデックスを別途返す。
+    from docx.oxml.ns import qn
+
+    p_index_by_elm = {p._p: i for i, p in enumerate(doc.paragraphs)}
+    t_index_by_elm = {t._tbl: i for i, t in enumerate(doc.tables)}
+    body_order = []
+    for child in doc.element.body:
+        if child.tag == qn("w:p") and child in p_index_by_elm:
+            body_order.append({"type": "paragraph", "index": p_index_by_elm[child]})
+        elif child.tag == qn("w:tbl") and child in t_index_by_elm:
+            body_order.append({"type": "table", "index": t_index_by_elm[child]})
+
     from _track_changes import count_revisions
 
     track_changes = count_revisions(doc)
@@ -91,10 +106,11 @@ def main() -> int:
         "paragraphs": selected,
         "table_count": len(tables),
         "tables": tables,
+        "body_order": body_order,
         "core_properties": core_properties,
         "track_changes": track_changes,
     }
-    summary = summarize_result(result, ["paragraphs", "tables"])
+    summary = summarize_result(result, ["paragraphs", "tables", "body_order"])
     summary.update(write_json_result(result, "docx_read", path))
     print(json.dumps(summary, ensure_ascii=False))
     return 0

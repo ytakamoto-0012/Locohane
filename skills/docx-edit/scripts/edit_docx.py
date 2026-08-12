@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 from _common import backup_before_overwrite, register_output_path, setup_utf8_stdio
-from _ops import apply_op
+from _ops import DocEditContext, apply_op
 
 
 def _load_json_arg(args: argparse.Namespace) -> str:
@@ -97,13 +97,14 @@ def main() -> int:
         print(f"ファイル読み込みに失敗しました: {e}", file=sys.stderr)
         return 1
 
+    ctx = DocEditContext(doc)
     op_results = []
     for idx, op in enumerate(ops):
         if not isinstance(op, dict) or "op" not in op:
             print(f"ops[{idx}] が不正です（'op'キーを持つオブジェクトである必要があります）: {op!r}", file=sys.stderr)
             return 1
         try:
-            result = apply_op(doc, op)
+            result = apply_op(ctx, op)
         except (KeyError, ValueError, TypeError) as e:
             print(f"ops[{idx}]（op={op.get('op')!r}）の適用に失敗しました: {e}", file=sys.stderr)
             return 1
