@@ -80,12 +80,54 @@ def _require(op: dict, key: str):
     return value
 
 
-def _get_slide(prs: Presentation, slide_num: int):
-    idx = int(slide_num) - 1
-    total = len(prs.slides)
-    if idx < 0 or idx >= total:
-        raise ValueError(f"存在しないスライド番号です: {slide_num}（現在の総スライド数: {total}）")
-    return prs.slides[idx]
+class EditContext:
+    """opsバッチ全体で共有する状態。
+
+    `slide`番号は常に「このopsバッチを開始した時点（＝直前のpptx-inspectが
+    見せていたはずの状態）のスライド番号」として解決する。`duplicate_slide`/
+    `delete_slide`/`reorder_slides`が後続スライド番号をずらしても、それより
+    後のopで毎回シフト量を手計算する必要が無い（Excel編集での同種の事故
+    ＝行挿入後の絶対行番号ズレ、と同根の問題への対応）。
+
+    対して`duplicate_slide`の`insert_after`と`reorder_slides`の`order`は、
+    「新しい内容をどこに置くか／並べ替えるか」という現在時点の配置に関する
+    指定なので、現在のライブ位置基準のまま扱う（詳細はSKILL.md参照）。
+    """
+
+    def __init__(self, prs: Presentation):
+        self.prs = prs
+        # sldId要素はスライドの並び替え・複製では再生成されず同一オブジェクトの
+        # ままなので、Python識別性でのlist.index()による生存追跡が可能。
+        # 削除された要素だけがこのリストの走査から消える。
+        self._original_slide_elements = list(prs.slides._sldIdLst)
+
+    def _resolve_element(self, slide_num: int):
+        idx = int(slide_num) - 1
+        total = len(self._original_slide_elements)
+        if idx < 0 or idx >= total:
+            raise ValueError(
+                f"存在しないスライド番号です: {slide_num}（このopsバッチ開始時点の総スライド数: {total}）"
+            )
+        element = self._original_slide_elements[idx]
+        if element not in list(self.prs.slides._sldIdLst):
+            raise ValueError(
+                f"スライド{slide_num}は、この呼び出し内の先行する操作（delete_slide等）で"
+                "既に削除されています"
+            )
+        return element
+
+    def get_slide(self, slide_num: int):
+        element = self._resolve_element(slide_num)
+        live_idx = list(self.prs.slides._sldIdLst).index(element)
+        return self.prs.slides[live_idx]
+
+    def get_slide_element(self, slide_num: int):
+        return self._resolve_element(slide_num)
+
+    def current_position(self, slide_num: int) -> int:
+        """スライド番号（バッチ開始時点基準）を、現在のライブな1始まり位置へ変換する。"""
+        element = self._resolve_element(slide_num)
+        return list(self.prs.slides._sldIdLst).index(element) + 1
 
 
 def _get_shape(slide, shape_index: int):
@@ -113,15 +155,15 @@ def _set_bullets(text_frame, bullets: list) -> None:
         p.level = level
 
 
-def op_set_title(prs: Presentation, op: dict) -> None:
-    slide = _get_slide(prs, _require(op, "slide"))
+def op_set_title(ctx: EditContext, op: dict) -> None:
+    slide = ctx.get_slide(_require(op, "slide"))
     if slide.shapes.title is None:
         raise ValueError("このスライドにタイトルプレースホルダがありません")
     slide.shapes.title.text = str(op.get("text", ""))
 
 
-def op_set_text(prs: Presentation, op: dict) -> None:
-    slide = _get_slide(prs, _require(op, "slide"))
+def op_set_text(ctx: EditContext, op: dict) -> None:
+    slide = ctx.get_slide(_require(op, "slide"))
     shape = _get_shape(slide, _require(op, "shape_index"))
     if not shape.has_text_frame:
         raise ValueError(f"shape_index {op['shape_index']} はテキストを持てないshapeです")
@@ -129,8 +171,8 @@ def op_set_text(prs: Presentation, op: dict) -> None:
     _set_bullets(shape.text_frame, bullets)
 
 
-def op_set_table_cell(prs: Presentation, op: dict) -> None:
-    slide = _get_slide(prs, _require(op, "slide"))
+def op_set_table_cell(ctx: EditContext, op: dict) -> None:
+    slide = ctx.get_slide(_require(op, "slide"))
     shape = _get_shape(slide, _require(op, "shape_index"))
     if not shape.has_table:
         raise ValueError(f"shape_index {op['shape_index']} は表ではありません")
@@ -144,8 +186,8 @@ def op_set_table_cell(prs: Presentation, op: dict) -> None:
     table.cell(row, col).text = str(op.get("text", ""))
 
 
-def op_set_table(prs: Presentation, op: dict) -> None:
-    slide = _get_slide(prs, _require(op, "slide"))
+def op_set_table(ctx: EditContext, op: dict) -> None:
+    slide = ctx.get_slide(_require(op, "slide"))
     shape = _get_shape(slide, _require(op, "shape_index"))
     if not shape.has_table:
         raise ValueError(f"shape_index {op['shape_index']} は表ではありません")
@@ -172,13 +214,13 @@ def op_set_table(prs: Presentation, op: dict) -> None:
         r += 1
 
 
-def op_set_notes(prs: Presentation, op: dict) -> None:
-    slide = _get_slide(prs, _require(op, "slide"))
+def op_set_notes(ctx: EditContext, op: dict) -> None:
+    slide = ctx.get_slide(_require(op, "slide"))
     slide.notes_slide.notes_text_frame.text = str(op.get("text", ""))
 
 
-def op_replace_picture(prs: Presentation, op: dict) -> None:
-    slide = _get_slide(prs, _require(op, "slide"))
+def op_replace_picture(ctx: EditContext, op: dict) -> None:
+    slide = ctx.get_slide(_require(op, "slide"))
     shape = _get_shape(slide, _require(op, "shape_index"))
     if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
         raise ValueError(f"shape_index {op['shape_index']} は画像ではありません")
@@ -240,7 +282,7 @@ def _style_text_frame(
                 _set_run_font_name(run, font_name)
 
 
-def op_set_shape_style(prs: Presentation, op: dict) -> None:
+def op_set_shape_style(ctx: EditContext, op: dict) -> None:
     """既存shape（テキストボックス・オートシェイプ・表）を明示的に再配色・再配置する。
 
     ユーザーが「もっと格好よく／見やすくして」「文字を中央寄せに」等、既存
@@ -249,7 +291,7 @@ def op_set_shape_style(prs: Presentation, op: dict) -> None:
     場面はこのopに限定する）。図形自体の位置/サイズ移動は set_shape_position
     を使う。
     """
-    slide = _get_slide(prs, _require(op, "slide"))
+    slide = ctx.get_slide(_require(op, "slide"))
     shape = _get_shape(slide, _require(op, "shape_index"))
 
     theme = resolve_theme(op["theme"]) if op.get("theme") else None
@@ -323,14 +365,14 @@ def op_set_shape_style(prs: Presentation, op: dict) -> None:
                                italic=italic, underline=underline, font_name=font_name, align=align)
 
 
-def op_set_shape_position(prs: Presentation, op: dict) -> None:
+def op_set_shape_position(ctx: EditContext, op: dict) -> None:
     """既存shapeの位置・サイズを変更する（cm単位）。
 
     ユーザーが「もっと左に」「大きくして」等、配置の変更を明示的に頼んできた
     場合にのみ使う。left/top/width/height のうち指定されたものだけを変更し、
     省略したものは元の値を維持する。
     """
-    slide = _get_slide(prs, _require(op, "slide"))
+    slide = ctx.get_slide(_require(op, "slide"))
     shape = _get_shape(slide, _require(op, "shape_index"))
 
     left = op.get("left_cm")
@@ -363,7 +405,18 @@ def _copy_picture_into(new_slide, shape) -> None:
 
 def _duplicate_slide_once(prs: Presentation, source_slide):
     layout = source_slide.slide_layout
+    # python-pptxのPresentationPart.add_slideは新規パート名を
+    # 「/ppt/slides/slide<現在のスライド数+1>.xml」という単純な個数ベースで
+    # 決めており、実際に空いているか（package.next_partnameのような
+    # 網羅チェック）を確認しない。そのため delete_slide で歯抜けができた後に
+    # duplicate_slide すると、末尾より手前に残っている既存スライドと
+    # パート名が衝突し、保存時にZIP内で同名エントリが重複する
+    # （python-pptx側の既知の制限）。add_slide前に衝突しない正しい空き
+    # パート名を計算しておき、add_slide後に付け替えて回避する。
+    safe_partname = prs.part.package.next_partname("/ppt/slides/slide%d.xml")
     new_slide = prs.slides.add_slide(layout)
+    if new_slide.part.partname != safe_partname:
+        new_slide.part.partname = safe_partname
     # add_slide が layout に合わせて自動生成する空プレースホルダは、
     # source_slide の内容をそのままコピーし直すため一旦すべて取り除く。
     for shape in list(new_slide.shapes):
@@ -399,45 +452,54 @@ def _move_slide_to(prs: Presentation, position: int) -> None:
     xml_slides.insert(position, last)
 
 
-def op_duplicate_slide(prs: Presentation, op: dict) -> None:
+def op_duplicate_slide(ctx: EditContext, op: dict) -> None:
     source_num = int(_require(op, "slide"))
-    source_slide = _get_slide(prs, source_num)
-    insert_after = int(op.get("insert_after", source_num))
+    source_slide = ctx.get_slide(source_num)
+    # insert_after省略時は「複製元スライドの“現在の”ライブ位置の直後」に置く。
+    # source_numをそのまま使うと、このバッチ内で先行opによりスライドが
+    # 既にずれている場合に誤った位置へ挿入してしまう。
+    insert_after = int(op["insert_after"]) if "insert_after" in op else ctx.current_position(source_num)
     count = int(op.get("count", 1))
     if count < 1:
         raise ValueError("count は1以上を指定してください")
-    total = len(prs.slides)
+    total = len(ctx.prs.slides)
     if insert_after < 0 or insert_after > total:
         raise ValueError(f"insert_after が不正です（0〜{total}の範囲で指定してください）: {insert_after}")
 
     position = insert_after
     for _ in range(count):
-        _duplicate_slide_once(prs, source_slide)
-        _move_slide_to(prs, position)
+        _duplicate_slide_once(ctx.prs, source_slide)
+        _move_slide_to(ctx.prs, position)
         position += 1
 
 
-def op_delete_slide(prs: Presentation, op: dict) -> None:
+def op_delete_slide(ctx: EditContext, op: dict) -> None:
     slide_num = int(_require(op, "slide"))
-    idx = slide_num - 1
-    xml_slides = prs.slides._sldIdLst
-    slides = list(xml_slides)
-    if idx < 0 or idx >= len(slides):
-        raise ValueError(f"存在しないスライド番号です: {slide_num}（現在の総スライド数: {len(slides)}）")
-    slide_id_elm = slides[idx]
-    rid = slide_id_elm.get(qn("r:id"))
-    prs.part.drop_rel(rid)
-    xml_slides.remove(slide_id_elm)
+    element = ctx.get_slide_element(slide_num)
+    xml_slides = ctx.prs.slides._sldIdLst
+    rid = element.get(qn("r:id"))
+    ctx.prs.part.drop_rel(rid)
+    xml_slides.remove(element)
 
 
-def op_reorder_slides(prs: Presentation, op: dict) -> None:
+def op_reorder_slides(ctx: EditContext, op: dict) -> None:
+    """全スライドの並び順を指定順に変更する。
+
+    `order`は他のopと異なり「バッチ開始時点の番号」ではなく、この操作を
+    適用する時点でのライブなスライド番号(1始まり)の順列を指定する
+    （このopの目的自体が「今存在する全スライドをどう並べるか」であり、
+    かつ先行opでduplicate_slideが作った新規スライドにはバッチ開始時点の
+    番号が存在しないため）。delete_slide/duplicate_slideと同一バッチで
+    併用する場合は、reorder_slidesをそれらより後・かつ操作列の最後に
+    置くことを推奨する（詳細はSKILL.md参照）。
+    """
     order = op.get("order")
-    total = len(prs.slides)
+    total = len(ctx.prs.slides)
     if not isinstance(order, list) or sorted(order) != list(range(1, total + 1)):
         raise ValueError(
             f"order には現在の全スライド番号(1〜{total})の順列を指定してください: {order!r}"
         )
-    xml_slides = prs.slides._sldIdLst
+    xml_slides = ctx.prs.slides._sldIdLst
     slides = list(xml_slides)
     new_order_elms = [slides[i - 1] for i in order]
     for elm in new_order_elms:
@@ -521,6 +583,7 @@ def main() -> int:
         print(f"pptxの読み込みに失敗しました: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return 1
 
+    ctx = EditContext(prs)
     for i, op in enumerate(operations):
         op_name = op.get("op") if isinstance(op, dict) else None
         handler = OP_HANDLERS.get(op_name)
@@ -529,7 +592,7 @@ def main() -> int:
             print(f"操作{i + 1}: 未対応の op です: {op_name!r}（対応: {supported}）", file=sys.stderr)
             return 1
         try:
-            handler(prs, op)
+            handler(ctx, op)
         except ValueError as e:
             print(f"操作{i + 1}（{op_name}）の適用に失敗しました: {e}", file=sys.stderr)
             return 1

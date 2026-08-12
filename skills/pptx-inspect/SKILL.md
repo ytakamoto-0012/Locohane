@@ -44,14 +44,21 @@ metadata:
 `{"index", "layout_name", "layout_index", "shapes", "notes_present"}`。
 `shapes` の各要素は `{"shape_index", "name", "shape_type", "is_placeholder",
 "placeholder_idx", "placeholder_type", "has_text_frame", "text_preview",
-"has_table", "table_dims", "has_picture"}`）は標準出力からは省かれ、
-`result_path` が指すJSONファイルにのみ含まれます。`Read` ツールで読んで
-`shape_index` を確認してから `pptx-edit` を呼んでください。
+"has_table", "table_dims", "has_picture", "left_cm", "top_cm", "width_cm",
+"height_cm"}`）は標準出力からは省かれ、`result_path` が指すJSONファイルにのみ
+含まれます。`Read` ツールで読んで `shape_index` を確認してから `pptx-edit` を
+呼んでください。
 
 - `shape_index` は `pptx-edit` の各操作で指定する `shape_index` と完全に一致します
   （このスライド内での0始まり連番）。
 - `text_preview` は先頭50文字までの切り詰め表示です（編集対象を見分けるための参考情報で、
   全文取得には `pptx-read` を使ってください）。
+- `left_cm`/`top_cm`/`width_cm`/`height_cm` はshapeの現在位置・サイズ（cm単位）。
+  `pptx-edit`の`set_shape_position`が受け取る単位と完全に一致するため、
+  ここで読んだ値をそのまま計算の基準に使える（例:「shape_index 2の右に10cm離して
+  配置したい」→このshapeの`left_cm + width_cm + 10`を新しい`left_cm`にする）。
+  プレースホルダ等でレイアウト側から座標を継承していて実座標が取得できない
+  shapeは`null`になる。
 - ページングは `pptx-read` と同じ設計です（`total_slides` が `max_slides` を超える場合は
   `--start-slide` を `end_slide + 1` にして再度呼び出す）。
 

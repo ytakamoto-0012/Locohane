@@ -38,10 +38,15 @@ metadata:
 ## JSON操作列スキーマ
 
 トップレベルは `{"operations": [...]}` で、各要素が1つの操作です。**配列の先頭から順に**
-1つのPresentationへ適用されるため、`duplicate_slide`/`delete_slide`/`reorder_slides` を使うと
-それ以降の操作で参照するスライド番号がずれます（下記`slide`キーの注記を参照）。
+1つのPresentationへ適用されます。
 
-すべての操作の `slide` キーは1始まりで、**その操作を適用する時点での**スライド番号を指します。
+**`slide`キーは常に「このedit_pptx.py呼び出しを開始した時点（＝直前のpptx-inspectが見せていた状態）のスライド番号」を指します。** `duplicate_slide`/`delete_slide`を同一バッチ内で使って後続スライド番号がずれても、ツール側が自動的に追跡するため、以降の操作で「何番ズレたか」を手計算する必要はありません（`pptx-inspect`で確認した番号をそのままどのopにも使えます）。バッチ開始後に削除されたスライド番号を参照するとエラーになります。
+
+例外は次の2つで、これらは「今現在どこに配置するか」を指定する操作のため、**その操作を適用する時点でのライブなスライド番号**を指します（バッチ開始時点の番号ではありません）:
+- `duplicate_slide`の`insert_after`（省略時は複製元スライドの現在のライブ位置の直後に自動設定される）
+- `reorder_slides`の`order`（`duplicate_slide`が作った新規スライドにはバッチ開始時点の番号が存在しないため、現在の全スライドを対象にせざるを得ない）
+
+`delete_slide`/`duplicate_slide`と`reorder_slides`を同一バッチで併用する場合は、`reorder_slides`を操作列の最後に置くことを推奨します（構造変更を全て終えてから並び替える方が意図が明確になるため）。
 
 | op | 主なキー | 内容 |
 |---|---|---|
@@ -53,7 +58,7 @@ metadata:
 | `replace_picture` | `slide`, `shape_index`, `image_path` | 既存画像shapeの位置・サイズを保ったまま画像だけ差し替え（差し替え後、z順序は最前面に移動する点に注意） |
 | `set_shape_style` | `slide`, `shape_index` | `role`(`heading`/`table_header`)+`theme`、または`text_color`/`bold`/`italic`/`underline`/`font_size_pt`/`font_name`/`fill_color`/`border_color`/`align`(`left`/`center`/`right`/`justify`)、表shapeは`row`/`all_rows` | 既存shapeを明示的に再配色・再装飾・文字配置変更（下記参照） |
 | `set_shape_position` | `slide`, `shape_index` | `left_cm`/`top_cm`/`width_cm`/`height_cm`（cm単位、いずれか1つ以上） | 既存shapeの位置・サイズを変更（下記参照） |
-| `duplicate_slide` | `slide`, `insert_after`(省略時は`slide`と同じ), `count`(省略時1) | 指定スライドを同じレイアウトのまま複製し、`insert_after`の直後に`count`枚挿入。プレースホルダ・表・テキストボックス・画像を含めて複製できる |
+| `duplicate_slide` | `slide`, `insert_after`(省略時は複製元スライドの現在のライブ位置と同じ), `count`(省略時1) | 指定スライドを同じレイアウトのまま複製し、`insert_after`の直後に`count`枚挿入。プレースホルダ・表・テキストボックス・画像を含めて複製できる |
 | `delete_slide` | `slide` | 指定スライドを削除 |
 | `reorder_slides` | `order` | **その時点での全スライド番号(1始まり)の順列**を渡し、その並びに変更（例: `[2,1,3]`で1番目と2番目を入替） |
 
@@ -126,13 +131,16 @@ metadata:
 
 - `template_path` と `output_path` が同じで `--overwrite` 未指定の場合はエラー終了します。
 - `--data` と `--data-file` を両方指定、または両方省略した場合はエラー終了します。
-- 存在しない `slide` / `shape_index`、shape種別が合わない操作（例: 表でないshapeへの
-  `set_table_cell`）、`set_table` の行列数不一致、`reorder_slides` の順列が現在の全スライド数と
-  不一致、`replace_picture` の `image_path` 不在、未対応の `theme`/`role`/`align`、
+- 存在しない `slide` / `shape_index`、このバッチ内で既に`delete_slide`された`slide`を
+  参照、shape種別が合わない操作（例: 表でないshapeへの`set_table_cell`）、`set_table`
+  の行列数不一致、`reorder_slides` の順列が現在の全スライド数と不一致、
+  `replace_picture` の `image_path` 不在、未対応の `theme`/`role`/`align`、
   `set_shape_style` でスタイルキーが1つも無い、表shapeへの`set_shape_style`で
   対象行未指定、表shapeへの`set_shape_style`で`border_color`指定、
   `set_shape_position` で位置/サイズキーが1つも無い、は、いずれもその操作番号を
   添えてエラー終了します。
+- `delete_slide`で歯抜けができた後に`duplicate_slide`を実行しても、内部でスライドの
+  パート名衝突（python-pptx側の既知の制限）を自動回避するため、安全に組み合わせられます。
 - 操作の途中でエラーになった場合、`output_path` へのファイル保存は行われません
   （テンプレート自体もその場では変更されないため、途中失敗しても既存ファイルへの影響はありません）。
 - 未対応の `op` 値を指定した場合、対応一覧を添えてエラー終了します。

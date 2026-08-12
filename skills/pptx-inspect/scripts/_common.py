@@ -46,13 +46,24 @@ def backup_before_overwrite(path: Path) -> Path | None:
     return backup_path
 
 
+def _length_cm(value) -> float | None:
+    """python-pptxのLength（EMU）をcm単位のfloatへ変換する（None時はNoneのまま）。"""
+    return round(value.cm, 2) if value is not None else None
+
+
 def describe_shape(shape, index: int) -> dict:
     """1つのshapeの構造情報をdictにする。
 
-    inspect_pptx.py（一覧表示）と edit_pptx.py（エラーメッセージ・対象種別
-    チェック）の両方から使う共有ロジック。ここで定義する `shape_index` は
+    inspect_pptx.py（一覧表示）が使う。ここで定義する `shape_index` は
     `enumerate(slide.shapes)` の0始まり連番であり、edit_pptx.py の各操作が
-    指定する `shape_index` と完全に一致する仕様として両スクリプトで揃える。
+    指定する `shape_index` と完全に一致する仕様として両スクリプトで揃える
+    （edit_pptx.py自体はこの関数を呼ばないが、shape_indexの数え方はここに合わせる）。
+
+    `left_cm`/`top_cm`/`width_cm`/`height_cm` は edit_pptx.py の
+    `set_shape_position` が受け取る単位（cm）と完全に一致させている
+    （pptx-inspectで読んだ値をそのままset_shape_positionの引数へ使い回せる
+    ようにするため。プレースホルダ等でレイアウト側から位置を継承していて
+    実座標が取得できない場合はNoneになる）。
     """
     info: dict = {
         "shape_index": index,
@@ -66,6 +77,10 @@ def describe_shape(shape, index: int) -> dict:
         "has_table": shape.has_table,
         "table_dims": None,
         "has_picture": shape.shape_type == MSO_SHAPE_TYPE.PICTURE,
+        "left_cm": _length_cm(shape.left),
+        "top_cm": _length_cm(shape.top),
+        "width_cm": _length_cm(shape.width),
+        "height_cm": _length_cm(shape.height),
     }
     if shape.is_placeholder:
         info["placeholder_idx"] = shape.placeholder_format.idx
