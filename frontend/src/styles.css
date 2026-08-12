@@ -325,8 +325,10 @@
   word-break: break-word;
 }
 
+/* テーマの配色モード（--accent）に準じた薄い色付け。ユーザーが選んだ
+   アクセントカラーが変わっても自動的に追従する（theme.ts の applyAccent 参照）。 */
 .message-bubble--assistant {
-  background: var(--surface);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   border: 1px solid var(--border);
   border-top-left-radius: 4px;
 }
@@ -339,13 +341,16 @@
 
 .message-bubble--system {
   background: var(--system-bg);
-  border: 1px solid var(--system-color);
+  border: 1px solid color-mix(in srgb, var(--system-color) 35%, transparent);
   border-top-left-radius: 4px;
 }
 
+/* サブエージェント: メインエージェントより薄い色付け+文字も少し控えめにして、
+   「バックグラウンドで動いている」ことが一目でわかるようにする。 */
 .message-bubble--subagent {
-  background: var(--subagent-bg);
-  border: 1px solid var(--subagent-color);
+  background: color-mix(in srgb, var(--accent) 2%, var(--surface));
+  color: color-mix(in srgb, var(--text-muted) 65%, var(--surface));
+  border: 1px solid var(--border);
   border-top-left-radius: 4px;
 }
 
