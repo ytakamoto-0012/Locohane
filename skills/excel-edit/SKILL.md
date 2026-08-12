@@ -41,7 +41,8 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 | `set_range` | `sheet`,`start_cell`,`rows` | `style`,`header_style`,`row_styles`,`format_table` | 起点セルから複数行を一括書込。`header_style`は1行目のみ適用。列幅は自動調整（全角=2文字換算、既存幅より縮まない）。**`header_style`を渡すと自動的に`format_table`相当（見出し配色・罫線・縞模様・見出し行固定・列幅調整）が既定で適用される**（`format_table:false`で無効化可。逆に`header_style`省略でも`format_table:true`で強制適用可） |
 | `set_style` | `sheet`,`range` | `style` | 値は変えず既存セルへ書式のみ適用 |
 | `format_table` | `sheet`,`range` | `theme`(下記参照),`header_fill`(既定`1F4E78`または`theme`のprimary),`header_font_color`(既定`FFFFFF`または`theme`のtext_on_primary),`band_fill`(既定`F2F2F2`),`banded`(既定true),`border`(既定`thin`),`freeze_header`(既定true),`autofit`(既定true) | 書き込み済みの表を後から仕上げる。`range`の1行目を見出しとみなす。本体行のフォント色・太字は変更しない（`role`色分けを壊さないため） |
-| `insert_rows` | `sheet`,`index` | `count`(既定1) | 行挿入（1始まり位置） |
+| `insert_rows` | `sheet`,`index` | `count`(既定1) | 行挿入（1始まり位置。絶対行番号を自分で計算する必要がある。月・区分等でグルーピングされた表への挿入は`insert_row_group`を使う） |
+| `insert_row_group` | `sheet`,`rows` | `anchor`(`{"column","equals"}`),`position`(`"before"`/`"after"`、既定`"before"`),`start_column`,`style`,`header_style`,`row_styles`,`format_table` | **グルーピングされた列（月・区分など、同じ値が連続し結合セル化される列）を持つ表へ、既存グループの前後に新しい行グループを挿入する。**`anchor`で指定した列の値が最初に一致する行範囲を、このop実行時点（＝同一opsバッチ内の直前のops適用後）のシート状態から解決してから挿入・書き込みを1opで行うため、絶対行番号の計算が一切不要。`anchor`省略時はシート末尾に追記。`position:"before"`は対象グループの先頭に、`"after"`は末尾の直後に挿入する。書き込み内容（`rows`/`style`等）は`set_range`と同じスキーマ |
 | `delete_rows` | `sheet`,`index` | `count`(既定1) | 行削除 |
 | `insert_cols` | `sheet`,`index` | `count`(既定1) | 列挿入（1始まり） |
 | `delete_cols` | `sheet`,`index` | `count`(既定1) | 列削除 |
@@ -146,6 +147,20 @@ xlsxとpptxを同じ資料セットとして作るときに見た目を揃えや
 1回の`merge_cells`は連続矩形のみ結合可。値グループが複数（上記の「1月」「2月」）ならグループごとに`merge_cells`＋`set_style`を1回ずつ呼ぶ。
 
 **既に書き込み済みの表**（`insert_rows`で追記した後など）に後から仕上げをかけたいだけなら独立opの`format_table`を使う: `[{"op": "format_table", "sheet": "Sheet1", "range": "A1:C3"}]`。`role`規約で入力セルに色を当てていても`format_table`は本体行のフォント色を変更しないため壊れない（呼び出し順序は値→`format_table`でもその逆でもよい）。
+
+## グルーピングされた列を持つ表へ、既存グループの前後に新しい行グループを挿入したいとき（必須ルール）
+
+**`insert_rows`で絶対行番号を計算してから`set_range`で書き込む、という組み合わせは避ける**（対象が「7月」等どの行から始まるかを自分で数え、複数グループを挿入する際は先に行ったinsertで後続の行番号がズレることまで手計算する必要があり、ズレを1行間違えると別の月のデータを上書きしてしまう事故が起きる）。代わりに`insert_row_group`を使い、`anchor`で「どの値の前/後に挿入するか」を指定する（挿入位置はopが自動的に解決するため行番号を書く必要が無い）。
+
+```json
+[{"op": "insert_row_group", "sheet": "月間予定表",
+  "anchor": {"column": "A", "equals": "7月"}, "position": "before",
+  "rows": [["6月","ふれあい祭り出店","06/14"], ["6月","夏休み前最後の行事","06/28"]],
+  "row_styles": [null, null]}]
+```
+同じopsバッチ内で`insert_row_group`を複数回連続実行しても、各opは常に直前のopsまで適用済みの最新のシート状態からアンカーを解決するため、行ズレによる上書き事故は起きない（「6月に2つの行事を追加」のように複数グループを7月の前へ挿入したい場合は、この形で`insert_row_group`を必要な回数だけ並べればよい）。
+
+現在のグループ構成を確認したいとき（`insert_row_group`の`anchor`に使う値の確認、挿入結果の検証など）は、`excel-read`スキルの`--query-json '[{"op": "group_by", "column": "A"}]'`を使う（生の`rows`を目で数えて行範囲を手計算しない）。
 
 ## 条件付き書式（`add_conditional_format`）
 

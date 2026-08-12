@@ -18,7 +18,7 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 {"skill_name": "excel-read", "script_filename": "read_excel.py",
  "script_args": ["C:\\Users\\me\\book.xlsx", "--sheet", "Sheet1", "--offset", "0", "--limit", "200"]}
 ```
-`--sheet`省略でシート一覧モード。`--sheet`/`--offset`/`--limit`（既定0/200）/`--data-only`/`--include-style`はすべて省略可（後2つは値なしフラグ）。
+`--sheet`省略でシート一覧モード。`--sheet`/`--offset`/`--limit`（既定0/200）/`--data-only`/`--include-style`/`--query-json`はすべて省略可（`--data-only`/`--include-style`は値なしフラグ）。
 
 ## 入出力の型
 
@@ -49,9 +49,29 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 ```
 既定値と一致する項目は省略、書式なしセルは`style`キー自体省略。トップレベルに`merged_cells`（シート全体、offset/limit範囲に関わらず全件）と`tables`（構造化テーブル一覧）も付く。
 
+## 構造化クエリ（`--query-json`、必須ルール）
+
+**`insert_rows`/`merge_cells`後の検証や、グルーピングされた列（月・区分など、結合セル化される列）の範囲確認では、生の`rows`を目で数えて行範囲を手計算しない。** 代わりに`--query-json`でクエリを渡すと、列の値ごとに連続する行範囲へグルーピングした結果を1回の呼び出しで返す。
+
+```json
+{"skill_name": "excel-read", "script_filename": "read_excel.py",
+ "script_args": ["C:\\Users\\me\\book.xlsx", "--sheet", "月間予定表", "--query-json", "[{\"op\": \"group_by\", \"column\": \"A\"}]"]}
+```
+出力（`result_path`内、`query_results`キー）:
+```json
+"query_results": [
+  {"op": "group_by", "column": "A",
+   "items": [{"value": "4月", "start_row": 2, "end_row": 2, "row_count": 1},
+             {"value": "5月", "start_row": 3, "end_row": 4, "row_count": 2}]}
+]
+```
+- `group_by`: 指定列（列アルファベット`"A"`または1始まりの列番号、例`"3"`＝C列）を上から走査し、非null値ごとに連続する行範囲（結合セルの非アンカー行・空欄継続行を含む）を`{value,start_row,end_row,row_count}`としてまとめる。
+- `--sheet`必須（省略時・`.xls`拡張子ではエラー）。未対応のop名もエラー＋終了コード1（対応opの一覧をメッセージに含む）。
+- excel-editスキルで`insert_row_group`を使う際の`anchor`（どの値の前/後に挿入するか）の確認にもそのまま使える。
+
 ## エッジケース
 
-ファイル不在／拡張子がxlsx・xlsm・xls以外／シート未検出／破損ファイルはエラー＋終了コード1。`--include-style`は`.xls`非対応。
+ファイル不在／拡張子がxlsx・xlsm・xls以外／シート未検出／破損ファイルはエラー＋終了コード1。`--include-style`/`--query-json`は`.xls`非対応。
 
 ## 見た目の確認について
 

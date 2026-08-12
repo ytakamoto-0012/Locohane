@@ -33,6 +33,41 @@ from pathlib import Path
 from _common import cell_to_json, resolve_sheet_name, setup_utf8_stdio, summarize_result, write_json_result
 from _style import extract_style
 
+# group_by等の列グルーピングロジックは excel-edit スキル側の _excel_shared.py が唯一の実体
+# （読み書き双方で同一ロジックを使う必要があり、複製すると読み込み結果と書き込み側の
+# 挿入位置解決が食い違う恐れがあるため、複製せず隣接スキルフォルダから直接importする。
+# excel-read は excel-edit が同梱されていることを前提とする）。
+_EXCEL_EDIT_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "excel-edit" / "scripts"
+if str(_EXCEL_EDIT_SCRIPTS) not in sys.path:
+    sys.path.append(str(_EXCEL_EDIT_SCRIPTS))
+from _excel_shared import group_column_values  # noqa: E402
+
+
+def _query_group_by(ws, query: dict, max_row: int) -> dict:
+    if "column" not in query:
+        raise ValueError("group_byクエリには'column'が必須です")
+    return {
+        "op": "group_by",
+        "column": query["column"],
+        "items": group_column_values(ws, query["column"], max_row),
+    }
+
+
+_QUERY_HANDLERS = {
+    "group_by": _query_group_by,
+}
+
+
+def _run_queries(ws, queries: list[dict], max_row: int) -> list[dict]:
+    results = []
+    for query in queries:
+        op_name = query.get("op")
+        handler = _QUERY_HANDLERS.get(op_name)
+        if handler is None:
+            raise ValueError(f"未対応のqueryです: {op_name!r}（対応op: {sorted(_QUERY_HANDLERS)}）")
+        results.append(handler(ws, query, max_row))
+    return results
+
 
 def _cell_json(cell, include_style: bool) -> object:
     value = cell_to_json(cell.value)
@@ -43,9 +78,18 @@ def _cell_json(cell, include_style: bool) -> object:
 
 
 def _read_xlsx(
-    path: Path, sheet_arg: str | None, offset: int, limit: int, data_only: bool, include_style: bool
+    path: Path,
+    sheet_arg: str | None,
+    offset: int,
+    limit: int,
+    data_only: bool,
+    include_style: bool,
+    queries: list[dict] | None = None,
 ) -> dict:
     import openpyxl
+
+    if queries and sheet_arg is None:
+        raise ValueError("--query-json は --sheet 指定時のみ使えます")
 
     wb = openpyxl.load_workbook(str(path), data_only=data_only, read_only=not include_style)
     try:
@@ -86,6 +130,8 @@ def _read_xlsx(
                 }
                 for t in ws.tables.values()
             ]
+        if queries:
+            result["query_results"] = _run_queries(ws, queries, total_rows)
         return result
     finally:
         wb.close()
@@ -147,6 +193,17 @@ def main() -> int:
         action="store_true",
         help="太字・背景色等の書式、セル結合、構造化テーブルも合わせて返す（.xlsx/.xlsmのみ対応。既定offで通常より読み込みが重くなる）",
     )
+    parser.add_argument(
+        "--query-json",
+        default=None,
+        help=(
+            "構造化クエリの配列を1行JSON化した文字列（.xlsx/.xlsmのみ、--sheet必須）。"
+            '例: \'[{"op": "group_by", "column": "A"}]\' '
+            "→ 指定列を値ごとに連続する行範囲へグルーピングして{value,start_row,end_row,row_count}の"
+            "配列で返す。insert_rows/merge_cells後の検証や、結合予定の列（月・区分等）の範囲確認を"
+            "生のrowsを目で数えて手計算する代わりに使う。"
+        ),
+    )
     args = parser.parse_args()
 
     path = Path(args.file_path)
@@ -161,10 +218,24 @@ def main() -> int:
     if ext == ".xls" and args.include_style:
         print("--include-style は .xlsx/.xlsm のみ対応です", file=sys.stderr)
         return 1
+    if ext == ".xls" and args.query_json:
+        print("--query-json は .xlsx/.xlsm のみ対応です", file=sys.stderr)
+        return 1
+
+    queries: list[dict] | None = None
+    if args.query_json:
+        try:
+            queries = json.loads(args.query_json)
+        except json.JSONDecodeError as e:
+            print(f"--query-jsonのJSON解析に失敗しました: {e}", file=sys.stderr)
+            return 1
+        if not isinstance(queries, list):
+            print("--query-jsonはJSON配列で指定してください", file=sys.stderr)
+            return 1
 
     try:
         if ext in (".xlsx", ".xlsm"):
-            result = _read_xlsx(path, args.sheet, offset, limit, args.data_only, args.include_style)
+            result = _read_xlsx(path, args.sheet, offset, limit, args.data_only, args.include_style, queries)
         elif ext == ".xls":
             result = _read_xls(path, args.sheet, offset, limit)
         else:

@@ -18,6 +18,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from _common import resolve_sheet_name
+from _excel_shared import column_index, group_column_values
 from _style import apply_style, resolve_theme
 
 _CHART_CLASSES = {
@@ -101,9 +102,12 @@ def op_set_cell(wb, op: dict) -> None:
     apply_style(cell, op.get("style"))
 
 
-def op_set_range(wb, op: dict) -> None:
-    ws = _sheet(wb, op["sheet"])
-    min_col, min_row, _, _ = range_boundaries(f"{op['start_cell']}:{op['start_cell']}")
+def _write_rows(ws, min_row: int, min_col: int, op: dict) -> None:
+    """`rows`（+ style/header_style/row_styles/format_table）を起点セルから書き込む。
+
+    `op_set_range`（起点セル明示）と`op_insert_row_group`（挿入位置解決後）の
+    両方から呼ばれる共通実装。
+    """
     rows = op.get("rows") or []
     style = op.get("style")
     header_style = op.get("header_style", style)
@@ -134,6 +138,46 @@ def op_set_range(wb, op: dict) -> None:
         max_row = min_row + len(rows) - 1
         opts = format_table_opt if isinstance(format_table_opt, dict) else {}
         _format_table_range(ws, min_row, max_row, min_col, max_col, opts)
+
+
+def op_set_range(wb, op: dict) -> None:
+    ws = _sheet(wb, op["sheet"])
+    min_col, min_row, _, _ = range_boundaries(f"{op['start_cell']}:{op['start_cell']}")
+    _write_rows(ws, min_row, min_col, op)
+
+
+def op_insert_row_group(wb, op: dict) -> None:
+    """列の値（アンカー）を基準に、その場で挿入位置を解決してから挿入・書き込みまでを
+    1opで完結させる。`insert_rows`+`set_range`を絶対行番号で組み合わせる方式と異なり、
+    このop実行時点（＝同一opsバッチ内の直前のopsが既に適用済みの最新のシート状態）から
+    アンカーを解決するため、複数の`insert_row_group`を連続実行しても行ズレによる
+    上書き事故が起きない。
+    """
+    ws = _sheet(wb, op["sheet"])
+    rows = op.get("rows") or []
+    anchor = op.get("anchor")
+    if anchor:
+        matches = [g for g in group_column_values(ws, anchor["column"]) if g["value"] == anchor["equals"]]
+        if not matches:
+            raise ValueError(
+                "insert_row_groupのanchorに一致する値が見つかりません: "
+                f"column={anchor.get('column')!r} equals={anchor.get('equals')!r}"
+            )
+        target = matches[0]
+        position = op.get("position", "before")
+        if position == "before":
+            index = target["start_row"]
+        elif position == "after":
+            index = target["end_row"] + 1
+        else:
+            raise ValueError(f"insert_row_groupのpositionは'before'/'after'のみ対応です: {position!r}")
+        min_col = column_index(op["start_column"]) if op.get("start_column") else column_index(anchor["column"])
+    else:
+        index = (ws.max_row or 0) + 1
+        min_col = column_index(op["start_column"]) if op.get("start_column") else 1
+
+    ws.insert_rows(index, len(rows))
+    _write_rows(ws, index, min_col, op)
 
 
 def op_set_style(wb, op: dict) -> None:
@@ -366,6 +410,7 @@ OP_HANDLERS = {
     "set_style": op_set_style,
     "format_table": op_format_table,
     "insert_rows": op_insert_rows,
+    "insert_row_group": op_insert_row_group,
     "delete_rows": op_delete_rows,
     "insert_cols": op_insert_cols,
     "delete_cols": op_delete_cols,
