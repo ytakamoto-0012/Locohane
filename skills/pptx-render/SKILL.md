@@ -23,7 +23,7 @@ PPTXスライドを画像化してLLMに見せるスキルです。`render_pptx.
 {
     "skill_name": "pptx-render",
     "script_filename": "render_pptx.py",
-    "script_args": ["C:\\Users\\me\\presentation.pptx", "--start-page", "1", "--max-pages", "3"]
+    "script_args": ["C:\\Users\\me\\presentation.pptx"]
 }
 ```
 ## 引数一覧
@@ -31,18 +31,19 @@ PPTXスライドを画像化してLLMに見せるスキルです。`render_pptx.
 | 引数 | 必須/任意 | 値の型 | 既定値 | 説明 |
 |---|---|---|---|---|
 | `pptx_path`（位置引数） | 必須 | 文字列（絶対パス） | - | 画像化対象の`.pptx`ファイルパス。他拡張子はエラー |
-| `--start-page` | 任意 | 整数 | `1` | 開始スライド番号（1始まり）。クランプなし。総スライド数超過時は下記エッジケース参照 |
-| `--max-pages` | 任意 | 整数 | `3` | 一度に画像化する最大スライド数。**1〜5にクランプされる**（6以上を指定しても5枚まで） |
+
+全スライドを一度に画像化します（範囲の指定はできません）。
 
 出力例:
 ```json
-{"path": "C:\\foo\\presentation.pptx", "tool": "pptx", "total_pages": 12, "start_page": 1, "end_page": 3, "dpi": 300, "target_dpi": 150, "crop_applied": false,
+{"path": "C:\\foo\\presentation.pptx", "tool": "pptx", "total_pages": 12, "start_page": 1, "end_page": 12, "dpi": 300, "target_dpi": 150, "crop_applied": false,
  "images": [
    {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300},
    {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300},
-   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300}
+   {"page": 12, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p12.png", "original_dpi": 300}
  ]}
 ```
+`images`には`total_pages`件全てが含まれる。
 
 **重要（2段階手順）**: このスクリプト自体はPNGファイルを保存してパスをJSONで
 返すだけで、LLMへ画像を見せるところまでは行いません。`images` の各要素の
@@ -54,11 +55,9 @@ PPTXスライドを画像化してLLMに見せるスキルです。`render_pptx.
 ## エッジケース
 
 - ファイル不在・ディレクトリ指定・拡張子が`.pptx`以外・壊れたファイル/PowerPoint未インストールはエラー終了します。
-- `start_page` が総スライド数を超える場合はエラーにはならず終了コード0で返りますが、
+- PDF化後のページ数が0になった場合はエラーにはならず終了コード0で返りますが、
   返るJSONの形が通常時と異なる点に注意（`images: []`に加えて`start_page`/`end_page`が
   `null`になり、**`target_dpi`キー自体が無くなる**）。
-- `max_pages` は5にクランプされます。総スライド数が多いプレゼンを広く画像化
-  したい場合は `--start-page` を変えて複数回に分けて呼び出してください。
 - 生成されるPNGは作業ディレクトリ配下のセッション専用一時フォルダ
   （`_tmp_<thread_id>/rendered/`）に保存されます。同一ファイルの再実行時は
   上書きされ、会話終了時に自動的に削除されます。

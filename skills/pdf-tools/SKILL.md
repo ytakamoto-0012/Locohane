@@ -72,21 +72,21 @@ offset/limitと同じ考え方のページ版です）。
 {
     "skill_name": "pdf-tools",
     "script_filename": "render_pdf_pages.py",
-    "script_args": ["C:\\Users\\me\\report.pdf", "--start-page", "1", "--max-pages", "3"]
+    "script_args": ["C:\\Users\\me\\report.pdf"]
 }
 ```
-`--start-page`/`--max-pages`（既定3、最大5にクランプ）は省略可。
-解像度は既定150DPI固定。
+全ページを一度に画像化します（範囲の指定はできません）。解像度は既定150DPI固定。
 
 出力例:
 ```json
-{"path": "C:\\foo\\report.pdf", "total_pages": 42, "start_page": 1, "end_page": 3, "dpi": 150,
+{"path": "C:\\foo\\report.pdf", "total_pages": 3, "start_page": 1, "end_page": 3, "dpi": 150,
  "images": [
    {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\pdf_rendered\\1a2b3c4d_p1.png"},
    {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\pdf_rendered\\1a2b3c4d_p2.png"},
    {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\pdf_rendered\\1a2b3c4d_p3.png"}
  ]}
 ```
+`images`には`total_pages`件全てが含まれる。
 
 **重要（2段階手順）**: このスクリプト自体はPNGファイルを保存してパスをJSONで
 返すだけで、LLMへ画像を見せるところまでは行いません。`images` の各要素の
@@ -97,10 +97,6 @@ offset/limitと同じ考え方のページ版です）。
 
 エッジケース:
 - ファイル不在・ディレクトリ指定・壊れたPDF/暗号化PDFはエラー終了します。
-- `start_page` が総ページ数を超える場合はエラーにはならず、`images: []` を
-  終了コード0で返します。
-- `max_pages` は5にクランプされます。総ページ数が多い文書を広く画像化したい場合は
-  `--start-page` を変えて複数回に分けて呼び出してください（コスト抑制のため）。
 - 生成されるPNGは作業ディレクトリ配下のセッション専用一時フォルダ
   （`_tmp_<thread_id>/pdf_rendered/`）に保存されます。同一PDF・同一ページの
   再実行時は上書きされ、会話終了時に自動的に削除されます。

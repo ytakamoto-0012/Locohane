@@ -2,8 +2,8 @@
 
 pdf-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script ツールから
-    python render_pdf_pages.py <pdf_path> [--start-page N] [--max-pages N]
-の形で呼ばれる。
+    python render_pdf_pages.py <pdf_path>
+の形で呼ばれる。全ページを画像化する。
 
 生成したPNGは、作業ディレクトリ（run_script の cwd）配下のセッション専用一時フォルダ
 `_tmp_<thread_id>/pdf_rendered/` に保存する（thread_idは run_script が注入する環境変数
@@ -26,7 +26,6 @@ from pathlib import Path
 import pypdfium2 as pdfium
 from _common import register_output_path, setup_utf8_stdio
 
-MAX_PAGES_CAP = 5
 _CAPTURE_DPI = 150
 
 
@@ -34,8 +33,6 @@ def main() -> int:
     setup_utf8_stdio()
     parser = argparse.ArgumentParser()
     parser.add_argument("pdf_path")
-    parser.add_argument("--start-page", type=int, default=1)
-    parser.add_argument("--max-pages", type=int, default=3)
     args = parser.parse_args()
 
     path = Path(args.pdf_path)
@@ -53,12 +50,8 @@ def main() -> int:
         return 1
 
     total_pages = len(pdf)
-    max_pages = min(max(args.max_pages, 1), MAX_PAGES_CAP)
     dpi = _CAPTURE_DPI
     scale = dpi / 72
-
-    start_idx = max(args.start_page, 1) - 1
-    end_idx = min(start_idx + max_pages, total_pages)
 
     thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
     rendered_dir = Path.cwd() / f"_tmp_{thread_id}" / "pdf_rendered"
@@ -66,7 +59,7 @@ def main() -> int:
     digest = hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
 
     images = []
-    for i in range(start_idx, end_idx):
+    for i in range(total_pages):
         page_num = i + 1
         filename = f"{digest}_p{page_num}.png"
         out_path = rendered_dir / filename
@@ -83,8 +76,8 @@ def main() -> int:
     result = {
         "path": str(path),
         "total_pages": total_pages,
-        "start_page": start_idx + 1 if images else None,
-        "end_page": end_idx if images else None,
+        "start_page": images[0]["page"] if images else None,
+        "end_page": images[-1]["page"] if images else None,
         "dpi": dpi,
         "images": images,
     }

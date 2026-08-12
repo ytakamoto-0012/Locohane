@@ -2,8 +2,8 @@
 
 pptx-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script ツールから
-    python render_pptx.py <pptx_path> [--start-page N] [--max-pages N]
-の形で呼ばれる。
+    python render_pptx.py <pptx_path>
+の形で呼ばれる。全スライドを画像化する。
 
 動作概要:
   1. OLE（COM）で PowerPoint をヘッドレス起動し、ファイルをPDFへエクスポート。
@@ -32,8 +32,6 @@ def main() -> int:
     setup_utf8_stdio()
     parser = argparse.ArgumentParser()
     parser.add_argument("pptx_path")
-    parser.add_argument("--start-page", type=int, default=1)
-    parser.add_argument("--max-pages", type=int, default=3)
     args = parser.parse_args()
 
     path = Path(args.pptx_path)
@@ -51,8 +49,6 @@ def main() -> int:
         result = render_office_file(
             path=path,
             tool="pptx",
-            start_page=args.start_page,
-            max_pages=args.max_pages,
         )
     except ImportError as e:
         print(f"必要なライブラリが見つかりません（pywin32が必要です）: {e}", file=sys.stderr)

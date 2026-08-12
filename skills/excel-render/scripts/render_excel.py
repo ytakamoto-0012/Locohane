@@ -2,8 +2,8 @@
 
 excel-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script ツールから
-    python render_excel.py <excel_path> [--start-page N] [--max-pages N]
-の形で呼ばれる。
+    python render_excel.py <excel_path>
+の形で呼ばれる。全シート（PDF化後の全ページ）を画像化する。
 
 動作概要:
   1. OLE（COM）で Excel をヘッドレス起動し、各シートの印刷設定を横1ページ×
@@ -35,8 +35,6 @@ def main() -> int:
     setup_utf8_stdio()
     parser = argparse.ArgumentParser()
     parser.add_argument("excel_path")
-    parser.add_argument("--start-page", type=int, default=1)
-    parser.add_argument("--max-pages", type=int, default=3)
     args = parser.parse_args()
 
     path = Path(args.excel_path)
@@ -54,8 +52,6 @@ def main() -> int:
         result = render_office_file(
             path=path,
             tool="excel",
-            start_page=args.start_page,
-            max_pages=args.max_pages,
         )
     except ImportError as e:
         print(f"必要なライブラリが見つかりません（pywin32が必要です）: {e}", file=sys.stderr)

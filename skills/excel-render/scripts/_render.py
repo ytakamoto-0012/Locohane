@@ -269,8 +269,8 @@ def _crop_image(image_path: Path, bbox: tuple[int, int, int, int], target_dpi: i
 # ---------------------------------------------------------------------------
 
 
-def _render_pdf_to_images(pdf_path: Path, start_page: int, max_pages: int, dpi: int, thread_id: str) -> list[dict]:
-    """PDFファイルを pypdfium2 で画像化し、リストとして返す。"""
+def _render_pdf_to_images(pdf_path: Path, dpi: int, thread_id: str) -> list[dict]:
+    """PDFファイルの全ページを pypdfium2 で画像化し、リストとして返す。"""
     rendered_dir = Path.cwd() / f"_tmp_{thread_id}" / "rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
 
@@ -280,16 +280,12 @@ def _render_pdf_to_images(pdf_path: Path, start_page: int, max_pages: int, dpi: 
         return []
 
     total_pages = len(pdf)
-    max_pages = min(max(max_pages, 1), 5)
     scale = dpi / 72
-
-    start_idx = max(start_page, 1) - 1
-    end_idx = min(start_idx + max_pages, total_pages)
 
     digest = hashlib.sha1(os.path.abspath(str(pdf_path)).encode("utf-8")).hexdigest()[:8]
 
     images = []
-    for i in range(start_idx, end_idx):
+    for i in range(total_pages):
         page_num = i + 1
         filename = f"{digest}_p{page_num}.png"
         out_path = rendered_dir / filename
@@ -317,13 +313,11 @@ def _render_pdf_to_images(pdf_path: Path, start_page: int, max_pages: int, dpi: 
 def render_office_file(
     path: Path,
     tool: str,
-    start_page: int = 1,
-    max_pages: int = 3,
     crop: bool = True,
     target_dpi: int = _TARGET_DPI,
     thread_id: str | None = None,
 ) -> dict:
-    """Officeファイル（excel/pptx/docx）をレンダリングして画像化。
+    """Officeファイル（excel/pptx/docx）の全ページをレンダリングして画像化。
 
     Parameters
     ----------
@@ -331,10 +325,6 @@ def render_office_file(
         対象の Office ファイルパス
     tool : str
         "excel" | "pptx" | "docx"
-    start_page : int
-        開始ページ（1始まり）
-    max_pages : int
-        最大ページ数（最大5にクランプ）
     crop : bool
         True なら白黒境界判定で余白を除去
     target_dpi : int
@@ -349,8 +339,6 @@ def render_office_file(
     """
     if thread_id is None:
         thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
-
-    max_pages = min(max(max_pages, 1), 5)
 
     # 1. OLE → PDF 変換（excelのみ、シートごとの必要縮尺も同時に取得）
     pdf_path, scale_by_sheet = _convert_office_to_pdf(path, tool, thread_id)
@@ -383,8 +371,8 @@ def render_office_file(
     except Exception:
         total_pages = 0
 
-    # 2. PDF → 画像化
-    images = _render_pdf_to_images(pdf_path, start_page, max_pages, capture_dpi, thread_id)
+    # 2. PDF → 画像化（全ページ）
+    images = _render_pdf_to_images(pdf_path, capture_dpi, thread_id)
 
     if not images:
         result = {
