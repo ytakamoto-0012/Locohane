@@ -37,7 +37,7 @@ jmespath==1.1.0
 #     内部で使うreportlabのCID内蔵フォント（HeiseiMin-W3/HeiseiKakuGo-W5）
 #     で描画するため外部フォントファイル不要。reportlab自体はxhtml2pdfの
 #     推移的依存のため明記しない） ---
-pypdf==6.11.0
+pypdf==6.15.0
 pypdfium2==4.30.0
 xhtml2pdf==0.2.17
 
