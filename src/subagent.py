@@ -482,7 +482,7 @@ async def run_subagent(
         ):
             messages.append(HumanMessage(content=config.subagent_token_guard_soft_warning_text))
             soft_warning_issued = True
-            logger.info(
+            logger.warning(
                 "subagent: トークン使用量が閾値(%d)に近づいたため注意メッセージを注入" "(iter=%d, total_tokens=%d)",
                 config.subagent_token_guard_soft_threshold,
                 iteration,

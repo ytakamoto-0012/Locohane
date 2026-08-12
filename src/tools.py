@@ -3016,7 +3016,7 @@ async def dispatch_agent(task: str, agent_type: str) -> str:
         # 発生しない）ため、ジョブ側のfinally節が実行されるより確実に前にこの
         # 代入が間に合う。
         job.turn_still_waiting = False
-        logger.info(
+        logger.warning(
             "dispatch_agent: 安全上限(%s秒)に達したため job_id を返してターンを終えます: job_id=%s",
             wait_timeout,
             job_id,

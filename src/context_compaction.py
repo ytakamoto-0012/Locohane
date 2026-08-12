@@ -244,7 +244,7 @@ async def maybe_compact(
     # 既存stateに無いidのメッセージを渡された順に末尾へ追記する）。
     kept_copies = [m.model_copy(update={"id": str(uuid.uuid4())}) for m in kept_messages]
 
-    logger.info(
+    logger.warning(
         "会話履歴を圧縮しました: %d件 -> 要約1件 + 直近%d件",
         len(old_messages),
         len(kept_messages),

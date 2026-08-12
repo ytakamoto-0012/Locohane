@@ -1735,7 +1735,7 @@ async def _run_context_compaction(
     # ため、Read/Glob等の重複呼び出しガードの履歴も合わせてリセットする
     # （記憶が無いのにガードだけが残り、拒否され続けてループする問題を防ぐ）。
     reset_call_history_guards_after_compaction()
-    logging.getLogger(__name__).info(
+    logging.getLogger(__name__).warning(
         "コンテキスト圧縮を実行しました thread_id=%s messages=%d->%d",
         thread_id,
         len(messages),
@@ -2030,9 +2030,22 @@ async def on_message(message: cl.Message) -> None:
                                 cstate = await graph.aget_state(config)
                                 committed_messages = cstate.values.get("messages", []) if cstate else []
                                 approx_count = len(committed_messages) + len(pending_main_tool_msgs)
-                                if should_compact(
-                                    cumulative_main, last_usage, approx_count, _config
-                                ) and not cl.user_session.get("awaiting_approve_plan_call"):
+                                compact_due = should_compact(cumulative_main, last_usage, approx_count, _config)
+                                awaiting_approval = bool(cl.user_session.get("awaiting_approve_plan_call"))
+                                # ISSUE調査用: 安全点（pending_main_tool_idsが空）に到達する
+                                # たびに、実際に圧縮まで踏み切ったかどうかを判定材料つきで
+                                # 記録する。cumulative_mainが閾値超なのに発火しない事例が
+                                # 観測されたため、原因切り分けに使う（2026-08-12調査）。
+                                logging.getLogger(__name__).debug(
+                                    "コンテキスト圧縮: 安全点到達 compact_due=%s awaiting_approval=%s "
+                                    "cumulative_main_total=%s approx_count=%d [%s]",
+                                    compact_due,
+                                    awaiting_approval,
+                                    (cumulative_main or {}).get("total"),
+                                    approx_count,
+                                    describe_current_task(),
+                                )
+                                if compact_due and not awaiting_approval:
                                     raise _CompactionCheckpoint(list(pending_main_tool_msgs))
 
                 elif kind == "on_chat_model_end":
@@ -2205,7 +2218,7 @@ async def on_message(message: cl.Message) -> None:
             # 続き（チェックポイントのpending task）を再開する。新しいユーザー
             # 発言を追加するわけではないため、ThinkingLoopDetectedのnudge注入
             # 経路（STARTからの再実行）とは異なる継続方法になる。
-            logging.getLogger(__name__).info(
+            logging.getLogger(__name__).warning(
                 "on_message: ループ内の安全な区切りでコンテキスト圧縮の条件を" "満たしたため、ターン内でグラフ実行を一時中断して圧縮します [%s]",
                 describe_current_task(),
             )
