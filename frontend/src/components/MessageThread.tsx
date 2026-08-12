@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { ChainlitContext, elementState, sessionIdState, type IStep } from '@chainlit/react-client';
 import type { IMessageElement } from '@chainlit/react-client';
 import { Icon } from './Icon';
+import { SUBAGENT_MESSAGE_AUTHOR } from '../utils/messageTree';
 
 function MessageElements({ messageId }: { messageId: string }) {
   const elements = useRecoilValue(elementState);
@@ -45,12 +46,28 @@ function MessageElements({ messageId }: { messageId: string }) {
   );
 }
 
+/** メッセージの表示カテゴリ。ユーザー発言 / メインエージェントの回答 /
+ *  システムメッセージ / サブエージェント（dispatch_agent）由来、の4種。 */
+function messageCategory(step: IStep): 'user' | 'system' | 'subagent' | 'assistant' {
+  if (step.type === 'user_message') return 'user';
+  if (step.type === 'system_message') return 'system';
+  if (step.name === SUBAGENT_MESSAGE_AUTHOR) return 'subagent';
+  return 'assistant';
+}
+
+const AVATAR_LABEL: Record<'assistant' | 'system' | 'subagent', string> = {
+  assistant: 'AI',
+  system: 'SYS',
+  subagent: 'SUB'
+};
+
 function MessageBubble({ step }: { step: IStep }) {
-  const isUser = step.type === 'user_message';
+  const category = messageCategory(step);
+  const isUser = category === 'user';
   return (
     <div className={`message-row ${isUser ? 'message-row--user' : 'message-row--assistant'}`}>
-      {!isUser ? <div className="avatar avatar--assistant">AI</div> : null}
-      <div className={`message-bubble ${isUser ? 'message-bubble--user' : 'message-bubble--assistant'}`}>
+      {!isUser ? <div className={`avatar avatar--${category}`}>{AVATAR_LABEL[category]}</div> : null}
+      <div className={`message-bubble ${isUser ? 'message-bubble--user' : `message-bubble--${category}`}`}>
         <div className="message-bubble-content">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}

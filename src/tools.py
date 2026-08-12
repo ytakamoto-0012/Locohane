@@ -2733,6 +2733,11 @@ class _DispatchAgentJob:
 # その内部で走っていた run_subagent 自体も再起動で失われるため実害はない）。
 _DISPATCH_AGENT_JOBS: dict[str, _DispatchAgentJob] = {}
 
+# app.py の SUBAGENT_MESSAGE_AUTHOR、frontend/src/utils/messageTree.ts の
+# SUBAGENT_MESSAGE_AUTHOR と一致させる（UI側でメインエージェントの回答と
+# 区別して表示するための cl.Message author 識別子）。
+_SUBAGENT_MESSAGE_AUTHOR = "サブエージェント"
+
 
 def _format_dispatch_agent_progress(job: "_DispatchAgentJob", job_id: str) -> str:
     """dispatch_agent ジョブの実行中の状況を表す文字列を組み立てる。
@@ -2774,7 +2779,10 @@ async def _push_dispatch_agent_progress(job: "_DispatchAgentJob", job_id: str) -
         await asyncio.sleep(_DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS)
         if job.status != "running":
             break
-        await cl.Message(content=_format_dispatch_agent_progress(job, job_id)).send()
+        await cl.Message(
+            content=_format_dispatch_agent_progress(job, job_id),
+            author=_SUBAGENT_MESSAGE_AUTHOR,
+        ).send()
 
 
 async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: str, resolved: "ResolvedAgentType") -> None:

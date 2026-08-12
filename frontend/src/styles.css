@@ -7,6 +7,10 @@
   --text-muted: #85858d;
   --accent: #6d5ef8;
   --accent-soft: rgba(109, 94, 248, 0.14);
+  --system-color: #9a6b12;
+  --system-bg: rgba(217, 155, 27, 0.14);
+  --subagent-color: #0f8a82;
+  --subagent-bg: rgba(15, 138, 130, 0.12);
   --radius-lg: 16px;
   --radius-md: 10px;
   --radius-sm: 7px;
@@ -26,6 +30,10 @@
   --text: #ededef;
   --text-muted: #94949c;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 1px rgba(0, 0, 0, 0.2);
+  --system-color: #e3ac3f;
+  --system-bg: rgba(227, 172, 63, 0.16);
+  --subagent-color: #3fd6ca;
+  --subagent-bg: rgba(63, 214, 202, 0.14);
 }
 
 * {
@@ -278,11 +286,31 @@
   border: 1px solid var(--border);
 }
 
-/* ダークテーマでは accent-soft(低不透明度) が背景に同化して見えづらいため、
+.avatar--system {
+  background: var(--system-bg);
+  color: var(--system-color);
+}
+
+.avatar--subagent {
+  background: var(--subagent-bg);
+  color: var(--subagent-color);
+}
+
+/* ダークテーマでは低不透明度の背景が同化して見えづらいため、
    塗りつぶし背景+白文字に反転してコントラストを確保する。 */
 :root[data-theme='dark'] .avatar--assistant {
   background: var(--accent);
   color: #ffffff;
+}
+
+:root[data-theme='dark'] .avatar--system {
+  background: var(--system-color);
+  color: #1b1b1f;
+}
+
+:root[data-theme='dark'] .avatar--subagent {
+  background: var(--subagent-color);
+  color: #0a2624;
 }
 
 .message-bubble {
@@ -307,6 +335,18 @@
   background: var(--accent);
   color: #ffffff;
   border-top-right-radius: 4px;
+}
+
+.message-bubble--system {
+  background: var(--system-bg);
+  border: 1px solid var(--system-color);
+  border-top-left-radius: 4px;
+}
+
+.message-bubble--subagent {
+  background: var(--subagent-bg);
+  border: 1px solid var(--subagent-color);
+  border-top-left-radius: 4px;
 }
 
 .message-bubble--typing {

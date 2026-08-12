@@ -18,6 +18,9 @@ export const STARTER_PREFIX = '🚀 定型文\n';
 export const MAX_DISPLAY_MESSAGES_PREFIX = '📏 表示件数上限\n';
 /** app.py の MAX_DISPLAY_SIDE_STEPS_PREFIX と一致させる（サイドパネルのStep一覧の表示件数上限）。 */
 export const MAX_DISPLAY_SIDE_STEPS_PREFIX = '🧰 サイドパネル表示件数上限\n';
+/** app.py の SUBAGENT_MESSAGE_AUTHOR、src/tools.py の _SUBAGENT_MESSAGE_AUTHOR と一致させる
+ *  （dispatch_agent＝サブエージェント由来のメッセージを識別する cl.Message author 名）。 */
+export const SUBAGENT_MESSAGE_AUTHOR = 'サブエージェント';
 
 function flattenAll(nodes: IStep[]): IStep[] {
   const out: IStep[] = [];
@@ -62,11 +65,11 @@ export function isMaxDisplaySideStepsMessage(step: IStep): boolean {
   return isPrefixedStatusMessage(step, MAX_DISPLAY_SIDE_STEPS_PREFIX);
 }
 
-/** メインカラムに表示する、ユーザー発言とアシスタントの最終回答のみ。 */
+/** メインカラムに表示する、ユーザー発言・アシスタントの最終回答・システムメッセージ。 */
 export function selectMainThread(messages: IStep[]): IStep[] {
   return flattenAll(messages).filter(
     (s) =>
-      (s.type === 'user_message' || s.type === 'assistant_message') &&
+      (s.type === 'user_message' || s.type === 'assistant_message' || s.type === 'system_message') &&
       !isTokenUsageMessage(s) &&
       !isWorkDirMessage(s) &&
       !isPlanMessage(s) &&
@@ -77,7 +80,12 @@ export function selectMainThread(messages: IStep[]): IStep[] {
 }
 
 function isSideStepType(step: IStep): boolean {
-  return step.type !== 'user_message' && step.type !== 'assistant_message' && step.type !== 'run';
+  return (
+    step.type !== 'user_message' &&
+    step.type !== 'assistant_message' &&
+    step.type !== 'system_message' &&
+    step.type !== 'run'
+  );
 }
 
 /**

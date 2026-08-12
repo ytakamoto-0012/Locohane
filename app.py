@@ -101,6 +101,12 @@ from src.tools import (
 )
 from src.uploads import cleanup_old_uploads, run_cleanup_loop
 
+# dispatch_agent（サブエージェント）由来のメッセージに付与する author 名。
+# frontend/src/utils/messageTree.ts の SUBAGENT_MESSAGE_AUTHOR、
+# src/tools.py の _push_dispatch_agent_progress と一致させる
+# （UI側でメインエージェントの回答と区別して表示するための識別子）。
+SUBAGENT_MESSAGE_AUTHOR = "サブエージェント"
+
 # ツール名 → UI 表示ラベル（ステップ名として表示）。
 _TOOL_LABELS = {
     "read_skill": "スキル読み込み",
@@ -961,7 +967,10 @@ async def on_stop() -> None:
                 describe_current_task(),
                 exc_info=True,
             )
-            await cl.Message(content="セッションの再初期化に失敗しました。反応がなければ" "ページを再読み込みしてください。").send()
+            await cl.Message(
+                content="セッションの再初期化に失敗しました。反応がなければ" "ページを再読み込みしてください。",
+                type="system_message",
+            ).send()
     logging.getLogger(__name__).info(
         "on_stop: セッション thread_id=%s のLLMクライアントを強制クローズし、" "グラフを再構築しました%s%s",
         thread_id,
@@ -1979,7 +1988,17 @@ async def on_message(message: cl.Message) -> None:
                         # 思考が終わり本回答が始まったのでStepを確定させる。
                         thinking = await _close_thinking(thinking)
                         if answer is None:
-                            answer = cl.Message(content="")
+                            # dispatch_agent 内部（サブエージェント）由来のチャンクは、
+                            # astream_events がcontextvar経由で内部呼び出しの
+                            # イベントも同じストリームへ伝播させるため、対策しないと
+                            # メインエージェントの回答と見分けが付かないまま届く
+                            # （_resolve_parent_id/_is_subagent_call 参照）。
+                            # authorを変えてUI側で区別できるようにする。
+                            is_subagent_answer = _is_subagent_call(event, steps)
+                            answer = cl.Message(
+                                content="",
+                                author=SUBAGENT_MESSAGE_AUTHOR if is_subagent_answer else None,
+                            )
                         await answer.stream_token(chunk.content)
 
                 elif kind == "on_tool_start":
@@ -2023,7 +2042,8 @@ async def on_message(message: cl.Message) -> None:
                                     "サブエージェントのタスクが打ち切られました"
                                     "（反復回数や応答内容の上限に到達したため）。"
                                     "ここまでに収集できた結果を踏まえて続行します。"
-                                )
+                                ),
+                                type="system_message",
                             ).send()
                         if isinstance(content, str):
                             generated = extract_generated_files(content)
@@ -2038,6 +2058,7 @@ async def on_message(message: cl.Message) -> None:
                                 await cl.Message(
                                     content=f"生成ファイル: {names}",
                                     elements=elements,
+                                    type="system_message",
                                 ).send()
                     # 実行計画がユーザーに却下された直後。ツール結果の文言・
                     # system_prompt.mdの指示だけに頼ると、LLMが計画を微修正して
@@ -2055,7 +2076,10 @@ async def on_message(message: cl.Message) -> None:
                         if answer is not None:
                             await _send_answer(answer)
                             answer = None
-                        await cl.Message(content="実行計画が却下されたため、処理を終了しました。ご指示をお待ちしています。").send()
+                        await cl.Message(
+                            content="実行計画が却下されたため、処理を終了しました。ご指示をお待ちしています。",
+                            type="system_message",
+                        ).send()
                         raise _PlanDeniedInterrupt(tool_message=event["data"].get("output"))
 
                     # コンテキスト圧縮: 直近のメインAIMessageが発行した
@@ -2239,7 +2263,8 @@ async def on_message(message: cl.Message) -> None:
                 content=(
                     f"反復上限（recursion_limit={_config.graph_recursion_limit}）に達したため、"
                     "処理を打ち切りました。タスクを分割するか、別のアプローチを試してください。"
-                )
+                ),
+                type="system_message",
             ).send()
             await _remove_message_ids_if_present(graph, config, loop_nudge_ids)
             return
@@ -2439,7 +2464,10 @@ async def on_message(message: cl.Message) -> None:
                 inputs = {"messages": [HumanMessage(content=text, id=nudge_id)]}
                 attempt += 1  # for range(total_retries + 1) の暗黙インクリメント相当
                 continue
-            await cl.Message(content=(f"生成がループし、{loop_max_retries}回リトライしましたが" "改善しなかったため停止しました。")).send()
+            await cl.Message(
+                content=(f"生成がループし、{loop_max_retries}回リトライしましたが" "改善しなかったため停止しました。"),
+                type="system_message",
+            ).send()
             await _remove_message_ids_if_present(graph, config, loop_nudge_ids)
             return
 
@@ -2468,7 +2496,10 @@ async def on_message(message: cl.Message) -> None:
                     repaired,
                     describe_current_task(),
                 )
-            await cl.Message(content="通信エラーのため中断しました。 少し待って「続けて」と送信してください。").send()
+            await cl.Message(
+                content="通信エラーのため中断しました。 少し待って「続けて」と送信してください。",
+                type="system_message",
+            ).send()
             return
 
         thinking = await _close_thinking(thinking)
