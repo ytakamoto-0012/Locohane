@@ -1,6 +1,6 @@
 ---
 name: docx-edit
-description: 既存のWord文書（.docx）を編集するスキル。文字列の検索置換、段落の末尾追加・削除、Track Changes（変更履歴）つきの検索置換、変更履歴の一括確定・却下ができる。既存のWordファイルの文言を修正・追記したいとき、変更履歴（校閲）付きで修正を提案したいときに使う。新規作成は`docx-create`、編集前の内容確認は`docx-read`を使う。
+description: 既存のWord文書（.docx）を編集するスキル。文字列の検索置換、段落の末尾追加・削除、Track Changes（変更履歴）つきの検索置換、変更履歴の一括確定・却下ができる。ユーザーが見た目の変更を明示的に頼んできた場合のみ、既存段落・表の再配色・文字装飾・配置（左右中央揃え等）・インデント・行間を変えるset_paragraph_style/set_table_styleも使える。既存のWordファイルの文言を修正・追記したいとき、変更履歴（校閲）付きで修正を提案したいときに使う。新規作成は`docx-create`、編集前の内容確認は`docx-read`を使う。
 license: MIT
 metadata:
   author: ytakamoto
@@ -60,14 +60,66 @@ JSONが長くなる場合は `--ops-json` の代わりに `["<編集対象.docx�
 | op | 必須キー | 主な省略可キー | 説明 |
 |---|---|---|---|
 | `find_replace` | `old_text` | `new_text`（既定`""`）、`track_changes`（既定`false`）、`paragraph_index`（既定=全段落を対象）、`occurrence`（`"all"`既定/`"first"`）、`author`、`date` | 段落内テキストの検索置換 |
-| `append_block` | `block`（`docx-create` の `blocks` 要素と同一形式） | なし | 文書末尾にブロックを追加（常に非トラッキング） |
+| `append_block` | `block`（`docx-create` の `blocks` 要素と同一形式） | `theme`（`callout`のみ使用。既定`charcoal`） | 文書末尾にブロックを追加（常に非トラッキング） |
+| `set_paragraph_style` | `index` | `role`(`heading`/`callout`)+`theme`、または`color`/`bold`/`italic`/`underline`/`font`/`size_pt`/`fill_color`/`border_color`/`align`(`left`/`center`/`right`/`justify`)/`indent_left_cm`/`line_spacing` | 既存段落を明示的に再配色・再配置（下記参照） |
+| `set_table_style` | `table_index` | `theme`、または`header_fill`/`header_font_color`、`row`/`all_rows` | 既存の表の行（既定は見出し行=1行目）を明示的に再配色（下記参照） |
 | `delete_paragraph` | `index` | なし | 指定indexの段落を削除（非トラッキングのみ） |
 | `accept_all_changes` | なし | なし | 文書内の全 `w:ins`/`w:del` を確定（採用） |
 | `reject_all_changes` | なし | なし | 文書内の全 `w:ins`/`w:del` を却下（元に戻す） |
 
 `append_block` の `block` は `docx-create` の `blocks` 配列の要素と同じ形式
-（`heading`/`paragraph`/`bullet_list`/`number_list`/`table`/`image`/`page_break`）
-が使えます。詳細は `docx-create` スキルの `blocks` の各 type 表を参照してください。
+（`heading`/`paragraph`/`bullet_list`/`number_list`/`table`/`image`/`callout`/
+`page_break`）が使えます。**ただし`docx-create`と違い、`heading`/`table`は
+`theme`があっても配色しません**（この文書自身が持つWordの組み込みスタイルの
+色をそのまま尊重するため）。既存文書に追記する内容が、文書側に既に確立した
+見た目（見出しスタイル等）を持っている以上、それを上書きしないのが既定動作です。
+唯一 `callout` はWordに対応するスタイルが無い新規概念なので、`theme`
+（`charcoal`/`navy`/`forest`/`coral`/`terracotta`/`ocean`/`teal`/`berry`、
+省略時`charcoal`）で配色されます。
+
+## set_paragraph_style / set_table_style（既存デザイン・配置の明示的な変更）
+
+`find_replace`/`append_block`/`delete_paragraph`は文字の中身だけを扱い、見た目には
+一切触れません。**ユーザーが「もっと格好よく」「見やすく」「中央揃えにして」
+「インデントを付けて」等、見た目・配置の変更を明示的に頼んできた場合にのみ**、
+この2つのopで既存の段落・表を再配色・再配置してください。頼まれていないのに
+先回りして呼ばないこと。
+
+このopで「レイアウトを直して」系の要望はひととおりカバーできます：文字色・
+背景色・左罫線色・太字/斜体/下線・フォント種類・フォントサイズ・文字揃え・
+左インデント・行間（`set_paragraph_style`）と、表の任意行の再配色
+（`set_table_style`）。それでも対応できない依頼（列幅、ページ余白・用紙サイズ、
+表全体の罫線、複数段落への一括適用）は、この節末尾の「非対応」を参照し、
+できない旨をユーザーに伝えてください。
+
+```json
+[
+  {"op": "set_paragraph_style", "index": 3, "role": "heading", "theme": "navy"},
+  {"op": "set_paragraph_style", "index": 5, "role": "callout", "theme": "navy"},
+  {"op": "set_paragraph_style", "index": 7, "align": "center"},
+  {"op": "set_paragraph_style", "index": 8, "indent_left_cm": 1.0, "line_spacing": 1.5},
+  {"op": "set_table_style", "table_index": 0, "theme": "navy"},
+  {"op": "set_table_style", "table_index": 0, "theme": "navy", "all_rows": true}
+]
+```
+
+- `set_paragraph_style`: `index`（`doc.paragraphs`の0始まりindex、`find_replace`の
+  `paragraph_index`と同じ数え方）を対象に、`role`(`"heading"`=文字色を`theme`の
+  primary色＋太字／`"callout"`=`theme`のsecondary色で背景を塗りprimary色の左罫線)
+  ＋`theme`、または個別キー（`color`/`bold`/`italic`/`underline`/`font`/`size_pt`/
+  `fill_color`/`border_color`/`align`/`indent_left_cm`/`line_spacing`）で再配色・
+  再配置する。個別キーは`role`由来の既定値より優先。**1回の呼び出しで対象にできる
+  段落は1つ**なので、複数段落に同じ変更をしたい場合はopを複数並べる。
+- `set_table_style`: `table_index`（`doc.tables`の0始まりindex）の表を対象に、
+  `theme`または`header_fill`/`header_font_color`で再配色する。既定では**見出し行
+  （1行目）のみ**（太字＋見出し用フォントも付与）。`row`（0始まり行番号を1つ指定）
+  または`all_rows: true`を指定すると対象行を変えられる（この場合は塗り・文字色の
+  みで太字強制はしない）。
+- どちらも `theme`/スタイルキーが何も無い呼び出しはエラーになります。
+
+**非対応（現状のop群でできないこと）**: 列幅・行高、ページ余白・用紙サイズ・
+向き、表本体の罫線（見出しセルの網掛けのみ対応）、ヘッダー/フッター、画像の
+挿入位置調整、複数段落への一括スタイル適用（1opにつき1段落）。
 
 ## find_replace の制約（重要）
 
@@ -131,8 +183,11 @@ indexがずれるため、**大きいindexから先に削除する**よう指定
 - 対象ファイル不在・ディレクトリ指定・`.doc`拡張子・非`.docx`拡張子・
   壊れた`.docx`は `read_docx.py` と同様にエラーメッセージ＋終了コード1。
 - `ops` がJSON配列でない、各要素に `op` キーが無い、`old_text` が見つからない、
-  存在しない `index`/`paragraph_index`、未対応の `op`/`block.type`、
-  `delete_paragraph` に `track_changes: true` を指定、のいずれもエラー
+  存在しない `index`/`paragraph_index`/`table_index`/`set_table_style`の`row`、
+  未対応の `op`/`block.type`/`theme`/`role`/`align`、
+  `set_paragraph_style`/`set_table_style`でスタイルキーが1つも無い、
+  `delete_paragraph` に `track_changes: true` を指定、
+  のいずれもエラー
   メッセージ＋終了コード1。どのop（何番目・どの種別）が失敗したかが
   メッセージに含まれるので、そのまま報告するかopを修正して再実行すること。
 - 一部の op が失敗した場合、それ以前に成功した op を含めて保存は行われません

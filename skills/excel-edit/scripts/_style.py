@@ -31,6 +31,29 @@ ROLE_COLORS = {
     "link": "008000",
 }
 
+# Anthropic公式pptxスキルのDesign Ideas（配色パレット）に準拠した8テーマ。
+# pptx-create スキルの THEMES と同じ名前・同じ色（クロススキルで統一した
+# 見た目にできるよう意図的に揃えている）。primary=見出し・アクセント、
+# secondary=補助色、accent=強調、text_on_primary=primaryを塗りに使うときの文字色。
+THEMES = {
+    "charcoal": {"primary": "36454F", "secondary": "F2F2F2", "accent": "212121", "text_on_primary": "FFFFFF"},
+    "navy": {"primary": "1E2761", "secondary": "CADCFC", "accent": "0B1440", "text_on_primary": "FFFFFF"},
+    "forest": {"primary": "2C5F2D", "secondary": "97BC62", "accent": "1C3D1D", "text_on_primary": "FFFFFF"},
+    "coral": {"primary": "2F3C7E", "secondary": "F9E795", "accent": "F96167", "text_on_primary": "FFFFFF"},
+    "terracotta": {"primary": "B85042", "secondary": "E7E8D1", "accent": "A7BEAE", "text_on_primary": "FFFFFF"},
+    "ocean": {"primary": "065A82", "secondary": "1C7293", "accent": "21295C", "text_on_primary": "FFFFFF"},
+    "teal": {"primary": "028090", "secondary": "00A896", "accent": "02C39A", "text_on_primary": "FFFFFF"},
+    "berry": {"primary": "6D2E46", "secondary": "A26769", "accent": "ECE2D0", "text_on_primary": "FFFFFF"},
+}
+
+
+def resolve_theme(name: str) -> dict:
+    key = (name or "").strip().lower()
+    if key not in THEMES:
+        supported = ", ".join(sorted(THEMES))
+        raise ValueError(f"未対応の theme です: {name!r}（対応: {supported}）")
+    return THEMES[key]
+
 _BORDER_SIDES = ("top", "bottom", "left", "right")
 
 

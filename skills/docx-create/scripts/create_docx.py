@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 from _common import register_output_path, setup_utf8_stdio
-from _blocks import BLOCK_HANDLERS, DEFAULT_FONT, _set_east_asian_font
+from _blocks import BLOCK_HANDLERS, DEFAULT_FONT, _set_east_asian_font, resolve_theme
 
 PAGE_SIZES_CM = {
     "a4": (21.0, 29.7),
@@ -109,6 +109,8 @@ def _build_document(spec: dict):
     if core_props.get("author"):
         doc.core_properties.author = str(core_props["author"])
 
+    theme = resolve_theme(spec.get("theme"))
+
     warnings: list[str] = []
     for i, block in enumerate(spec.get("blocks") or []):
         block_type = block.get("type") if isinstance(block, dict) else None
@@ -116,7 +118,7 @@ def _build_document(spec: dict):
         if handler is None:
             warnings.append(f"blocks[{i}]: 未知の type '{block_type}' はスキップしました")
             continue
-        handler(doc, block)
+        handler(doc, block, theme)
 
     return doc, warnings
 

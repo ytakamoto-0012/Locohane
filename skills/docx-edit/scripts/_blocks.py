@@ -11,6 +11,68 @@ from __future__ import annotations
 from pathlib import Path
 
 DEFAULT_FONT = "游明朝"
+HEADING_FONT = "游ゴシック"
+
+# docx-create スキルの THEMES と同じ名前・同じ色（同一文書内でappend_blockした
+# 内容とdocx-createで作った内容の見た目を揃えられるよう意図的に揃えている）。
+THEMES = {
+    "charcoal": {"primary": "36454F", "secondary": "F2F2F2", "accent": "212121", "text_on_primary": "FFFFFF"},
+    "navy": {"primary": "1E2761", "secondary": "CADCFC", "accent": "0B1440", "text_on_primary": "FFFFFF"},
+    "forest": {"primary": "2C5F2D", "secondary": "97BC62", "accent": "1C3D1D", "text_on_primary": "FFFFFF"},
+    "coral": {"primary": "2F3C7E", "secondary": "F9E795", "accent": "F96167", "text_on_primary": "FFFFFF"},
+    "terracotta": {"primary": "B85042", "secondary": "E7E8D1", "accent": "A7BEAE", "text_on_primary": "FFFFFF"},
+    "ocean": {"primary": "065A82", "secondary": "1C7293", "accent": "21295C", "text_on_primary": "FFFFFF"},
+    "teal": {"primary": "028090", "secondary": "00A896", "accent": "02C39A", "text_on_primary": "FFFFFF"},
+    "berry": {"primary": "6D2E46", "secondary": "A26769", "accent": "ECE2D0", "text_on_primary": "FFFFFF"},
+}
+DEFAULT_THEME = "charcoal"
+
+
+def resolve_theme(name: str | None) -> dict:
+    key = (name or DEFAULT_THEME).strip().lower()
+    if key not in THEMES:
+        supported = ", ".join(sorted(THEMES))
+        raise ValueError(f"未対応の theme です: {name!r}（対応: {supported}）")
+    return THEMES[key]
+
+
+def _set_cell_shading(cell, color_hex: str) -> None:
+    from docx.oxml.ns import qn
+    from docx.oxml.shared import OxmlElement
+
+    tcPr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), color_hex)
+    tcPr.append(shd)
+
+
+def _set_paragraph_shading(paragraph, color_hex: str) -> None:
+    from docx.oxml.ns import qn
+    from docx.oxml.shared import OxmlElement
+
+    pPr = paragraph._p.get_or_add_pPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), color_hex)
+    pPr.append(shd)
+
+
+def _set_paragraph_left_border(paragraph, color_hex: str) -> None:
+    from docx.oxml.ns import qn
+    from docx.oxml.shared import OxmlElement
+
+    pPr = paragraph._p.get_or_add_pPr()
+    pBdr = OxmlElement("w:pBdr")
+    left = OxmlElement("w:left")
+    left.set(qn("w:val"), "single")
+    left.set(qn("w:sz"), "24")
+    left.set(qn("w:space"), "8")
+    left.set(qn("w:color"), color_hex)
+    pBdr.append(left)
+    pPr.append(pBdr)
 
 
 def _set_east_asian_font(font_obj, element, font_name: str) -> None:
@@ -44,12 +106,15 @@ def _apply_run_props(run, run_spec: dict) -> None:
         _set_east_asian_font(run.font, run._element, str(run_spec["font"]))
 
 
-def _add_heading(doc, block: dict):
+def _add_heading(doc, block: dict, theme: dict):
+    # 既存文書へのappend_blockでは、その文書自身のWordテーマ（組み込み
+    # 見出しスタイルが参照する色）をそのまま尊重する。theme引数はここでは
+    # 使わない（callout等、文書側に対応物が無い新規要素にのみ使う）。
     level = max(0, min(int(block.get("level", 1)), 9))
     doc.add_heading(str(block.get("text", "")), level=level)
 
 
-def _add_paragraph(doc, block: dict):
+def _add_paragraph(doc, block: dict, theme: dict):
     from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     align_map = {
@@ -72,12 +137,14 @@ def _add_paragraph(doc, block: dict):
         _apply_run_props(run, block)
 
 
-def _add_list(doc, block: dict, style_name: str):
+def _add_list(doc, block: dict, theme: dict, style_name: str):
     for item in block.get("items") or []:
         doc.add_paragraph(str(item), style=style_name)
 
 
-def _add_table(doc, block: dict):
+def _add_table(doc, block: dict, theme: dict):
+    # heading同様、theme引数は使わず太字のみ（既存文書に配色を押し付けない）。
+    # 後から配色したい場合は set_table_style op を明示的に呼ぶ。
     rows = block.get("rows") or []
     if not rows:
         raise ValueError("table.rows が空です（少なくとも1行必要）")
@@ -96,7 +163,7 @@ def _add_table(doc, block: dict):
                         run.bold = True
 
 
-def _add_image(doc, block: dict):
+def _add_image(doc, block: dict, theme: dict):
     from docx.shared import Cm
 
     image_path = Path(str(block.get("path", "")))
@@ -110,12 +177,22 @@ def _add_image(doc, block: dict):
     doc.add_picture(str(image_path), **kwargs)
 
 
+def _add_callout(doc, block: dict, theme: dict):
+    """左に太いアクセント罫線＋薄い塗りの強調ボックス段落（docx-createのcalloutと同じ）。"""
+    para = doc.add_paragraph()
+    _set_paragraph_shading(para, theme["secondary"])
+    _set_paragraph_left_border(para, theme["primary"])
+    run = para.add_run(str(block.get("text", "")))
+    _apply_run_props(run, block)
+
+
 BLOCK_HANDLERS = {
     "heading": _add_heading,
     "paragraph": _add_paragraph,
-    "bullet_list": lambda doc, b: _add_list(doc, b, "List Bullet"),
-    "number_list": lambda doc, b: _add_list(doc, b, "List Number"),
+    "bullet_list": lambda doc, b, theme: _add_list(doc, b, theme, "List Bullet"),
+    "number_list": lambda doc, b, theme: _add_list(doc, b, theme, "List Number"),
     "table": _add_table,
     "image": _add_image,
-    "page_break": lambda doc, b: doc.add_page_break(),
+    "callout": _add_callout,
+    "page_break": lambda doc, b, theme: doc.add_page_break(),
 }

@@ -11,13 +11,14 @@ from __future__ import annotations
 import unicodedata
 
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference, ScatterChart
+from openpyxl.chart.label import DataLabelList
 from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule, FormulaRule, IconSetRule
 from openpyxl.utils.cell import range_boundaries
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from _common import resolve_sheet_name
-from _style import apply_style
+from _style import apply_style, resolve_theme
 
 _CHART_CLASSES = {
     "bar": BarChart,
@@ -158,7 +159,9 @@ def _format_table_range(ws, min_row: int, max_row: int, min_col: int, max_col: i
     border_style = opts.get("border", "thin")
     banded = opts.get("banded", True)
     band_fill = opts.get("band_fill", "F2F2F2")
-    header_fill = opts.get("header_fill", "1F4E78")
+    theme = resolve_theme(opts["theme"]) if opts.get("theme") else None
+    header_fill = opts.get("header_fill") or (theme["primary"] if theme else "1F4E78")
+    header_font_color_default = theme["text_on_primary"] if theme else "FFFFFF"
 
     # min_row の直前行が既に見出し色（header_fill）で塗られている場合、この
     # 呼び出しは新規テーブルの先頭ではなく、見出し行とデータ行を別々の
@@ -173,7 +176,7 @@ def _format_table_range(ws, min_row: int, max_row: int, min_col: int, max_col: i
     if not is_continuation:
         header_style = {
             "bold": True,
-            "font_color": opts.get("header_font_color", "FFFFFF"),
+            "font_color": opts.get("header_font_color") or header_font_color_default,
             "fill_color": header_fill,
             "align": "center",
             "valign": "center",
@@ -225,6 +228,10 @@ def op_delete_cols(wb, op: dict) -> None:
 
 def op_set_column_width(wb, op: dict) -> None:
     _sheet(wb, op["sheet"]).column_dimensions[op["column"]].width = op["width"]
+
+
+def op_set_row_height(wb, op: dict) -> None:
+    _sheet(wb, op["sheet"]).row_dimensions[int(op["row"])].height = op["height"]
 
 
 def op_merge_cells(wb, op: dict) -> None:
@@ -284,6 +291,26 @@ def op_add_chart(wb, op: dict) -> None:
     chart.add_data(data_ref, titles_from_data=op.get("titles_from_data", True))
     if op.get("categories_range"):
         chart.set_categories(_reference(ws, op["categories_range"]))
+
+    # 既定でデータラベルを表示する（公式pptxスキルが指摘する
+    # 「装飾なしのグラフは見劣りする」問題への対応。無地の棒/線グラフより
+    # 値が読み取れるほうが実用上有用なため、明示的にオフにしない限り常時表示）。
+    if op.get("show_data_labels", True):
+        chart.dataLabels = DataLabelList(
+            showVal=False, showCatName=False, showSerName=False,
+            showLegendKey=False, showPercent=False, showBubbleSize=False,
+        )
+        if op["type"] == "pie":
+            chart.dataLabels.showPercent = True
+        else:
+            chart.dataLabels.showVal = True
+
+    theme = resolve_theme(op["theme"]) if op.get("theme") else None
+    if theme is not None and op["type"] != "pie":
+        palette = [theme["primary"], theme["secondary"], theme["accent"]]
+        for i, series in enumerate(chart.series):
+            series.graphicalProperties.solidFill = palette[i % len(palette)]
+
     ws.add_chart(chart, op["anchor"])
 
 
@@ -343,6 +370,7 @@ OP_HANDLERS = {
     "insert_cols": op_insert_cols,
     "delete_cols": op_delete_cols,
     "set_column_width": op_set_column_width,
+    "set_row_height": op_set_row_height,
     "merge_cells": op_merge_cells,
     "unmerge_cells": op_unmerge_cells,
     "add_table": op_add_table,

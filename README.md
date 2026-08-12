@@ -21,7 +21,7 @@
 **このプロジェクトは、高性能な大規模パラメータモデルではなく、低パラメータモデルでも
 安定して Agent がタスクをこなせるようにすることを目指す。** 特に低パラメータモデルで
 起こりやすい、思考ループ・パス生成不具合・途中停止（無言のまま応答を終える等）の制御に
-全力を尽くす。この中核使命を支える技術は次の6点:
+全力を尽くす。この中核使命を支える技術は次の7点:
 
 - **パスメモリー機能**（`src/path_memory.py`、`system_prompt.md` の
   Tool Usage Guidelines）: `Glob`/`Grep`/`Read` の結果に短い参照番号 `@N`
@@ -61,6 +61,21 @@
   実行をブロックする。任意コード実行が可能な `execute_python_code` でも
   git/npm/pip の起動とプロジェクト外への書き込みをガードで遮断し、最低限の
   破壊的操作を防いでいる。
+- **文書生成スキルの「ops JSON DSL」設計**（`skills/pptx-create`・`skills/excel-edit`・
+  `skills/docx-create` の `scripts/_*.py`）: 上記「bash/npm相当のツールを持たせない
+  設計」を xlsx/pptx/docx 生成にも一貫して適用したもの。`python-pptx`/`openpyxl`/
+  `python-docx` の生コードを LLM に書かせるのではなく、有限個の `op`（`set_range`/
+  `add_chart`/`format_table` 等）と JSON スキーマへ閉じ込めることで、低パラメータ
+  モデルでも構文エラーやファイル破損なく確実に動く操作だけに絞っている（Anthropic
+  公式の `skills/pptx`・`skills/xlsx` 等は逆に、Claude自身の事前知識に頼って
+  `python-pptx`/`openpyxl` の生コードを直接書かせる設計で、SKILL.md はライブラリ
+  API そのものではなく「落とし穴」だけを補足する差分ドキュメントになっている）。
+  見た目の一貫性のため、`pptx-create`/`excel-edit`/`docx-create`/`pdf-tools` は
+  同じ8色の配色テーマ（`charcoal`/`navy` 等、Anthropic公式pptxスキルのDesign
+  Ideas準拠）を共有している。`pdf-tools`（`create_pdf.py`）だけは例外的に
+  セマンティックHTML（`xhtml2pdf` 経由、JS実行なし）を LLM に直接書かせている —
+  HTML は xlsx/pptx/docx の XMLベース形式と違い多少崩れても致命的にファイルが
+  壊れないため、この原則の範囲内で安全に表現力を確保できる。
 
 ---
 

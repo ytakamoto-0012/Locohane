@@ -32,10 +32,14 @@ PyYAML==6.0.3
 # --- json_query ツール（JMESPath クエリ、src/file_tools.py） ---
 jmespath==1.1.0
 
-# --- pdf-tools スキル（PDF読み込み: pypdf / PDFページ画像化: pypdfium2 / PDF生成: reportlab、日本語CIDフォント内蔵） ---
+# --- pdf-tools スキル（PDF読み込み: pypdf / PDFページ画像化: pypdfium2 /
+#     PDF生成: xhtml2pdf、セマンティックHTML+CSSをレンダリング。日本語は
+#     内部で使うreportlabのCID内蔵フォント（HeiseiMin-W3/HeiseiKakuGo-W5）
+#     で描画するため外部フォントファイル不要。reportlab自体はxhtml2pdfの
+#     推移的依存のため明記しない） ---
 pypdf==6.11.0
 pypdfium2==4.30.0
-reportlab==4.5.1
+xhtml2pdf==0.2.17
 
 # --- excel-read/excel-edit/excel-recalc/excel-vba-read/excel-vba-edit/excel-render
 #     スキル（xlsx/xlsm読み書き: openpyxl / レガシーxls読み込み: xlrd /

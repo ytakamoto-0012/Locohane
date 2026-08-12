@@ -19,7 +19,9 @@ from pathlib import Path
 from _common import register_output_path, setup_utf8_stdio
 
 from pptx import Presentation
-from pptx.util import Inches
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
+from pptx.util import Emu, Inches, Pt
 
 TEMPLATE_PATH = Path(__file__).parent.parent / "assets" / "template_16x9.pptx"
 
@@ -31,8 +33,122 @@ LAYOUT_MAP = {
     "two_content": 3,
     "table": 1,
     "picture": 1,
+    "stat": 6,
     "blank": 6,
 }
+
+# 公式Anthropicスキル（pptx）のDesign Ideasにある配色パレットの抜粋。
+# primary=基調色（60-70%）, secondary=補助色, accent=アクセント,
+# text_on_primary=primaryを背景/塗りに使ったときの文字色。
+THEMES = {
+    "charcoal": {"primary": "36454F", "secondary": "F2F2F2", "accent": "212121", "text_on_primary": "FFFFFF"},
+    "navy": {"primary": "1E2761", "secondary": "CADCFC", "accent": "0B1440", "text_on_primary": "FFFFFF"},
+    "forest": {"primary": "2C5F2D", "secondary": "97BC62", "accent": "1C3D1D", "text_on_primary": "FFFFFF"},
+    "coral": {"primary": "2F3C7E", "secondary": "F9E795", "accent": "F96167", "text_on_primary": "FFFFFF"},
+    "terracotta": {"primary": "B85042", "secondary": "E7E8D1", "accent": "A7BEAE", "text_on_primary": "FFFFFF"},
+    "ocean": {"primary": "065A82", "secondary": "1C7293", "accent": "21295C", "text_on_primary": "FFFFFF"},
+    "teal": {"primary": "028090", "secondary": "00A896", "accent": "02C39A", "text_on_primary": "FFFFFF"},
+    "berry": {"primary": "6D2E46", "secondary": "A26769", "accent": "ECE2D0", "text_on_primary": "FFFFFF"},
+}
+DEFAULT_THEME = "charcoal"
+MUTED_GRAY = "595959"
+
+
+def resolve_theme(name: str | None) -> dict:
+    key = (name or DEFAULT_THEME).strip().lower()
+    if key not in THEMES:
+        supported = ", ".join(sorted(THEMES))
+        raise ValueError(f"未対応の theme です: {name!r}（対応: {supported}）")
+    return THEMES[key]
+
+
+def set_text_color(shape, rgb_hex: str, bold: bool | None = None) -> None:
+    if shape is None:
+        return
+    for paragraph in shape.text_frame.paragraphs:
+        for run in paragraph.runs:
+            run.font.color.rgb = RGBColor.from_string(rgb_hex)
+            if bold is not None:
+                run.font.bold = bold
+
+
+def style_title_slide(slide, theme: dict, dark: bool) -> None:
+    title = slide.shapes.title
+    if dark:
+        slide.background.fill.solid()
+        slide.background.fill.fore_color.rgb = RGBColor.from_string(theme["primary"])
+        set_text_color(title, theme["text_on_primary"], bold=True)
+        try:
+            set_text_color(slide.placeholders[1], theme["secondary"])
+        except KeyError:
+            pass
+    else:
+        set_text_color(title, theme["primary"], bold=True)
+        try:
+            set_text_color(slide.placeholders[1], MUTED_GRAY)
+        except KeyError:
+            pass
+
+
+def style_content_title(slide, theme: dict) -> None:
+    set_text_color(slide.shapes.title, theme["primary"], bold=True)
+
+
+def style_table(table, theme: dict, has_header: bool) -> None:
+    if not has_header:
+        return
+    n_cols = len(table.columns)
+    for c in range(n_cols):
+        cell = table.cell(0, c)
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = RGBColor.from_string(theme["primary"])
+        for paragraph in cell.text_frame.paragraphs:
+            for run in paragraph.runs:
+                run.font.color.rgb = RGBColor.from_string(theme["text_on_primary"])
+                run.font.bold = True
+
+
+def add_stat_row(slide, prs: Presentation, stats: list, theme: dict, top) -> None:
+    n = len(stats)
+    if n == 0:
+        raise ValueError("stat レイアウトには stats に1件以上の要素が必要です")
+    if n > 4:
+        raise ValueError("stat レイアウトの stats は最大4件です")
+
+    margin = Inches(0.6)
+    gap = Inches(0.4)
+    usable_width = prs.slide_width - margin * 2 - gap * (n - 1)
+    col_width = Emu(int(usable_width / n))
+    height = Inches(2.2)
+
+    for i, item in enumerate(stats):
+        if isinstance(item, dict):
+            value = str(item.get("value", ""))
+            label = str(item.get("label", ""))
+        else:
+            raise ValueError("stats の各要素は {'value':..., 'label':...} の形式にしてください")
+        left = Emu(int(margin + i * (col_width + gap)))
+
+        value_box = slide.shapes.add_textbox(left, top, col_width, Inches(1.3))
+        vtf = value_box.text_frame
+        vtf.word_wrap = True
+        vp = vtf.paragraphs[0]
+        vp.alignment = PP_ALIGN.CENTER
+        vrun = vp.add_run()
+        vrun.text = value
+        vrun.font.size = Pt(44)
+        vrun.font.bold = True
+        vrun.font.color.rgb = RGBColor.from_string(theme["primary"])
+
+        label_box = slide.shapes.add_textbox(left, Emu(int(top + Inches(1.3))), col_width, Inches(0.7))
+        ltf = label_box.text_frame
+        ltf.word_wrap = True
+        lp = ltf.paragraphs[0]
+        lp.alignment = PP_ALIGN.CENTER
+        lrun = lp.add_run()
+        lrun.text = label
+        lrun.font.size = Pt(14)
+        lrun.font.color.rgb = RGBColor.from_string(MUTED_GRAY)
 
 
 def set_bullets(placeholder, bullets: list) -> None:
@@ -71,9 +187,10 @@ def add_table(slide, table_def: dict, left, top, width, height) -> None:
         for c, val in enumerate(row):
             table.cell(r, c).text = str(val)
         r += 1
+    return table
 
 
-def apply_slide(prs: Presentation, slide_def: dict) -> None:
+def apply_slide(prs: Presentation, slide_def: dict, theme: dict) -> None:
     layout_key = slide_def.get("layout", "content")
     if layout_key not in LAYOUT_MAP:
         supported = ", ".join(sorted(LAYOUT_MAP))
@@ -85,6 +202,7 @@ def apply_slide(prs: Presentation, slide_def: dict) -> None:
     except IndexError as e:
         raise ValueError(f"テンプレートに slide_layouts[{layout_idx}] が存在しません") from e
     slide = prs.slides.add_slide(layout)
+    dark = bool(slide_def.get("dark", False))
 
     title = slide_def.get("title")
     if title is not None and slide.shapes.title is not None:
@@ -97,6 +215,10 @@ def apply_slide(prs: Presentation, slide_def: dict) -> None:
                 slide.placeholders[1].text = str(subtitle)
             except KeyError:
                 pass
+        style_title_slide(slide, theme, dark)
+
+    elif layout_key == "section":
+        style_title_slide(slide, theme, dark)
 
     elif layout_key == "content":
         bullets = slide_def.get("bullets") or []
@@ -105,6 +227,7 @@ def apply_slide(prs: Presentation, slide_def: dict) -> None:
                 set_bullets(slide.placeholders[1], bullets)
             except KeyError as e:
                 raise ValueError("content レイアウトに本文プレースホルダが見つかりません") from e
+        style_content_title(slide, theme)
 
     elif layout_key == "two_content":
         left_bullets = slide_def.get("left_bullets") or []
@@ -116,6 +239,7 @@ def apply_slide(prs: Presentation, slide_def: dict) -> None:
                 set_bullets(slide.placeholders[2], right_bullets)
         except KeyError as e:
             raise ValueError("two_content レイアウトに左右のプレースホルダが見つかりません") from e
+        style_content_title(slide, theme)
 
     elif layout_key == "table":
         table_def = slide_def.get("table")
@@ -126,7 +250,9 @@ def apply_slide(prs: Presentation, slide_def: dict) -> None:
             left, top, width, height = body.left, body.top, body.width, body.height
         else:
             left, top, width, height = Inches(0.5), Inches(1.8), Inches(9.0), Inches(4.5)
-        add_table(slide, table_def, left, top, width, height)
+        table = add_table(slide, table_def, left, top, width, height)
+        style_table(table, theme, has_header=bool(table_def.get("headers")))
+        style_content_title(slide, theme)
 
     elif layout_key == "picture":
         image_path = slide_def.get("image_path")
@@ -145,6 +271,22 @@ def apply_slide(prs: Presentation, slide_def: dict) -> None:
         if caption:
             box = slide.shapes.add_textbox(left, prs.slide_height - Inches(0.8), width, Inches(0.5))
             box.text_frame.text = str(caption)
+        style_content_title(slide, theme)
+
+    elif layout_key == "stat":
+        # blank layout（layout_idx=6）にはタイトルプレースホルダが無いため、
+        # 手動でタイトル用テキストボックスを追加する。
+        if title is not None:
+            title_box = slide.shapes.add_textbox(
+                Inches(0.6), Inches(0.5), prs.slide_width - Inches(1.2), Inches(1.0)
+            )
+            trun = title_box.text_frame.paragraphs[0].add_run()
+            trun.text = str(title)
+            trun.font.size = Pt(30)
+            trun.font.bold = True
+            trun.font.color.rgb = RGBColor.from_string(theme["primary"])
+        stats = slide_def.get("stats") or []
+        add_stat_row(slide, prs, stats, theme, Inches(2.6))
 
     notes = slide_def.get("notes")
     if notes:
@@ -183,13 +325,19 @@ def main() -> int:
         print("data の 'slides' キーに1件以上のスライド定義が必要です。", file=sys.stderr)
         return 1
 
+    try:
+        theme = resolve_theme(data.get("theme") if isinstance(data, dict) else None)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
     if not TEMPLATE_PATH.is_file():
         print(f"テンプレートが見つかりません: {TEMPLATE_PATH}", file=sys.stderr)
         return 1
     prs = Presentation(str(TEMPLATE_PATH))
     try:
         for slide_def in slide_defs:
-            apply_slide(prs, slide_def)
+            apply_slide(prs, slide_def, theme)
     except ValueError as e:
         print(f"スライド生成に失敗しました: {e}", file=sys.stderr)
         return 1

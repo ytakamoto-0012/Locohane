@@ -39,8 +39,8 @@ _DEFAULT_RENDER_DPI = 300
 # 目標 DPI（余白除去後の縮尺）
 _TARGET_DPI = 150
 
-# 白黒境界判定の閾値（ピクセルあたりの黒画素率。これ未満なら白＝余白）
-_MARGIN_THRESHOLD = 0.02  # 2%未満の黒画素なら余白とみなす
+# 白黒境界判定の閾値（ピクセル値。これ未満なら黒＝コンテンツとみなす）
+_DARK_PIXEL_THRESHOLD = 128
 
 
 # ---------------------------------------------------------------------------
@@ -121,58 +121,33 @@ def _convert_office_to_pdf(path: Path, tool: str) -> Path:
 
 
 def _detect_content_bbox(image_path: Path) -> tuple[int, int, int, int] | None:
-    """PNG画像から白黒境界判定でコンテンツ領域のbboxを算出。
+    """PNG画像からコンテンツ領域のbbox（left, top, right, bottom）を算出する。
 
-    上・左から黒画素が現れる位置、下・右から黒画素が現れる位置を検出し、
-    コンテンツ領域の (left, top, right, bottom) を返す。
+    グレースケール化し、閾値未満（暗い）ピクセルの外接矩形をPILの
+    getbbox()で直接求める。
+
+    旧実装は上下・左右を別々に「黒画素数 ÷ 画像の幅（上下判定）/高さ
+    （左右判定）」の比率で判定していたため、コンテンツが画像の一部
+    （例: ページ上部のみ）に偏っている場合、左右判定の比率が画像全高で
+    薄まってしまい、実際のコンテンツ幅よりはるかに狭いbboxになるバグが
+    あった。getbbox()は行・列を独立に判定しないため、コンテンツの偏りに
+    影響されず正確な外接矩形を返す。
 
     完全に白（コンテンツなし）の場合は None を返す。
     """
     from PIL import Image
 
     img = Image.open(image_path).convert("L")  # グレースケール
-    pixels = img.load()
-    w, h = img.size
+    mask = img.point(lambda p: 255 if p < _DARK_PIXEL_THRESHOLD else 0)
+    bbox = mask.getbbox()
+    if bbox is None:
+        return None  # 全面白（コンテンツなし）
 
-    # 行方向（上から）
-    top = None
-    for y in range(h):
-        row_black = sum(1 for x in range(w) if pixels[x, y] < 128)
-        if row_black / w >= _MARGIN_THRESHOLD:
-            top = y
-            break
-
-    if top is None:
-        return None  # 全行白
-
-    # 行方向（下から）
-    bottom = None
-    for y in range(h - 1, -1, -1):
-        row_black = sum(1 for x in range(w) if pixels[x, y] < 128)
-        if row_black / w >= _MARGIN_THRESHOLD:
-            bottom = y
-            break
-
-    # 列方向（左から）
-    left = None
-    for x in range(w):
-        col_black = sum(1 for y in range(h) if pixels[x, y] < 128)
-        if col_black / h >= _MARGIN_THRESHOLD:
-            left = x
-            break
-
-    # 列方向（右から）
-    right = None
-    for x in range(w - 1, -1, -1):
-        col_black = sum(1 for y in range(h) if pixels[x, y] < 128)
-        if col_black / h >= _MARGIN_THRESHOLD:
-            right = x
-            break
-
-    if left is None or right is None:
-        return None
-
-    return (left, top, right, bottom)
+    left, top, right, bottom = bbox
+    # getbbox()は半開区間 [left, right) x [top, bottom) を返す。呼び出し側
+    # _crop_image の crop((left, top, right+1, bottom+1)) と整合させるため、
+    # 包含的な最終インデックス（right-1, bottom-1）に変換して返す。
+    return (left, top, right - 1, bottom - 1)
 
 
 def _crop_image(image_path: Path, bbox: tuple[int, int, int, int], target_dpi: int) -> Path:
@@ -262,7 +237,7 @@ def render_office_file(
     start_page: int = 1,
     max_pages: int = 3,
     dpi: int = 300,
-    crop: bool = True,
+    crop: bool = False,
     target_dpi: int = _TARGET_DPI,
     thread_id: str | None = None,
 ) -> dict:

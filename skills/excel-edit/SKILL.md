@@ -1,6 +1,6 @@
 ---
 name: excel-edit
-description: xlsx/xlsmファイルの新規作成・既存編集を行うスキル。セル値・書式（フォント/背景色/罫線/列幅/結合）の設定、行列の挿入削除、グラフ追加、条件付き書式、データ検証、構造化テーブルに対応。Excel本体は不要（openpyxlで直接書き込む）。数式文字列は書き込めるが計算はしない（計算結果の確認・エラーセル検出はexcel-recalcスキルを使う）。ユーザーが表データを新規作成/編集したいとき、書式付きのレポートやグラフ入りのExcelを出力したいとき、既存のxlsx/xlsmにデータや装飾を追記・修正したいときに使う。読み込み専用ならexcel-read、VBAマクロの読み書きはexcel-vba-read/excel-vba-edit、見た目の画像確認はexcel-renderを使う。
+description: xlsx/xlsmファイルの新規作成・既存編集を行うスキル。セル値・書式（フォント/背景色/罫線/列幅/行高/結合）の設定、行列の挿入削除、グラフ追加（既定でデータラベル表示・テーマ配色対応）、条件付き書式、データ検証、構造化テーブルに対応。Excel本体は不要（openpyxlで直接書き込む）。数式文字列は書き込めるが計算はしない（計算結果の確認・エラーセル検出はexcel-recalcスキルを使う）。ユーザーが表データを新規作成/編集したいとき、書式付きのレポートやグラフ入りのExcelを出力したいとき、既存のxlsx/xlsmにデータや装飾を追記・修正したいときに使う。読み込み専用ならexcel-read、VBAマクロの読み書きはexcel-vba-read/excel-vba-edit、見た目の画像確認はexcel-renderを使う。
 license: MIT
 metadata:
   author: ytakamoto
@@ -40,19 +40,20 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 | `set_cell` | `sheet`,`cell` | `value`,`style` | 単一セルへ値・書式設定 |
 | `set_range` | `sheet`,`start_cell`,`rows` | `style`,`header_style`,`row_styles`,`format_table` | 起点セルから複数行を一括書込。`header_style`は1行目のみ適用。列幅は自動調整（全角=2文字換算、既存幅より縮まない）。**`header_style`を渡すと自動的に`format_table`相当（見出し配色・罫線・縞模様・見出し行固定・列幅調整）が既定で適用される**（`format_table:false`で無効化可。逆に`header_style`省略でも`format_table:true`で強制適用可） |
 | `set_style` | `sheet`,`range` | `style` | 値は変えず既存セルへ書式のみ適用 |
-| `format_table` | `sheet`,`range` | `header_fill`(既定`1F4E78`),`header_font_color`(既定`FFFFFF`),`band_fill`(既定`F2F2F2`),`banded`(既定true),`border`(既定`thin`),`freeze_header`(既定true),`autofit`(既定true) | 書き込み済みの表を後から仕上げる。`range`の1行目を見出しとみなす。本体行のフォント色・太字は変更しない（`role`色分けを壊さないため） |
+| `format_table` | `sheet`,`range` | `theme`(下記参照),`header_fill`(既定`1F4E78`または`theme`のprimary),`header_font_color`(既定`FFFFFF`または`theme`のtext_on_primary),`band_fill`(既定`F2F2F2`),`banded`(既定true),`border`(既定`thin`),`freeze_header`(既定true),`autofit`(既定true) | 書き込み済みの表を後から仕上げる。`range`の1行目を見出しとみなす。本体行のフォント色・太字は変更しない（`role`色分けを壊さないため） |
 | `insert_rows` | `sheet`,`index` | `count`(既定1) | 行挿入（1始まり位置） |
 | `delete_rows` | `sheet`,`index` | `count`(既定1) | 行削除 |
 | `insert_cols` | `sheet`,`index` | `count`(既定1) | 列挿入（1始まり） |
 | `delete_cols` | `sheet`,`index` | `count`(既定1) | 列削除 |
 | `set_column_width` | `sheet`,`column`,`width` | - | 列幅を手動指定 |
+| `set_row_height` | `sheet`,`row`,`height` | - | 行の高さを手動指定（`row`は1始まり行番号、`height`はポイント単位） |
 | `merge_cells` | `sheet`,`range` | - | セル結合（例`"A1:C1"`） |
 | `unmerge_cells` | `sheet`,`range` | - | 結合解除。未結合範囲指定はエラー |
 | `add_table` | `sheet`,`name`,`range` | `style`(既定`TableStyleMedium9`),`banded`(既定true) | 構造化テーブル作成（フィルター・構造化参照付き。`format_table`の見た目装飾とは別物）。`range`1行目の既存値がヘッダー名になる。`name`はブック内一意な識別子 |
 | `update_table` | `sheet`,`name` | `range`,`style`,`banded` | 既存テーブルの範囲拡張・スタイル変更 |
 | `remove_table` | `sheet`,`name` | - | テーブル定義のみ削除（値・書式は残る） |
 | `freeze_panes` | `sheet`,`cell` | - | ウィンドウ枠固定（`"A2"`で1行目固定） |
-| `add_chart` | `sheet`,`type`,`data_range`,`anchor` | `title`,`categories_range`,`titles_from_data`(既定true) | グラフ追加。`type`は`bar`/`line`/`pie`/`scatter` |
+| `add_chart` | `sheet`,`type`,`data_range`,`anchor` | `title`,`categories_range`,`titles_from_data`(既定true),`theme`(下記参照),`show_data_labels`(既定true) | グラフ追加。`type`は`bar`/`line`/`pie`/`scatter`。既定でデータラベル（値。`pie`は%）を表示し、`theme`指定時は系列色をテーマ配色にする（`pie`は対象外、Excel既定の配色のまま） |
 | `add_conditional_format` | `sheet`,`range`,`rule_type`,`params` | - | 条件付き書式（下記表参照） |
 | `add_data_validation` | `sheet`,`range`,`type` | `formula1`,`formula2`,`prompt`,`prompt_title`,`error_message`,`error_title`,`allow_blank`(既定true) | データ検証（下記参照） |
 
@@ -77,6 +78,31 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 | `link` | 緑`008000` | 他シートを参照する数式 |
 
 表を作る際はこの規約で`role`を使い分けると「どこが手入力/どこが計算か」が一目で分かる。
+
+## テーマ配色（theme）
+
+`header_style`（`set_range`経由）・`format_table`・`add_chart`の`theme`キーに以下から選ぶと、
+見出し配色や系列色を一括で指定できる（`pptx-create`スキルと同じ配色・同じ名前なので、
+xlsxとpptxを同じ資料セットとして作るときに見た目を揃えやすい）。個別に`header_fill`等を
+指定すればそちらが優先される。
+
+| theme | 主な色調 |
+|---|---|
+| `charcoal`（既定相当） | チャコールグレー・落ち着いた中立トーン |
+| `navy` | 濃紺・信頼感のあるビジネス調 |
+| `forest` | 深緑・成長や環境をイメージ |
+| `coral` | 紺+コーラル、明るく力強い |
+| `terracotta` | テラコッタ・温かみのある土色系 |
+| `ocean` | 深い青系のグラデーション調 |
+| `teal` | ティール・清潔感のあるトーン |
+| `berry` | ベリー色・落ち着いた華やかさ |
+
+```json
+[{"op": "set_range", "sheet": "Sheet1", "start_cell": "A1",
+  "rows": [["月","売上"], ["4月",120], ["5月",135]], "header_style": {"theme": "navy"}},
+ {"op": "add_chart", "sheet": "Sheet1", "type": "bar", "data_range": "B1:B3",
+  "categories_range": "A2:A3", "anchor": "D1", "title": "月次実績", "theme": "navy"}]
+```
 
 ## 美しい表を作る基本レシピ（必須ルール）
 
@@ -151,7 +177,7 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 3. `--new`使用時に対象が既存で上書き可否不明なら、`--overwrite`なしで一度実行しエラーからユーザーに確認する。
 4. 成功時`{"path":...,"sheets":[...],"applied_ops":N}`が返るので保存先パスを伝える。
 
-エッジケース: 拡張子がxlsx/xlsm以外／opsがJSON配列でない／opに`op`キーがない／存在しないシートやop種別を指定／`--new`なしでファイル不在／`--new`かつ`--overwrite`なしで既存ファイル、はいずれもエラー＋終了コード1（何番目のどのopが失敗したかメッセージに含まれる。それを手がかりに修正して再実行）。
+エッジケース: 拡張子がxlsx/xlsm以外／opsがJSON配列でない／opに`op`キーがない／存在しないシートやop種別を指定／未対応の`theme`名を指定／`--new`なしでファイル不在／`--new`かつ`--overwrite`なしで既存ファイル、はいずれもエラー＋終了コード1（何番目のどのopが失敗したかメッセージに含まれる。それを手がかりに修正して再実行）。
 
 ## デザイン確認（必須ルール）
 

@@ -2,14 +2,20 @@
 
 pptx-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script ツールから
-    python render_pptx.py <pptx_path> [--start-page N] [--max-pages N] [--dpi N] [--no-crop]
+    python render_pptx.py <pptx_path> [--start-page N] [--max-pages N] [--dpi N] [--crop]
 の形で呼ばれる。
 
 動作概要:
   1. OLE（COM）で PowerPoint をヘッドレス起動し、ファイルをPDFへエクスポート。
   2. pypdfium2 で PDF ページを画像化（既定300DPI）。
-  3. 白黒境界判定で余白を除去（既定）。
+  3. --crop 指定時のみ、余白除去（コンテンツ領域のbboxでクロップ）。
   4. 目標DPI（150）に縮尺して保存。
+
+既定はクロップなし（スライドの実際の端がそのまま見える）。スライドのサイズ・
+余白はpptxファイル自体が定義済みで、ピクセル走査で推測する必要が無いうえ、
+クロップすると余白の均等さ・中央揃え・スライドが薄すぎないか等のレイアウトQAに
+必要な情報が失われるため。表計算のような「意味のあるデータ領域が可変」な
+excel-renderとは事情が異なる。
 
 生成したPNGは、作業ディレクトリ配下のセッション専用一時フォルダ
 `_tmp_<thread_id>/rendered/` に保存する。
@@ -40,8 +46,8 @@ def main() -> int:
     parser.add_argument("--start-page", type=int, default=1)
     parser.add_argument("--max-pages", type=int, default=3)
     parser.add_argument("--dpi", type=int, default=300)
-    parser.add_argument("--no-crop", action="store_true",
-                        help="余白除去を行わない")
+    parser.add_argument("--crop", action="store_true",
+                        help="コンテンツ領域のbboxで余白を除去する（既定は無効。レイアウトQA目的では通常不要）")
     args = parser.parse_args()
 
     path = Path(args.pptx_path)
@@ -63,7 +69,7 @@ def main() -> int:
             start_page=args.start_page,
             max_pages=args.max_pages,
             dpi=dpi,
-            crop=not args.no_crop,
+            crop=args.crop,
         )
     except ImportError as e:
         print(f"必要なライブラリが見つかりません（pywin32が必要です）: {e}", file=sys.stderr)

@@ -27,15 +27,15 @@ PPTXスライドを画像化してLLMに見せるスキルです。`render_pptx.
 }
 ```
 `--start-page`/`--max-pages`（既定3、最大5にクランプ）/`--dpi`（既定300、
-72〜600にクランプ）/`--no-crop`（余白除去をオフ）は省略可。
+72〜600にクランプ）/`--crop`（後述の余白除去をオンにする。既定はオフ）は省略可。
 
 出力例:
 ```json
-{"path": "C:\\foo\\presentation.pptx", "tool": "pptx", "total_pages": 12, "start_page": 1, "end_page": 3, "dpi": 300, "target_dpi": 150, "crop_applied": true,
+{"path": "C:\\foo\\presentation.pptx", "tool": "pptx", "total_pages": 12, "start_page": 1, "end_page": 3, "dpi": 300, "target_dpi": 150, "crop_applied": false,
  "images": [
-   {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300, "cropped": true},
-   {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300, "cropped": true},
-   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300, "cropped": true}
+   {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300},
+   {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300},
+   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300}
  ]}
 ```
 
@@ -46,8 +46,11 @@ PPTXスライドを画像化してLLMに見せるスキルです。`render_pptx.
 1回の `analyze_image` 呼び出しで1スライド分が見えるので、複数スライドある場合は
 スライド数分 `analyze_image` を呼びます。
 
-**余白除去について**: 既定では白黒境界判定で余白を自動除去します。スライドの
-背景色や図形の配置を正確に把握できるので、このオプションを有効にしてください。
+**余白除去について**: 既定はクロップなし（スライドの実際の端がそのまま見える）。
+スライドのサイズ・余白はpptxファイル自体が定義済みで推測の必要が無いうえ、
+レイアウトQA（余白の均等さ・中央揃え・スライドが薄すぎないか等の確認）には
+実際の端が見えている方が有用なため。図形の配置確認だけが目的で余白を詰めたい
+場合のみ `--crop` を付けてください。
 
 ## エッジケース
 

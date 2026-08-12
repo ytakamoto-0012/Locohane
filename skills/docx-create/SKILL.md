@@ -1,6 +1,6 @@
 ---
 name: docx-create
-description: JSON仕様を渡すだけでWord文書（.docx）を新規生成するスキル。見出し・段落・箇条書き・番号付きリスト・表・画像・改ページ・ページ設定（用紙サイズ/余白/縦横）・ヘッダーフッター・ページ番号を含む本格的な文書を1回のスクリプト実行で作成できる。レポートや議事録、案内文書などをWordファイルとして出力・保存したいときに使う。既存docxの部分編集は`docx-edit`、内容確認は`docx-read`を使う。
+description: JSON仕様を渡すだけでWord文書（.docx）を新規生成するスキル。見出し・段落・箇条書き・番号付きリスト・表・強調ボックス（callout）・画像・改ページ・ページ設定（用紙サイズ/余白/縦横）・ヘッダーフッター・ページ番号を含む本格的な文書を1回のスクリプト実行で作成できる。配色テーマ（8種）で見出し色・表見出し行・calloutの配色を一括指定できる。レポートや議事録、案内文書などを見た目良くWordファイルとして出力・保存したいときに使う。既存docxの部分編集は`docx-edit`、内容確認は`docx-read`を使う。
 license: MIT
 metadata:
   author: ytakamoto
@@ -36,6 +36,7 @@ LLM自身が組み立てたJSON文字列を **`--data` 引数にそのまま渡�
 
 ```json
 {
+  "theme": "navy",
   "core_properties": {"title": "報告書", "author": "山田太郎"},
   "page": {
     "size": "a4",
@@ -48,10 +49,7 @@ LLM自身が組み立てたJSON文字列を **`--data` 引数にそのまま渡�
   "blocks": [
     {"type": "heading", "text": "1. 概要", "level": 1},
     {"type": "paragraph", "text": "本文のテキストです。", "bold": false},
-    {"type": "paragraph", "runs": [
-      {"text": "重要: ", "bold": true, "color": "FF0000"},
-      {"text": "納期は来月末です。"}
-    ]},
+    {"type": "callout", "text": "重要: 納期は来月末です。"},
     {"type": "bullet_list", "items": ["項目A", "項目B", "項目C"]},
     {"type": "number_list", "items": ["手順1", "手順2"]},
     {"type": "table", "rows": [["項目", "値"], ["売上", "1200万円"]], "header_row": true},
@@ -64,6 +62,8 @@ LLM自身が組み立てたJSON文字列を **`--data` 引数にそのまま渡�
 トップレベルのキーはすべて省略可能です（`blocks` のみ指定すれば最小構成の
 文書が作れます）。
 
+- `theme`: 省略可（既定 `charcoal`）。見出し文字色・表見出し行の配色・
+  `callout`の配色を一括で決める。下記「配色テーマ」参照。
 - `core_properties`: 省略可。`title`/`author` を文書プロパティに設定する。
 - `page`: 省略可。`size` は `"a4"`（既定）または `"letter"`。`orientation`
   は `"portrait"`（既定）または `"landscape"`。`margin_cm` は上下左右の
@@ -77,22 +77,41 @@ LLM自身が組み立てたJSON文字列を **`--data` 引数にそのまま渡�
 - `blocks`: 本文の要素を先頭から順に並べた配列。各要素の `type` ごとの
   仕様は以下の通り。
 
+### 配色テーマ（theme）
+
+Anthropic公式pptxスキルのDesign Ideas（配色パレット）に準拠した8種類です
+（`pptx-create`/`excel-edit`と同じ名前・同じ色。同じ資料セットの見た目を
+揃えたいときはxlsx/pptx/docxで同じ`theme`名を指定してください）。
+
+| theme | 主な色調 |
+|---|---|
+| `charcoal`（既定） | チャコールグレー・落ち着いた中立トーン |
+| `navy` | 濃紺・信頼感のあるビジネス調 |
+| `forest` | 深緑・成長や環境をイメージ |
+| `coral` | 紺+コーラル、明るく力強い |
+| `terracotta` | テラコッタ・温かみのある土色系 |
+| `ocean` | 深い青系のグラデーション調 |
+| `teal` | ティール・清潔感のあるトーン |
+| `berry` | ベリー色・落ち着いた華やかさ |
+
 ### blocks の各 type
 
 | type | 必須キー | 主な省略可キー | 説明 |
 |---|---|---|---|
-| `heading` | `text` | `level`（既定1、0=Title・1〜9=見出しレベル） | 見出し段落 |
+| `heading` | `text` | `level`（既定1、0=Title・1〜9=見出しレベル） | 見出し段落。テーマ色＋ゴシック体で描画 |
 | `paragraph` | `text` または `runs` | `alignment`（`left`/`center`/`right`/`justify`）、`bold`/`italic`/`underline`/`color`/`font`/`size_pt`（`text` 使用時のみ直接効く） | 通常の段落。複数の書式が混在する文なら `runs` を使う |
 | `bullet_list` | `items`（文字列配列） | なし | 行頭記号付き箇条書き |
 | `number_list` | `items`（文字列配列） | なし | 番号付きリスト |
-| `table` | `rows`（行の配列。各行はセル文字列の配列） | `header_row`（true なら1行目を太字に） | 表。列数は各行の最大長に合わせる |
+| `table` | `rows`（行の配列。各行はセル文字列の配列） | `header_row`（true なら1行目をテーマ色で塗り白太字に） | 表。列数は各行の最大長に合わせる |
+| `callout` | `text` | `bold`/`italic`/`underline`/`color`/`font`/`size_pt` | 左にテーマ色の太罫線＋薄い塗りの強調ボックス段落。補足・注意書き向け |
 | `image` | `path`（画像ファイルの絶対パス） | `width_cm`、`height_cm`（片方のみ指定でアスペクト比維持） | 画像挿入。パスは実在するファイルの絶対パスであること |
 | `page_break` | なし | なし | 改ページ |
 
-`paragraph` の `runs` 配列の各要素は `text` 必須、`bold`/`italic`/
-`underline`（真偽値）、`color`（`"FF0000"` のようなRRGGBB16進文字列）、
-`font`（フォント名。游明朝など日本語フォント名も可）、`size_pt`
-（フォントサイズ、pt単位）を指定できます。既定フォントは游明朝です。
+`paragraph`/`callout` の `runs`（`paragraph`のみ）や直接キーは `text` 必須、
+`bold`/`italic`/`underline`（真偽値）、`color`（`"FF0000"` のようなRRGGBB16進
+文字列）、`font`（フォント名。游明朝など日本語フォント名も可）、`size_pt`
+（フォントサイズ、pt単位）を指定できます。既定フォントは本文が游明朝、
+見出しが游ゴシックです。
 
 未知の `type` を指定した要素はエラーにせずスキップされ、生成結果の
 `warnings` にその旨が記録されます（後述）。
@@ -115,9 +134,9 @@ LLM自身が組み立てたJSON文字列を **`--data` 引数にそのまま渡�
 ## エッジケース
 
 - 出力先の拡張子が `.docx` でない、`--data`/`--data-file` の両方を
-  指定・両方省略、渡したJSON文字列がパース不能、`table.rows` が空、
-  `image.path` が存在しないファイル、のいずれもエラーメッセージ＋終了コード1。
-  内容をそのままユーザーに伝えること。
+  指定・両方省略、渡したJSON文字列がパース不能、未対応の `theme` 名、
+  `table.rows` が空、`image.path` が存在しないファイル、のいずれもエラー
+  メッセージ＋終了コード1。内容をそのままユーザーに伝えること。
 - 出力先が既に存在する場合は確認なく上書きされます（`pdf-tools`/`pptx-create`
   と同じ挙動）。上書きしてよいか事前にユーザーへ確認するとよいです。
 - 出力先の親ディレクトリが存在しない場合は自動的に作成されます。

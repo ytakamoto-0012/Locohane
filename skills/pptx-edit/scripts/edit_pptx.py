@@ -27,9 +27,35 @@ from pathlib import Path
 from _common import backup_before_overwrite, register_output_path, setup_utf8_stdio
 
 from pptx import Presentation
+from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.enum.text import PP_ALIGN
 from pptx.exc import PackageNotFoundError
 from pptx.oxml.ns import qn
+from pptx.oxml.xmlchemy import OxmlElement
+from pptx.util import Cm, Pt
+
+# pptx-create / excel-edit / docx-create の THEMES と同じ名前・同じ色。
+# 既存テンプレートを流用する場合、テンプレート自身のテーマ色が最優先だが、
+# 「格好よくして」等ユーザーから明示的に再配色を頼まれたときの候補として使う。
+THEMES = {
+    "charcoal": {"primary": "36454F", "secondary": "F2F2F2", "accent": "212121", "text_on_primary": "FFFFFF"},
+    "navy": {"primary": "1E2761", "secondary": "CADCFC", "accent": "0B1440", "text_on_primary": "FFFFFF"},
+    "forest": {"primary": "2C5F2D", "secondary": "97BC62", "accent": "1C3D1D", "text_on_primary": "FFFFFF"},
+    "coral": {"primary": "2F3C7E", "secondary": "F9E795", "accent": "F96167", "text_on_primary": "FFFFFF"},
+    "terracotta": {"primary": "B85042", "secondary": "E7E8D1", "accent": "A7BEAE", "text_on_primary": "FFFFFF"},
+    "ocean": {"primary": "065A82", "secondary": "1C7293", "accent": "21295C", "text_on_primary": "FFFFFF"},
+    "teal": {"primary": "028090", "secondary": "00A896", "accent": "02C39A", "text_on_primary": "FFFFFF"},
+    "berry": {"primary": "6D2E46", "secondary": "A26769", "accent": "ECE2D0", "text_on_primary": "FFFFFF"},
+}
+
+
+def resolve_theme(name: str) -> dict:
+    key = (name or "").strip().lower()
+    if key not in THEMES:
+        supported = ", ".join(sorted(THEMES))
+        raise ValueError(f"未対応の theme です: {name!r}（対応: {supported}）")
+    return THEMES[key]
 
 # duplicate_slide で単純なXML deep copyでは正しく複製できないshape種別。
 # （チャート/OLE/動画/SmartArt/グループはリレーションシップや埋め込みデータの
@@ -165,6 +191,166 @@ def op_replace_picture(prs: Presentation, op: dict) -> None:
     slide.shapes.add_picture(str(image_file), left, top, width=width, height=height)
 
 
+_ALIGN_MAP = {
+    "left": PP_ALIGN.LEFT,
+    "center": PP_ALIGN.CENTER,
+    "right": PP_ALIGN.RIGHT,
+    "justify": PP_ALIGN.JUSTIFY,
+}
+
+
+def _set_run_font_name(run, font_name: str) -> None:
+    # run.font.name はlatin書体のみを設定するため、日本語等の実際の描画に
+    # 使われる east-asian書体（a:ea）もoxmlで直接設定する（docx-editの
+    # _set_east_asian_font と同じ理由）。
+    run.font.name = font_name
+    rPr = run._r.get_or_add_rPr()
+    ea = rPr.find(qn("a:ea"))
+    if ea is None:
+        ea = OxmlElement("a:ea")
+        rPr.append(ea)
+    ea.set("typeface", font_name)
+
+
+def _style_text_frame(
+    text_frame,
+    text_color: str | None,
+    bold: bool | None,
+    font_size_pt,
+    italic: bool | None = None,
+    underline: bool | None = None,
+    font_name: str | None = None,
+    align: str | None = None,
+) -> None:
+    for paragraph in text_frame.paragraphs:
+        if align:
+            paragraph.alignment = _ALIGN_MAP[align]
+        for run in paragraph.runs:
+            if text_color:
+                run.font.color.rgb = RGBColor.from_string(text_color)
+            if bold is not None:
+                run.font.bold = bold
+            if italic is not None:
+                run.font.italic = italic
+            if underline is not None:
+                run.font.underline = underline
+            if font_size_pt:
+                run.font.size = Pt(float(font_size_pt))
+            if font_name:
+                _set_run_font_name(run, font_name)
+
+
+def op_set_shape_style(prs: Presentation, op: dict) -> None:
+    """既存shape（テキストボックス・オートシェイプ・表）を明示的に再配色・再配置する。
+
+    ユーザーが「もっと格好よく／見やすくして」「文字を中央寄せに」等、既存
+    デザインの変更を明示的に頼んできた場合にのみ使う（set_title等の中身
+    差し替えopは見た目に一切触れない設計なので、再配色・配置変更が必要な
+    場面はこのopに限定する）。図形自体の位置/サイズ移動は set_shape_position
+    を使う。
+    """
+    slide = _get_slide(prs, _require(op, "slide"))
+    shape = _get_shape(slide, _require(op, "shape_index"))
+
+    theme = resolve_theme(op["theme"]) if op.get("theme") else None
+    role = op.get("role")
+    text_color = op.get("text_color")
+    bold = op.get("bold")
+    italic = op.get("italic")
+    underline = op.get("underline")
+    font_size_pt = op.get("font_size_pt")
+    font_name = op.get("font_name")
+    fill_color = op.get("fill_color")
+    border_color = op.get("border_color")
+    align = op.get("align")
+
+    if align is not None and align not in _ALIGN_MAP:
+        raise ValueError(f"未対応の align です: {align!r}（対応: {', '.join(_ALIGN_MAP)}）")
+
+    if role == "heading":
+        text_color = text_color or (theme["primary"] if theme else None)
+        bold = True if bold is None else bold
+    elif role == "table_header":
+        fill_color = fill_color or (theme["primary"] if theme else None)
+        text_color = text_color or (theme["text_on_primary"] if theme else None)
+        bold = True if bold is None else bold
+    elif role is not None:
+        raise ValueError(f"未対応の role です: {role!r}（対応: heading, table_header）")
+
+    if not any([text_color, bold is not None, italic is not None, underline is not None,
+                font_size_pt, font_name, fill_color, border_color, align]):
+        raise ValueError(
+            "text_color/bold/italic/underline/font_size_pt/font_name/fill_color/"
+            "border_color/align のいずれか、または role（heading/table_header）+ theme の指定が必要です"
+        )
+
+    if shape.has_table:
+        if border_color:
+            raise ValueError("表shapeの罫線色（border_color）は現状非対応です（セル塗り・文字装飾のみ対応）")
+        table = shape.table
+        if role == "table_header":
+            target_rows = [0]
+        elif op.get("all_rows"):
+            target_rows = range(len(table.rows))
+        else:
+            row = op.get("row")
+            if row is None:
+                raise ValueError(
+                    "表shapeへの set_shape_style は対象行の指定が必要です"
+                    "（role='table_header' で見出し行、'row'で行番号指定、'all_rows':trueで全行）"
+                )
+            target_rows = [int(row)]
+        for r in target_rows:
+            if r < 0 or r >= len(table.rows):
+                raise ValueError(f"存在しない行です: {r}（この表は{len(table.rows)}行）")
+            for c in range(len(table.columns)):
+                cell = table.cell(r, c)
+                if fill_color:
+                    cell.fill.solid()
+                    cell.fill.fore_color.rgb = RGBColor.from_string(fill_color)
+                _style_text_frame(cell.text_frame, text_color, bold, font_size_pt,
+                                   italic=italic, underline=underline, font_name=font_name, align=align)
+    else:
+        if fill_color:
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = RGBColor.from_string(fill_color)
+        if border_color:
+            shape.line.color.rgb = RGBColor.from_string(border_color)
+        if any([text_color, bold is not None, italic is not None, underline is not None, font_size_pt, font_name, align]):
+            if not shape.has_text_frame:
+                raise ValueError(f"shape_index {op['shape_index']} はテキストを持てないshapeです")
+            _style_text_frame(shape.text_frame, text_color, bold, font_size_pt,
+                               italic=italic, underline=underline, font_name=font_name, align=align)
+
+
+def op_set_shape_position(prs: Presentation, op: dict) -> None:
+    """既存shapeの位置・サイズを変更する（cm単位）。
+
+    ユーザーが「もっと左に」「大きくして」等、配置の変更を明示的に頼んできた
+    場合にのみ使う。left/top/width/height のうち指定されたものだけを変更し、
+    省略したものは元の値を維持する。
+    """
+    slide = _get_slide(prs, _require(op, "slide"))
+    shape = _get_shape(slide, _require(op, "shape_index"))
+
+    left = op.get("left_cm")
+    top = op.get("top_cm")
+    width = op.get("width_cm")
+    height = op.get("height_cm")
+
+    if left is None and top is None and width is None and height is None:
+        raise ValueError("left_cm/top_cm/width_cm/height_cm のいずれか1つ以上の指定が必要です")
+
+    if left is not None:
+        shape.left = Cm(float(left))
+    if top is not None:
+        shape.top = Cm(float(top))
+    if width is not None:
+        shape.width = Cm(float(width))
+    if height is not None:
+        shape.height = Cm(float(height))
+
+
 def _copy_picture_into(new_slide, shape) -> None:
     image = shape.image
     _, rid = new_slide.part.get_or_add_image_part(io.BytesIO(image.blob))
@@ -267,6 +453,8 @@ OP_HANDLERS = {
     "set_table": op_set_table,
     "set_notes": op_set_notes,
     "replace_picture": op_replace_picture,
+    "set_shape_style": op_set_shape_style,
+    "set_shape_position": op_set_shape_position,
     "duplicate_slide": op_duplicate_slide,
     "delete_slide": op_delete_slide,
     "reorder_slides": op_reorder_slides,
