@@ -3114,6 +3114,13 @@ async def stop_dispatch_agent_job(job_id: str) -> str:
         return f"エラー: job_id '{job_id}' は既に終了しています（status={job.status}）。" "check_dispatch_agent_job で結果を取得してください。"
 
     job.status = "killed"
+    logger.warning(
+        "dispatch_agent: 停止指示により強制終了します (run_id=%s, job_id=%s, iter=%d/%d)",
+        job.run_id,
+        job_id,
+        job.current_iteration,
+        job.max_iterations,
+    )
     if job.runner_task is not None:
         job.runner_task.cancel()
         try:
