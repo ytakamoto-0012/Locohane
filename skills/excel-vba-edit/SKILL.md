@@ -46,6 +46,17 @@ End Sub
 - `--output`省略で対象パスへ上書き保存（出力先拡張子は必ず`.xlsm`）。
 - VBAコードは複数行文字列になりやすいため、`--ops-json`直埋め込みより最初から`--ops-file <絶対パス>`（`execute_python_code`でops配列を組み立て`json.dump`で作業ディレクトリ配下の一時ファイルへ書き出し、そのパスを渡す）を基本とする。
 
+### 引数一覧
+
+| 引数 | 必須/任意 | 値の型 | 既定値 | 説明 |
+|---|---|---|---|---|
+| `path`（位置引数） | 必須 | 文字列（絶対パス） | - | `--new`なし時は編集対象の既存`.xlsm`。`--new`あり時は作成先（`--output`省略時の保存先そのもの） |
+| `--ops-json` | `--ops-file`と排他で必須 | 文字列（JSON配列） | - | opsをそのまま1行のJSON文字列で渡す |
+| `--ops-file` | `--ops-json`と排他で必須 | 文字列（絶対パス） | - | opsを書いたJSONファイルのパス |
+| `--new`（値なしフラグ） | 任意 | - | 付けない＝既存ファイル編集 | 既存ファイルを読まず新規のマクロ有効ブックとして作成する |
+| `--overwrite`（値なしフラグ） | 任意 | - | 付けない＝上書き拒否 | `--new`時、保存先（`--output`指定時はそちら、省略時は`path`）に既にファイルがあっても上書きすることを許可する |
+| `--output` | 任意 | 文字列（絶対パス、`.xlsm`必須） | 省略＝`path`へ保存 | 別名で保存したいときのみ指定 |
+
 前提条件（実行前に必ずユーザーへ伝える）:
 - **ローカルにMicrosoft Excelが導入され対話セッションから呼ばれている必要がある**（excel-recalcスキルと同じ制約）。
 - **Excelトラストセンターで「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」が有効である必要がある**（既定無効、プログラムから自動有効化不可）。未設定時は`workbook.VBProject`アクセス自体がエラーになり設定手順を含むメッセージが返るので、そのままユーザーに案内する（設定手順: Excelを開く→ファイル→オプション→トラストセンター→トラストセンターの設定→マクロの設定→「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」にチェック）。
@@ -57,7 +68,7 @@ End Sub
 
 | op | 必須 | 任意 | 説明 |
 |---|---|---|---|
-| `add_module` | `name`,`code` | `type`(既定`standard`。`standard`/`class`) | 標準/クラスモジュールを新規追加。同名既存はエラー |
+| `add_module` | `name` | `code`(既定`""`＝空モジュール)、`type`(既定`standard`。`standard`/`class`) | 標準/クラスモジュールを新規追加。同名既存はエラー |
 | `set_code` | `name`,`code` | - | 既存モジュール（`ThisWorkbook`等含む）を**全文置換** |
 | `find_replace` | `name`,`old_code`,`new_code` | - | 一部コード（`old_code`）を`new_code`に置換（差分パッチ）。`old_code`が非一意（0件/複数件）ならエラー |
 | `replace_procedure` | `name`,`procedure`,`code` | `kind`(`sub`/`property_get`/`property_let`/`property_set`。省略時自動判別) | 指定Sub/Function/Propertyだけを丸ごと置換 |
@@ -73,14 +84,15 @@ End Sub
 | 1つのSub/Function/Propertyの中身丸ごと | `replace_procedure`（プロシージャ外の他コードは渡さなくてよい） |
 | 既存コードは変えず新規Sub/Functionを追加 | `insert_code`（既存コードのやり取り不要） |
 
-出力: `{"path":..., "applied_ops": 2, "results": [3]}`。`results`は戻り値ありop（`run_macro`でFunction実行時等）の結果のみ発生順に入る。生成・更新したファイルは`path_memory`に自動登録される。
+出力: `{"path":..., "backup_path": null, "applied_ops": 2, "results": [3]}`。`results`は戻り値ありop（`run_macro`でFunction実行時等）の結果のみ発生順に入る。`backup_path`は保存先に既にファイルがあった場合、上書き直前にタイムスタンプ付きでコピーした先の絶対パス（無ければ`null`）。生成・更新したファイルは`path_memory`に自動登録される。
 
 ## 手順とエッジケース
 
 1. コードを書く前にexcel-vba-readスキルの`read_vba.py`でモジュール一覧・既存コードを確認する。
 2. 既存モジュールへの変更は基本`find_replace`/`replace_procedure`/`insert_code`のいずれか（`set_code`は全体書き直し時のみ）。
-3. `run_script`を呼ぶ。
-4. `--new`使用時に対象が既存で上書き可否不明なら`--overwrite`なしで一度実行しエラーからユーザーに確認する。
+3. 別名で保存したい場合のみ`--output`を追加する（省略時は`path`へ上書き保存）。
+4. `run_script`を呼ぶ。
+5. `--new`使用時に保存先（`--output`指定時はそちら、省略時は`path`）が既存で上書き可否不明なら`--overwrite`なしで一度実行しエラーからユーザーに確認する。
 
 エッジケース: 拡張子が`.xlsm`でない／保存先拡張子が`.xlsm`でない／opsがJSON配列でない／opに`op`キーなし／存在しないモジュール指定／UserFormを`add_module`の`type`や`set_code`等の対象に指定／ドキュメントモジュールを`delete_module`／`add_module`で既存モジュール名指定／`find_replace`の`old_code`が0件・複数件一致／`replace_procedure`の`procedure`未検出、はいずれもエラー＋終了コード1（何番目のどのopが失敗したかメッセージに含まれる）。危険API（`Kill`等）検出時は「危険なVBA API（...）が含まれているため、このコードは書き込めません」＋終了コード1（コード修正で再送せずまずユーザーに目的確認）。構文チェック失敗時は「VBAコードの構文が不正な可能性があります（...）」＋終了コード1（`#If`等の条件付きコンパイルやコロン複文、意味的エラーは取りこぼすが誤って正しいコードを拒否するリスクは低い設計。メッセージに従い修正して再送。**このチェックを通っても意味的コンパイルエラーが残っている可能性はこのスキルでは検出不可**）。トラストセンター未設定エラーは上記の設定手順をそのまま案内する。`pywin32`未導入は`ImportError`（該当する`pip install pywin32`をユーザーに促す）。ExcelのCOMエラーは「VBAの編集に失敗しました: ...」＋終了コード1。強制終了時はEXCEL.EXE残留の可能性あり（タスクマネージャーでの手動終了が必要）。
 

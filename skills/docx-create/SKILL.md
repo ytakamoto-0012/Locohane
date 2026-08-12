@@ -99,7 +99,7 @@ Anthropic公式pptxスキルのDesign Ideas（配色パレット）に準拠し�
 | type | 必須キー | 主な省略可キー | 説明 |
 |---|---|---|---|
 | `heading` | `text` | `level`（既定1、0=Title・1〜9=見出しレベル） | 見出し段落。テーマ色＋ゴシック体で描画 |
-| `paragraph` | `text` または `runs` | `alignment`（`left`/`center`/`right`/`justify`）、`bold`/`italic`/`underline`/`color`/`font`/`size_pt`（`text` 使用時のみ直接効く） | 通常の段落。複数の書式が混在する文なら `runs` を使う |
+| `paragraph` | `text` または `runs` | `alignment`（`left`/`center`/`right`/`justify`。それ以外の値・省略時は既定の左揃えのまま、エラーにはならない）、`bold`/`italic`/`underline`/`color`/`font`/`size_pt`（`text` 使用時のみ直接効く） | 通常の段落。複数の書式が混在する文なら `runs` を使う |
 | `bullet_list` | `items`（文字列配列） | なし | 行頭記号付き箇条書き |
 | `number_list` | `items`（文字列配列） | なし | 番号付きリスト |
 | `table` | `rows`（行の配列。各行はセル文字列の配列） | `header_row`（true なら1行目をテーマ色で塗り白太字に） | 表。列数は各行の最大長に合わせる |
@@ -128,8 +128,10 @@ Anthropic公式pptxスキルのDesign Ideas（配色パレット）に準拠し�
 ## 出力例
 
 ```json
-{"output_path": "C:\\foo\\report.docx", "blocks_written": 8, "warnings": []}
+{"output_path": "C:\\foo\\report.docx", "blocks_written": 8, "warnings": [],
+ "path_memory": {"@12": "C:\\foo\\report.docx"}}
 ```
+`path_memory`は生成のたびに自動登録される（下記「パスメモリー」節参照）。常に付くとは限らない（`AGENT_SRC_DIR`未設定時は付かない）ため、無くてもエラーではない。
 
 ## エッジケース
 

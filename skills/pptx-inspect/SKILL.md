@@ -32,7 +32,8 @@ metadata:
     "script_args": ["C:\\Users\\me\\template.pptx", "--start-slide", "1", "--max-slides", "20"]
 }
 ```
-`--start-slide`/`--max-slides` は省略可。
+`--start-slide`（整数、既定`1`）/`--max-slides`（整数、既定`20`）は省略可。
+どちらも1未満を指定すると1にクランプされる（例`--max-slides 0`は`1`扱い）。
 
 出力例:
 ```json

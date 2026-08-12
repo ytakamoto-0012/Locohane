@@ -170,6 +170,7 @@ docx-readが見せていた状態）の段落番号」を指します。複数�
 ```json
 {
   "path": "C:\\foo\\report.docx",
+  "backup_path": "C:\\foo\\report.bak_20260812_154200.docx",
   "paragraph_count": 44,
   "table_count": 2,
   "applied_ops": 3,
@@ -180,6 +181,16 @@ docx-readが見せていた状態）の段落番号」を指します。複数�
   ]
 }
 ```
+`accept_all_changes`/`reject_all_changes`の`op_results`要素はそれぞれ
+`{"op": "accept_all_changes", "accepted_ins": N, "accepted_del": N}`/
+`{"op": "reject_all_changes", "rejected_ins": N, "rejected_del": N}`（件数はins/del別集計）。
+
+**`backup_path`（自動バックアップ）**: 保存直前に、上書き対象ファイルが既に
+存在すればタイムスタンプ付きで同じフォルダへコピーしてからOSレベルで上書き
+保存する（`--output`で別名保存する場合、コピーされるのは`--output`側の
+既存ファイルの方）。バックアップ対象が無かった場合（新規パスへの保存等）は
+`backup_path`は`null`になる。呼び出し側でクリーンアップ等が必要な場合はこの
+パスを使う。
 
 ## エッジケース
 

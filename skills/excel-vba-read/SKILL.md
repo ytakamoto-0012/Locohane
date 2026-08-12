@@ -33,4 +33,4 @@ xlsm/xls のVBAマクロコードを読み込み専用で取得するスキル�
 
 ## エッジケース
 
-対象はxlsm/xls（`.xlsx`は即エラー）。VBAプロジェクト無しのファイルはエラーにせず`{"has_vba": false, "modules": []}`で正常終了。モジュール種別（`standard`/`class`/`document`/`form`）は名前パターン・コード内容からの**簡易推測**であり保証はない（正確な種別が要る場合はExcelのVBE(Alt+F11)確認をユーザーに案内）。存在しないモジュール名指定はエラー（存在する一覧付き）。UserFormは`type:"form"`として一覧表示され読込は可能だがexcel-vba-editスキルの編集対象外。
+対象はxlsm/xls（`.xlsx`は即エラー）。VBAプロジェクト無しのファイルはエラーにせず正常終了する。標準出力は他の場合と同じ形（`modules`は`modules_count: 0`に変換され、`result_path`/`path_memory`も付く）で`{"path":..., "has_vba": false, "modules_count": 0, "result_path": "...", "path_memory": {...}}`。`result_path`の中身（生JSON）は`modules: []`のまま。モジュール種別（`standard`/`class`/`document`/`form`）は名前パターン・コード内容からの**簡易推測**であり保証はない（正確な種別が要る場合はExcelのVBE(Alt+F11)確認をユーザーに案内）。存在しないモジュール名指定はエラー（存在する一覧付き）。UserFormは`type:"form"`として一覧表示され読込は可能だがexcel-vba-editスキルの編集対象外。

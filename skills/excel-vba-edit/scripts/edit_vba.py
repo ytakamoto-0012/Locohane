@@ -82,8 +82,8 @@ def _edit_vba(path: Path, output_path: Path, ops: list, is_new: bool, overwrite:
         excel.AutomationSecurity = 1 if has_run_macro else 3
 
         if is_new:
-            if path.exists() and not overwrite:
-                raise FileExistsError(f"作成先が既に存在します（上書きするには --overwrite を指定）: {path}")
+            if output_path.exists() and not overwrite:
+                raise FileExistsError(f"作成先が既に存在します（上書きするには --overwrite を指定）: {output_path}")
             workbook = excel.Workbooks.Add()
         else:
             if not path.is_file():

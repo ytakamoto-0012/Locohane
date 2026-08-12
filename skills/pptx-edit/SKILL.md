@@ -48,19 +48,19 @@ metadata:
 
 `delete_slide`/`duplicate_slide`と`reorder_slides`を同一バッチで併用する場合は、`reorder_slides`を操作列の最後に置くことを推奨します（構造変更を全て終えてから並び替える方が意図が明確になるため）。
 
-| op | 主なキー | 内容 |
-|---|---|---|
-| `set_title` | `slide`, `text` | タイトルプレースホルダのテキストを差し替え |
-| `set_text` | `slide`, `shape_index`, `bullets` | 任意shapeのテキストを差し替え（`bullets`は`pptx-create`と同じ、文字列または`{"text":..,"level":..}`のリスト） |
-| `set_table_cell` | `slide`, `shape_index`, `row`, `col`, `text` | 既存表の1セルを差し替え（row/colは0始まり、ヘッダー行も含む） |
-| `set_table` | `slide`, `shape_index`, `headers`, `rows` | 既存表を丸ごと差し替え。**既存表と行数・列数が完全一致する場合のみ**可能（python-pptxは既存表の行列数の増減に非対応。行列数を変えたい場合は`pptx-create`で新規スライドとして作る） |
-| `set_notes` | `slide`, `text` | 発表者ノートを差し替え |
-| `replace_picture` | `slide`, `shape_index`, `image_path` | 既存画像shapeの位置・サイズを保ったまま画像だけ差し替え（差し替え後、z順序は最前面に移動する点に注意） |
+| op | 必須キー | 主な省略可キー | 内容 |
+|---|---|---|---|
+| `set_title` | `slide` | `text`（省略時`""`＝空文字にする） | タイトルプレースホルダのテキストを差し替え |
+| `set_text` | `slide`, `shape_index`, `bullets` | なし | 任意shapeのテキストを差し替え（`bullets`は`pptx-create`と同じ、文字列または`{"text":..,"level":..}`のリスト） |
+| `set_table_cell` | `slide`, `shape_index`, `row`, `col` | `text`（省略時`""`＝空文字にする） | 既存表の1セルを差し替え（row/colは0始まり、ヘッダー行も含む） |
+| `set_table` | `slide`, `shape_index` | `headers`、`rows` | 既存表を丸ごと差し替え。**既存表と行数・列数が完全一致する場合のみ**可能（python-pptxは既存表の行列数の増減に非対応。行列数を変えたい場合は`pptx-create`で新規スライドとして作る）。`headers`省略時は必要列数を`rows[0]`の要素数から推定する（`headers`と`rows`が両方省略／空だと0行0列扱いになり、既存表と一致しない限りエラー） |
+| `set_notes` | `slide` | `text`（省略時`""`＝空文字にする） | 発表者ノートを差し替え |
+| `replace_picture` | `slide`, `shape_index`, `image_path` | なし | 既存画像shapeの位置・サイズを保ったまま画像だけ差し替え（差し替え後、z順序は最前面に移動する点に注意） |
 | `set_shape_style` | `slide`, `shape_index` | `role`(`heading`/`table_header`)+`theme`、または`text_color`/`bold`/`italic`/`underline`/`font_size_pt`/`font_name`/`fill_color`/`border_color`/`align`(`left`/`center`/`right`/`justify`)、表shapeは`row`/`all_rows` | 既存shapeを明示的に再配色・再装飾・文字配置変更（下記参照） |
 | `set_shape_position` | `slide`, `shape_index` | `left_cm`/`top_cm`/`width_cm`/`height_cm`（cm単位、いずれか1つ以上） | 既存shapeの位置・サイズを変更（下記参照） |
-| `duplicate_slide` | `slide`, `insert_after`(省略時は複製元スライドの現在のライブ位置と同じ), `count`(省略時1) | 指定スライドを同じレイアウトのまま複製し、`insert_after`の直後に`count`枚挿入。プレースホルダ・表・テキストボックス・画像を含めて複製できる |
-| `delete_slide` | `slide` | 指定スライドを削除 |
-| `reorder_slides` | `order` | **その時点での全スライド番号(1始まり)の順列**を渡し、その並びに変更（例: `[2,1,3]`で1番目と2番目を入替） |
+| `duplicate_slide` | `slide` | `insert_after`(省略時は複製元スライドの現在のライブ位置と同じ), `count`(省略時1) | 指定スライドを同じレイアウトのまま複製し、`insert_after`の直後に`count`枚挿入。プレースホルダ・表・テキストボックス・画像を含めて複製できる |
+| `delete_slide` | `slide` | なし | 指定スライドを削除 |
+| `reorder_slides` | `order` | なし | **その時点での全スライド番号(1始まり)の順列**を渡し、その並びに変更（例: `[2,1,3]`で1番目と2番目を入替） |
 
 サンプルJSON:
 ```json
@@ -74,9 +74,15 @@ metadata:
 
 出力例:
 ```json
-{"output_path": "C:\\foo\\edited.pptx", "total_slides": 5, "size_bytes": 37998, "applied_operations": 4}
+{"output_path": "C:\\foo\\edited.pptx", "backup_path": null, "total_slides": 5, "size_bytes": 37998, "applied_operations": 4}
 ```
 生成が終わったら `output_path` と `total_slides` をユーザーに伝えてください。
+
+**`backup_path`（自動バックアップ）**: `output_path`に既にファイルが存在する場合
+（`--overwrite`でテンプレートへ上書き保存する場合や、既存の`output_path`を
+再利用する場合）、保存直前にタイムスタンプ付きで同じフォルダへコピーしてから
+上書きする。コピー先の絶対パスが入る。バックアップ対象が無かった場合（新規パスへの
+保存等）は`null`。
 
 ## duplicate_slide の非対応shape
 

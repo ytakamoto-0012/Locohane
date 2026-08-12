@@ -48,6 +48,7 @@ Word文書（`.docx`）を読み込み、段落・表・文書プロパティ・
   "paragraphs_count": 300,
   "table_count": 1,
   "tables_count": 1,
+  "body_order_count": 452,
   "core_properties": {"title": "報告書", "author": "山田太郎", "created": "2026-01-10T09:00:00", "modified": null},
   "track_changes": {"has_pending_revisions": false, "insertion_count": 0, "deletion_count": 0},
   "result_path": "C:\\...\\_tmp_<thread_id>\\docx_read\\1a2b3c4d_20260805_153012_123456.json",
@@ -70,7 +71,8 @@ Word文書（`.docx`）を読み込み、段落・表・文書プロパティ・
   この変更履歴内のテキストを検出できないため、編集前に
   `accept_all_changes`/`reject_all_changes` で確定させるべきかユーザーに
   確認するとよいです。
-- `body_order`（`[{"type":"paragraph"/"table","index":N}, ...]`）は、段落と表が
+- 標準出力の`body_order_count`は本文の段落＋表の要素数（上記出力例の件数）。本体の
+  `body_order`（`[{"type":"paragraph"/"table","index":N}, ...]`）は、段落と表が
   文書内でどの順で交互に現れるかを表す。`paragraphs`/`tables`は別々のフラットな
   リストで返るため、これが無いと「表2の直前/直後にある段落はどれか」が分からない。
   表の近くに段落を追記したい、章立てと表の対応関係を把握したい、といった

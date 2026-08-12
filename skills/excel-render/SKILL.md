@@ -21,7 +21,15 @@ PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フ�
 {"skill_name": "excel-render", "script_filename": "render_excel.py",
  "script_args": ["C:\\Users\\me\\book.xlsx", "--start-page", "1", "--max-pages", "3"]}
 ```
-`--start-page`/`--max-pages`(既定3、最大5)/`--dpi`(既定600、72〜600)/`--no-crop`(余白除去オフ)は省略可。
+## 引数一覧
+
+| 引数 | 必須/任意 | 値の型 | 既定値 | 説明 |
+|---|---|---|---|---|
+| `excel_path`（位置引数） | 必須 | 文字列（絶対パス） | - | 画像化対象の`.xlsx`/`.xlsm`/`.xls`ファイルパス。他拡張子はエラー |
+| `--start-page` | 任意 | 整数 | `1` | 開始ページ番号（1始まり）。クランプなし。総ページ数超過時は下記エッジケース参照 |
+| `--max-pages` | 任意 | 整数 | `3` | 一度に画像化する最大ページ数。**1〜5にクランプされる** |
+| `--dpi` | 任意 | 整数 | `600` | 画像化解像度。**72〜600にクランプされる**（他の`*-render`スキルより既定が高いのは、余白除去の判定精度を確保するため。最終出力は`target_dpi`（既定300）へダウンスケールされる） |
+| `--no-crop`（値なしフラグ） | 任意 | - | 付けない＝余白除去オン | excel-renderは他の`*-render`スキルと違い**既定で余白除去がオン**。付けるとオフにする |
 
 ## 入出力の型
 
@@ -29,7 +37,15 @@ PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フ�
 
 ## 出力
 
-`{"total_pages":5,"start_page":1,"end_page":3,"dpi":600,"target_dpi":300,"crop_applied":true,"images":[{"page":1,"image_path":"...","cropped":true}, ...]}`。
+```json
+{"path": "C:\\foo\\book.xlsx", "tool": "excel", "total_pages": 5, "start_page": 1, "end_page": 3,
+ "dpi": 600, "target_dpi": 300, "crop_applied": true,
+ "images": [{"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 600, "cropped": true}, ...]}
+```
+`images`の各要素は常に`original_dpi`（クロップ前の実解像度）を持つ。`cropped`（bbox検出に
+成功しクロップできたら`true`、検出できず元画像のままなら`false`）は**`--no-crop`を付けない
+既定動作でのみ**各画像に付与される。`--no-crop`指定時は`cropped`キー自体が存在しない
+（`false`にはならず、キーごと無い）。
 
 ## 重要（2段階手順、必須ルール）
 
@@ -41,4 +57,4 @@ PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フ�
 
 ## エッジケース
 
-ファイル不在／ディレクトリ指定／壊れたファイル／Excel未インストールはエラー終了。`start_page`が総ページ数超過は`images: []`を終了コード0で返す（エラーにならない）。`max_pages`は5にクランプ（総ページ数が多い場合は`--start-page`を変えて複数回呼ぶ）。生成PNGは`_tmp_<thread_id>/rendered/`に保存され同一ファイル再実行時は上書き、会話終了時に自動削除。`pywin32`/`pypdfium2`/`pillow`未導入は`ImportError`（該当する`pip install <パッケージ名>`をユーザーに促す）。
+ファイル不在／ディレクトリ指定／拡張子が`.xlsx`・`.xlsm`・`.xls`以外／壊れたファイル／Excel未インストールはエラー終了。`start_page`が総ページ数超過は終了コード0で返るが、通常時とJSONの形が異なる点に注意（`images: []`に加え`start_page`/`end_page`が`null`になり、**`target_dpi`キー自体が無くなる**）。`max_pages`は5にクランプ（総ページ数が多い場合は`--start-page`を変えて複数回呼ぶ）。生成PNGは`_tmp_<thread_id>/rendered/`に保存され同一ファイル再実行時は上書き、会話終了時に自動削除。`pywin32`/`pypdfium2`/`pillow`未導入は`ImportError`（該当する`pip install <パッケージ名>`をユーザーに促す）。
