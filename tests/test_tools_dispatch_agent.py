@@ -297,7 +297,8 @@ async def test_exception_inside_job_is_returned_as_error_not_lost(monkeypatch, t
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
     result = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
 
-    assert result == "エラー: サブエージェントの実行に失敗しました: boom"
+    assert result.startswith("エラー: サブエージェントの実行に失敗しました: boom\n")
+    assert "Traceback (most recent call last)" in result
     assert tools._DISPATCH_AGENT_JOBS == {}
 
 
@@ -315,7 +316,8 @@ async def test_exception_with_empty_str_falls_back_to_type_name(monkeypatch, tmp
     monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
     result = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
 
-    assert result == "エラー: サブエージェントの実行に失敗しました: TimeoutError"
+    assert result.startswith("エラー: サブエージェントの実行に失敗しました: TimeoutError\n")
+    assert "Traceback (most recent call last)" in result
 
 
 def test_scratch_notes_path_for_run_is_isolated_per_run(monkeypatch, tmp_path) -> None:

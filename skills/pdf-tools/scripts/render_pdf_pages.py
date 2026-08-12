@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 
 from _common import register_output_path, setup_utf8_stdio
@@ -51,7 +52,7 @@ def main() -> int:
     try:
         pdf = pdfium.PdfDocument(str(path))
     except Exception as e:  # noqa: BLE001 - 壊れたPDF/暗号化PDF等はすべてエラー扱いにする
-        print(f"PDFを開けませんでした（壊れているか暗号化されている可能性）: {e}", file=sys.stderr)
+        print(f"PDFを開けませんでした（壊れているか暗号化されている可能性）: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return 1
 
     total_pages = len(pdf)

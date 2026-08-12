@@ -23,6 +23,7 @@ import argparse
 import json
 import re
 import sys
+import traceback
 from pathlib import Path
 
 from _common import setup_utf8_stdio, summarize_result, write_json_result
@@ -112,7 +113,7 @@ def main() -> int:
         print(f"必要なライブラリが見つかりません（oletoolsが必要です）: {e}", file=sys.stderr)
         return 1
     except Exception as e:  # noqa: BLE001 - 破損ファイル等、oletoolsが送出する多様な例外を丸めて報告する
-        print(f"VBAコードの読み込みに失敗しました: {e}", file=sys.stderr)
+        print(f"VBAコードの読み込みに失敗しました: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return 1
 
     summary = summarize_result(result, ["modules", "code"])

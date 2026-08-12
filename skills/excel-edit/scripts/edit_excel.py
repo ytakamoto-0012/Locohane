@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from pathlib import Path
 
 from _common import backup_before_overwrite, register_output_path, setup_utf8_stdio
@@ -89,7 +90,7 @@ def main() -> int:
         try:
             wb = openpyxl.load_workbook(str(path), keep_vba=(ext == ".xlsm"))
         except Exception as e:  # noqa: BLE001 - 破損ファイル等、openpyxlが送出する多様な例外を丸めて報告する
-            print(f"ファイルの読み込みに失敗しました: {e}", file=sys.stderr)
+            print(f"ファイルの読み込みに失敗しました: {e}\n{traceback.format_exc()}", file=sys.stderr)
             return 1
 
     for idx, op in enumerate(ops):

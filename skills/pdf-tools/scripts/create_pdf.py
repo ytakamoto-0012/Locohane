@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -99,7 +100,7 @@ def main() -> int:
     try:
         doc.build(flowables)
     except Exception as e:  # noqa: BLE001 - reportlab の生成失敗はすべてエラー扱いにする
-        print(f"PDF生成に失敗しました: {e}", file=sys.stderr)
+        print(f"PDF生成に失敗しました: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return 1
 
     result = {"output_path": str(output_path), "size_bytes": output_path.stat().st_size}

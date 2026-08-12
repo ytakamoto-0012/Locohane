@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 from collections.abc import Callable
 
 import httpx
@@ -77,7 +78,7 @@ async def _run_one_tool_call(call: dict, tools_by_name: dict[str, BaseTool]) -> 
         except Exception as e:  # noqa: BLE001 - ツール異常はエラー文字列化してループ継続
             logger.exception("subagent tool error: %s", call["name"])
             tool_message = ToolMessage(
-                content=f"エラー: ツール実行に失敗しました: {e}",
+                content=f"エラー: ツール実行に失敗しました: {e}\n{traceback.format_exc()}",
                 tool_call_id=call["id"],
             )
     # execute_python_*系ツールは成功時もWARNING（スキル開発アイデアのシグナルとして記録）

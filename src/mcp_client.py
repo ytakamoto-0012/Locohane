@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import re
+import traceback
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -268,7 +269,7 @@ def _wrap_mcp_tool(
         except Exception as e:  # noqa: BLE001 - 予期しない伝送層エラーもグラフを壊さず返す
             return (
                 f"エラー: MCPツール呼び出し中に予期しないエラーが発生しました"
-                f"（server={server_name}, tool={mcp_tool.name}）: {e}"
+                f"（server={server_name}, tool={mcp_tool.name}）: {e}\n{traceback.format_exc()}"
             )
         texts = [b.text for b in result.content if getattr(b, "type", None) == "text"]
         text = "\n".join(texts) if texts else "(テキスト以外の応答、または空の応答)"

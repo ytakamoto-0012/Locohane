@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from pathlib import Path
 
 from _common import cell_to_json, resolve_sheet_name, setup_utf8_stdio, summarize_result, write_json_result
@@ -176,7 +177,7 @@ def main() -> int:
         print(f"必要なライブラリが見つかりません: {e}", file=sys.stderr)
         return 1
     except Exception as e:  # noqa: BLE001 - 破損ファイル等、openpyxl/xlrdが送出する多様な例外を丸めて報告する
-        print(f"読み込みに失敗しました: {e}", file=sys.stderr)
+        print(f"読み込みに失敗しました: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return 1
 
     summary = summarize_result(result, ["rows", "sheets"])

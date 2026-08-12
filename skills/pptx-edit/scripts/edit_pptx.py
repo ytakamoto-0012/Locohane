@@ -21,6 +21,7 @@ import copy
 import io
 import json
 import sys
+import traceback
 from pathlib import Path
 
 from _common import backup_before_overwrite, register_output_path, setup_utf8_stdio
@@ -329,7 +330,7 @@ def main() -> int:
         print(f"pptxとして読み込めませんでした（壊れているか非対応形式の可能性）: {args.template_path}", file=sys.stderr)
         return 1
     except Exception as e:  # noqa: BLE001 - python-pptx側の想定外エラーもエラー終了に統一する
-        print(f"pptxの読み込みに失敗しました: {e}", file=sys.stderr)
+        print(f"pptxの読み込みに失敗しました: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return 1
 
     for i, op in enumerate(operations):

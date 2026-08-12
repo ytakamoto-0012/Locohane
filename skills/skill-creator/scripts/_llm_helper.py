@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import traceback
 from pathlib import Path
 
 
@@ -57,7 +58,10 @@ def main() -> int:
     try:
         result = asyncio.run(_ask(payload))
     except Exception as e:  # noqa: BLE001 - 呼び出し元へ理由を伝えるため意図的に広く捕捉
-        print(json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
+        print(json.dumps(
+            {"error": f"{type(e).__name__}: {e}", "traceback": traceback.format_exc()},
+            ensure_ascii=False,
+        ))
         return 1
 
     print(json.dumps(result, ensure_ascii=False))

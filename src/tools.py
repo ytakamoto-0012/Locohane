@@ -60,6 +60,7 @@ import re
 import subprocess
 import tempfile
 import time
+import traceback
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
@@ -1896,7 +1897,7 @@ async def _run_background_job(job: "_BackgroundJob") -> None:
         except Exception as e:  # noqa: BLE001 - ストリーム読み取り自体の異常はエラー扱いで返す
             if job.status != "killed":
                 job.status = "error"
-                job.error_message = str(e)
+                job.error_message = f"{e}\n{traceback.format_exc()}"
             return
 
         job.returncode = job.process.returncode
@@ -2848,7 +2849,7 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
             # 一切分からない文言になっていた実例が本番ログで確認された
             # （issue/20260808_022438_dispatch_agent_background_failure.md）。
             # 空の場合は例外の型名で補い、必ず何らかの手がかりを残す。
-            job.error_message = str(e) or type(e).__name__
+            job.error_message = f"{str(e) or type(e).__name__}\n{traceback.format_exc()}"
     finally:
         progress_task.cancel()
         try:

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import sys
+import traceback
 from pathlib import Path
 
 from _common import register_output_path, setup_utf8_stdio
@@ -106,7 +107,7 @@ def main() -> int:
         print(f"必要なライブラリが見つかりません（pywin32が必要です）: {e}", file=sys.stderr)
         return 1
     except Exception as e:  # noqa: BLE001 - COMエラーはExcelのバージョン・状態により多様なため丸めて報告する
-        print(f"Excelでの再計算に失敗しました: {e}", file=sys.stderr)
+        print(f"Excelでの再計算に失敗しました: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return 1
 
     print(json.dumps(result, ensure_ascii=False))
