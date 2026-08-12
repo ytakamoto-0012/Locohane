@@ -75,8 +75,8 @@ offset/limitと同じ考え方のページ版です）。
     "script_args": ["C:\\Users\\me\\report.pdf", "--start-page", "1", "--max-pages", "3"]
 }
 ```
-`--start-page`/`--max-pages`（既定3、最大5にクランプ）/`--dpi`（既定150、
-72〜300にクランプ）は省略可。
+`--start-page`/`--max-pages`（既定3、最大5にクランプ）は省略可。
+解像度は既定150DPI固定。
 
 出力例:
 ```json

@@ -46,8 +46,8 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 | `delete_rows` | `sheet`,`index` | `count`(既定1) | 行削除 |
 | `insert_cols` | `sheet`,`index` | `count`(既定1) | 列挿入（1始まり） |
 | `delete_cols` | `sheet`,`index` | `count`(既定1) | 列削除 |
-| `set_column_width` | `sheet`,`column`,`width` | - | 列幅を手動指定 |
-| `set_row_height` | `sheet`,`row`,`height` | - | 行の高さを手動指定（`row`は1始まり行番号、`height`はポイント単位） |
+| `set_column_width` | `sheet`,`column`,`width` | - | 列幅を手動指定。単位はExcelの文字幅（既定約8.43）。1〜60にクランプされる |
+| `set_row_height` | `sheet`,`row`,`height` | - | 行の高さを手動指定（`row`は1始まり行番号、`height`はポイント単位。1〜409にクランプされる） |
 | `merge_cells` | `sheet`,`range` | - | セル結合（例`"A1:C1"`） |
 | `unmerge_cells` | `sheet`,`range` | - | 結合解除。未結合範囲指定はエラー |
 | `add_table` | `sheet`,`name`,`range` | `style`(既定`TableStyleMedium9`),`banded`(既定true) | 構造化テーブル作成（フィルター・構造化参照付き。`format_table`の見た目装飾とは別物）。`range`1行目の既存値がヘッダー名になる。`name`はブック内一意な識別子 |

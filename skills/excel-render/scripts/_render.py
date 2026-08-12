@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 from pathlib import Path
 
 import pypdfium2 as pdfium
@@ -33,18 +34,32 @@ _PROG_ID = {
 # PDFエクスポート定数
 # Excel: xlTypePDF=0, PowerPoint: ppSaveAsPDF=32, Word: wdFormatPDF=17
 
-# 画像化のデフォルト DPI（PDF→画像変換時に使用）
-_DEFAULT_RENDER_DPI = 300
+# PDF→画像化キャプチャDPI（docx-render/pptx-renderと同じ基準値に統一）
+_CAPTURE_DPI = 300
 
-# 目標 DPI（余白除去後の縮尺）
-# PDF→画像化は600DPIの高解像度で行い、余白除去（クロップ）の精度を確保した上で、
-# 最終的にLLMへ渡すサイズとして扱いやすい解像度（150〜300DPI）までダウンスケールする。
-# 横1ページ×縦1ページに収める印刷設定でシートが縮小される分、下限寄りの150では
-# 文字がつぶれやすいため、上限寄りの300を既定にしている。
+# 目標DPI（クロップ後の最終出力解像度）。既定ではキャプチャDPIと同値のため
+# ダウンスケールは事実上no-opになる（縮尺が必要なケースのみ_crop_imageが動く）。
 _TARGET_DPI = 300
 
 # 白黒境界判定の閾値（ピクセル値。これ未満なら黒＝コンテンツとみなす）
 _DARK_PIXEL_THRESHOLD = 128
+
+# --- フィット印刷の縮尺補正（3.2節で使用） ---
+# 用紙サイズ(pt)の対応表。xlPaperSize定数のうち代表的なもののみ。
+# 未対応の値の場合はスケール計算をスキップする（=A4等を勝手に仮定しない）。
+_PAPER_SIZE_PT: dict[int, tuple[float, float]] = {
+    1: (612.0, 792.0),  # xlPaperLetter
+    5: (612.0, 1008.0),  # xlPaperLegal
+    8: (841.89, 1190.55),  # xlPaperA3
+    9: (595.28, 841.89),  # xlPaperA4
+    11: (419.53, 595.28),  # xlPaperA5
+    12: (728.50, 1031.81),  # xlPaperB4
+    13: (516.22, 728.50),  # xlPaperB5
+}
+
+_FIT_SCALE_FLOOR = 0.10  # Excel自体の縮小印刷下限（これ未満は指定不可でページが分割される）
+_BOOST_TRIGGER_SCALE = 0.5  # この値を下回ったらDPIブーストを検討する
+_BOOST_DPI_CEIL = 900  # ブースト後キャプチャDPIの上限（暴走防止）
 
 
 # ---------------------------------------------------------------------------
@@ -52,11 +67,57 @@ _DARK_PIXEL_THRESHOLD = 128
 # ---------------------------------------------------------------------------
 
 
-def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
+def _sheet_required_scale(ws) -> float:
+    """シートの内容（セル使用範囲＋図形）が、フィット印刷でどこまで縮小を要求
+    されるか（Excel自体の10%下限を適用する前の理論値）を返す。1.0なら縮小不要。
+    用紙サイズが対応表に無い場合や算出できない場合は1.0（＝補正なし）を返す。
+    """
+    try:
+        used = ws.UsedRange
+        content_left = used.Left
+        content_top = used.Top
+        content_right = used.Left + used.Width
+        content_bottom = used.Top + used.Height
+
+        # 図形（オートシェイプ・グラフ等）はUsedRangeに含まれないため、
+        # 存在する場合はbboxをUsedRangeとの和集合に広げる。
+        shapes = ws.Shapes
+        for i in range(1, shapes.Count + 1):
+            shp = shapes.Item(i)
+            content_left = min(content_left, shp.Left)
+            content_top = min(content_top, shp.Top)
+            content_right = max(content_right, shp.Left + shp.Width)
+            content_bottom = max(content_bottom, shp.Top + shp.Height)
+
+        content_w = content_right - content_left
+        content_h = content_bottom - content_top
+        if content_w <= 0 or content_h <= 0:
+            return 1.0
+
+        ps = ws.PageSetup
+        paper = _PAPER_SIZE_PT.get(int(ps.PaperSize))
+        if paper is None:
+            return 1.0  # 未対応の用紙サイズは補正をスキップ（A4等を仮定しない）
+        paper_w, paper_h = paper
+        if int(ps.Orientation) == 2:  # xlLandscape
+            paper_w, paper_h = paper_h, paper_w
+
+        printable_w = paper_w - ps.LeftMargin - ps.RightMargin
+        printable_h = paper_h - ps.TopMargin - ps.BottomMargin
+        if printable_w <= 0 or printable_h <= 0:
+            return 1.0
+
+        return min(printable_w / content_w, printable_h / content_h, 1.0)
+    except Exception:
+        return 1.0
+
+
+def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> tuple[Path, dict[str, float]]:
     """OfficeファイルをOLE（COM）で開き、一時PDFへエクスポートする。
 
     tool: "excel" | "pptx" | "docx"
-    戻り値: 生成されたPDFのパス（セッション専用一時フォルダ `_tmp_<thread_id>/pdf_export/` 配下）
+    戻り値: (生成されたPDFのパス, シート名→required_scaleの辞書)。
+        excel以外はscale辞書は空dict。
     """
     import pythoncom
     import win32com.client as win32
@@ -66,6 +127,7 @@ def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
     app = None
     doc = None
     pdf_path = None
+    scale_by_sheet: dict[str, float] = {}
     try:
         app = win32.DispatchEx(prog_id)
         # PowerPointは Presentations.Open 前後を問わず Application.Visible = False の
@@ -87,11 +149,11 @@ def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
         if tool == "excel":
             # Workbook → PDF (xlTypePDF = 0)
             doc = app.Workbooks.Open(abs_path)
-            # 印刷設定を「横1ページ×縦1ページ」に収めるフィット印刷へ強制する。
-            # これをしないとシートの使用範囲が用紙サイズ基準で複数ページに分割
-            # され、PDF化後の画像が細切れになる。Zoom=False は FitToPagesWide/
-            # Tall を有効にするために先に設定する必要がある（Excel COMの仕様）。
             for ws in doc.Worksheets:
+                try:
+                    scale_by_sheet[ws.Name] = _sheet_required_scale(ws)
+                except Exception:
+                    scale_by_sheet[ws.Name] = 1.0
                 try:
                     page_setup = ws.PageSetup
                     page_setup.Zoom = False
@@ -99,7 +161,6 @@ def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
                     page_setup.FitToPagesTall = 1
                 except Exception:
                     continue
-            # Quality は XlFixedFormatQuality（xlQualityStandard=0）の整数指定が必要
             doc.ExportAsFixedFormat(0, pdf_path, Quality=0, IncludeDocProperties=True, IgnorePrintAreas=False, OpenAfterPublish=False)
             doc.Close(SaveChanges=False)
 
@@ -118,7 +179,7 @@ def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
         else:
             raise ValueError(f"未知のツール: {tool}")
 
-        return Path(pdf_path)
+        return Path(pdf_path), (scale_by_sheet if tool == "excel" else {})
 
     except Exception:
         raise
@@ -258,7 +319,6 @@ def render_office_file(
     tool: str,
     start_page: int = 1,
     max_pages: int = 3,
-    dpi: int = 300,
     crop: bool = True,
     target_dpi: int = _TARGET_DPI,
     thread_id: str | None = None,
@@ -275,8 +335,6 @@ def render_office_file(
         開始ページ（1始まり）
     max_pages : int
         最大ページ数（最大5にクランプ）
-    dpi : int
-        PDF→画像変換時のDPI（72〜600にクランプ）
     crop : bool
         True なら白黒境界判定で余白を除去
     target_dpi : int
@@ -292,11 +350,31 @@ def render_office_file(
     if thread_id is None:
         thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
 
-    dpi = min(max(dpi, 72), 600)
     max_pages = min(max(max_pages, 1), 5)
 
-    # 1. OLE → PDF 変換
-    pdf_path = _convert_office_to_pdf(path, tool, thread_id)
+    # 1. OLE → PDF 変換（excelのみ、シートごとの必要縮尺も同時に取得）
+    pdf_path, scale_by_sheet = _convert_office_to_pdf(path, tool, thread_id)
+
+    # 1.5 縮尺に応じたキャプチャDPI・目標DPIの動的ブーストと、分割警告の生成
+    capture_dpi = _CAPTURE_DPI
+    effective_target_dpi = target_dpi
+    warnings: list[str] = []
+    if scale_by_sheet:
+        worst_scale = min(scale_by_sheet.values())
+        if worst_scale < _BOOST_TRIGGER_SCALE:
+            boost_factor = _BOOST_TRIGGER_SCALE / max(worst_scale, 0.01)
+            capture_dpi = min(round(_CAPTURE_DPI * boost_factor), _BOOST_DPI_CEIL)
+            effective_target_dpi = min(round(target_dpi * boost_factor), _BOOST_DPI_CEIL)
+        split_sheets = [name for name, s in scale_by_sheet.items() if s < _FIT_SCALE_FLOOR]
+        if split_sheets:
+            msg = (
+                "警告: シート " + ", ".join(split_sheets) + " は列幅・行高さの合計が用紙1ページに収めるための下限スケール"
+                "(10%)を下回っています。1ページに収まらず複数ページに分割され"
+                "ています。excel-editのset_column_width（単位は文字幅、目安1〜60）"
+                "で列幅を見直してください。"
+            )
+            warnings.append(msg)
+            print(msg, file=sys.stderr)
 
     # PDFの総ページ数を取得（PDF→画像化の前に取得）
     try:
@@ -306,19 +384,22 @@ def render_office_file(
         total_pages = 0
 
     # 2. PDF → 画像化
-    images = _render_pdf_to_images(pdf_path, start_page, max_pages, dpi, thread_id)
+    images = _render_pdf_to_images(pdf_path, start_page, max_pages, capture_dpi, thread_id)
 
     if not images:
-        return {
+        result = {
             "path": str(path),
             "tool": tool,
             "total_pages": total_pages,
             "start_page": None,
             "end_page": None,
-            "dpi": dpi,
+            "dpi": capture_dpi,
             "images": [],
             "crop_applied": False,
         }
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     # 3. 余白除去（crop=True の場合）
     crop_applied = False
@@ -327,7 +408,7 @@ def render_office_file(
             img_path = Path(img_info["image_path"])
             bbox = _detect_content_bbox(img_path)
             if bbox is not None:
-                cropped_path = _crop_image(img_path, bbox, target_dpi, dpi)
+                cropped_path = _crop_image(img_path, bbox, effective_target_dpi, capture_dpi)
                 img_info["image_path"] = str(cropped_path)
                 img_info["cropped"] = True
                 crop_applied = True
@@ -343,14 +424,17 @@ def render_office_file(
     first_page = images[0]["page"]
     last_page = images[-1]["page"]
 
-    return {
+    result = {
         "path": str(path),
         "tool": tool,
         "total_pages": total_pages,
         "start_page": first_page if images else None,
         "end_page": last_page if images else None,
-        "dpi": dpi,
-        "target_dpi": target_dpi,
+        "dpi": capture_dpi,
+        "target_dpi": effective_target_dpi,
         "images": images,
         "crop_applied": crop_applied,
     }
+    if warnings:
+        result["warnings"] = warnings
+    return result

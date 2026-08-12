@@ -2,7 +2,7 @@
 
 pdf-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script ツールから
-    python render_pdf_pages.py <pdf_path> [--start-page N] [--max-pages N] [--dpi N]
+    python render_pdf_pages.py <pdf_path> [--start-page N] [--max-pages N]
 の形で呼ばれる。
 
 生成したPNGは、作業ディレクトリ（run_script の cwd）配下のセッション専用一時フォルダ
@@ -23,13 +23,11 @@ import sys
 import traceback
 from pathlib import Path
 
+import pypdfium2 as pdfium
 from _common import register_output_path, setup_utf8_stdio
 
-import pypdfium2 as pdfium
-
 MAX_PAGES_CAP = 5
-DPI_MIN = 72
-DPI_MAX = 300
+_CAPTURE_DPI = 150
 
 
 def main() -> int:
@@ -38,7 +36,6 @@ def main() -> int:
     parser.add_argument("pdf_path")
     parser.add_argument("--start-page", type=int, default=1)
     parser.add_argument("--max-pages", type=int, default=3)
-    parser.add_argument("--dpi", type=int, default=150)
     args = parser.parse_args()
 
     path = Path(args.pdf_path)
@@ -57,7 +54,7 @@ def main() -> int:
 
     total_pages = len(pdf)
     max_pages = min(max(args.max_pages, 1), MAX_PAGES_CAP)
-    dpi = min(max(args.dpi, DPI_MIN), DPI_MAX)
+    dpi = _CAPTURE_DPI
     scale = dpi / 72
 
     start_idx = max(args.start_page, 1) - 1

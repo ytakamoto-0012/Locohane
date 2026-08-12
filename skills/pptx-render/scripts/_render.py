@@ -1,11 +1,9 @@
-"""excel/pptx/docx 共用のレンダリング共通モジュール。
+"""pptx/docx 共用のレンダリング共通モジュール。
 
 動作概要:
-  1. OLE（COM）で Office アプリ（Excel/PowerPoint/Word）をヘッドレス起動し、
+  1. OLE（COM）で Office アプリ（PowerPoint/Word）をヘッドレス起動し、
      ファイルを高品質PDFへエクスポート。
-  2. pypdfium2 で PDF ページを画像化。
-  3. 白黒境界判定で余白を除去（コンテンツ領域のbboxを算出）。
-  4. bbox でクロップ後、目標 DPI に縮尺を合わせる。
+  2. pypdfium2 で PDF ページを画像化（既定CAPTURE_DPI）。
 
 前提条件:
   - Windows 環境かつ Microsoft Office がインストールされていること。
@@ -33,10 +31,11 @@ _PROG_ID = {
 # PDFエクスポート定数
 # Excel: xlTypePDF=0, PowerPoint: ppSaveAsPDF=32, Word: wdFormatPDF=17
 
-# 画像化のデフォルト DPI（PDF→画像変換時に使用）
-_DEFAULT_RENDER_DPI = 300
+# PDF→画像化キャプチャDPI
+_CAPTURE_DPI = 300
 
-# 目標 DPI（余白除去後の縮尺）
+# 目標DPI（余白除去後の縮尺。crop機能自体は常時OFFのため実質未使用だが、
+# render_office_file()の戻り値JSONの`target_dpi`フィールドとして返す）
 _TARGET_DPI = 150
 
 # 白黒境界判定の閾値（ピクセル値。これ未満なら黒＝コンテンツとみなす）
@@ -116,73 +115,6 @@ def _convert_office_to_pdf(path: Path, tool: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# 余白除去（白黒境界判定）
-# ---------------------------------------------------------------------------
-
-
-def _detect_content_bbox(image_path: Path) -> tuple[int, int, int, int] | None:
-    """PNG画像からコンテンツ領域のbbox（left, top, right, bottom）を算出する。
-
-    グレースケール化し、閾値未満（暗い）ピクセルの外接矩形をPILの
-    getbbox()で直接求める。
-
-    旧実装は上下・左右を別々に「黒画素数 ÷ 画像の幅（上下判定）/高さ
-    （左右判定）」の比率で判定していたため、コンテンツが画像の一部
-    （例: スライド上部のみ）に偏っている場合、左右判定の比率が画像全高で
-    薄まってしまい、実際のコンテンツ幅よりはるかに狭いbboxになるバグが
-    あった（タイトル+短い箇条書きだけのスライドで異常に小さくクロップ
-    される事例で発覚）。getbbox()は行・列を独立に判定しないため、
-    コンテンツの偏りに影響されず正確な外接矩形を返す。
-
-    完全に白（コンテンツなし）の場合は None を返す。
-    """
-    from PIL import Image
-
-    img = Image.open(image_path).convert("L")  # グレースケール
-    mask = img.point(lambda p: 255 if p < _DARK_PIXEL_THRESHOLD else 0)
-    bbox = mask.getbbox()
-    if bbox is None:
-        return None  # 全面白（コンテンツなし）
-
-    left, top, right, bottom = bbox
-    # getbbox()は半開区間 [left, right) x [top, bottom) を返す。呼び出し側
-    # _crop_image の crop((left, top, right+1, bottom+1)) と整合させるため、
-    # 包含的な最終インデックス（right-1, bottom-1）に変換して返す。
-    return (left, top, right - 1, bottom - 1)
-
-
-def _crop_image(image_path: Path, bbox: tuple[int, int, int, int], target_dpi: int) -> Path:
-    """bbox で画像をクロップし、目標 DPI に縮尺して保存。
-
-    target_dpi: 目標DPI（画像の解像度を調整）
-    戻り値: 保存先パス
-    """
-    from PIL import Image
-
-    img = Image.open(image_path).convert("RGB")
-    left, top, right, bottom = bbox
-
-    if right <= left or bottom <= top:
-        return image_path
-
-    cropped = img.crop((left, top, right + 1, bottom + 1))
-
-    # 目標 DPI に縮尺（元画像は _DEFAULT_RENDER_DPI で描画済み）
-    scale = target_dpi / _DEFAULT_RENDER_DPI
-
-    if abs(scale - 1.0) > 0.01:
-        new_size = (
-            max(int(cropped.width * scale), 1),
-            max(int(cropped.height * scale), 1),
-        )
-        cropped = cropped.resize(new_size, Image.LANCZOS)
-
-    out_path = image_path.with_name(image_path.stem + "_cropped.png")
-    cropped.save(out_path, dpi=(target_dpi, target_dpi))
-    return out_path
-
-
-# ---------------------------------------------------------------------------
 # PDF→画像レンダリング（pypdfium2）
 # ---------------------------------------------------------------------------
 
@@ -237,29 +169,23 @@ def render_office_file(
     tool: str,
     start_page: int = 1,
     max_pages: int = 3,
-    dpi: int = 300,
-    crop: bool = False,
     target_dpi: int = _TARGET_DPI,
     thread_id: str | None = None,
 ) -> dict:
-    """Officeファイル（excel/pptx/docx）をレンダリングして画像化。
+    """Officeファイル（pptx/docx）をレンダリングして画像化。
 
     Parameters
     ----------
     path : Path
         対象の Office ファイルパス
     tool : str
-        "excel" | "pptx" | "docx"
+        "pptx" | "docx"
     start_page : int
         開始ページ（1始まり）
     max_pages : int
         最大ページ数（最大5にクランプ）
-    dpi : int
-        PDF→画像変換時のDPI（72〜600にクランプ）
-    crop : bool
-        True なら白黒境界判定で余白を除去
     target_dpi : int
-        余白除去後の目標DPI
+        出力JSONの`target_dpi`フィールドとして返す（crop機能は常時OFF）
     thread_id : str | None
         AGENT_THREAD_ID。None なら "_no_session"
 
@@ -271,7 +197,6 @@ def render_office_file(
     if thread_id is None:
         thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
 
-    dpi = min(max(dpi, 72), 600)
     max_pages = min(max(max_pages, 1), 5)
 
     # 1. OLE → PDF 変換
@@ -285,7 +210,7 @@ def render_office_file(
         total_pages = 0
 
     # 2. PDF → 画像化
-    images = _render_pdf_to_images(pdf_path, start_page, max_pages, dpi, thread_id)
+    images = _render_pdf_to_images(pdf_path, start_page, max_pages, _CAPTURE_DPI, thread_id)
 
     if not images:
         return {
@@ -294,24 +219,10 @@ def render_office_file(
             "total_pages": total_pages,
             "start_page": None,
             "end_page": None,
-            "dpi": dpi,
+            "dpi": _CAPTURE_DPI,
             "images": [],
             "crop_applied": False,
         }
-
-    # 3. 余白除去（crop=True の場合）
-    crop_applied = False
-    if crop:
-        for img_info in images:
-            img_path = Path(img_info["image_path"])
-            bbox = _detect_content_bbox(img_path)
-            if bbox is not None:
-                cropped_path = _crop_image(img_path, bbox, target_dpi)
-                img_info["image_path"] = str(cropped_path)
-                img_info["cropped"] = True
-                crop_applied = True
-            else:
-                img_info["cropped"] = False
 
     # 一時PDFを削除
     try:
@@ -328,8 +239,8 @@ def render_office_file(
         "total_pages": total_pages,
         "start_page": first_page if images else None,
         "end_page": last_page if images else None,
-        "dpi": dpi,
+        "dpi": _CAPTURE_DPI,
         "target_dpi": target_dpi,
         "images": images,
-        "crop_applied": crop_applied,
+        "crop_applied": False,
     }

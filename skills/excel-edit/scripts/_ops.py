@@ -10,16 +10,21 @@ from __future__ import annotations
 
 import unicodedata
 
-from openpyxl.chart import BarChart, LineChart, PieChart, Reference, ScatterChart
-from openpyxl.chart.label import DataLabelList
-from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule, FormulaRule, IconSetRule
-from openpyxl.utils.cell import range_boundaries
-from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.worksheet.table import Table, TableStyleInfo
-
 from _common import resolve_sheet_name
 from _excel_shared import column_index, group_column_values
 from _style import apply_style, resolve_theme
+from openpyxl.chart import BarChart, LineChart, PieChart, Reference, ScatterChart
+from openpyxl.chart.label import DataLabelList
+from openpyxl.formatting.rule import (
+    CellIsRule,
+    ColorScaleRule,
+    DataBarRule,
+    FormulaRule,
+    IconSetRule,
+)
+from openpyxl.utils.cell import range_boundaries
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 _CHART_CLASSES = {
     "bar": BarChart,
@@ -80,10 +85,7 @@ def _apply_col_widths(ws, widths: dict[str, float]) -> None:
 def op_add_sheet(wb, op: dict) -> None:
     name = str(op["name"])[:31]
     if name in wb.sheetnames:
-        raise ValueError(
-            f"シート'{name}'は既に存在します（rename_sheetで別名にするか、"
-            "既存シートへの書き込みに切り替えてください）"
-        )
+        raise ValueError(f"シート'{name}'は既に存在します（rename_sheetで別名にするか、" "既存シートへの書き込みに切り替えてください）")
     wb.create_sheet(title=name, index=op.get("index"))
 
 
@@ -113,10 +115,7 @@ def _write_rows(ws, min_row: int, min_col: int, op: dict) -> None:
     header_style = op.get("header_style", style)
     row_styles = op.get("row_styles")
     if row_styles is not None and len(row_styles) != len(rows):
-        raise ValueError(
-            f"row_stylesの要素数({len(row_styles)})はrowsの行数({len(rows)})と"
-            "一致させてください（見出し行分も含めて1要素=1行）"
-        )
+        raise ValueError(f"row_stylesの要素数({len(row_styles)})はrowsの行数({len(rows)})と" "一致させてください（見出し行分も含めて1要素=1行）")
     for r_offset, row in enumerate(rows):
         if row_styles is not None:
             row_style = row_styles[r_offset]
@@ -160,8 +159,7 @@ def op_insert_row_group(wb, op: dict) -> None:
         matches = [g for g in group_column_values(ws, anchor["column"]) if g["value"] == anchor["equals"]]
         if not matches:
             raise ValueError(
-                "insert_row_groupのanchorに一致する値が見つかりません: "
-                f"column={anchor.get('column')!r} equals={anchor.get('equals')!r}"
+                "insert_row_groupのanchorに一致する値が見つかりません: " f"column={anchor.get('column')!r} equals={anchor.get('equals')!r}"
             )
         target = matches[0]
         position = op.get("position", "before")
@@ -241,10 +239,7 @@ def _format_table_range(ws, min_row: int, max_row: int, min_col: int, max_col: i
         ws.freeze_panes = ws.cell(row=body_start, column=min_col).coordinate
 
     if opts.get("autofit", True):
-        rows_values = [
-            [ws.cell(row=r, column=c).value for c in range(min_col, max_col + 1)]
-            for r in range(min_row, max_row + 1)
-        ]
+        rows_values = [[ws.cell(row=r, column=c).value for c in range(min_col, max_col + 1)] for r in range(min_row, max_row + 1)]
         _apply_col_widths(ws, _col_width_from_rows(rows_values, min_col))
 
 
@@ -271,11 +266,13 @@ def op_delete_cols(wb, op: dict) -> None:
 
 
 def op_set_column_width(wb, op: dict) -> None:
-    _sheet(wb, op["sheet"]).column_dimensions[op["column"]].width = op["width"]
+    width = min(max(float(op["width"]), 1), 60)
+    _sheet(wb, op["sheet"]).column_dimensions[op["column"]].width = width
 
 
 def op_set_row_height(wb, op: dict) -> None:
-    _sheet(wb, op["sheet"]).row_dimensions[int(op["row"])].height = op["height"]
+    height = min(max(float(op["height"]), 1), 409)
+    _sheet(wb, op["sheet"]).row_dimensions[int(op["row"])].height = height
 
 
 def op_merge_cells(wb, op: dict) -> None:
@@ -341,8 +338,12 @@ def op_add_chart(wb, op: dict) -> None:
     # 値が読み取れるほうが実用上有用なため、明示的にオフにしない限り常時表示）。
     if op.get("show_data_labels", True):
         chart.dataLabels = DataLabelList(
-            showVal=False, showCatName=False, showSerName=False,
-            showLegendKey=False, showPercent=False, showBubbleSize=False,
+            showVal=False,
+            showCatName=False,
+            showSerName=False,
+            showLegendKey=False,
+            showPercent=False,
+            showBubbleSize=False,
         )
         if op["type"] == "pie":
             chart.dataLabels.showPercent = True
@@ -371,9 +372,7 @@ def op_add_conditional_format(wb, op: dict) -> None:
     ws = _sheet(wb, op["sheet"])
     builder = _CF_BUILDERS.get(op["rule_type"])
     if builder is None:
-        raise ValueError(
-            f"未対応のrule_typeです（color_scale/cell_is/formula/data_bar/icon_setのみ対応）: {op['rule_type']}"
-        )
+        raise ValueError(f"未対応のrule_typeです（color_scale/cell_is/formula/data_bar/icon_setのみ対応）: {op['rule_type']}")
     try:
         rule = builder(op.get("params") or {})
     except TypeError as e:
