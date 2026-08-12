@@ -25,6 +25,18 @@ LLMが会話履歴やpath_memoryから正しいパスを抽出できず、ユー
 
 （なし）
 
+## 追記（2026-08-12 12:00）
+
+同種の「パスを推測で構築してGlobエラー」が別セッションで再発。今回はメインエージェントが`explore-docs`サブエージェントへの委譲タスク文中で`E:\yukinori\テスト\2024\ocr_md`・`E:\yukinori\テスト\2025\ocr_md`という、実際には途中に`Datas`フォルダが必要なパス（正: `E:\yukinori\テスト\Datas\2024\ocr_md`）を誤って指示した。
+
+```
+2026-08-12 11:56:41,327 DEBUG src.tools: tool_call: name=dispatch_agent args={'task': 'E:\\yukinori\\テスト\\2024\\ocr_md\\ と E:\\yukinori\\テスト\\2025\\ocr_md\\ の markdown ファイルを読み込み...', 'agent_type': 'explore-docs'}
+2026-08-12 11:56:48,126 WARNING src.subagent: subagent tool=Glob args={'pattern': '**/*.md', 'path': 'E:\\yukinori\\テスト\\2024\\ocr_md'} -> エラー: 検索起点ディレクトリが見つかりません: E:\yukinori\テスト\2024\ocr_md
+2026-08-12 11:56:48,126 WARNING src.subagent: subagent tool=Glob args={'pattern': '**/*.md', 'path': 'E:\\yukinori\\テスト\\2025\\ocr_md'} -> エラー: 検索起点ディレクトリが見つかりません: E:\yukinori\テスト\2025\ocr_md
+```
+
+今回は前回と異なり、サブエージェント自身が`E:\yukinori\テスト`のルートを`Glob`で確認し直し（11:56:51）、11:57:09に正しい`Datas`付きパスで再試行して自己回復した（ユーザーへの`AskUserQuestion`には至らなかった）。同一セッション内で同じ4年分バッチ委譲（[issue/20260812_115000_explore_docs_batch_oversize_hard_token_cutoff.md](20260812_115000_explore_docs_batch_oversize_hard_token_cutoff.md)参照）の直後の残り2年分（2024・2025）を委譲する際に発生しており、**メインエージェントは11:42の1回目の委譲では正しいパスの一部（`Datas`無し表記だが実データはサブエージェント側のGlobで解決できていた）を使い、2回目でも同じ`Datas`無し表記を再度使っている**——つまり1回目の委譲で`Datas`付きの正しいパスがツール結果として返ってきていたにもかかわらず、2回目のタスク文生成時にそれを踏まえずまた推測ベースのパスを書いてしまっている。「直前のツール結果のパスをそのままコピーする」という指示が、委譲タスク文の生成（dispatch_agentへの`task`引数の作文）という文脈では効いていない可能性がある。
+
 ## ユーザー回答
 
 ここにはユーザーの回答が記述される
