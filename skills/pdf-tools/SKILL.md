@@ -41,10 +41,11 @@ PDFの読み込み（テキスト抽出／ページの画像化）とPDFの生�
  "result_path": "C:\\...\\_tmp_<thread_id>\\pdf_read\\1a2b3c4d_20260805_153012_123456.json",
  "path_memory": {"@7": "C:\\...\\_tmp_<thread_id>\\pdf_read\\1a2b3c4d_20260805_153012_123456.json"}}
 ```
-ページ本文（`pages`、各要素は `{"page", "text"}`）は標準出力からは省かれ、
+ページ本文（`pages`、各要素は `{"page", "text", "width_pt", "height_pt"}`）は標準出力からは省かれ、
 `result_path` が指すJSONファイルにのみ含まれます。`Read` ツールで
 `result_path`（または `path_memory` の `@N`）を読み、各要素の `text` を
 つなげてユーザーに内容を報告するか、要約して伝えてください。
+`width_pt`/`height_pt`（pt単位）はページサイズであり、レイアウト検証時に参考になります。
 `total_pages` が `max_pages` より多い場合は、続きを読みたければ `--start-page` を
 `end_page + 1` に指定して再度呼び出すことを案内してください（`read_file.py` の
 offset/limitと同じ考え方のページ版です）。

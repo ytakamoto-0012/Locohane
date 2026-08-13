@@ -26,6 +26,11 @@ from pathlib import Path
 
 from _common import backup_before_overwrite, register_output_path, setup_utf8_stdio
 
+# _shared/office_theme.py から THEMES / resolve_theme を import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "_shared"
+if str(_OFFICE_SHARED) not in sys.path:
+    sys.path.append(str(_OFFICE_SHARED))
+from office_theme import THEMES, resolve_theme  # noqa: E402
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -34,28 +39,6 @@ from pptx.exc import PackageNotFoundError
 from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Cm, Pt
-
-# pptx-create / excel-edit / docx-create の THEMES と同じ名前・同じ色。
-# 既存テンプレートを流用する場合、テンプレート自身のテーマ色が最優先だが、
-# 「格好よくして」等ユーザーから明示的に再配色を頼まれたときの候補として使う。
-THEMES = {
-    "charcoal": {"primary": "36454F", "secondary": "F2F2F2", "accent": "212121", "text_on_primary": "FFFFFF"},
-    "navy": {"primary": "1E2761", "secondary": "CADCFC", "accent": "0B1440", "text_on_primary": "FFFFFF"},
-    "forest": {"primary": "2C5F2D", "secondary": "97BC62", "accent": "1C3D1D", "text_on_primary": "FFFFFF"},
-    "coral": {"primary": "2F3C7E", "secondary": "F9E795", "accent": "F96167", "text_on_primary": "FFFFFF"},
-    "terracotta": {"primary": "B85042", "secondary": "E7E8D1", "accent": "A7BEAE", "text_on_primary": "FFFFFF"},
-    "ocean": {"primary": "065A82", "secondary": "1C7293", "accent": "21295C", "text_on_primary": "FFFFFF"},
-    "teal": {"primary": "028090", "secondary": "00A896", "accent": "02C39A", "text_on_primary": "FFFFFF"},
-    "berry": {"primary": "6D2E46", "secondary": "A26769", "accent": "ECE2D0", "text_on_primary": "FFFFFF"},
-}
-
-
-def resolve_theme(name: str) -> dict:
-    key = (name or "").strip().lower()
-    if key not in THEMES:
-        supported = ", ".join(sorted(THEMES))
-        raise ValueError(f"未対応の theme です: {name!r}（対応: {supported}）")
-    return THEMES[key]
 
 # duplicate_slide で単純なXML deep copyでは正しく複製できないshape種別。
 # （チャート/OLE/動画/SmartArt/グループはリレーションシップや埋め込みデータの
@@ -105,15 +88,10 @@ class EditContext:
         idx = int(slide_num) - 1
         total = len(self._original_slide_elements)
         if idx < 0 or idx >= total:
-            raise ValueError(
-                f"存在しないスライド番号です: {slide_num}（このopsバッチ開始時点の総スライド数: {total}）"
-            )
+            raise ValueError(f"存在しないスライド番号です: {slide_num}（このopsバッチ開始時点の総スライド数: {total}）")
         element = self._original_slide_elements[idx]
         if element not in list(self.prs.slides._sldIdLst):
-            raise ValueError(
-                f"スライド{slide_num}は、この呼び出し内の先行する操作（delete_slide等）で"
-                "既に削除されています"
-            )
+            raise ValueError(f"スライド{slide_num}は、この呼び出し内の先行する操作（delete_slide等）で" "既に削除されています")
         return element
 
     def get_slide(self, slide_num: int):
@@ -180,9 +158,7 @@ def op_set_table_cell(ctx: EditContext, op: dict) -> None:
     row = int(_require(op, "row"))
     col = int(_require(op, "col"))
     if row < 0 or row >= len(table.rows) or col < 0 or col >= len(table.columns):
-        raise ValueError(
-            f"表の範囲外です（既存の表は{len(table.rows)}行{len(table.columns)}列、指定は row={row}, col={col}）"
-        )
+        raise ValueError(f"表の範囲外です（既存の表は{len(table.rows)}行{len(table.columns)}列、指定は row={row}, col={col}）")
     table.cell(row, col).text = str(op.get("text", ""))
 
 
@@ -319,8 +295,7 @@ def op_set_shape_style(ctx: EditContext, op: dict) -> None:
     elif role is not None:
         raise ValueError(f"未対応の role です: {role!r}（対応: heading, table_header）")
 
-    if not any([text_color, bold is not None, italic is not None, underline is not None,
-                font_size_pt, font_name, fill_color, border_color, align]):
+    if not any([text_color, bold is not None, italic is not None, underline is not None, font_size_pt, font_name, fill_color, border_color, align]):
         raise ValueError(
             "text_color/bold/italic/underline/font_size_pt/font_name/fill_color/"
             "border_color/align のいずれか、または role（heading/table_header）+ theme の指定が必要です"
@@ -350,8 +325,9 @@ def op_set_shape_style(ctx: EditContext, op: dict) -> None:
                 if fill_color:
                     cell.fill.solid()
                     cell.fill.fore_color.rgb = RGBColor.from_string(fill_color)
-                _style_text_frame(cell.text_frame, text_color, bold, font_size_pt,
-                                   italic=italic, underline=underline, font_name=font_name, align=align)
+                _style_text_frame(
+                    cell.text_frame, text_color, bold, font_size_pt, italic=italic, underline=underline, font_name=font_name, align=align
+                )
     else:
         if fill_color:
             shape.fill.solid()
@@ -361,8 +337,7 @@ def op_set_shape_style(ctx: EditContext, op: dict) -> None:
         if any([text_color, bold is not None, italic is not None, underline is not None, font_size_pt, font_name, align]):
             if not shape.has_text_frame:
                 raise ValueError(f"shape_index {op['shape_index']} はテキストを持てないshapeです")
-            _style_text_frame(shape.text_frame, text_color, bold, font_size_pt,
-                               italic=italic, underline=underline, font_name=font_name, align=align)
+            _style_text_frame(shape.text_frame, text_color, bold, font_size_pt, italic=italic, underline=underline, font_name=font_name, align=align)
 
 
 def op_set_shape_position(ctx: EditContext, op: dict) -> None:
@@ -496,9 +471,7 @@ def op_reorder_slides(ctx: EditContext, op: dict) -> None:
     order = op.get("order")
     total = len(ctx.prs.slides)
     if not isinstance(order, list) or sorted(order) != list(range(1, total + 1)):
-        raise ValueError(
-            f"order には現在の全スライド番号(1〜{total})の順列を指定してください: {order!r}"
-        )
+        raise ValueError(f"order には現在の全スライド番号(1〜{total})の順列を指定してください: {order!r}")
     xml_slides = ctx.prs.slides._sldIdLst
     slides = list(xml_slides)
     new_order_elms = [slides[i - 1] for i in order]

@@ -51,6 +51,45 @@ def _length_cm(value) -> float | None:
     return round(value.cm, 2) if value is not None else None
 
 
+def check_shape_overflow(shape_info: dict, slide_width_cm: float | None, slide_height_cm: float | None) -> str | None:
+    """shapeがスライド境界をはみ出しているかをチェックする。
+
+    はみ出していれば説明文を返す。はみ出していなければNoneを返す。
+    微小許容誤差（0.05cm）を加味する。
+    """
+    if slide_width_cm is None or slide_height_cm is None:
+        return None
+
+    left_cm = shape_info.get("left_cm")
+    top_cm = shape_info.get("top_cm")
+    width_cm = shape_info.get("width_cm")
+    height_cm = shape_info.get("height_cm")
+
+    if left_cm is None or top_cm is None or width_cm is None or height_cm is None:
+        return None
+
+    tolerance = 0.05
+    issues = []
+
+    if left_cm < -tolerance:
+        issues.append(f"左端を{abs(left_cm):.2f}cmはみ出し")
+    if top_cm < -tolerance:
+        issues.append(f"上端を{abs(top_cm):.2f}cmはみ出し")
+    if left_cm + width_cm > slide_width_cm + tolerance:
+        overshoot = left_cm + width_cm - slide_width_cm
+        issues.append(f"右端を{overshoot:.2f}cmはみ出し")
+    if top_cm + height_cm > slide_height_cm + tolerance:
+        overshoot = top_cm + height_cm - slide_height_cm
+        issues.append(f"下端を{overshoot:.2f}cmはみ出し")
+
+    if not issues:
+        return None
+
+    shape_name = shape_info.get("name", "unknown")
+    shape_idx = shape_info.get("shape_index", "?")
+    return f"shape_index {shape_idx}('{shape_name}')が{', '.join(issues)}しています"
+
+
 def describe_shape(shape, index: int) -> dict:
     """1つのshapeの構造情報をdictにする。
 

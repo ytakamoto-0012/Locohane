@@ -18,6 +18,11 @@ from pathlib import Path
 
 from _common import register_output_path, setup_utf8_stdio
 
+# _shared/office_theme.py から THEMES / resolve_theme を import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "_shared"
+if str(_OFFICE_SHARED) not in sys.path:
+    sys.path.append(str(_OFFICE_SHARED))
+from office_theme import DEFAULT_THEME, THEMES, resolve_theme  # noqa: E402
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
@@ -37,29 +42,7 @@ LAYOUT_MAP = {
     "blank": 6,
 }
 
-# 公式Anthropicスキル（pptx）のDesign Ideasにある配色パレットの抜粋。
-# primary=基調色（60-70%）, secondary=補助色, accent=アクセント,
-# text_on_primary=primaryを背景/塗りに使ったときの文字色。
-THEMES = {
-    "charcoal": {"primary": "36454F", "secondary": "F2F2F2", "accent": "212121", "text_on_primary": "FFFFFF"},
-    "navy": {"primary": "1E2761", "secondary": "CADCFC", "accent": "0B1440", "text_on_primary": "FFFFFF"},
-    "forest": {"primary": "2C5F2D", "secondary": "97BC62", "accent": "1C3D1D", "text_on_primary": "FFFFFF"},
-    "coral": {"primary": "2F3C7E", "secondary": "F9E795", "accent": "F96167", "text_on_primary": "FFFFFF"},
-    "terracotta": {"primary": "B85042", "secondary": "E7E8D1", "accent": "A7BEAE", "text_on_primary": "FFFFFF"},
-    "ocean": {"primary": "065A82", "secondary": "1C7293", "accent": "21295C", "text_on_primary": "FFFFFF"},
-    "teal": {"primary": "028090", "secondary": "00A896", "accent": "02C39A", "text_on_primary": "FFFFFF"},
-    "berry": {"primary": "6D2E46", "secondary": "A26769", "accent": "ECE2D0", "text_on_primary": "FFFFFF"},
-}
-DEFAULT_THEME = "charcoal"
 MUTED_GRAY = "595959"
-
-
-def resolve_theme(name: str | None) -> dict:
-    key = (name or DEFAULT_THEME).strip().lower()
-    if key not in THEMES:
-        supported = ", ".join(sorted(THEMES))
-        raise ValueError(f"未対応の theme です: {name!r}（対応: {supported}）")
-    return THEMES[key]
 
 
 def set_text_color(shape, rgb_hex: str, bold: bool | None = None) -> None:
@@ -127,7 +110,7 @@ def add_stat_row(slide, prs: Presentation, stats: list, theme: dict, top) -> Non
             label = str(item.get("label", ""))
         else:
             raise ValueError("stats の各要素は {'value':..., 'label':...} の形式にしてください")
-        left = Emu(int(margin + i * (col_width + gap)))
+        left = Emu(round(margin + i * (col_width + gap)))
 
         value_box = slide.shapes.add_textbox(left, top, col_width, Inches(1.3))
         vtf = value_box.text_frame
@@ -140,7 +123,7 @@ def add_stat_row(slide, prs: Presentation, stats: list, theme: dict, top) -> Non
         vrun.font.bold = True
         vrun.font.color.rgb = RGBColor.from_string(theme["primary"])
 
-        label_box = slide.shapes.add_textbox(left, Emu(int(top + Inches(1.3))), col_width, Inches(0.7))
+        label_box = slide.shapes.add_textbox(left, Emu(round(top + Inches(1.3))), col_width, Inches(0.7))
         ltf = label_box.text_frame
         ltf.word_wrap = True
         lp = ltf.paragraphs[0]
@@ -277,9 +260,7 @@ def apply_slide(prs: Presentation, slide_def: dict, theme: dict) -> None:
         # blank layout（layout_idx=6）にはタイトルプレースホルダが無いため、
         # 手動でタイトル用テキストボックスを追加する。
         if title is not None:
-            title_box = slide.shapes.add_textbox(
-                Inches(0.6), Inches(0.5), prs.slide_width - Inches(1.2), Inches(1.0)
-            )
+            title_box = slide.shapes.add_textbox(Inches(0.6), Inches(0.5), prs.slide_width - Inches(1.2), Inches(1.0))
             trun = title_box.text_frame.paragraphs[0].add_run()
             trun.text = str(title)
             trun.font.size = Pt(30)

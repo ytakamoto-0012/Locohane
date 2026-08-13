@@ -886,9 +886,11 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
     として書き出し、PYTHONPATH の先頭に追加することで対象スクリプトのソースを
     一切変更せずに書き込み・削除系呼び出しへガードを差し込む。
 
-    許可されるのは workdir（run_script の cwd = 作業ディレクトリ）と
-    default_workdir 配下のみ（execute_python_code と同じ allowed_roots）。
-    それ以外の場所（他ドライブ・Locohaneプロジェクト本体を含む）への
+    許可されるのは workdir（run_script の cwd = 作業ディレクトリ）・
+    default_workdir・path_memory_dir（register_output_path() がロックファイルを
+    書き込むLocohane内部の状態ディレクトリ。ユーザー成果物の保存先では
+    ないためexecute_python_code側のallowed_rootsとは異なりここにのみ追加）
+    配下のみ。それ以外の場所（他ドライブ・Locohaneプロジェクト本体を含む）への
     書き込み・削除は PermissionError でブロックされる。読み取りは対象外。
 
     Args:
@@ -906,6 +908,8 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
     allowed_roots = [workdir]
     if _DEFAULT_WORKDIR is not None:
         allowed_roots.append(_DEFAULT_WORKDIR)
+    if _PATH_MEMORY_DIR is not None:
+        allowed_roots.append(_PATH_MEMORY_DIR)
     try:
         guard_dir = Path(tempfile.mkdtemp(prefix="agent_fs_guard_"))
         (guard_dir / "sitecustomize.py").write_text(_python_fs_guard_preamble(allowed_roots), encoding="utf-8")
@@ -2316,6 +2320,21 @@ def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float
     return "[生成/更新ファイル]\n" + "\n".join(lines)
 
 
+def _exec_guard_roots(workdir: Path) -> list[Path]:
+    """execute_python_code系（execute_python_code/execute_python_code_background）
+    のガードに渡す allowed_roots を組み立てる。
+
+    workdir.parent・default_workdir に加え、path_memory_dir
+    （LLM生成コードが path_memory.register()/resolve() を直接呼ぶ場合に
+    ロックファイル書き込みが必要になるLocohane内部の状態ディレクトリ）を
+    含める。4箇所の呼び出し元での重複を避けるための共通ヘルパー。
+    """
+    roots = [workdir.parent, _DEFAULT_WORKDIR]
+    if _PATH_MEMORY_DIR is not None:
+        roots.append(_PATH_MEMORY_DIR)
+    return roots
+
+
 def _python_fs_guard_preamble(allowed_roots: Sequence[Path]) -> str:
     """execute_python_code / run_script が実行するコードの先頭（または
     サブプロセスの sitecustomize.py）に連結する、書き込みサンドボックス用の
@@ -2573,7 +2592,7 @@ async def execute_python_code(code: str) -> str:
         before_snapshot = {}
 
     try:
-        _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR])
+        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir))
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
@@ -2586,7 +2605,7 @@ async def execute_python_code(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
-            _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR])
+            _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir))
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
             tmp.write(_fs_guard + code)
             tmp.close()
@@ -2714,7 +2733,7 @@ async def execute_python_code_background(code: str) -> str:
         before_snapshot = {}
 
     try:
-        _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR])
+        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir))
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
@@ -2727,7 +2746,7 @@ async def execute_python_code_background(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
-            _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR])
+            _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir))
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
             tmp.write(_fs_guard + code)
             tmp.close()

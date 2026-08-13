@@ -71,7 +71,20 @@ def main() -> int:
     pages = []
     for i in range(start_idx, end_idx):
         text = reader.pages[i].extract_text() or ""
-        pages.append({"page": i + 1, "text": text})
+        page_entry = {"page": i + 1, "text": text}
+
+        # ページサイズをpt単位で取得
+        try:
+            mediabox = reader.pages[i].mediabox
+            width_pt = float(mediabox[2] - mediabox[0])
+            height_pt = float(mediabox[3] - mediabox[1])
+            page_entry["width_pt"] = round(width_pt, 2)
+            page_entry["height_pt"] = round(height_pt, 2)
+        except Exception:
+            # mediabox取得に失敗した場合はスキップ
+            pass
+
+        pages.append(page_entry)
 
     result = {
         "path": str(path),

@@ -115,6 +115,25 @@ def test_subprocess_write_inside_default_workdir_succeeds(tmp_path):
     assert target.read_text(encoding="utf-8") == "ok"
 
 
+def test_subprocess_write_inside_path_memory_dir_succeeds(tmp_path, monkeypatch):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path_memory_dir = tmp_path / "path_memory"
+    path_memory_dir.mkdir()
+    monkeypatch.setattr(tools, "_PATH_MEMORY_DIR", path_memory_dir)
+    env, guard_dir = tools._run_script_guard_env(workdir)
+    target = path_memory_dir / "thread-1.json.lock"
+
+    try:
+        result = _run_script(workdir, f'open(r"{target}", "a+b").write(b"\\0")\n', env)
+    finally:
+        if guard_dir is not None:
+            shutil.rmtree(guard_dir, ignore_errors=True)
+
+    assert result.returncode == 0, result.stderr
+    assert target.exists()
+
+
 def test_subprocess_read_outside_workdir_is_permitted(tmp_path):
     workdir = tmp_path / "workdir"
     outside = tmp_path / "outside"

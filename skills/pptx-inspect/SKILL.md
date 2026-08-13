@@ -38,7 +38,7 @@ metadata:
 出力例:
 ```json
 {"path": "C:\\foo\\template.pptx", "total_slides": 4, "start_slide": 1, "end_slide": 4,
- "slides_count": 4,
+ "slides_count": 4, "slide_width_cm": 25.4, "slide_height_cm": 19.05,
  "result_path": "C:\\...\\_tmp_<thread_id>\\pptx_inspect\\1a2b3c4d_20260805_153012_123456.json"}
 ```
 スライド単位のshape構造（`slides`、各要素は
@@ -49,6 +49,10 @@ metadata:
 "height_cm"}`）は標準出力からは省かれ、`result_path` が指すJSONファイルにのみ
 含まれます。`Read` ツールで読んで `shape_index` を確認してから `pptx-edit` を
 呼んでください。
+
+トップレベルに以下のフィールドも追加されます：
+- `slide_width_cm`/`slide_height_cm`: スライドのサイズ（cm単位）
+- `warnings`: 構造的な不備の警告配列（該当なしならキー省略）。shapeがスライド境界をはみ出している場合に指摘。
 
 - `shape_index` は `pptx-edit` の各操作で指定する `shape_index` と完全に一致します
   （このスライド内での0始まり連番）。

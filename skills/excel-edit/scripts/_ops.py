@@ -174,7 +174,7 @@ def op_insert_row_group(wb, op: dict) -> None:
         index = (ws.max_row or 0) + 1
         min_col = column_index(op["start_column"]) if op.get("start_column") else 1
 
-    ws.insert_rows(index, len(rows))
+    _resize_preserving_merges(ws, "row", index, len(rows))
     _write_rows(ws, index, min_col, op)
 
 
@@ -249,20 +249,108 @@ def op_format_table(wb, op: dict) -> None:
     _format_table_range(ws, min_row, max_row, min_col, max_col, op)
 
 
+def _shift_index(value: int, index: int, amount: int) -> int:
+    """行/列インデックスvalueを、amount>0なら「index位置の直前にamount本挿入」、
+    amount<0なら「index位置からabs(amount)本削除」した後の新しい位置へ変換する。
+
+    削除で消える位置（index <= value < index-amount）はindexへクランプする。
+    区間の上端（hi）をこの関数だけで変換すると「削除範囲の内側で始まり外側で
+    終わる」区間の長さがズレるため、呼び出し側（`_merged_ranges_after_resize`）
+    では hi は区間長を引き算し直して求める。
+    """
+    if amount > 0:
+        return value if value < index else value + amount
+    count = -amount
+    if value < index:
+        return value
+    if value < index + count:
+        return index
+    return value - count
+
+
+def _merged_ranges_after_resize(saved: list[tuple[int, int, int, int]], axis: str, index: int, amount: int):
+    """`saved`（挿入・削除前の結合範囲の(min_col,min_row,max_col,max_row)一覧）を、
+    挿入・削除後の座標へ変換して返す。復元不能（削除範囲に完全に収まっていた・
+    1x1セルに縮んだ）な範囲は結果から除外する。
+
+    amount>0: index位置の直前にamount本を挿入。amount<0: index位置からabs(amount)本を削除。
+    """
+    is_row = axis == "row"
+    for min_col, min_row, max_col, max_row in saved:
+        lo, hi = (min_row, max_row) if is_row else (min_col, max_col)
+        length = hi - lo + 1
+
+        if amount > 0:
+            new_lo = _shift_index(lo, index, amount)
+            new_hi = _shift_index(hi, index, amount)
+        else:
+            count = -amount
+            overlap = max(0, min(hi, index + count - 1) - max(lo, index) + 1)
+            if overlap >= length:
+                continue  # 削除範囲に完全に収まっていた結合 → 復元不能なので破棄する
+            new_lo = _shift_index(lo, index, amount)
+            new_hi = new_lo + (length - overlap) - 1
+
+        if is_row:
+            new_min_row, new_max_row, new_min_col, new_max_col = new_lo, new_hi, min_col, max_col
+        else:
+            new_min_row, new_max_row, new_min_col, new_max_col = min_row, max_row, new_lo, new_hi
+
+        if new_min_row == new_max_row and new_min_col == new_max_col:
+            continue  # 縦横とも1セルにまで縮んだ場合は結合不要
+        yield (new_min_col, new_min_row, new_max_col, new_max_row)
+
+
+def _resize_preserving_merges(ws, axis: str, index: int, amount: int) -> None:
+    """insert_rows/delete_rows/insert_cols/delete_cols/insert_row_group の
+    挿入・削除処理をラップし、既存の結合セル範囲を正しく追従させる。
+
+    openpyxlのinsert_rows等はセルの値だけを移動し、既存の結合セル範囲
+    （`ws.merged_cells.ranges`）の座標も、各セルの実際の型（`MergedCell`/`Cell`）の
+    対応関係も追従させない（openpyxl 3.1系の既知の制限。`Worksheet._move_cells`は
+    `self._cells`しか動かさない）。挿入・削除の"あと"に結合範囲の座標だけを
+    机上で計算し直して`merge_cells`/`unmerge_cells`し直すアプローチは、その時点で
+    実際のセル（`MergedCell`）が既に黙って移動済みのため`KeyError`等で破綻する。
+
+    そのため、挿入・削除の"前"に一旦すべての結合を解除してアンカーセルの値・
+    書式だけが残る単純な配置に戻し、openpyxl本体の`insert_rows`等へ素直に
+    移動を任せてから、新しい座標を計算して結合をかけ直す。
+
+    amount>0: index位置の直前にamount本を挿入する。
+    amount<0: index位置からabs(amount)本を削除する。
+    """
+    if amount == 0:
+        return
+
+    saved = []
+    for merged_range in list(ws.merged_cells.ranges):
+        min_col, min_row, max_col, max_row = merged_range.bounds
+        saved.append((min_col, min_row, max_col, max_row))
+        ws.unmerge_cells(start_row=min_row, start_column=min_col, end_row=max_row, end_column=max_col)
+
+    if axis == "row":
+        ws.insert_rows(index, amount) if amount > 0 else ws.delete_rows(index, -amount)
+    else:
+        ws.insert_cols(index, amount) if amount > 0 else ws.delete_cols(index, -amount)
+
+    for min_col, min_row, max_col, max_row in _merged_ranges_after_resize(saved, axis, index, amount):
+        ws.merge_cells(start_row=min_row, start_column=min_col, end_row=max_row, end_column=max_col)
+
+
 def op_insert_rows(wb, op: dict) -> None:
-    _sheet(wb, op["sheet"]).insert_rows(op["index"], op.get("count", 1))
+    _resize_preserving_merges(_sheet(wb, op["sheet"]), "row", op["index"], op.get("count", 1))
 
 
 def op_delete_rows(wb, op: dict) -> None:
-    _sheet(wb, op["sheet"]).delete_rows(op["index"], op.get("count", 1))
+    _resize_preserving_merges(_sheet(wb, op["sheet"]), "row", op["index"], -op.get("count", 1))
 
 
 def op_insert_cols(wb, op: dict) -> None:
-    _sheet(wb, op["sheet"]).insert_cols(op["index"], op.get("count", 1))
+    _resize_preserving_merges(_sheet(wb, op["sheet"]), "col", op["index"], op.get("count", 1))
 
 
 def op_delete_cols(wb, op: dict) -> None:
-    _sheet(wb, op["sheet"]).delete_cols(op["index"], op.get("count", 1))
+    _resize_preserving_merges(_sheet(wb, op["sheet"]), "col", op["index"], -op.get("count", 1))
 
 
 def op_set_column_width(wb, op: dict) -> None:
@@ -276,7 +364,19 @@ def op_set_row_height(wb, op: dict) -> None:
 
 
 def op_merge_cells(wb, op: dict) -> None:
-    _sheet(wb, op["sheet"]).merge_cells(op["range"])
+    ws = _sheet(wb, op["sheet"])
+    min_col, min_row, max_col, max_row = range_boundaries(op["range"])
+    conflicts = [
+        str(r)
+        for r in ws.merged_cells.ranges
+        if not (max_col < r.min_col or min_col > r.max_col or max_row < r.min_row or min_row > r.max_row)
+    ]
+    if conflicts:
+        raise ValueError(
+            f"merge_cellsの範囲 {op['range']!r} は既存の結合範囲 {conflicts} と重複しています。"
+            "先にunmerge_cellsで解除するか、範囲を見直してください。"
+        )
+    ws.merge_cells(op["range"])
 
 
 def op_unmerge_cells(wb, op: dict) -> None:

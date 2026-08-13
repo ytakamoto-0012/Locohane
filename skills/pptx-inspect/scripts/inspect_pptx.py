@@ -18,7 +18,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from _common import describe_shape, setup_utf8_stdio, summarize_result, write_json_result
+from _common import check_shape_overflow, describe_shape, setup_utf8_stdio, summarize_result, write_json_result
 
 from pptx import Presentation
 from pptx.exc import PackageNotFoundError
@@ -69,21 +69,39 @@ def main() -> int:
 
     total_slides = len(prs.slides)
 
+    # スライドサイズをcm単位で取得
+    from _common import _length_cm
+    slide_width_cm = _length_cm(prs.slide_width)
+    slide_height_cm = _length_cm(prs.slide_height)
+
     start_idx = max(args.start_slide, 1) - 1
     end_idx = min(start_idx + max(args.max_slides, 1), total_slides)
 
     slides_out = []
+    warnings = []
     for i in range(start_idx, end_idx):
-        info = extract_slide(prs.slides[i])
-        slides_out.append({"index": i + 1, **info})
+        slide = prs.slides[i]
+        info = extract_slide(slide)
+        slide_entry = {"index": i + 1, **info}
+        slides_out.append(slide_entry)
+
+        # 各shapeの境界はみ出しをチェック
+        for shape_info in info.get("shapes", []):
+            overflow_msg = check_shape_overflow(shape_info, slide_width_cm, slide_height_cm)
+            if overflow_msg:
+                warnings.append(f"スライド{i + 1}の{overflow_msg}")
 
     result = {
         "path": str(path),
         "total_slides": total_slides,
         "start_slide": start_idx + 1 if slides_out else None,
         "end_slide": end_idx if slides_out else None,
+        "slide_width_cm": slide_width_cm,
+        "slide_height_cm": slide_height_cm,
         "slides": slides_out,
     }
+    if warnings:
+        result["warnings"] = warnings
     summary = summarize_result(result, ["slides"])
     summary.update(write_json_result(result, "pptx_inspect", path))
     print(json.dumps(summary, ensure_ascii=False))

@@ -41,6 +41,7 @@ _EXCEL_EDIT_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "excel-edi
 if str(_EXCEL_EDIT_SCRIPTS) not in sys.path:
     sys.path.append(str(_EXCEL_EDIT_SCRIPTS))
 from _excel_shared import group_column_values  # noqa: E402
+from _ops import _display_width  # noqa: E402
 
 
 def _query_group_by(ws, query: dict, max_row: int) -> dict:
@@ -130,6 +131,51 @@ def _read_xlsx(
                 }
                 for t in ws.tables.values()
             ]
+            # 列幅を取得（返却範囲の列のみ）
+            from openpyxl.utils import get_column_letter
+            column_widths = {}
+            if rows:
+                min_col = 1
+                max_col = len(rows[0]) if rows else 0
+                for col_idx in range(min_col, min_col + max_col):
+                    letter = get_column_letter(col_idx)
+                    width = ws.column_dimensions[letter].width
+                    column_widths[letter] = width
+            result["column_widths"] = column_widths
+
+            # 行の高さを取得（返却範囲のみ）
+            row_heights = {}
+            if rows:
+                for row_offset, row in enumerate(rows):
+                    row_num = offset + 1 + row_offset
+                    height = ws.row_dimensions[row_num].height
+                    if height is not None:
+                        row_heights[str(row_num)] = height
+            result["row_heights"] = row_heights
+
+            # 列幅超過の警告を生成
+            warnings = []
+            for row_offset, row in enumerate(rows):
+                row_num = offset + 1 + row_offset
+                for col_idx, cell in enumerate(row):
+                    col_letter = get_column_letter(col_idx + 1)
+                    cell_width = column_widths.get(col_letter)
+                    # wrap_text が有効でない場合のみチェック
+                    if cell_width is not None and not (cell.alignment and cell.alignment.wrap_text):
+                        text_value = str(cell.value) if cell.value is not None else ""
+                        if text_value:
+                            display_width = _display_width(text_value)
+                            # 列幅に2を加えたデフォルト幅（_apply_col_widths のロジックに合わせる）
+                            target_width = min(max(cell_width + 2, 8), 60)
+                            if display_width > target_width:
+                                cell_ref = f"{resolved}!{col_letter}{row_num}"
+                                msg = (
+                                    f"'{cell_ref}' の文字列(推定幅{display_width:.1f})が"
+                                    f"列幅({cell_width:.1f})を超えており、表示が切れる可能性があります"
+                                )
+                                warnings.append(msg)
+            if warnings:
+                result["warnings"] = warnings
         if queries:
             result["query_results"] = _run_queries(ws, queries, total_rows)
         return result

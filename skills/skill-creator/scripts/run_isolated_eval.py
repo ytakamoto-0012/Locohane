@@ -57,14 +57,22 @@ def _skill_root_dir(root_key: str) -> Path:
     return root / "skills" if root_key == "skills" else root / ".locohane" / "skills"
 
 
-def _build_isolated_env(skill_root: str, skill_name: str, mode: str, replacement_dir: str | None) -> dict[str, str]:
-    """mode に応じて一時 skills_dir を用意し、環境変数にセットして返す。"""
+def _build_isolated_env(skill_root: str, skill_name: str, mode: str, replacement_dir: str | None, workspace: Path) -> dict[str, str]:
+    """mode に応じて一時 skills_dir を用意し、環境変数にセットして返す。
+
+    一時ディレクトリは `workspace` 配下に作る（run_script の書き込み
+    サンドボックスガードは workdir/default_workdir 配下以外への書き込みを
+    ブロックするため、OS既定の一時フォルダ直下には作れない。
+    propose_description.py が `tempfile.mkstemp(dir=str(workspace))` で
+    同じ制約を回避しているのと同じ方式）。
+    """
     env = dict(os.environ)
     if mode == "with_skill":
         return env
 
     root_dir = _skill_root_dir(skill_root)
-    tmp_root = Path(tempfile.mkdtemp(prefix="skill-creator-eval-"))
+    workspace.mkdir(parents=True, exist_ok=True)
+    tmp_root = Path(tempfile.mkdtemp(prefix="skill-creator-eval-", dir=str(workspace)))
     # locohane の場合、環境変数は PROJECT_LOCOHANE_DIR（「.locohane」相当の
     # ディレクトリそのもの）を指すため、スキル本体は tmp_root/skills/ 配下へ
     # コピーする（skills の場合は tmp_root 自体が SKILLS_DIR 相当のため直下へ）。
@@ -106,13 +114,13 @@ def _cmd_start(args: argparse.Namespace) -> int:
         print(f"エラー: 対象スキルディレクトリが見つかりません: {skill_dir}", file=sys.stderr)
         return 1
 
+    workspace = Path(args.workspace) if args.workspace else workspace_dir(skill_dir)
     try:
-        env = _build_isolated_env(args.skill_root, args.skill_name, args.mode, args.replacement_dir)
+        env = _build_isolated_env(args.skill_root, args.skill_name, args.mode, args.replacement_dir, workspace)
     except ValueError as e:
         print(f"エラー: {e}", file=sys.stderr)
         return 1
 
-    workspace = Path(args.workspace) if args.workspace else workspace_dir(skill_dir)
     cmd = [args.python_exe, "-m", "evals.run_case", str(case_path.resolve())]
     result = start_background(cmd, cwd=project_root(), env=env, workspace=workspace)
     result["mode"] = args.mode

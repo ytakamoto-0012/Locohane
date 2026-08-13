@@ -8,32 +8,17 @@ run_script からは直接実行されない。
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 DEFAULT_FONT = "游明朝"
 HEADING_FONT = "游ゴシック"
 
-# docx-create スキルの THEMES と同じ名前・同じ色（同一文書内でappend_blockした
-# 内容とdocx-createで作った内容の見た目を揃えられるよう意図的に揃えている）。
-THEMES = {
-    "charcoal": {"primary": "36454F", "secondary": "F2F2F2", "accent": "212121", "text_on_primary": "FFFFFF"},
-    "navy": {"primary": "1E2761", "secondary": "CADCFC", "accent": "0B1440", "text_on_primary": "FFFFFF"},
-    "forest": {"primary": "2C5F2D", "secondary": "97BC62", "accent": "1C3D1D", "text_on_primary": "FFFFFF"},
-    "coral": {"primary": "2F3C7E", "secondary": "F9E795", "accent": "F96167", "text_on_primary": "FFFFFF"},
-    "terracotta": {"primary": "B85042", "secondary": "E7E8D1", "accent": "A7BEAE", "text_on_primary": "FFFFFF"},
-    "ocean": {"primary": "065A82", "secondary": "1C7293", "accent": "21295C", "text_on_primary": "FFFFFF"},
-    "teal": {"primary": "028090", "secondary": "00A896", "accent": "02C39A", "text_on_primary": "FFFFFF"},
-    "berry": {"primary": "6D2E46", "secondary": "A26769", "accent": "ECE2D0", "text_on_primary": "FFFFFF"},
-}
-DEFAULT_THEME = "charcoal"
-
-
-def resolve_theme(name: str | None) -> dict:
-    key = (name or DEFAULT_THEME).strip().lower()
-    if key not in THEMES:
-        supported = ", ".join(sorted(THEMES))
-        raise ValueError(f"未対応の theme です: {name!r}（対応: {supported}）")
-    return THEMES[key]
+# _shared/office_theme.py から THEMES / resolve_theme を import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "_shared"
+if str(_OFFICE_SHARED) not in sys.path:
+    sys.path.append(str(_OFFICE_SHARED))
+from office_theme import DEFAULT_THEME, THEMES, resolve_theme  # noqa: E402
 
 
 def _set_cell_shading(cell, color_hex: str) -> None:
@@ -89,16 +74,14 @@ def _set_east_asian_font(font_obj, element, font_name: str) -> None:
 
 
 def _apply_run_props(run, run_spec: dict) -> None:
-    if run_spec.get("bold"):
-        run.bold = True
-    if run_spec.get("italic"):
-        run.italic = True
-    if run_spec.get("underline"):
-        run.underline = True
+    # keyの存在とNone判定を明示（False/0 の明示指定でも正しく適用する）
+    for bool_key in ("bold", "italic", "underline"):
+        if bool_key in run_spec and run_spec[bool_key] is not None:
+            setattr(run, bool_key, bool(run_spec[bool_key]))
 
     from docx.shared import Pt, RGBColor
 
-    if run_spec.get("size_pt"):
+    if "size_pt" in run_spec and run_spec["size_pt"] is not None:
         run.font.size = Pt(float(run_spec["size_pt"]))
     if run_spec.get("color"):
         run.font.color.rgb = RGBColor.from_string(str(run_spec["color"]).lstrip("#").upper())
