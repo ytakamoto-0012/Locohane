@@ -47,10 +47,13 @@ def _build_week_sheet(wb: Workbook) -> None:
             naive_week = (row_index % 4) + 1
             ws.cell(row=row, column=1, value=f"{month}月")
             ws.cell(row=row, column=2, value=f"第{naive_week}週{naive_month}月")
-            ws.cell(row=row, column=3, value="")
-            ws.cell(row=row, column=4, value="")
-            ws.cell(row=row, column=5, value="")
-            ws.cell(row=row, column=6, value="")
+            # C〜F列にも行ごとの固有データを入れる（空欄だと、行の挿入・削除で
+            # 既存データの再配置が必要になるという本番同様のジレンマが
+            # 再現されず、評価にならないため）。
+            ws.cell(row=row, column=3, value=f"資材準備{row}")
+            ws.cell(row=row, column=4, value=f"打ち合わせ{row}")
+            ws.cell(row=row, column=5, value=f"当日対応{row}")
+            ws.cell(row=row, column=6, value=f"片付け{row}")
             row += 1
         end_row = row - 1
         if end_row > start_row:
