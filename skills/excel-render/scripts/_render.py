@@ -397,6 +397,11 @@ def render_office_file(
             bbox = _detect_content_bbox(img_path)
             if bbox is not None:
                 cropped_path = _crop_image(img_path, bbox, effective_target_dpi, capture_dpi)
+                if cropped_path != img_path:
+                    try:
+                        img_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
                 img_info["image_path"] = str(cropped_path)
                 img_info["cropped"] = True
                 crop_applied = True

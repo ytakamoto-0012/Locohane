@@ -20,7 +20,11 @@ import json
 import sys
 from pathlib import Path
 
-from _common import setup_utf8_stdio, summarize_result, write_json_result
+# office_shared/docx_common.py から共有ヘルパーを import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
+if str(_OFFICE_SHARED) not in sys.path:
+    sys.path.append(str(_OFFICE_SHARED))
+from docx_common import setup_utf8_stdio, summarize_result, write_json_result  # noqa: E402
 
 
 def _length_cm(value) -> float | None:

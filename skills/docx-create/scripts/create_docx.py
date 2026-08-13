@@ -21,8 +21,12 @@ import json
 import sys
 from pathlib import Path
 
-from _common import register_output_path, setup_utf8_stdio
-from _blocks import BLOCK_HANDLERS, DEFAULT_FONT, _set_east_asian_font, resolve_theme
+# office_shared/docx_common.py から共有ヘルパーを import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
+if str(_OFFICE_SHARED) not in sys.path:
+    sys.path.append(str(_OFFICE_SHARED))
+from docx_common import register_output_path, setup_utf8_stdio  # noqa: E402
+from _blocks import BLOCK_HANDLERS, DEFAULT_FONT, _set_east_asian_font, resolve_theme  # noqa: E402
 
 PAGE_SIZES_CM = {
     "a4": (21.0, 29.7),

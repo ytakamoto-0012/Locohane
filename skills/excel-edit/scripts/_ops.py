@@ -8,10 +8,14 @@ run_script からは直接実行されない。edit_excel.py から import し�
 
 from __future__ import annotations
 
-import unicodedata
+import sys
+from pathlib import Path
 
-from _common import resolve_sheet_name
-from _excel_shared import column_index, group_column_values
+# office_shared/excel_common.py から共有ヘルパーを import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
+if str(_OFFICE_SHARED) not in sys.path:
+    sys.path.append(str(_OFFICE_SHARED))
+from excel_common import _display_width, column_index, group_column_values, resolve_sheet_name  # noqa: E402
 from _style import apply_style, resolve_theme
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference, ScatterChart
 from openpyxl.chart.label import DataLabelList
@@ -42,20 +46,6 @@ def _sheet(wb, name: str):
 def _reference(ws, range_str: str) -> Reference:
     min_col, min_row, max_col, max_row = range_boundaries(range_str)
     return Reference(ws, min_col=min_col, min_row=min_row, max_col=max_col, max_row=max_row)
-
-
-def _display_width(value: object) -> float:
-    """全角文字（東アジアのWide/Fullwidth/Ambiguous）を半角2文字分として数えた表示幅。
-
-    日本語混じりの表で `len(str(value))` を使うと全角文字が半角と同じ1として
-    数えられ、実際の見た目より大幅に狭い列幅になってしまうため。
-    """
-    if value is None:
-        return 0.0
-    width = 0.0
-    for ch in str(value):
-        width += 2.0 if unicodedata.east_asian_width(ch) in ("W", "F", "A") else 1.0
-    return width
 
 
 def _col_width_from_rows(rows: list[list[object]], start_col: int) -> dict[str, float]:

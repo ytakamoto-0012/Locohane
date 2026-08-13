@@ -18,7 +18,11 @@ import sys
 import traceback
 from pathlib import Path
 
-from _common import check_shape_overflow, describe_shape, setup_utf8_stdio, summarize_result, write_json_result
+# office_shared/pptx_common.py から共有ヘルパーを import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
+if str(_OFFICE_SHARED) not in sys.path:
+    sys.path.append(str(_OFFICE_SHARED))
+from pptx_common import check_shape_overflow, describe_shape, setup_utf8_stdio, summarize_result, write_json_result  # noqa: E402
 
 from pptx import Presentation
 from pptx.exc import PackageNotFoundError
@@ -70,7 +74,7 @@ def main() -> int:
     total_slides = len(prs.slides)
 
     # スライドサイズをcm単位で取得
-    from _common import _length_cm
+    from pptx_common import _length_cm
     slide_width_cm = _length_cm(prs.slide_width)
     slide_height_cm = _length_cm(prs.slide_height)
 

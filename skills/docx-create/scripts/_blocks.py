@@ -14,8 +14,8 @@ from pathlib import Path
 DEFAULT_FONT = "游明朝"
 HEADING_FONT = "游ゴシック"
 
-# _shared/office_theme.py から THEMES / resolve_theme を import する（1-B 相互import方式）
-_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "_shared"
+# office_shared/office_theme.py から THEMES / resolve_theme を import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
 if str(_OFFICE_SHARED) not in sys.path:
     sys.path.append(str(_OFFICE_SHARED))
 from office_theme import DEFAULT_THEME, THEMES, resolve_theme  # noqa: E402

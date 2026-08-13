@@ -44,7 +44,7 @@ _TARGET_DPI = 150
 # ---------------------------------------------------------------------------
 
 
-def _convert_office_to_pdf(path: Path, tool: str) -> Path:
+def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
     """OfficeファイルをOLE（COM）で開き、一時PDFへエクスポートする。
 
     tool: "excel" | "pptx" | "docx"
@@ -68,10 +68,17 @@ def _convert_office_to_pdf(path: Path, tool: str) -> Path:
 
         abs_path = os.path.abspath(path)
 
+        # 中間生成物のPDFは元ファイルのフォルダを汚さないよう、他の一時出力
+        # （_render_pdf_to_images の画像など）と同じ `_tmp_<thread_id>/` 配下に
+        # 保存する。会話終了時に自動削除される。
+        out_dir = Path.cwd() / f"_tmp_{thread_id}" / "pdf_export"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha1(abs_path.encode("utf-8")).hexdigest()[:8]
+        pdf_path = str(out_dir / f"{tool}_{digest}_export.pdf")
+
         if tool == "excel":
             # Workbook → PDF (xlTypePDF = 0)
             doc = app.Workbooks.Open(abs_path)
-            pdf_path = os.path.join(os.path.dirname(abs_path), f"_tmp_{tool}_export.pdf")
             # Quality は XlFixedFormatQuality（xlQualityStandard=0）の整数指定が必要
             doc.ExportAsFixedFormat(0, pdf_path, Quality=0, IncludeDocProperties=True, IgnorePrintAreas=False, OpenAfterPublish=False)
             doc.Close(SaveChanges=False)
@@ -79,14 +86,12 @@ def _convert_office_to_pdf(path: Path, tool: str) -> Path:
         elif tool == "pptx":
             # Presentation → PDF (ppSaveAsPDF = 32)
             doc = app.Presentations.Open(abs_path, ReadOnly=True, Untitled=False, WithWindow=False)
-            pdf_path = os.path.join(os.path.dirname(abs_path), f"_tmp_{tool}_export.pdf")
             doc.SaveAs(pdf_path, 32)
             doc.Close()
 
         elif tool == "docx":
             # Document → PDF (wdFormatPDF = 17)
             doc = app.Documents.Open(abs_path, ReadOnly=False, Revert=True)
-            pdf_path = os.path.join(os.path.dirname(abs_path), f"_tmp_{tool}_export.pdf")
             doc.SaveAs2(pdf_path, 17)
             doc.Close(SaveChanges=False)
 
@@ -185,7 +190,7 @@ def render_office_file(
         thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
 
     # 1. OLE → PDF 変換
-    pdf_path = _convert_office_to_pdf(path, tool)
+    pdf_path = _convert_office_to_pdf(path, tool, thread_id)
 
     # PDFの総ページ数を取得（PDF→画像化の前に取得）
     try:

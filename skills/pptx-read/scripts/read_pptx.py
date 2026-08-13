@@ -17,7 +17,11 @@ import sys
 import traceback
 from pathlib import Path
 
-from _common import setup_utf8_stdio, summarize_result, write_json_result
+# office_shared/pptx_common.py から共有ヘルパーを import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
+if str(_OFFICE_SHARED) not in sys.path:
+    sys.path.append(str(_OFFICE_SHARED))
+from pptx_common import setup_utf8_stdio, summarize_result, write_json_result  # noqa: E402
 
 from pptx import Presentation
 from pptx.exc import PackageNotFoundError

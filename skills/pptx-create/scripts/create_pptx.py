@@ -16,12 +16,11 @@ import json
 import sys
 from pathlib import Path
 
-from _common import register_output_path, setup_utf8_stdio
-
-# _shared/office_theme.py から THEMES / resolve_theme を import する（1-B 相互import方式）
-_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "_shared"
+# office_shared/ から共有ヘルパー・THEMES/resolve_theme を import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
 if str(_OFFICE_SHARED) not in sys.path:
     sys.path.append(str(_OFFICE_SHARED))
+from pptx_common import register_output_path, setup_utf8_stdio  # noqa: E402
 from office_theme import DEFAULT_THEME, THEMES, resolve_theme  # noqa: E402
 from pptx import Presentation
 from pptx.dml.color import RGBColor

@@ -1,8 +1,12 @@
-"""excel-tools スキル内の各スクリプトが共有するヘルパー関数。
+"""docx系スキル（docx-create/docx-edit/docx-read/docx-render）が共有する
+ヘルパー関数。
 
-run_script からは直接実行されない（scripts/ prefix チェックを通らないため）。
-scripts/ 配下の各スクリプトが同一ディレクトリから import して使う。
-標準ライブラリのみで完結する。
+実体はこのファイルのみ（`office_shared/`配下、SKILL.mdを持たない非スキル
+ディレクトリ）。各スキルのscripts/配下のスクリプトはsys.path経由でこの
+ファイルを直接importする（1-B 相互import方式、詳細はOFFICE_SKILLS_README.md
+参照）。
+
+run_script からは直接実行されない。
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ import json
 import os
 import shutil
 import sys
-from datetime import date, datetime, time
+from datetime import datetime
 from pathlib import Path
 
 
@@ -43,26 +47,6 @@ def backup_before_overwrite(path: Path) -> Path | None:
         suffix_n += 1
     shutil.copy2(path, backup_path)
     return backup_path
-
-
-def cell_to_json(value: object) -> object:
-    """セル値をJSON化できる型へ変換する（日時系はISO8601文字列にする）。"""
-    if isinstance(value, (datetime, date, time)):
-        return value.isoformat()
-    return value
-
-
-def resolve_sheet_name(names: list[str], sheet_arg: str) -> str:
-    """シート名の完全一致、次に0始まりインデックスとして解決する。"""
-    if sheet_arg in names:
-        return sheet_arg
-    try:
-        idx = int(sheet_arg)
-    except ValueError:
-        raise ValueError(f"シートが見つかりません: {sheet_arg}（存在するシート: {names}）")
-    if 0 <= idx < len(names):
-        return names[idx]
-    raise ValueError(f"シートインデックスが範囲外です: {sheet_arg}（シート数: {len(names)}）")
 
 
 def register_output_path(path, description: str | None = None) -> dict[str, str] | None:

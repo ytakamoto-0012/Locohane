@@ -30,18 +30,24 @@ import sys
 import traceback
 from pathlib import Path
 
-from _common import cell_to_json, resolve_sheet_name, setup_utf8_stdio, summarize_result, write_json_result
 from _style import extract_style
 
-# group_by等の列グルーピングロジックは excel-edit スキル側の _excel_shared.py が唯一の実体
-# （読み書き双方で同一ロジックを使う必要があり、複製すると読み込み結果と書き込み側の
-# 挿入位置解決が食い違う恐れがあるため、複製せず隣接スキルフォルダから直接importする。
-# excel-read は excel-edit が同梱されていることを前提とする）。
-_EXCEL_EDIT_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "excel-edit" / "scripts"
-if str(_EXCEL_EDIT_SCRIPTS) not in sys.path:
-    sys.path.append(str(_EXCEL_EDIT_SCRIPTS))
-from _excel_shared import group_column_values  # noqa: E402
-from _ops import _display_width  # noqa: E402
+# office_shared/excel_common.py から共有ヘルパーを import する（1-B 相互import方式）。
+# group_by等の列グルーピングロジックは読み書き双方で同一実装を使う必要があり
+# （複製すると読み込み結果と書き込み側の挿入位置解決が食い違う恐れがある）、
+# _common系のヘルパーと合わせてexcel_common.pyに一本化している。
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
+if str(_OFFICE_SHARED) not in sys.path:
+    sys.path.append(str(_OFFICE_SHARED))
+from excel_common import (  # noqa: E402
+    _display_width,
+    cell_to_json,
+    group_column_values,
+    resolve_sheet_name,
+    setup_utf8_stdio,
+    summarize_result,
+    write_json_result,
+)
 
 
 def _query_group_by(ws, query: dict, max_row: int) -> dict:
@@ -160,9 +166,12 @@ def _read_xlsx(
                 for col_idx, cell in enumerate(row):
                     col_letter = get_column_letter(col_idx + 1)
                     cell_width = column_widths.get(col_letter)
+                    # include_style時は _cell_json が {"value": ..., "style": {...}} の dict を返す
+                    cell_value = cell.get("value")
+                    wrap_text = cell.get("style", {}).get("wrap_text", False)
                     # wrap_text が有効でない場合のみチェック
-                    if cell_width is not None and not (cell.alignment and cell.alignment.wrap_text):
-                        text_value = str(cell.value) if cell.value is not None else ""
+                    if cell_width is not None and not wrap_text:
+                        text_value = str(cell_value) if cell_value is not None else ""
                         if text_value:
                             display_width = _display_width(text_value)
                             # 列幅に2を加えたデフォルト幅（_apply_col_widths のロジックに合わせる）

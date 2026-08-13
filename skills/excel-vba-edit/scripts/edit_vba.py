@@ -32,8 +32,12 @@ import sys
 import traceback
 from pathlib import Path
 
-from _common import backup_before_overwrite, register_output_path, setup_utf8_stdio
-from _vba_ops import apply_op
+# office_shared/excel_common.py から共有ヘルパーを import する（1-B 相互import方式）
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
+if str(_OFFICE_SHARED) not in sys.path:
+    sys.path.append(str(_OFFICE_SHARED))
+from excel_common import backup_before_overwrite, register_output_path, setup_utf8_stdio  # noqa: E402
+from _vba_ops import apply_op  # noqa: E402
 
 _XL_OPEN_XML_WORKBOOK_MACRO_ENABLED = 52
 

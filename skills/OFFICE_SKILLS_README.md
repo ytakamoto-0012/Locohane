@@ -20,15 +20,14 @@ Excel/Word/PowerPointを扱うスキル群固有の実装上の注意点をま�
 
 ## 1. ヘルパーの共有方式（2パターン）
 
-### 1-A. 複製方式（既定・大半のヘルパーが該当）
+### 1-A. 複製方式（`pdf-tools`/`skill-creator`/`web-search`の`_common.py`が該当）
 
 `_common.py`（UTF-8標準入出力設定・パスメモリー登録・結果JSON書き出し等）は、
-**ファミリー内の全スキルの`scripts/`配下へバイト単位で同一内容を複製**している
-（`skills/*/scripts/_common.py`をファミリー内で比較すればハッシュが完全一致する）。
+`pdf-tools` / `skill-creator` / `web-search` では**各スキルの`scripts/`配下へ
+バイト単位で同一内容を複製**している。
 
 理由: Agent Skills仕様はスキル間の相互import を想定しておらず、`run_script`も
 「実行対象スキル自身の`scripts/`配下」以外への依存を前提としない設計のため、
-office系スキルは常にまとめて配置される前提ではあるが、`_common.py` については
 各スキルフォルダを単独で配置した場合でも動くよう複製で持たせている。
 
 **この複製を保証する自動チェックは現状存在しない**（手作業での同時更新に依存）。
@@ -36,55 +35,72 @@ office系スキルは常にまとめて配置される前提ではあるが、`_
 反映すること。
 
 > **補足: 1-B方式へ移行したファイル**
-> `docx-edit/scripts/_track_changes.py` と `docx-read/scripts/_track_changes.py`
-> はかつて1-Aの複製関係にあったが、`docx-read/scripts/_track_changes.py` は
-> 削除し、`read_docx.py` から `docx-edit/scripts/` を `sys.path` 経由で import
-> する 1-B 方式へ移行した（excel-read → excel-edit のパターンと同様）。
+> - `docx-edit/scripts/_track_changes.py` と `docx-read/scripts/_track_changes.py`
+>   はかつて1-Aの複製関係にあったが、`docx-read/scripts/_track_changes.py` は
+>   削除し、`read_docx.py` から `docx-edit/scripts/` を `sys.path` 経由で import
+>   する 1-B 方式へ移行した（excel-read → excel-edit のパターンと同様）。
+> - `excel-*`（6スキル）/ `docx-*`（4スキル）/ `pptx-*`（5スキル）の`_common.py`
+>   も、かつては各ファミリー内で1-Aの複製関係にあった（ファミリー内ではバイト単位で
+>   完全一致していた）。個別スキルフォルダの単体持ち出しは実際の運用ケースではない
+>   （本ファイル冒頭参照）ため複製で保つ根拠が薄く、`excel-edit/scripts/
+>   _excel_shared.py`（B1方式だった列グルーピングロジック）も含めて
+>   `office_shared/excel_common.py` / `office_shared/docx_common.py` /
+>   `office_shared/pptx_common.py` へ統合し、1-B方式（下記B2）へ移行した。
+>   pptx-inspect限定だった`check_shape_overflow`もこの際`pptx_common.py`に
+>   統合済み（他pptx系スキルからも参照可能になったが、現状は未使用）。
 
 ### 1-B. 相互import方式（兄弟ディレクトリへの依存）
 
 office系スキルは同一 `skills/` ディレクトリに配置される前提のため、
-`sys.path` 経由で兄弟ディレクトリ（または `_shared/` 配下）のモジュールを
+`sys.path` 経由で兄弟ディレクトリ（または `office_shared/` 配下）のモジュールを
 import できる。このパターンは2つ存在する。
 
 **B1. 兄弟スキルの `scripts/` へ直接アクセス**
 
-`excel-read/scripts/read_excel.py` は `excel-edit/scripts/_excel_shared.py`
-（列グルーピングロジック `group_column_values` / `column_index`。`excel-edit` の
-`insert_row_group` op と完全に同一の実装を共有する必要があるため複製ではなく
-実体を1箇所に集約した）を、**相対パスで `sys.path` に追加して import する**:
+`docx-read/scripts/read_docx.py` は `docx-edit/scripts/_track_changes.py`
+（`count_revisions`。docx-editが書き込む変更履歴と同一の解釈ロジックを
+読み込み側でも使う必要があるため複製ではなく実体を1箇所に集約した）を、
+**相対パスで `sys.path` に追加して import する**:
 
 ```python
-_EXCEL_EDIT_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "excel-edit" / "scripts"
-sys.path.append(str(_EXCEL_EDIT_SCRIPTS))
-from _excel_shared import group_column_values
+_DOCX_EDIT_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "docx-edit" / "scripts"
+sys.path.append(str(_DOCX_EDIT_SCRIPTS))
+from _track_changes import count_revisions
 ```
 
-**このため `excel-read` は `excel-edit` フォルダが兄弟ディレクトリとして存在しないと
-動作しない（`excel-read` 単体では `--query-json` の `group_by` クエリが使えない）。**
-本リポジトリでは両スキルとも常にセットで同梱されるため実運用上問題ないが、
-`excel-read` フォルダだけを他基盤へ個別に持ち出す場合は `excel-edit/scripts/
-_excel_shared.py` も一緒にコピーする必要がある（`_excel_shared.py` 単体を
-`excel-read/scripts/` へ複製しても動作はするが、その場合 1-A の複製方式に戻るため
-以後は手動同期が必要になる）。
+**このため `docx-read` は `docx-edit` フォルダが兄弟ディレクトリとして存在しないと
+動作しない。** 本リポジトリでは両スキルとも常にセットで同梱されるため実運用上
+問題ないが、`docx-read` フォルダだけを他基盤へ個別に持ち出す場合は
+`docx-edit/scripts/_track_changes.py` も一緒にコピーする必要がある。
 
-**B2. `skills/_shared/` への共用モジュール配置**
+**B2. `skills/office_shared/` への共用モジュール配置**
 
-`pptx-create` / `pptx-edit` / `docx-create` / `docx-edit` / `excel-edit` の
-THEMES（配色テーマ）と `resolve_theme()` 関数は、`skills/_shared/office_theme.py`
-へ統合した。各スキルは `sys.path` に `_shared` を追加して import する:
+`office_shared/`（SKILL.mdを持たない非スキルディレクトリ）には以下が置かれている:
+
+- `office_theme.py` — `pptx-create` / `pptx-edit` / `docx-create` / `docx-edit` /
+  `excel-edit` が使うTHEMES（配色テーマ）と `resolve_theme()` 関数。
+- `excel_common.py` — excel系6スキル共通のヘルパー（UTF-8標準入出力設定・
+  パスメモリー登録・結果JSON書き出し・セル値/シート名解決・列幅計算・
+  列グルーピングロジック）。
+- `docx_common.py` — docx系4スキル共通のヘルパー。
+- `pptx_common.py` — pptx系5スキル共通のヘルパー（shape記述・境界はみ出し検出含む）。
+
+各スキルは `sys.path` に `office_shared` を追加して import する:
 
 ```python
-_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "_shared"
+_OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
 if str(_OFFICE_SHARED) not in sys.path:
     sys.path.append(str(_OFFICE_SHARED))
 from office_theme import THEMES, DEFAULT_THEME, resolve_theme
+from excel_common import setup_utf8_stdio, ...  # スキルのファミリーに応じて excel_common/docx_common/pptx_common を使い分ける
 ```
 
-同様に `docx-read/scripts/read_docx.py` は `docx-edit/scripts/_track_changes.py`
-をこのパターンで import している。
+`office_theme`と`{family}_common`の両方が必要なスキル（`pptx-create`/
+`pptx-edit`/`docx-create`/`docx-edit`/`excel-edit`）は、`_OFFICE_SHARED`への
+`sys.path.append`は1回だけ行い、そこから両方のモジュールをimportすればよい
+（どちらも同じ`office_shared/`配下にあるため）。
 
-この共有モジュールは SKILL.md を持たないため、`src/skills.py` のスキル走査では
+この共有ディレクトリは SKILL.md を持たないため、`src/skills.py` のスキル走査では
 自動的にスキップされる（SKILL.md 有無を確認する仕組みのため）。
 
 ## 2. Locohane固有の環境変数（ソフト依存）
