@@ -645,6 +645,43 @@ def _task_with_work_dir_hint(task: str) -> str:
     return f"作業ディレクトリ: {work_dir}\n\n{task}"
 
 
+def current_plan_status_text() -> str:
+    """現在の実行計画の状態を、プロース（要約LLMの再構成・委譲元の手書き）に頼らず
+    cl.user_session から直接読んで機械的に整形する。
+
+    context_compaction.py（圧縮再注入）と _task_with_plan_hint（dispatch_agent
+    委譲時の注入）の両方が同じ整形結果を共有するための single source of truth。
+    計画が未作成、またはchainlitセッション文脈外（テスト・evals等で
+    cl.user_session.get() が ChainlitContextException を送出する場合）は
+    空文字列を返す。
+    """
+    try:
+        plan = cl.user_session.get("plan")
+    except Exception:
+        return ""
+    if not plan:
+        return ""
+    return _render_plan(plan)
+
+
+def _task_with_plan_hint(task: str) -> str:
+    """dispatch_agent の task 文の先頭に、現在の実行計画を事実として付与する。
+
+    本番インシデント: create_plan の detail_markdown（プロース）は1ファイル
+    成果物を約束していたが、実際の steps は月間・週間版を別々の
+    dispatch_agent 呼び出しへ分割委譲しており、委譲されたworkerは
+    「月間版を作って」としか伝えられず計画全体の約束を知る術が無かった。
+    _task_with_work_dir_hint と同じ「委譲元の書き起こしを信用せず、
+    cl.user_session の ground truth を機械的に注入する」パターンをここにも
+    適用し、委譲元がtask文に計画全体を書き忘れてもサブエージェントが
+    常に計画全体・現在位置を認識できるようにする。
+    """
+    status = current_plan_status_text()
+    if not status:
+        return task
+    return f"[実行計画（進行中・最優先タスク）]\n{status}\n\n{task}"
+
+
 _RAW_UNC_PATH_RE = re.compile(r"\\\\[A-Za-z0-9_.\-]+(?:\\[A-Za-z0-9_.\-]+)+")
 
 
@@ -3069,6 +3106,7 @@ async def dispatch_agent(task: str, agent_type: str) -> str:
         return f"エラー: 不明な agent_type '{agent_type}' です。利用可能: {available}"
     task = _resolve_path_memory_tokens_in_text(task)
     task = _task_with_work_dir_hint(task)
+    task = _task_with_plan_hint(task)
     logger.info("dispatch_agent: task=%r agent_type=%r", task, agent_type)
 
     _purge_stale_dispatch_agent_jobs()

@@ -101,12 +101,13 @@
 
 2状態: **Plan Mode**（既定、書き込み系ツールはブロックされ「計画が未承認」エラーのみ）／**Edit Automatically**（`create_plan`→`approve_plan`後、承認済み計画の各ステップを再承認なしで実行可。全`completed`で自動的にPlan Modeへ戻る。途中で戻したい場合は`lock_plan_mode`）。確認は`get_plan_status`（読み取り専用）。
 
-`execute_python_code`/`run_script`を1回でも呼ぶタスク（`dispatch_agent(agent_type="worker")`への委譲を含む）は次の4ステップを省略しない。
+`execute_python_code`/`run_script`を1回でも呼ぶタスク（`dispatch_agent(agent_type="worker")`への委譲を含む）は次の5ステップを省略しない。
 
-1. **調査**: 対象ルート直下を1回`Glob`→`dispatch_agent(agent_type="explore")`で詳細調査→具体的事実（件数・ファイル名・構成）を得る。この調査フェーズにも前述の${subagent_max_iterations}件分割・逐次委任の規律が適用される。判断基準は「計画の各ステップに書く具体的事実がユーザー指示だけで確定しているか」。確定していない（例: 中身を読まないと件数・項目が分からない）ならフル調査必須。確定済み（例: 対象ファイル名・変更内容が指示だけで確定）なら`Glob`での実在確認のみで足りる。「情報を調査する」等の抽象ステップは書かない。`create_plan`直前に「具体的事実を最低1つ得たか」を自問し、得ていなければ調査を続ける。
-2. **create_plan**: 各ステップは`content`（内容）と`activeForm`（進行中表示）の辞書。ステップの実体は`run_script`/`execute_python_code`だけでなく`dispatch_agent`でもよい（1グループ＝1ステップ）。対象の全件を必ずカバーする（一部だけ書いて残りを省略しない）。ステップ数に上限はなく、多くても作り直さない。
-3. **approve_plan**: `create_plan`の直後、同ターンで必ず続けて呼ぶ（他ツールを挟まない、自問し直さない）。却下されたら計画を直さずその旨を述べて終える。タイムアウトのみ後で呼び直してよい。`create_plan`は単独で呼ぶ（他ツールと並列にしない、ガードが働かなくなる）。
-4. **update_task_progress**: `pending`→`in_progress`→`completed`の順、同時に`in_progress`は1つだけ。実行中の追加調査にもファイル調査委譲の必須ルールが適用される（承認後でも自分でRead/analyze_imageしない）。ステップ対象範囲を最後まで処理してから`completed`にする。全完了後はそれ以上ツールを呼ばず、保存先パス等を添えてテキストで最終報告する。
+1. **調査**: 対象ルート直下を1回`Glob`→`dispatch_agent(agent_type="explore")`で詳細調査→具体的事実（件数・ファイル名・構成）を得る。この調査フェーズにも前述の${subagent_max_iterations}件分割・逐次委任の規律が適用される。判断基準は「計画の各ステップに書く具体的事実がユーザー指示だけで確定しているか」。確定していない（例: 中身を読まないと件数・項目が分からない）ならフル調査必須。確定済み（例: 対象ファイル名・変更内容が指示だけで確定）なら`Glob`での実在確認のみで足りる。「情報を調査する」等の抽象ステップは書かない。次の設計ステップへ渡す前に「具体的事実を最低1つ得たか」を自問し、得ていなければ調査を続ける。
+2. **設計**: 調査で得た具体的事実とユーザー要求を`dispatch_agent(agent_type="planner")`へ過不足なく伝え、計画の草案（steps候補・detail_markdown草案）を作らせる。要約して伝えない（件数・ファイル名・数値等をそのまま渡す）。
+3. **create_plan**: plannerの草案をそのまま丸写しにせず、内容を確認・調整してから`steps`/`detail_markdown`を確定させて呼ぶ。各ステップは`content`（内容）と`activeForm`（進行中表示）の辞書。ステップの実体は`run_script`/`execute_python_code`だけでなく`dispatch_agent`でもよい（1グループ＝1ステップ）。対象の全件を必ずカバーする（一部だけ書いて残りを省略しない）。ステップ数に上限はなく、多くても作り直さない。
+4. **approve_plan**: `create_plan`の直後、同ターンで必ず続けて呼ぶ（他ツールを挟まない、自問し直さない）。却下されたら計画を直さずその旨を述べて終える。タイムアウトのみ後で呼び直してよい。`create_plan`は単独で呼ぶ（他ツールと並列にしない、ガードが働かなくなる）。
+5. **update_task_progress**: `pending`→`in_progress`→`completed`の順、同時に`in_progress`は1つだけ。実行中の追加調査にもファイル調査委譲の必須ルールが適用される（承認後でも自分でRead/analyze_imageしない）。ステップ対象範囲を最後まで処理してから`completed`にする。全完了後はそれ以上ツールを呼ばず、保存先パス等を添えてテキストで最終報告する。
 
 読み取り専用の`Read`/`Glob`/`Grep`/`json_query`/`list_path_memory`/`get_plan_status`は計画の有無に関わらずいつでも呼べる。
 

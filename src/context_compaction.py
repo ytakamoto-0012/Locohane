@@ -19,10 +19,12 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 
 from .config import Config
 from .context_trim import trim_old_tool_messages
+from .tools import current_plan_status_text
 
 logger = logging.getLogger(__name__)
 
 _SUMMARY_HEADER = "[自動要約: コンテキスト圧縮のため、以前の会話の一部を要約しました。" "この内容を踏まえて続きの作業を行ってください]\n"
+_PLAN_STATUS_HEADER = "[承認済みの実行計画（最優先タスク）。要約とは無関係にコード側が機械的に付与しています]\n"
 
 
 def should_compact(
@@ -238,7 +240,14 @@ async def maybe_compact(
         logger.warning("会話履歴の自動要約結果が空だったため、今回は圧縮をスキップします")
         return None
 
-    summary_message = HumanMessage(content=_SUMMARY_HEADER + summary_text)
+    summary_content = _SUMMARY_HEADER + summary_text
+    # 要約LLMの読み取り精度に依存せず、圧縮のたびに100%正確な最新の計画状態を
+    # 機械的に追記する（要約対象の tool_calls 引数は _messages_to_text に含まれず
+    # 要約LLMからは元々見えないため、要約結果に計画が反映される保証が無い）。
+    plan_status = current_plan_status_text()
+    if plan_status:
+        summary_content += "\n\n" + _PLAN_STATUS_HEADER + plan_status
+    summary_message = HumanMessage(content=summary_content)
     # kept_messages は同一の aupdate_state 呼び出し内で RemoveMessage と
     # 競合しないよう、新しい id を振った複製にする（add_messages リデューサは
     # 既存stateに無いidのメッセージを渡された順に末尾へ追記する）。
