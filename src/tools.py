@@ -57,6 +57,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -246,7 +247,6 @@ _HELP_PATH: Path | None = None
 _PATH_MEMORY_DIR: Path | None = None
 _PATH_MEMORY_MAX_ENTRIES: int = 500
 _SRC_DIR: Path = Path(__file__).parent  # src/ディレクトリ（path_memory.py 等がある）
-_PROJECT_ROOT: Path = _SRC_DIR.parent  # リポジトリ直下（execute_python_code のFSガードで使用）
 _APPROVAL_TIMEOUT_SECONDS: int = 300
 _ASK_USER_QUESTION_TIMEOUT_SECONDS: int = 60
 _ASK_USER_CHOICE_TIMEOUT_SECONDS: int = 90
@@ -834,6 +834,50 @@ def _subprocess_env() -> dict[str, str]:
         if bin_dirs:
             env["PATH"] = os.pathsep.join([*(str(d) for d in bin_dirs), env.get("PATH", "")])
     return env
+
+
+def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
+    """run_script/run_script_background が起動するサブプロセスへ、書き込み
+    サンドボックスガードを注入した環境変数を組み立てる。
+
+    run_script はスキル作者が書いた既存の scripts/ 配下のファイルをそのまま
+    実行するため、execute_python_code のようにコード文字列の先頭へガードの
+    ソースを連結する方法が使えない（対象ファイルを書き換えるのは事故の元）。
+    代わりに Python がサブプロセス起動時に sys.path 上の sitecustomize
+    モジュールを自動 import する仕組みを利用し、_python_fs_guard_preamble が
+    生成するのと同じモンキーパッチコードを一時ディレクトリへ sitecustomize.py
+    として書き出し、PYTHONPATH の先頭に追加することで対象スクリプトのソースを
+    一切変更せずに書き込み・削除系呼び出しへガードを差し込む。
+
+    許可されるのは workdir（run_script の cwd = 作業ディレクトリ）と
+    default_workdir 配下のみ（execute_python_code と同じ allowed_roots）。
+    それ以外の場所（他ドライブ・Locohaneプロジェクト本体を含む）への
+    書き込み・削除は PermissionError でブロックされる。読み取りは対象外。
+
+    Args:
+        workdir: このスクリプト実行の cwd（_resolve_workdir の解決結果）。
+
+    Returns:
+        (env, guard_dir) のタプル。guard_dir は呼び出し側がサブプロセス
+        終了後に削除する一時ディレクトリ。一時ファイル作成に失敗した場合は
+        guard_dir が None になり、env にはガード無しの _subprocess_env() の
+        結果のみが入る（ガード注入の失敗自体でスクリプト実行を止めない。
+        書き込み制限が効かなくなるだけで、通常の権限エラー等は従来通り
+        OS側で発生する）。
+    """
+    env = _subprocess_env()
+    allowed_roots = [workdir]
+    if _DEFAULT_WORKDIR is not None:
+        allowed_roots.append(_DEFAULT_WORKDIR)
+    try:
+        guard_dir = Path(tempfile.mkdtemp(prefix="agent_fs_guard_"))
+        (guard_dir / "sitecustomize.py").write_text(_python_fs_guard_preamble(allowed_roots), encoding="utf-8")
+    except OSError:
+        logger.warning("run_script: 書き込みガード用の一時ファイル作成に失敗したため、ガード無しで実行します。")
+        return env, None
+    existing_path = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(guard_dir) + (os.pathsep + existing_path if existing_path else "")
+    return env, guard_dir
 
 
 def _safe_path(relative: str) -> Path:
@@ -1488,13 +1532,22 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
     読み取り専用スクリプト（一部は事前に例外登録されている。例: excel-vba-read の
     read_vba.py）はこの承認チェックを免除される。
 
+    **重要: 書き込みは作業ディレクトリ配下限定（サンドボックス）**
+    起動するサブプロセスへ書き込みガードを注入しており、open()の書き込み
+    モードや os.remove/os.rename/shutil.move 等の呼び出し先が作業
+    ディレクトリと default_workdir 配下以外（他ドライブ・Locohaneプロジェクト
+    本体を含む）の場合は PermissionError で失敗する。出力先パス
+    （output_path/--output 等）は必ず作業ディレクトリ配下を指定すること。
+    既存ファイルの読み取りはこのガードの対象外で制限されない。
+
     Args:
         skill_name: スクリプトを持つスキルのフォルダ名。
         script_filename: 実行したいスクリプトのファイル名（例: "count.py"）。
             パスや scripts/ プレフィックスは不要 — スキルフォルダの scripts/
             配下から自動検索される。同名ファイルが複数階層にある場合は
             最も浅い階層のものが使われる。
-        script_args: スクリプトへ渡す追加引数のリスト（省略可）。
+        script_args: スクリプトへ渡す追加引数のリスト（省略可）。書き込み先の
+            パスは作業ディレクトリ配下を指定すること（上記サンドボックス参照）。
 
     Returns:
         「[終了コード] N」に続けて、標準出力・標準エラーがあれば
@@ -1783,6 +1836,7 @@ async def _run_script_impl(skill_name: str, script_filename: str, script_args: l
     if isinstance(prepared, str):
         return prepared
     cmd, workdir = prepared
+    env, guard_dir = _run_script_guard_env(workdir)
 
     logger.info("run_script: %s %s cwd=%s", skill_name, script_filename, workdir)
     try:
@@ -1797,12 +1851,15 @@ async def _run_script_impl(skill_name: str, script_filename: str, script_args: l
             timeout=_SCRIPT_TIMEOUT,
             encoding="utf-8",
             errors="replace",
-            env=_subprocess_env(),
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return f"エラー: スクリプトが {_SCRIPT_TIMEOUT} 秒でタイムアウトしました。"
     except OSError as e:
         return f"エラー: スクリプトを実行できませんでした: {e}"
+    finally:
+        if guard_dir is not None:
+            shutil.rmtree(guard_dir, ignore_errors=True)
 
     # stdout / stderr / 終了コードをまとめて返す（LLM が結果を解釈できるように）。
     parts = [f"[終了コード] {proc.returncode}"]
@@ -1840,6 +1897,13 @@ class _BackgroundJob:
     workdir: "Path | None" = None
     before_snapshot: "dict[Path, float] | None" = None
     fell_back: bool = False
+    # run_script_background / execute_python_code_background 由来のジョブの
+    # 書き込みガード用一時ディレクトリ（_run_script_guard_env が作成）。
+    # ジョブ終了後に _run_background_job の finally で削除する。ガード注入に
+    # 失敗した場合や execute_python_code_background 由来の場合は None のまま
+    # （execute_python_code_background 側はコード先頭連結方式のためこの
+    # フィールドを使わない）。
+    guard_dir: "Path | None" = None
     # check_script_job が直前に「実行中」ステータスを返した時刻
     # （time.monotonic()）。None は未確認（起動直後でまだ一度も
     # check_script_job が呼ばれていない）ことを表す。連続呼び出しの
@@ -1909,6 +1973,10 @@ async def _run_background_job(job: "_BackgroundJob") -> None:
         # run_script_background 由来のジョブでは tmp_path が None のため何もしない。
         if job.tmp_path is not None:
             job.tmp_path.unlink(missing_ok=True)
+        # run_script_background 由来のジョブの書き込みガード用一時ディレクトリの後始末
+        # （_run_script_guard_env が作成。ガード注入に失敗した場合は None のため何もしない）。
+        if job.guard_dir is not None:
+            shutil.rmtree(job.guard_dir, ignore_errors=True)
 
 
 def _purge_stale_background_jobs() -> None:
@@ -1986,7 +2054,9 @@ async def run_script_background(skill_name: str, script_filename: str, script_ar
     ターンをブロックしない。完了確認・結果取得には check_script_job を使う。
     処理に時間がかかっていること自体は打ち切る理由にならない。ユーザーから
     明示的に中断を指示された場合にのみ stop_script_job を使う。
-    引数解決・作業ディレクトリ解決・計画承認チェック（例外の扱いも含む）は
+    引数解決・作業ディレクトリ解決・計画承認チェック（例外の扱いも含む）、
+    および書き込みサンドボックスガード（出力先は作業ディレクトリ/
+    default_workdir配下限定、詳細は run_script のdocstring参照）は
     run_script と同じ。バックグラウンドジョブを強制終了するまでの上限は
     既定3600秒。
 
@@ -2004,6 +2074,7 @@ async def run_script_background(skill_name: str, script_filename: str, script_ar
     if isinstance(prepared, str):
         return prepared
     cmd, workdir = prepared
+    env, guard_dir = _run_script_guard_env(workdir)
 
     _purge_stale_background_jobs()
 
@@ -2014,9 +2085,11 @@ async def run_script_background(skill_name: str, script_filename: str, script_ar
             cwd=str(workdir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=_subprocess_env(),
+            env=env,
         )
     except OSError as e:
+        if guard_dir is not None:
+            shutil.rmtree(guard_dir, ignore_errors=True)
         return f"エラー: スクリプトを起動できませんでした: {e}"
 
     job_id = uuid.uuid4().hex[:12]
@@ -2031,6 +2104,7 @@ async def run_script_background(skill_name: str, script_filename: str, script_ar
         status="running",
         returncode=None,
         error_message=None,
+        guard_dir=guard_dir,
     )
     job.runner_task = asyncio.create_task(_run_background_job(job))
     _BACKGROUND_JOBS[job_id] = job
@@ -2205,42 +2279,43 @@ def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float
     return "[生成/更新ファイル]\n" + "\n".join(lines)
 
 
-def _python_fs_guard_preamble(allowed_roots: Sequence[Path], guarded_root: Path) -> str:
-    """execute_python_code が実行するコードの先頭に連結する、プロジェクト
-    フォルダ保護用のガードコードを生成する。
+def _python_fs_guard_preamble(allowed_roots: Sequence[Path]) -> str:
+    """execute_python_code / run_script が実行するコードの先頭（または
+    サブプロセスの sitecustomize.py）に連結する、書き込みサンドボックス用の
+    ガードコードを生成する。
 
-    LLMが生成したコードは絶対パスや `..` で任意の場所へ書き込めてしまい、
-    cwd を作業用ディレクトリに絞るだけでは `src/tools.py` や `config.ini`
-    のようなプロジェクト本体のファイルを誤って書き換える事故を防げない。
+    LLMが生成したコードや、スキルの scripts/ 配下のスクリプトは絶対パスや
+    `..` で任意の場所へ書き込めてしまい、cwd を作業用ディレクトリに絞る
+    だけでは他ドライブやプロジェクト本体を誤って書き換える事故を防げない。
     ここで生成するコードは、サブプロセス内で `open`/`os`/`shutil` の
-    書き込み・削除・改名系関数をモンキーパッチし、guarded_root（通常
-    PROJECT_ROOT）配下への操作を allowed_roots（作業ディレクトリと
-    default_workdir）配下を除いてブロックする。guarded_root の外側
-    （ユーザーが指定した他ドライブのデータフォルダ等）は従来通り無制限
-    のまま。悪意ある回避（ctypes直叩き等）までは防げないベストエフォート
-    のガードであり、あくまで「LLMが悪気なくプロジェクトを触ってしまう」
-    事故防止が目的（run_script は既存の承認済みスクリプトしか実行できず
-    任意コード実行ではないため、この関数の対象外）。
+    書き込み・削除・改名系関数をモンキーパッチし、allowed_roots（作業
+    ディレクトリと default_workdir）配下以外への操作を場所を問わず
+    ブロックする（原則「書き込みは常にサンドボックス配下限定」。以前は
+    Locohaneのプロジェクトフォルダだけを保護し、それ以外のドライブ・
+    フォルダへの書き込みは無制限に許可していたが、それでは
+    「作業ディレクトリの外に書き込まれる」事故を防げないため、常に
+    allowed_roots 配下限定へ強化した）。悪意ある回避（ctypes直叩き等）
+    までは防げないベストエフォートのガードであり、あくまで「LLMが
+    悪気なく意図しない場所に書き込んでしまう」事故防止が目的。
 
     加えて、`subprocess.Popen`（`run`/`call`/`check_call`/`check_output`
     もこれを経由する）・`os.system`・`os.popen` をモンキーパッチし、
     コマンド名（basename、拡張子は無視）が git / npm / pip / pip3 の
     いずれかに一致する場合は場所を問わず PermissionError にする。
-    execute_python_code に生成させたコードが誤ってリポジトリ操作や
-    パッケージインストールを行う事故を防ぐためで、こちらは
-    allowed_roots による除外はない（常に全面禁止）。
+    生成・実行させたコードが誤ってリポジトリ操作やパッケージインストールを
+    行う事故を防ぐためで、こちらは allowed_roots による除外はない
+    （常に全面禁止）。
 
     Args:
-        allowed_roots: guarded_root 配下でも書き込み・削除を許可する
-            ディレクトリの一覧（実行用ディレクトリと default_workdir）。
-        guarded_root: 保護対象のルートディレクトリ（PROJECT_ROOT）。
+        allowed_roots: 書き込み・削除を許可するディレクトリの一覧
+            （実行用ディレクトリと default_workdir）。
 
     Returns:
-        コード文字列の先頭に連結する、モンキーパッチ処理のPythonソース。
-        呼び出し元のコード自体には何も変更を加えない。
+        コード文字列の先頭に連結する、あるいは sitecustomize.py として
+        そのまま配置できるモンキーパッチ処理のPythonソース。呼び出し元の
+        コード自体には何も変更を加えない。
     """
     allowed_repr = ", ".join(repr(str(p)) for p in allowed_roots)
-    guarded_repr = repr(str(guarded_root))
     return f'''\
 import builtins as _guard_builtins
 import io as _guard_io
@@ -2248,7 +2323,6 @@ import os as _guard_os
 import shutil as _guard_shutil
 
 _GUARD_ALLOWED = [_guard_os.path.realpath(_p) for _p in ({allowed_repr},)]
-_GUARD_ROOT = _guard_os.path.realpath({guarded_repr})
 
 
 def _guard_check(_path, _op):
@@ -2256,14 +2330,12 @@ def _guard_check(_path, _op):
         _target = _guard_os.path.realpath(_guard_os.fspath(_path))
     except TypeError:
         return
-    if _target != _GUARD_ROOT and not _target.startswith(_GUARD_ROOT + _guard_os.sep):
-        return
     for _root in _GUARD_ALLOWED:
         if _target == _root or _target.startswith(_root + _guard_os.sep):
             return
     raise PermissionError(
-        f"[execute_python_codeガード] プロジェクトフォルダ内は{{_op}}できません: {{_path}}\\n"
-        "default_workdir配下のみ書き込み・削除可能です。"
+        f"[書き込みサンドボックスガード] 作業ディレクトリ配下以外は{{_op}}できません: {{_path}}\\n"
+        "作業ディレクトリ（またはdefault_workdir）配下のみ書き込み・削除可能です。"
     )
 
 
@@ -2425,14 +2497,15 @@ async def execute_python_code(code: str) -> str:
     簡易なスクリプト実行やプロトタイピングに限定し、複雑なデータ処理や
     大規模なファイル操作は避ける。
 
-    **重要: プロジェクトフォルダは書き込み・削除できない**
-    このコードは実行前ガードにより、Locohaneのプロジェクトフォルダ配下
-    （src/・app.py・config.ini・skills/ 等）への書き込み・削除・改名が
-    default_workdir配下を除いて自動的にブロックされる（PermissionErrorで
-    失敗する）。プロジェクト自体の設定やソースコードを変更する必要が
+    **重要: 書き込みは作業ディレクトリ配下限定（サンドボックス）**
+    このコードは実行前ガードにより、書き込み・削除・改名の類が作業
+    ディレクトリと default_workdir 配下以外では自動的にブロックされる
+    （PermissionErrorで失敗する。Locohaneのプロジェクトフォルダ
+    〔src/・app.py・config.ini・skills/ 等〕はもちろん、それ以外の
+    任意のドライブ・フォルダも含めて、作業ディレクトリの外への書き込みは
+    一切できない）。プロジェクト自体の設定やソースコードを変更する必要が
     ある場合はこのツールを使わず、ユーザーへ直接の編集を依頼すること。
-    default_workdir配下や、それ以外の任意のドライブ・フォルダ（ユーザーが
-    指定した作業対象データ）への読み書きは従来通り制限されない。
+    読み取りはこのガードの対象外で従来通り制限されない。
 
     Args:
         code: 実行する Python コード全文。path_memory の @N トークン
@@ -2463,7 +2536,7 @@ async def execute_python_code(code: str) -> str:
         before_snapshot = {}
 
     try:
-        _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR], _PROJECT_ROOT)
+        _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR])
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
@@ -2476,7 +2549,7 @@ async def execute_python_code(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
-            _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR], _PROJECT_ROOT)
+            _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR])
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
             tmp.write(_fs_guard + code)
             tmp.close()
@@ -2569,14 +2642,15 @@ async def execute_python_code_background(code: str) -> str:
     簡易なスクリプト実行やプロトタイピングに限定し、複雑なデータ処理や
     大規模なファイル操作は避ける。
 
-    **重要: プロジェクトフォルダは書き込み・削除できない**
-    このコードは実行前ガードにより、Locohaneのプロジェクトフォルダ配下
-    （src/・app.py・config.ini・skills/ 等）への書き込み・削除・改名が
-    default_workdir配下を除いて自動的にブロックされる（PermissionErrorで
-    失敗する）。プロジェクト自体の設定やソースコードを変更する必要が
+    **重要: 書き込みは作業ディレクトリ配下限定（サンドボックス）**
+    このコードは実行前ガードにより、書き込み・削除・改名の類が作業
+    ディレクトリと default_workdir 配下以外では自動的にブロックされる
+    （PermissionErrorで失敗する。Locohaneのプロジェクトフォルダ
+    〔src/・app.py・config.ini・skills/ 等〕はもちろん、それ以外の
+    任意のドライブ・フォルダも含めて、作業ディレクトリの外への書き込みは
+    一切できない）。プロジェクト自体の設定やソースコードを変更する必要が
     ある場合はこのツールを使わず、ユーザーへ直接の編集を依頼すること。
-    default_workdir配下や、それ以外の任意のドライブ・フォルダ（ユーザーが
-    指定した作業対象データ）への読み書きは従来通り制限されない。
+    読み取りはこのガードの対象外で従来通り制限されない。
 
     Args:
         code: 実行する Python コード全文。
@@ -2603,7 +2677,7 @@ async def execute_python_code_background(code: str) -> str:
         before_snapshot = {}
 
     try:
-        _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR], _PROJECT_ROOT)
+        _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR])
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
@@ -2616,7 +2690,7 @@ async def execute_python_code_background(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
-            _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR], _PROJECT_ROOT)
+            _fs_guard = _python_fs_guard_preamble([workdir.parent, _DEFAULT_WORKDIR])
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
             tmp.write(_fs_guard + code)
             tmp.close()
