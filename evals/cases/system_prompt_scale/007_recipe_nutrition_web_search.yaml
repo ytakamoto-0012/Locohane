@@ -44,7 +44,7 @@ judge: |
   ブロッコリーとじゃがいものポタージュ／玉ねぎとにんじんのフライの3品、
   IMG_2195.JPGにささみのマヨネーズ焼き／サバのしょうが煮／シシャモの変わり揚げの
   3品、各画像とも1枚に3品が並んだ合成ダミー画像）。委譲の分割粒度・大量ファイル時の
-  トークン管理は002側で検証済みのため対象外とし、ここでは栄養情報の扱いだけを見る。
+  トークン管理は006側で検証済みのため対象外とし、ここでは栄養情報の扱いだけを見る。
 
   **前提（本評価基盤の制約）**: `dispatch_agent(agent_type="worker")` 内部で
   worker が実際に呼んだツール（`run_script` による web-search skill 呼び出し等）は
@@ -67,7 +67,7 @@ judge: |
   3. `dispatch_agent(agent_type="worker")` への**最初の**委譲より前に、
      create_plan → approve_plan を経由しているか（計画未承認のまま委譲し、
      書き込みがブロックされて読み取り結果が無駄になっている場合は不合格。
-     002側で過去に実際に観測された退行と同種）。
+     006側で過去に実際に観測された退行と同種）。
   4. workerから返ってきた最終回答（ToolMessage）が、「Web検索で栄養情報を調べて
      記載した」という趣旨を含んでいるか、または少なくとも処理件数・書き出し件数の
      要約になっているか（読み取った本文やレシピ全文のコピーになっていないか）。
@@ -88,7 +88,7 @@ notes: >-
   切り出して検証するために追加した派生ケース。evals/fixtures/レシピ_栄養検索
   （2026-08-08作成）は evals/fixtures/レシピ/images の先頭2枚
   （IMG_2194.JPG, IMG_2195.JPG、各3品・計6品の合成ダミー画像）のみを使う
-  最小規模フィクスチャで、002系より大幅に短時間で完走する想定。
+  最小規模フィクスチャで、006系より大幅に短時間で完走する想定。
 
   本評価基盤（evals/run_case.py）は dispatch_agent（サブエージェント委譲）内部の
   ツール呼び出しを transcript に記録しない設計（サブエージェントの思考・
@@ -99,7 +99,7 @@ notes: >-
   「workerの最終回答の質」という間接的な代理指標で判定する設計になっている。
   work_dir はケース実行時に一時ディレクトリへコピーされてから使われるため
   （run_case.py の shutil.copytree）、フィクスチャ本体は実行のたびに汚染されない。
-  /tune-prompt の自動ループには含めない（002系と同じ理由: 実行に時間がかかる、
+  /tune-prompt の自動ループには含めない（006系と同じ理由: 実行に時間がかかる、
   web-search skillのAPIキー・レート制限に依存する）。
-  `python -m evals.run_case evals/cases/system_prompt_scale/003_recipe_nutrition_web_search.yaml`
+  `python -m evals.run_case evals/cases/system_prompt_scale/007_recipe_nutrition_web_search.yaml`
   で手動実行する（`run_all.py` は使わない）。

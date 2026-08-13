@@ -304,5 +304,5 @@ notes: >-
   画像を伴うvision呼び出しを複数回含み、複数ファイルを開いて回る分の
   ツール呼び出しも多く、ローカルllama-serverでの実行に時間がかかる見込みのため
   system_prompt_scale に置き、/tune-prompt の自動ループには含めない。
-  `python -m evals.run_case evals/cases/system_prompt_scale/004_eiken_wordlist_test_pdf_generation.yaml`
+  `python -m evals.run_case evals/cases/system_prompt_scale/008_eiken_wordlist_test_pdf_generation.yaml`
   で手動実行する（`run_all.py` は使わない）。

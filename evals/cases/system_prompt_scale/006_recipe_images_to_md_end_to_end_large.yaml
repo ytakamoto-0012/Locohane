@@ -88,6 +88,6 @@ notes: >-
   読み取り＋書き出しが worker サブエージェント内で発生するため、ローカル
   llama-serverでは実行に数十分〜数時間かかる見込み。重量級のため
   system_prompt_scale に置き、/tune-prompt の自動ループには含めない。
-  `python -m evals.run_case evals/cases/system_prompt_scale/002_recipe_images_to_md_end_to_end_large.yaml`
+  `python -m evals.run_case evals/cases/system_prompt_scale/006_recipe_images_to_md_end_to_end_large.yaml`
   で手動実行する（`run_all.py` は使わない。001ケースはこのチューニング
   対象には含めない）。
