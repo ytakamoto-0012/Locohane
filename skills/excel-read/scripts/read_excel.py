@@ -3,23 +3,23 @@
 excel-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script から
     python read_excel.py <file_path> [--sheet <シート名またはインデックス>]
-                          [--offset N] [--limit N] [--data-only] [--include-style]
+                          [--offset N] [--limit N] [--data-only]
 の形で呼ばれる。
 
 拡張子でライブラリを切り替える:
-- .xlsx / .xlsm -> openpyxl（既定は読み取り専用モード）
+- .xlsx / .xlsm -> openpyxl（style取得のため常に通常モードで読む）
 - .xls          -> xlrd（xlrd 2.x はレガシー .xls 専用。.xlsx は読めない。
-                    --include-styleは非対応）
+                    styleは非対応で常に値のみ）
 
 --sheet を省略した場合はシート名と行数・列数の一覧のみを返す（大きいファイルを
 うっかり全件読み込まないための既定動作）。--sheet を指定した場合のみセル
 データ本体を --offset/--limit の範囲で返す。
 
---include-style を付けると、書き込んだ太字・背景色・セル結合・構造化テーブル
-などが意図通りかを読み返して検証できるようになる（既定では返らない）。この
-場合セル単位の書式（apply_styleと同じキー体系）に加え、シート全体の
-merged_cells/tablesも返すが、openpyxlのread_onlyモードが使えなくなるぶん
-通常モードよりメモリ効率は落ちる。
+xlsx/xlsmでは--sheet指定時、太字・背景色・セル結合・構造化テーブルなどの
+style情報も常に合わせて返す（低パラメータモデルでもstyle情報を見落とさず
+不具合判断できるようにするため）。セル単位の書式（apply_styleと同じキー体系）
+に加え、シート全体のmerged_cells/tablesも返す。openpyxlのread_onlyモードは
+使わないため、通常モードよりメモリ効率は落ちる。
 """
 
 from __future__ import annotations
@@ -76,10 +76,8 @@ def _run_queries(ws, queries: list[dict], max_row: int) -> list[dict]:
     return results
 
 
-def _cell_json(cell, include_style: bool) -> object:
+def _cell_json(cell) -> object:
     value = cell_to_json(cell.value)
-    if not include_style:
-        return value
     style = extract_style(cell)
     return {"value": value, "style": style} if style else {"value": value}
 
@@ -90,7 +88,6 @@ def _read_xlsx(
     offset: int,
     limit: int,
     data_only: bool,
-    include_style: bool,
     queries: list[dict] | None = None,
 ) -> dict:
     import openpyxl
@@ -98,7 +95,7 @@ def _read_xlsx(
     if queries and sheet_arg is None:
         raise ValueError("--query-json は --sheet 指定時のみ使えます")
 
-    wb = openpyxl.load_workbook(str(path), data_only=data_only, read_only=not include_style)
+    wb = openpyxl.load_workbook(str(path), data_only=data_only, read_only=False)
     try:
         names = wb.sheetnames
         if sheet_arg is None:
@@ -116,7 +113,7 @@ def _read_xlsx(
             max_row = min(total_rows, offset + limit)
             if offset < max_row:
                 for row in ws.iter_rows(min_row=offset + 1, max_row=max_row):
-                    rows.append([_cell_json(cell, include_style) for cell in row])
+                    rows.append([_cell_json(cell) for cell in row])
         result = {
             "path": str(path),
             "mode": "rows",
@@ -127,64 +124,63 @@ def _read_xlsx(
             "end_row": offset + len(rows) if rows else None,
             "rows": rows,
         }
-        if include_style:
-            result["merged_cells"] = [str(r) for r in ws.merged_cells.ranges]
-            result["tables"] = [
-                {
-                    "name": t.name,
-                    "range": t.ref,
-                    "style": t.tableStyleInfo.name if t.tableStyleInfo else None,
-                }
-                for t in ws.tables.values()
-            ]
-            # 列幅を取得（返却範囲の列のみ）
-            from openpyxl.utils import get_column_letter
-            column_widths = {}
-            if rows:
-                min_col = 1
-                max_col = len(rows[0]) if rows else 0
-                for col_idx in range(min_col, min_col + max_col):
-                    letter = get_column_letter(col_idx)
-                    width = ws.column_dimensions[letter].width
-                    column_widths[letter] = width
-            result["column_widths"] = column_widths
+        result["merged_cells"] = [str(r) for r in ws.merged_cells.ranges]
+        result["tables"] = [
+            {
+                "name": t.name,
+                "range": t.ref,
+                "style": t.tableStyleInfo.name if t.tableStyleInfo else None,
+            }
+            for t in ws.tables.values()
+        ]
+        # 列幅を取得（返却範囲の列のみ）
+        from openpyxl.utils import get_column_letter
+        column_widths = {}
+        if rows:
+            min_col = 1
+            max_col = len(rows[0]) if rows else 0
+            for col_idx in range(min_col, min_col + max_col):
+                letter = get_column_letter(col_idx)
+                width = ws.column_dimensions[letter].width
+                column_widths[letter] = width
+        result["column_widths"] = column_widths
 
-            # 行の高さを取得（返却範囲のみ）
-            row_heights = {}
-            if rows:
-                for row_offset, row in enumerate(rows):
-                    row_num = offset + 1 + row_offset
-                    height = ws.row_dimensions[row_num].height
-                    if height is not None:
-                        row_heights[str(row_num)] = height
-            result["row_heights"] = row_heights
-
-            # 列幅超過の警告を生成
-            warnings = []
+        # 行の高さを取得（返却範囲のみ）
+        row_heights = {}
+        if rows:
             for row_offset, row in enumerate(rows):
                 row_num = offset + 1 + row_offset
-                for col_idx, cell in enumerate(row):
-                    col_letter = get_column_letter(col_idx + 1)
-                    cell_width = column_widths.get(col_letter)
-                    # include_style時は _cell_json が {"value": ..., "style": {...}} の dict を返す
-                    cell_value = cell.get("value")
-                    wrap_text = cell.get("style", {}).get("wrap_text", False)
-                    # wrap_text が有効でない場合のみチェック
-                    if cell_width is not None and not wrap_text:
-                        text_value = str(cell_value) if cell_value is not None else ""
-                        if text_value:
-                            display_width = _display_width(text_value)
-                            # 列幅に2を加えたデフォルト幅（_apply_col_widths のロジックに合わせる）
-                            target_width = min(max(cell_width + 2, 8), 60)
-                            if display_width > target_width:
-                                cell_ref = f"{resolved}!{col_letter}{row_num}"
-                                msg = (
-                                    f"'{cell_ref}' の文字列(推定幅{display_width:.1f})が"
-                                    f"列幅({cell_width:.1f})を超えており、表示が切れる可能性があります"
-                                )
-                                warnings.append(msg)
-            if warnings:
-                result["warnings"] = warnings
+                height = ws.row_dimensions[row_num].height
+                if height is not None:
+                    row_heights[str(row_num)] = height
+        result["row_heights"] = row_heights
+
+        # 列幅超過の警告を生成
+        warnings = []
+        for row_offset, row in enumerate(rows):
+            row_num = offset + 1 + row_offset
+            for col_idx, cell in enumerate(row):
+                col_letter = get_column_letter(col_idx + 1)
+                cell_width = column_widths.get(col_letter)
+                # 各セルは _cell_json が {"value": ..., "style": {...}} の dict を返す
+                cell_value = cell.get("value")
+                wrap_text = cell.get("style", {}).get("wrap_text", False)
+                # wrap_text が有効でない場合のみチェック
+                if cell_width is not None and not wrap_text:
+                    text_value = str(cell_value) if cell_value is not None else ""
+                    if text_value:
+                        display_width = _display_width(text_value)
+                        # 列幅に2を加えたデフォルト幅（_apply_col_widths のロジックに合わせる）
+                        target_width = min(max(cell_width + 2, 8), 60)
+                        if display_width > target_width:
+                            cell_ref = f"{resolved}!{col_letter}{row_num}"
+                            msg = (
+                                f"'{cell_ref}' の文字列(推定幅{display_width:.1f})が"
+                                f"列幅({cell_width:.1f})を超えており、表示が切れる可能性があります"
+                            )
+                            warnings.append(msg)
+        if warnings:
+            result["warnings"] = warnings
         if queries:
             result["query_results"] = _run_queries(ws, queries, total_rows)
         return result
@@ -244,11 +240,6 @@ def main() -> int:
         help="xlsx/xlsmで数式ではなく最後にExcelが計算したキャッシュ値を返す（xlsのみ影響なし）",
     )
     parser.add_argument(
-        "--include-style",
-        action="store_true",
-        help="太字・背景色等の書式、セル結合、構造化テーブルも合わせて返す（.xlsx/.xlsmのみ対応。既定offで通常より読み込みが重くなる）",
-    )
-    parser.add_argument(
         "--query-json",
         default=None,
         help=(
@@ -270,9 +261,6 @@ def main() -> int:
     offset = max(args.offset, 0)
     limit = max(args.limit, 0)
 
-    if ext == ".xls" and args.include_style:
-        print("--include-style は .xlsx/.xlsm のみ対応です", file=sys.stderr)
-        return 1
     if ext == ".xls" and args.query_json:
         print("--query-json は .xlsx/.xlsm のみ対応です", file=sys.stderr)
         return 1
@@ -290,7 +278,7 @@ def main() -> int:
 
     try:
         if ext in (".xlsx", ".xlsm"):
-            result = _read_xlsx(path, args.sheet, offset, limit, args.data_only, args.include_style, queries)
+            result = _read_xlsx(path, args.sheet, offset, limit, args.data_only, queries)
         elif ext == ".xls":
             result = _read_xls(path, args.sheet, offset, limit)
         else:

@@ -1,6 +1,6 @@
 ---
 name: excel-read
-description: xlsx/xlsm/xlsファイルの読み込み専用スキル（シート一覧・セルデータの取得）。数式セルは数式文字列またはExcelが最後に計算した値のどちらかを選んで取得できる。既存xlsx/xlsmに書式（太字・背景色・罫線・結合セル・構造化テーブル）を検証したいときはセル単位のstyle情報も取得できる。Excel本体は不要（openpyxlで直接読む）。ユーザーがExcelファイルの中身を確認・要約・検索したいとき、表データの値を読み取りたいとき、書き込んだ内容や書式が正しく反映されているか検証したいときに使う。VBAマクロコードを読みたい場合はexcel-vba-read、罫線・グラフ・レイアウトを画像として見たい場合はexcel-render、値の新規作成・編集はexcel-editを使う。
+description: xlsx/xlsm/xlsファイルの読み込み専用スキル（シート一覧・セルデータの取得）。数式セルは数式文字列またはExcelが最後に計算した値のどちらかを選んで取得できる。xlsx/xlsmはセルの値に加えて書式（太字・背景色・罫線・結合セル・構造化テーブル）のstyle情報も常に取得できる。Excel本体は不要（openpyxlで直接読む）。ユーザーがExcelファイルの中身を確認・要約・検索したいとき、表データの値を読み取りたいとき、書き込んだ内容や書式が正しく反映されているか検証したいときに使う。VBAマクロコードを読みたい場合はexcel-vba-read、罫線・グラフ・レイアウトを画像として見たい場合はexcel-render、値の新規作成・編集はexcel-editを使う。
 license: MIT
 metadata:
   author: ytakamoto
@@ -30,7 +30,6 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 | `--offset` | 任意 | 整数文字列 | `"0"` | 読み飛ばす行数（0始まり）。分割読み込み時に前回の`end_row`をそのまま次回`offset`に使う |
 | `--limit` | 任意 | 整数文字列 | `"200"` | 読み込む最大行数。大きい表でも一度に全件読まず、`total_rows`を見ながら分割読み込みする |
 | `--data-only` | 任意・値なしフラグ | - | 付けない＝数式文字列を返す | 数式セルを数式文字列ではなくExcelが最後に計算したキャッシュ値で返す。`.xlsx`/`.xlsm`のみ有効（`.xls`は常に値のみで無関係） |
-| `--include-style` | 任意・値なしフラグ | - | 付けない＝style情報なし | 太字・背景色・結合セル・構造化テーブル等のstyle情報も返す。`.xlsx`/`.xlsm`のみ対応（`.xls`指定はエラー）。`read_only=False`で読むため既定より低速 |
 | `--query-json` | 任意 | 文字列（JSON配列を1行化） | なし | 構造化クエリ（詳細は下記「構造化クエリ」節）。`.xlsx`/`.xlsm`のみ対応かつ`--sheet`必須（`.xls`指定・`--sheet`省略はエラー） |
 
 `--sheet`を省略した場合はシート一覧のみを返す（大きいファイルを誤って全件読み込まないための既定動作）。それ以外の引数はすべて省略可。
@@ -49,18 +48,18 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
    - `--offset`/`--limit`: セル値を上から順に読みたいときに使う。1回あたり`--limit`行ずつ`rows`に返る。`total_rows`を見て続きが要るか判断し、次回`--offset`に前回の`end_row`を渡して続きから読む。
    - `--query-json`: 列の値ごとの行範囲（グルーピング列の範囲確認、`insert_rows`/`merge_cells`後の検証など）を知りたいときに使う（下記「構造化クエリ」節）。生の`rows`を目で数えて行範囲を手計算しない。`--offset`/`--limit`の指定値には影響されず、常にシート全体（1行目〜`total_rows`）が対象になる。`rows`本体が不要なら`--limit`は既定`200`のままでよい（`query_results`は`--limit`の値に関係なく全件返る）。
 4. 数式セルは既定で数式文字列（`"=SUM(A1:A10)"`）を返す。Excelが最後に計算した値が欲しければ`--data-only`（xlsxのみ、`rows`・`query_results`両方の値表示に影響する）。数式を書き込んだ直後の最新値が欲しい場合は先にexcel-recalcスキルの`recalc_excel.py`を実行してから読み直す。
-5. excel-editスキルの`edit_excel.py`で書いた書式（太字・背景色・結合・テーブル）を検証したいときだけ`--include-style`を付ける（`read_only=False`でファイル全体を読むため既定より遅い。大きいファイルでは必要時のみ）。`--query-json`の`query_results`にはstyle情報は含まれない（`rows`側のみ`--include-style`が効く）。
+5. `.xlsx`/`.xlsm`は`--sheet`指定時、excel-editスキルの`edit_excel.py`で書いた書式（太字・背景色・結合・テーブル）も含めセル単位のstyle情報を常に返す（`read_only=False`でファイル全体を読むため`.xls`より低速）。`--query-json`の`query_results`にはstyle情報は含まれない（`rows`側のみ）。
 
 ## 出力
 
-`result_path`（JSONファイル）のトップレベルキーはどちらのモードでも`path`（読み込んだファイルパス）と`mode`（`"sheets"`または`"rows"`）を含む。それ以外は`--sheet`の有無・`--include-style`・`--query-json`の組み合わせで変わる。
+`result_path`（JSONファイル）のトップレベルキーはどちらのモードでも`path`（読み込んだファイルパス）と`mode`（`"sheets"`または`"rows"`）を含む。それ以外は`--sheet`の有無・拡張子（`.xlsx`/`.xlsm`か`.xls`か）・`--query-json`の組み合わせで変わる。
 
 **シート一覧モード**（`--sheet`省略時）: `sheets`＝各要素`{"name","max_row","max_column"}`のリストのみ。
 
 **セルデータモード**（`--sheet`指定時）共通キー: `sheet`（解決後のシート名）、`total_rows`/`total_columns`（シート全体の行数・列数）、`start_row`/`end_row`（今回`rows`に含まれる1始まり行番号の範囲。1行も返らなければ両方`null`。次回`--offset`にはこの`end_row`をそのまま渡せる）、`rows`（1行1配列のリスト、`--offset`/`--limit`の範囲のみ）。
 
-- `rows`のセル値（`--include-style`なし時）: 日付/時刻はISO8601文字列、空セルは`null`、数式セルは既定で数式文字列（例`"=SUM(A1:A10)"`）、`--data-only`を付けるとExcelが最後に計算したキャッシュ値（例`15`）に変わる。
-- `--include-style`ありのとき: `rows`の各セルが`{"value":..., "style":{...}}`（`value`部分は上記と同じ規則）に加え、トップレベルに`merged_cells`（シート全体、offset/limit範囲に関わらず全件）と`tables`（構造化テーブル一覧）が付く。`style`のキー体系:
+- `.xls`のとき: `rows`のセル値は日付/時刻はISO8601文字列、空セルは`null`（style情報は非対応）。
+- `.xlsx`/`.xlsm`のとき: `rows`の各セルが`{"value":..., "style":{...}}`。`value`は日付/時刻はISO8601文字列、空セルは`null`、数式セルは既定で数式文字列（例`"=SUM(A1:A10)"`）、`--data-only`を付けるとExcelが最後に計算したキャッシュ値（例`15`）に変わる。加えてトップレベルに`merged_cells`（シート全体、offset/limit範囲に関わらず全件）と`tables`（構造化テーブル一覧）が付く。`style`のキー体系:
 ```json
 {"bold": true, "italic": false, "font_color": "0000FF", "font_size": 11,
  "fill_color": "FFFF00", "number_format": "#,##0.00",
@@ -68,11 +67,11 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
  "border": "thin"}
 ```
 既定値と一致する項目は省略、書式なしセルは`style`キー自体省略。
-- `--include-style`ありのとき追加フィールド:
+- `.xlsx`/`.xlsm`の追加フィールド:
   - `column_widths`: 返却範囲に含まれる各列の幅（`{"A": 12.3, "B": null, ...}`）。未設定列は`null`。
   - `row_heights`: 返却範囲（`start_row`〜`end_row`）の各行の高さ（`{"3": 15.0, ...}`）。未設定行は省略。
   - `warnings`: 構造的な不備の警告配列（該当なしならキー省略）。`wrap_text`が有効でないセルで、推定表示幅が列幅を超えている場合に文字切れの可能性を指摘。
-- `--query-json`ありのとき: 上記`rows`一式に加え、トップレベルに`query_results`が付く。**`query_results`は`--offset`/`--limit`の範囲に関わらずシート全体が対象**（詳細・例は次の「構造化クエリ」節）。
+- `--query-json`ありのとき: 上記`rows`一式に加え、トップレベルに`query_results`が付く。**`query_results`は`--offset`/`--limit`の範囲に関わらずシート全体が対象**（詳細・例は次の「構造化クエリ」節）。`query_results`にはstyle情報は含まれない。
 
 ## 構造化クエリ（`--query-json`、必須ルール）
 
@@ -99,7 +98,7 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 
 ## エッジケース
 
-ファイル不在／拡張子がxlsx・xlsm・xls以外／シート未検出／破損ファイルはエラー＋終了コード1。`--include-style`/`--query-json`は`.xls`非対応。
+ファイル不在／拡張子がxlsx・xlsm・xls以外／シート未検出／破損ファイルはエラー＋終了コード1。`.xls`はstyle情報・`--query-json`非対応（`--query-json`指定時のみエラー、style情報はそもそも`.xlsx`/`.xlsm`限定で自動的に付かない）。
 
 ## 見た目の確認について
 
