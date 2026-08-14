@@ -384,6 +384,17 @@ class Config:
             維持したまま steps だけ差し替える（未承認状態からの呼び出しは
             この設定に関わらず常に Plan Mode のまま）。
             （config.ini の [plan].reset_approval_on_recreate 由来）。
+        plan_require_planner_dispatch: create_plan を呼ぶ前に、同一ターンで
+            dispatch_agent(agent_type="planner") が完了していることを必須に
+            するか。True（既定）なら、未実施の場合 create_plan はエラーを
+            返しブロックする（本番インシデント: 2026-08-14, planner委譲を
+            一度も経ずにメインエージェントが自分の記憶だけでworkerへの
+            委譲タスク文を執筆し、内部で自己矛盾した指示を書いてしまい
+            annual_schedule.xlsx の修正が失敗した事例を受けて追加）。
+            create_plan が成功するたびにフラグは消費（False へリセット）
+            されるため、同一ターン内で create_plan を複数回呼ぶ場合は
+            その都度 planner を呼び直す必要がある。
+            （config.ini の [plan].require_planner_dispatch 由来）。
         thinking_loop_guard_enabled: LLM応答（thinking/本文）のストリーミング中に
             反復ループを検知したら生成を打ち切って再試行する機能の有効/無効。
         thinking_loop_guard_window_chars: ループ検知の判定対象に使う
@@ -620,6 +631,7 @@ class Config:
     # --- Plan Mode / Edit Automatically バッジ（送信ボタン付近のUI） ---
     plan_badge_allow_unlock: bool
     plan_reset_approval_on_recreate: bool
+    plan_require_planner_dispatch: bool
 
     # --- LLM応答の反復ループ検知（src/llm.py の ChatLlamaCpp） ---
     thinking_loop_guard_enabled: bool
@@ -1494,6 +1506,9 @@ def load_config(config_path: Path | None = None) -> Config:
         plan_badge_allow_unlock=_as_bool(os.getenv("PLAN_BADGE_ALLOW_UNLOCK", plan_section.get("allow_badge_unlock", True))),
         plan_reset_approval_on_recreate=_as_bool(
             os.getenv("PLAN_RESET_APPROVAL_ON_RECREATE", plan_section.get("reset_approval_on_recreate", True))
+        ),
+        plan_require_planner_dispatch=_as_bool(
+            os.getenv("PLAN_REQUIRE_PLANNER_DISPATCH", plan_section.get("require_planner_dispatch", True))
         ),
         thinking_loop_guard_enabled=_as_bool(os.getenv("THINKING_LOOP_GUARD_ENABLED", thinking_loop_guard.get("enabled", True))),
         thinking_loop_guard_window_chars=int(os.getenv("THINKING_LOOP_GUARD_WINDOW_CHARS", thinking_loop_guard.get("window_chars", 600))),

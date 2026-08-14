@@ -252,6 +252,7 @@ _ASK_USER_QUESTION_TIMEOUT_SECONDS: int = 60
 _ASK_USER_CHOICE_TIMEOUT_SECONDS: int = 90
 _PLAN_BADGE_ALLOW_UNLOCK: bool = True
 _PLAN_RESET_APPROVAL_ON_RECREATE: bool = True
+_PLAN_REQUIRE_PLANNER_DISPATCH: bool = True
 
 # run_script は本来「書き込み系ツール」として一律に計画承認を要求するが、
 # 副作用のない純粋な読み取り専用スクリプトはここに (skill_name, script_filename)
@@ -308,6 +309,7 @@ def init_tools(
     plan_approval_exempt_scripts: Iterable[tuple[str, str]] = (),
     plans_dir: Path | None = None,
     plan_reset_approval_on_recreate: bool = True,
+    plan_require_planner_dispatch: bool = True,
 ) -> None:
     """ツールが使う設定を注入する（app 起動時に一度だけ呼ぶ）。
 
@@ -441,6 +443,11 @@ def init_tools(
             維持したまま steps だけ差し替える（未承認状態からの呼び出しは
             この設定に関わらず常に Plan Mode のまま）。
             （config.ini の [plan].reset_approval_on_recreate 由来）。
+        plan_require_planner_dispatch: create_plan を呼ぶ前に、同一ターンで
+            dispatch_agent(agent_type="planner") が完了していることを必須に
+            するか。True（既定）なら未実施の場合 create_plan はエラーを返す。
+            create_plan が成功するたびにフラグは消費される。
+            （config.ini の [plan].require_planner_dispatch 由来）。
 
     Returns:
         None。副作用としてモジュール globals を更新するのみ。
@@ -462,6 +469,7 @@ def init_tools(
     global _ASK_USER_CHOICE_TIMEOUT_SECONDS
     global _PLAN_BADGE_ALLOW_UNLOCK
     global _PLAN_RESET_APPROVAL_ON_RECREATE
+    global _PLAN_REQUIRE_PLANNER_DISPATCH
     global _DISPATCH_AGENT_MAX_PARALLEL
     global _TOOL_CALL_MAX_PARALLEL
     global _PLAN_APPROVAL_EXEMPT_SCRIPTS
@@ -498,6 +506,7 @@ def init_tools(
     _ASK_USER_CHOICE_TIMEOUT_SECONDS = ask_user_choice_timeout_seconds
     _PLAN_BADGE_ALLOW_UNLOCK = plan_badge_allow_unlock
     _PLAN_RESET_APPROVAL_ON_RECREATE = plan_reset_approval_on_recreate
+    _PLAN_REQUIRE_PLANNER_DISPATCH = plan_require_planner_dispatch
     _DISPATCH_AGENT_MAX_PARALLEL = dispatch_agent_max_parallel
     _TOOL_CALL_MAX_PARALLEL = graph_tool_max_parallel
     # 設定値の変更（再初期化）に追従できるよう、以前の値で生成済みの
@@ -3015,6 +3024,12 @@ def _finalize_dispatch_agent_job_result(job: "_DispatchAgentJob", job_id: str) -
     """
     if job.status == "completed":
         result = job.result or ""
+        if job.agent_type == "planner":
+            # create_plan の直前チェック（_PLAN_REQUIRE_PLANNER_DISPATCH）が
+            # 消費するフラグ。ここで完了を記録しておくことで、dispatch_agent
+            # が安全上限内に即応した場合・check_dispatch_agent_job経由で
+            # 後続ターンに完了を取得した場合の両方をカバーする。
+            cl.user_session.set("planner_dispatched_since_plan", True)
     elif job.status == "killed":
         result = f"stop_dispatch_agent_job により強制終了されました。\n{job.result or '（強制終了時点で最終回答は未生成でした）'}"
     else:  # "error"
@@ -3380,6 +3395,13 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     このツールでステップ一覧を提示する。作成しただけでは書き込み系ツールの
     ブロックは解除されない。承認を得るには続けて approve_plan を呼ぶこと。
 
+    設定（既定）により、このツールを呼ぶ前に同一ターンで
+    dispatch_agent(agent_type="planner") が完了している必要がある
+    （未実施の場合はエラーを返しブロックする）。調査で得た具体的事実と
+    ユーザー要求をplannerへ丸投げし、その草案を確認・調整してから steps/
+    detail_markdown を確定させること。自分の記憶・推測だけでsteps文言
+    （行番号・セル位置等の具体的数値を含む）を作らない。
+
     既に approve_plan で承認済み（Edit Automatically）の状態でこのツールを
     再度呼んで steps を差し替えると、config.ini の
     [plan].reset_approval_on_recreate が既定の true の場合、承認状態は
@@ -3426,6 +3448,14 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     for i, s in enumerate(steps):
         if not isinstance(s, dict) or not s.get("content") or not s.get("activeForm"):
             return f"エラー: steps[{i}] には content と activeForm の両方を" f"文字列で指定してください: {s!r}"
+    if _PLAN_REQUIRE_PLANNER_DISPATCH and not cl.user_session.get("planner_dispatched_since_plan"):
+        return (
+            "エラー: create_planの前にdispatch_agent(agent_type=\"planner\")を"
+            "呼んでください。調査で得た具体的事実とユーザー要求をplannerへ"
+            "過不足なく伝え、計画の草案を作らせてからcreate_planを呼び直すこと"
+            "（自分の記憶・推測だけでsteps/detail_markdownを構成しない）。"
+        )
+    cl.user_session.set("planner_dispatched_since_plan", False)
     plan = [{"content": s["content"], "activeForm": s["activeForm"], "status": "pending"} for s in steps]
     # 既に承認済み（Edit Automatically）だった場合にこの呼び出しでも承認状態を
     # 維持するかは config.ini の [plan].reset_approval_on_recreate で切り替え可能
