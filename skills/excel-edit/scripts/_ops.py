@@ -16,7 +16,7 @@ _OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
 if str(_OFFICE_SHARED) not in sys.path:
     sys.path.append(str(_OFFICE_SHARED))
 from excel_common import _display_width, column_index, group_column_values, resolve_sheet_name  # noqa: E402
-from _style import apply_style, resolve_theme
+from _style import apply_style, extract_style, resolve_theme
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference, ScatterChart
 from openpyxl.chart.label import DataLabelList
 from openpyxl.formatting.rule import (
@@ -91,7 +91,23 @@ def op_set_cell(wb, op: dict) -> None:
     ws = _sheet(wb, op["sheet"])
     cell = ws[op["cell"]]
     cell.value = op.get("value")
-    apply_style(cell, op.get("style"))
+    style = op.get("style")
+    if style is None and op.get("inherit_style"):
+        style = _neighbor_style(ws, cell, op.get("inherit_style_from", "left"))
+    apply_style(cell, style)
+
+
+def _neighbor_style(ws, cell, direction: str) -> dict:
+    """`inherit_style`指定時、隣接セルの書式を`extract_style`で読み取って返す。
+
+    表の一部の列だけを`delete_rows`+`set_range`で書き戻すと、渡さなかった
+    既存列は新規セルとして無書式のまま生成される（`_write_rows`のformat_table
+    対象列数はrowsの列数依存のため）。set_cellで値だけ書き戻す際、周囲の
+    セルと見た目を揃えたい場合にこのオプションで対応する。
+    """
+    deltas = {"left": (0, -1), "right": (0, 1), "above": (-1, 0), "below": (1, 0)}
+    dr, dc = deltas.get(direction, (0, -1))
+    return extract_style(ws.cell(row=cell.row + dr, column=cell.column + dc))
 
 
 def _write_rows(ws, min_row: int, min_col: int, op: dict) -> None:
@@ -101,6 +117,24 @@ def _write_rows(ws, min_row: int, min_col: int, op: dict) -> None:
     両方から呼ばれる共通実装。
     """
     rows = op.get("rows") or []
+    # rowsの列数がシート既存の最大列数より少ない場合に警告する。delete_rows等で
+    # 行を削除してから一部列だけのrowsでset_rangeを呼ぶと、渡さなかった列は
+    # 新規セルとして無書式・空値のまま生成され、元データ（他列の値・書式）が
+    # 無警告で失われる事故につながるため（2026-08-14 実害: annual_schedule.xlsx
+    # の週間予定表で、月・週の2列だけをrowsに渡してdelete_rows後にset_rangeした
+    # ところ、残り5列の実データ・罫線・背景色が消失した）。
+    existing_max_col = ws.max_column or 0
+    if rows:
+        write_max_col = min_col + max(len(row) for row in rows) - 1
+        if existing_max_col > write_max_col:
+            print(
+                f"警告: set_range/insert_row_groupは{min_col}〜{write_max_col}列目のみを"
+                f"書き込みますが、シートには{existing_max_col}列目までデータが存在します。"
+                "delete_rows等で行を削除した直後にこの呼び出しをした場合、渡さなかった列の"
+                "元データ・書式が失われている可能性があります。表の一部列だけを直したい場合は"
+                "set_cell/set_styleで対象セルのみ操作してください。",
+                file=sys.stderr,
+            )
     style = op.get("style")
     header_style = op.get("header_style", style)
     row_styles = op.get("row_styles")

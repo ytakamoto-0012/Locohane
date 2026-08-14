@@ -1797,6 +1797,21 @@ async def _run_context_compaction_visible(
     return compacted
 
 
+def _should_retry_after_loop(
+    loop_exc: ThinkingLoopDetected | None, loop_attempt: int, loop_max_retries: int
+) -> bool:
+    """ThinkingLoopDetected検知後にリトライすべきか判定する。
+
+    呼び出し側はTrueを見てリトライ処理（グラフ再構築・nudge注入）をした直後、
+    必ず`loop_exc = None`へリセットすること。リセットを怠ると、on_message内の
+    while Trueループが次の周回で新たな検知が無いのにloop_exc is not Noneの
+    ままとなり、正常完了したはずのターンまで誤ってリトライされ続ける
+    （2026-08-14 状態リークバグの回帰防止。turn_broken_exc側はハンドラが
+    必ずreturnするため同種のリークが起きず、リセット不要）。
+    """
+    return loop_exc is not None and loop_attempt < loop_max_retries
+
+
 @cl.on_message
 async def on_message(message: cl.Message) -> None:
     """Chainlit がユーザーからのメッセージを受け取るたびに呼ばれるフック。
@@ -2437,7 +2452,7 @@ async def on_message(message: cl.Message) -> None:
             continue
 
         if loop_exc is not None:
-            if loop_attempt < loop_max_retries:
+            if _should_retry_after_loop(loop_exc, loop_attempt, loop_max_retries):
                 # ThinkingLoopDetected 発生時は常に旧接続を強制クローズする。
                 # llama-server側で旧ストリームが残ったままになると、
                 # 新しいクライアントを使っても次のリトライが応答ヘッダー
@@ -2463,6 +2478,7 @@ async def on_message(message: cl.Message) -> None:
                 loop_attempt += 1
                 inputs = {"messages": [HumanMessage(content=text, id=nudge_id)]}
                 attempt += 1  # for range(total_retries + 1) の暗黙インクリメント相当
+                loop_exc = None  # このターンの検知を消費したので次周回へ持ち越さない（状態リーク防止）
                 continue
             await cl.Message(
                 content=(f"生成がループし、{loop_max_retries}回リトライしましたが" "改善しなかったため停止しました。"),

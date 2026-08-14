@@ -37,7 +37,7 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 | `add_sheet` | `name` | `index` | シート追加。同名シートが既存ならエラー（自動リネームに頼らず明示エラーにするため。既存シートへ追記したいなら`set_range`等にそのシート名を指定） |
 | `delete_sheet` | `name` | - | シート削除 |
 | `rename_sheet` | `name`,`new_name` | - | シート名変更 |
-| `set_cell` | `sheet`,`cell` | `value`,`style` | 単一セルへ値・書式設定 |
+| `set_cell` | `sheet`,`cell` | `value`,`style`,`inherit_style`,`inherit_style_from` | 単一セルへ値・書式設定。`style`省略時、対象セルが元々無書式の新規セル（例: `delete_rows`後に再生成された行）だと書式は付かない。周囲と見た目を揃えたい場合は`inherit_style:true`を指定すると、隣接セル（既定で左隣。`inherit_style_from`で`"left"`/`"right"`/`"above"`/`"below"`を選べる）の書式をコピーする |
 | `set_range` | `sheet`,`start_cell`,`rows` | `style`,`header_style`,`row_styles`,`format_table` | 起点セルから複数行を一括書込。`header_style`は1行目のみ適用。列幅は自動調整（全角=2文字換算、既存幅より縮まない）。**`header_style`を渡すと自動的に`format_table`相当（見出し配色・罫線・縞模様・見出し行固定・列幅調整）が既定で適用される**（`format_table:false`で無効化可。逆に`header_style`省略でも`format_table:true`で強制適用可） |
 | `set_style` | `sheet`,`range` | `style` | 値は変えず既存セルへ書式のみ適用 |
 | `format_table` | `sheet`,`range` | `theme`(下記参照),`header_fill`(既定`1F4E78`または`theme`のprimary),`header_font_color`(既定`FFFFFF`または`theme`のtext_on_primary),`band_fill`(既定`F2F2F2`),`banded`(既定true),`border`(既定`thin`),`freeze_header`(既定true),`autofit`(既定true) | 書き込み済みの表を後から仕上げる。`range`の1行目を見出しとみなす。本体行のフォント色・太字は変更しない（`role`色分けを壊さないため） |
@@ -193,6 +193,15 @@ xlsxとpptxを同じ資料セットとして作るときに見た目を揃えや
 4. 成功時`{"path":...,"sheets":[...],"applied_ops":N}`が返るので保存先パスを伝える。
 
 エッジケース: 拡張子がxlsx/xlsm以外／opsがJSON配列でない／opに`op`キーがない／存在しないシートやop種別を指定／未対応の`theme`名を指定／`--new`なしでファイル不在／`--new`かつ`--overwrite`なしで既存ファイル、はいずれもエラー＋終了コード1（何番目のどのopが失敗したかメッセージに含まれる。それを手がかりに修正して再実行）。
+
+## 既存の表の一部列だけを直したいとき（必須ルール）
+
+**複数列ある既存の表（例:A〜G列）のうち一部の列（例:A〜B列）だけを直したい場合、`delete_rows`で行削除してから`set_range`に直したい列分の`rows`だけを渡す、という操作はしない。** `set_range`/`insert_row_group`が新規生成するのは`rows`に含めた列だけで、渡さなかった列（この例ではC〜G列）は既存データが行削除で失われた上、新規セルとして無書式・空値のまま復元されない（値だけでなく罫線・背景色などの書式も消える）。この呼び出しをすると`[標準エラー]`に警告が出るので、出た場合は表の再構築ではなく次のいずれかへ切り替える。
+
+- 直したいセルだけを`set_cell`（値のみ、または`set_style`で書式のみ）で個別に操作する。
+- 表全体を作り直す必要がある場合は、`rows`に既存の全列分のデータ（値も書式も）を含めて渡す。
+
+`set_cell`で値だけを書き戻す際、対象セルが上記のように新規生成された無書式セルだと書式が付かない。周囲のセルと見た目を揃えたい場合は`inherit_style:true`（上記opsの一覧を参照）を使う。
 
 ## デザイン確認（必須ルール）
 
