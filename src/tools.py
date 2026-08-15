@@ -76,9 +76,9 @@ from langgraph.prebuilt import ToolNode
 from . import file_tools, memory, path_memory
 from .agent_types import AgentType
 from .config import (
-    Config,
     DEFAULT_DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE,
     DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE,
+    Config,
     expand_config_vars,
 )
 from .images import image_followup_message, is_image_file, to_data_url
@@ -103,6 +103,22 @@ _IN_SUBAGENT: contextvars.ContextVar[bool] = contextvars.ContextVar("_in_subagen
 # メインが読み直すのは重複ではなく正当な再取得である（同一集合で数えると、
 # 1件目のサブエージェントが読んで返しきれなかった画像を誰も読み直せなくなる）。
 _SUBAGENT_RUN_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("_subagent_run_id", default=None)
+
+# 現在実行中のサブエージェントの agent_type 名（サブエージェント外では None）。
+# _AGENT_TYPE_RUN_SCRIPT_SKILL_ALLOWLIST によるスキル制限のチェックに使う。
+_SUBAGENT_AGENT_TYPE: contextvars.ContextVar[str | None] = contextvars.ContextVar("_subagent_agent_type", default=None)
+
+# agent_type ごとに run_script で呼んでよいスキル名を制限する（未登録の
+# agent_type は制限なし）。agents/*.md のプロンプト文面だけでこの制約を
+# 課しているagent_typeは、低パラメータモデルでは指示を無視して他スキルの
+# 読み込み専用スクリプトまで呼んでしまうことがある（本番同等のeval
+# ケースで実際に発生: explore が本来analyze-docs専用のread_excel.pyを
+# 呼んでxlsxを調査し、analyze-docs向けの誤診断防止ルールが適用されない
+# まま処理が進んでしまった）。プロンプトの記述と実際の許可を一致させる
+# ため、コード側でも強制する。
+_AGENT_TYPE_RUN_SCRIPT_SKILL_ALLOWLIST: dict[str, frozenset[str]] = {
+    "explore": frozenset({"web-search"}),
+}
 
 
 def _duplicate_guard_session_key(base_key: str) -> str:
@@ -159,9 +175,7 @@ _TOOL_CALL_MAX_PARALLEL: int = 1
 _TOOL_CALL_SEMAPHORES: "dict[str | None, asyncio.Semaphore]" = {}
 
 
-def _get_session_semaphore(
-    registry: "dict[str | None, asyncio.Semaphore]", max_parallel: int
-) -> "asyncio.Semaphore | None":
+def _get_session_semaphore(registry: "dict[str | None, asyncio.Semaphore]", max_parallel: int) -> "asyncio.Semaphore | None":
     """現在のセッション（llm.get_current_session()）専用の Semaphore を
     registry から取得する。無ければ max_parallel で新規生成して登録する
     （評価ハーネス等、Chainlitセッションを持たない呼び出し元は session_id が
@@ -1160,9 +1174,7 @@ def get_tool_source(skill_name: str, script_filename: str) -> str:
         script_path = _resolve_script_filename(skill_name, script_filename)
     except ValueError as e:
         return f"エラー: {e}"
-    dup_error = _check_file_tools_duplicate(
-        "get_tool_source", f"get_tool_source\x00{skill_name}\x00{script_filename}"
-    )
+    dup_error = _check_file_tools_duplicate("get_tool_source", f"get_tool_source\x00{skill_name}\x00{script_filename}")
     if dup_error:
         return dup_error
     logger.info("get_tool_source: %s/%s", skill_name, script_filename)
@@ -1840,6 +1852,17 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
         検証に成功すれば (cmd, workdir) のタプル。失敗すれば
         「エラー: ...」形式の文字列（呼び出し側はそのまま返せばよい）。
     """
+    current_agent_type = _SUBAGENT_AGENT_TYPE.get()
+    allowed_skills = _AGENT_TYPE_RUN_SCRIPT_SKILL_ALLOWLIST.get(current_agent_type) if current_agent_type else None
+    if allowed_skills is not None and skill_name not in allowed_skills:
+        return (
+            f"エラー: agent_type=\"{current_agent_type}\" から呼び出せる run_script のスキルは "
+            f"{sorted(allowed_skills)} に限定されています（skill={skill_name} は対象外）。"
+            "ファイルの内容確認が必要な場合は、委譲元に対応するサブエージェント"
+            "（office文書/PDFなら analyze-docs、書き込みが要るなら worker）へ"
+            "改めて委譲するよう伝えてください。"
+        )
+
     args = script_args or []
     # args 内の各要素で `@N`（パスメモリー参照）を実パスへ解決する。
     # 対象外の文字列（トークン形式でない）はそのまま通す。
@@ -2380,14 +2403,19 @@ def _python_fs_guard_preamble(allowed_roots: Sequence[Path]) -> str:
         そのまま配置できるモンキーパッチ処理のPythonソース。呼び出し元の
         コード自体には何も変更を加えない。
     """
-    allowed_repr = ", ".join(repr(str(p)) for p in allowed_roots)
+    # tuple の repr をそのまま埋め込む（旧実装は ", ".join(...) を "(...,)" で
+    # 囲んでいたため、allowed_roots が空リストのとき ("",) という「空文字列
+    # 1件を含むタプル」になってしまい、os.path.realpath("") がカレント
+    # ディレクトリを指す結果、書き込みガードが実質無効化される不具合が
+    # あった。repr(tuple(...)) なら空リストは正しく "()" になる。
+    allowed_repr = repr(tuple(str(p) for p in allowed_roots))
     return f'''\
 import builtins as _guard_builtins
 import io as _guard_io
 import os as _guard_os
 import shutil as _guard_shutil
 
-_GUARD_ALLOWED = [_guard_os.path.realpath(_p) for _p in ({allowed_repr},)]
+_GUARD_ALLOWED = [_guard_os.path.realpath(_p) for _p in {allowed_repr}]
 
 
 def _guard_check(_path, _op):
@@ -2656,6 +2684,91 @@ async def execute_python_code(code: str) -> str:
     warning = _track_failure_streak("execute_python_code_failure_streak", proc.returncode != 0, "execute_python_code")
     if warning:
         parts.append(warning)
+    if fell_back:
+        parts.append(_mark_workdir_not_writable())
+    return "\n".join(parts)
+
+
+@tool
+async def execute_python_code_readonly(code: str) -> str:
+    """LLMが生成したPythonコードをその場で実行し、標準出力/標準エラーを返す
+    （読み取り専用・書き込み不可版）。
+
+    execute_python_code と同じ方式（コード文字列を一時ファイルへ書き出し
+    その場で実行）だが、書き込み・削除・改名を場所を問わず一切許可しない。
+    規則から「正しい値」を計算する・既存データを読み込んで検算するといった、
+    ファイルを一切書き換えない計算・検証専用に使う。成果物ファイルの生成・
+    編集にはこのツールではなく execute_python_code、または対応するスキルの
+    専用スクリプトを使うこと（このツールでファイルを書こうとしても
+    PermissionError になり失敗する）。
+
+    execute_python_code と異なり計画承認（Plan Mode）を必要としない
+    （書き込みが一切できないため、計画未承認でも安全に実行できる）。
+
+    Args:
+        code: 実行する Python コード全文。path_memory の @N トークンを使う
+           場合は execute_python_code と同じ方法（path_memory.resolve()）
+            で実パスへ展開する。
+
+    Returns:
+        「[終了コード] N」に続けて、標準出力・標準エラーを連結した文字列。
+        code が空の場合、実行が無効化されている場合、タイムアウトした場合、
+        起動自体に失敗した場合はいずれも例外を送出せず「エラー: ...」形式で
+        返す。コードが書き込み・削除・改名を試みた場合は PermissionError と
+        なり、その内容が標準エラーに含まれる。
+    """
+    if not code.strip():
+        return "エラー: code が空です。"
+    if not _CODE_EXEC_ENABLED:
+        return "エラー: LLMが生成したPythonコードの実行はconfig.iniで無効化されています" "（[scripts] code_execution_enabled=false）。"
+    workdir, fell_back = _resolve_exec_workdir()
+
+    try:
+        _fs_guard = _python_fs_guard_preamble([])
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
+        tmp.write(_fs_guard + code)
+        tmp.close()
+        tmp_path = Path(tmp.name)
+    except OSError:
+        thread_id = cl.user_session.get("thread_id") or "_no_session"
+        workdir = _DEFAULT_WORKDIR / f"_tmp_{thread_id}"
+        workdir.mkdir(parents=True, exist_ok=True)
+        fell_back = True
+        try:
+            _fs_guard = _python_fs_guard_preamble([])
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
+            tmp.write(_fs_guard + code)
+            tmp.close()
+            tmp_path = Path(tmp.name)
+        except OSError as e2:
+            return f"エラー: 一時ファイルを作成できませんでした（既定フォルダでも失敗）: {e2}"
+
+    logger.info("execute_python_code_readonly: cwd=%s", workdir)
+    try:
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                [_SCRIPT_PYTHON, str(tmp_path)],
+                cwd=str(workdir),
+                capture_output=True,
+                text=True,
+                timeout=_SCRIPT_TIMEOUT,
+                encoding="utf-8",
+                errors="replace",
+                env=_subprocess_env(),
+            )
+        except subprocess.TimeoutExpired:
+            return f"エラー: コードが {_SCRIPT_TIMEOUT} 秒でタイムアウトしました。"
+        except OSError as e:
+            return f"エラー: コードを実行できませんでした: {e}"
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    parts = [f"[終了コード] {proc.returncode}"]
+    if proc.stdout:
+        parts.append(f"[標準出力]\n{proc.stdout.rstrip()}")
+    if proc.stderr:
+        parts.append(f"[標準エラー]\n{proc.stderr.rstrip()}")
     if fell_back:
         parts.append(_mark_workdir_not_writable())
     return "\n".join(parts)
@@ -2953,6 +3066,7 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
     """
     token = _IN_SUBAGENT.set(True)
     run_id_token = _SUBAGENT_RUN_ID.set(job.run_id)
+    agent_type_token = _SUBAGENT_AGENT_TYPE.set(job.agent_type)
     progress_task = asyncio.create_task(_push_dispatch_agent_progress(job, job_id))
 
     def _on_iteration(iteration: int, max_iterations: int) -> None:
@@ -3005,6 +3119,7 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
             pass
         _IN_SUBAGENT.reset(token)
         _SUBAGENT_RUN_ID.reset(run_id_token)
+        _SUBAGENT_AGENT_TYPE.reset(agent_type_token)
         # 委譲が完了するたびに main_agent_tool_guard のカウンタをリセットする。
         # 1ターン内で複数回「調査→delegate」を繰り返す正当なケースを妨げないため。
         # ただし、安全上限フォールバックや停止ボタン等で呼び出し元のターンが
@@ -4073,13 +4188,9 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
     if guard_max_calls > 0 and not _record_and_check_duplicate("main_agent_tool_guard_call_count", signature, guard_max_calls):
         return None
     content = (
-        f"エラー: {name} はメインエージェントとして呼び出しを禁止されています"
-        "（max_calls=0）。"
+        f"エラー: {name} はメインエージェントとして呼び出しを禁止されています" "（max_calls=0）。"
         if guard_max_calls <= 0
-        else (
-            f"エラー: {name} はメインエージェントとして既に呼び出し上限"
-            f"（{guard_max_calls}回）に達しています。"
-        )
+        else (f"エラー: {name} はメインエージェントとして既に呼び出し上限" f"（{guard_max_calls}回）に達しています。")
     )
     # agent_type一覧はagents/*.mdの走査結果（_AGENT_TYPES）から動的に組み立てる。
     # 種別を文言へ決め打ちすると、将来 agent_type が増減しても案内が追従せず、
@@ -4089,7 +4200,9 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
     return {
         "messages": [
             ToolMessage(
-                content=(f"{content}これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: {available_agent_types}）へ委譲してください。"),
+                content=(
+                    f"{content}これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: {available_agent_types}）へ委譲してください。"
+                ),
                 name=name,
                 tool_call_id=call.get("id"),
                 status="error",
@@ -4333,6 +4446,7 @@ _SUBAGENT_TOOLS: list = [
     stop_script_job,
     execute_python_code,
     execute_python_code_background,
+    execute_python_code_readonly,
     get_tool_source,
     check_work_dir_status,
     analyze_image,
