@@ -49,7 +49,17 @@ export function StepItem({ step }: { step: IStep }) {
         ? 'running'
         : 'done';
   const typeLabel = TYPE_LABELS[step.type] ?? step.type;
-  const displayLabel = step.name && step.name !== typeLabel ? `${typeLabel}: ${step.name}` : typeLabel;
+  // dispatch_agent（サブエージェント実行）のStepは、app.py側で name を
+  // "SUB: <agent_type>" 形式にして送ってくる。これは「ツール: サブエージェ...」
+  // という中身の分からない表示（狭い幅で agent_type 部分が見切れる）を避け、
+  // どのサブエージェント種別かひと目で分かるようにするためのもので、
+  // 通常のツールと違い typeLabel（"ツール"）を前置しない。
+  const displayLabel =
+    step.name && step.name.startsWith('SUB: ')
+      ? step.name
+      : step.name && step.name !== typeLabel
+        ? `${typeLabel}: ${step.name}`
+        : typeLabel;
 
   return (
     <div className={`step-item ${step.isError ? 'step-item--error' : ''}`}>

@@ -131,6 +131,25 @@ _TOOL_LABELS = {
     "help": "ヘルプ表示",
 }
 
+
+def _tool_step_label(event: dict) -> str:
+    """on_tool_start イベントから Step の表示名を決める。
+
+    dispatch_agent は _TOOL_LABELS だけだと常に「サブエージェント実行」
+    表示になり、狭い幅では「ツール: サブエージェ...」と見切れてどの種別
+    （explore/verifier等）に委譲したのか分からない。agent_type 引数が
+    取れる場合は "SUB: <agent_type>" 形式にする（frontend/src/components/
+    StepItem.tsx 側で、この形式の名前だけは "ツール: " を前置しない特別
+    扱いにしている）。
+    """
+    name = event["name"]
+    if name == "dispatch_agent":
+        tool_input = event["data"].get("input")
+        agent_type = tool_input.get("agent_type") if isinstance(tool_input, dict) else None
+        if agent_type:
+            return f"SUB: {agent_type}"
+    return _TOOL_LABELS.get(name, name)
+
 # アプリ全体で共有する状態（起動時に一度だけ構築）。
 # グラフ（LLMモデル・httpxクライアントを含む）はここには含まない。
 # セッション（タブ）ごとに個別構築し cl.user_session["graph"] に保持する
@@ -1759,17 +1778,20 @@ async def _run_context_compaction_visible(
     config: dict,
     thread_id: str,
     last_usage: dict | None,
-    steps: dict[str, cl.Step],
 ) -> bool:
-    """_run_context_compaction をユーザーに見える形（Step表示）で実行するラッパー。
+    """_run_context_compaction をユーザーに見える形（system_messageのMessage表示）で実行するラッパー。
 
     要約LLM呼び出しは会話が長いほど時間がかかり（実測: 62件の要約で初回チャンク
     まで約97秒）、その間ターンが完了しないため、何も表示しないとユーザーには
     「タスクは終わったはずなのに思考中のまま止まっている」ように見える
     （2026-08-12、issue/20260812_124500_post_turn_compaction_97s_ux_delay.md
-    参照）。should_compact() の判定自体は一瞬で終わり、実際に圧縮が発火する
-    ときだけ時間がかかるため、Stepは「発火が決まった後」にのみ表示する
-    （圧縮不要な大多数のターンでは何も表示されない）。
+    参照）。当初はcl.Stepで表示していたが、ターン完了後（最終防衛ライン）に
+    送るとチャット表示部に何も現れないとユーザーから報告があったため、
+    ループ検知停止・通信エラー等の他の通知と同じ type="system_message" の
+    cl.Message（チャット本文に確実に残る）へ切り替えた。should_compact() の
+    判定自体は一瞬で終わり、実際に圧縮が発火するときだけ時間がかかるため、
+    メッセージは「発火が決まった後」にのみ表示する（圧縮不要な大多数の
+    ターンでは何も表示されない）。
     """
     try:
         state = await graph.aget_state(config)
@@ -1777,24 +1799,24 @@ async def _run_context_compaction_visible(
         cumulative_main = cl.user_session.get("token_usage_cumulative_main")
         will_compact = should_compact(cumulative_main, last_usage, len(messages), _config)
     except Exception:
-        # 状態取得に失敗した場合、Step表示の要否だけ判定できないが、
-        # 圧縮の実処理自体は _run_context_compaction 内で同じ失敗に対する
-        # 自己修復（今回はスキップして次ターンに委ねる）を既に持っているため、
+        # 状態取得に失敗した場合、表示の要否だけ判定できないが、圧縮の実処理
+        # 自体は _run_context_compaction 内で同じ失敗に対する自己修復
+        # （今回はスキップして次ターンに委ねる）を既に持っているため、
         # ここでは例外を伝播させずそちらに委譲する。
-        logging.getLogger(__name__).exception("コンテキスト圧縮: Step表示要否の判定に失敗したため通常経路にフォールバックします")
+        logging.getLogger(__name__).exception("コンテキスト圧縮: 表示要否の判定に失敗したため通常経路にフォールバックします")
         return await _run_context_compaction(graph, config, thread_id, last_usage)
     if not will_compact:
         return await _run_context_compaction(graph, config, thread_id, last_usage)
 
-    step = cl.Step(name="会話履歴を整理中", type="tool", parent_id=_resolve_parent_id({}, steps))
-    step.start = utc_now()
-    await step.send()
-    try:
-        compacted = await _run_context_compaction(graph, config, thread_id, last_usage)
-    finally:
-        step.output = "整理しました" if compacted else "対象外だったためスキップしました"
-        step.end = utc_now()
-        await step.update()
+    await cl.Message(
+        content="会話が長くなったため、履歴を要約して整理しています（数十秒〜数分かかる場合があります）…",
+        type="system_message",
+    ).send()
+    compacted = await _run_context_compaction(graph, config, thread_id, last_usage)
+    await cl.Message(
+        content="会話履歴の整理が完了しました。" if compacted else "会話履歴の整理は対象外だったためスキップしました。",
+        type="system_message",
+    ).send()
     return compacted
 
 
@@ -2027,7 +2049,7 @@ async def on_message(message: cl.Message) -> None:
                     # cl.Step はコンストラクタで local_steps（@cl.on_message が積む
                     # 実行ラン）を自動継承しない（cl.Message は継承する）ため、
                     # _resolve_parent_id() で明示的に親を決める。
-                    label = _TOOL_LABELS.get(event["name"], event["name"])
+                    label = _tool_step_label(event)
                     step = cl.Step(name=label, type="tool", parent_id=_resolve_parent_id(event, steps))
                     step.start = utc_now()
                     step.input = event["data"].get("input")
@@ -2331,7 +2353,7 @@ async def on_message(message: cl.Message) -> None:
             await _aclose_event_stream(event_stream)
             if exc.tool_messages:
                 await graph.aupdate_state(config, {"messages": exc.tool_messages}, as_node="tools")
-            await _run_context_compaction_visible(graph, config, thread_id, last_usage, steps)
+            await _run_context_compaction_visible(graph, config, thread_id, last_usage)
             # 圧縮後に新しいツール呼び出しが続く場合に備え、安全点検知用
             # 変数をリセットする。
             pending_main_tool_ids.clear()
@@ -2570,4 +2592,4 @@ async def on_message(message: cl.Message) -> None:
     # ユーザーへの返信は既に送信済みだが、要約LLM呼び出しに数十秒〜数分
     # かかりうる（実測97秒）ため、_run_context_compaction_visible で
     # Stepを表示し「思考中のまま何も起きていないように見える」状態を防ぐ。
-    await _run_context_compaction_visible(graph, config, thread_id, last_usage, steps)
+    await _run_context_compaction_visible(graph, config, thread_id, last_usage)
