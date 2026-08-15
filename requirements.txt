@@ -33,13 +33,15 @@ PyYAML==6.0.3
 jmespath==1.1.0
 
 # --- pdf-tools スキル（PDF読み込み: pypdf / PDFページ画像化: pypdfium2 /
-#     PDF生成: xhtml2pdf、セマンティックHTML+CSSをレンダリング。日本語は
-#     内部で使うreportlabのCID内蔵フォント（HeiseiMin-W3/HeiseiKakuGo-W5）
-#     で描画するため外部フォントファイル不要。reportlab自体はxhtml2pdfの
-#     推移的依存のため明記しない） ---
+#     PDF生成: reportlab（platypus）で自前のセマンティックHTML断片パーサーから
+#     Flowableを組み立てる。日本語はWindows同梱のTTFフォント（Yu Gothic/
+#     Yu Mincho等）をreportlabへ実グリフごと埋め込んで描画する。以前はxhtml2pdf
+#     経由でreportlab内蔵のCID内蔵フォントを使っていたが、xhtml2pdfが内部で
+#     フォークしているPragraph実装が登録済みTTFontを正しく参照できず日本語が
+#     tofu化けする不具合を確認したため、xhtml2pdf依存を廃した） ---
 pypdf==6.15.0
 pypdfium2==4.30.0
-xhtml2pdf==0.2.17
+reportlab==4.5.1
 
 # --- excel-read/excel-edit/excel-recalc/excel-vba-read/excel-vba-edit/excel-render
 #     スキル（xlsx/xlsm読み書き: openpyxl / レガシーxls読み込み: xlrd /

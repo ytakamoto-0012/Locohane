@@ -2388,11 +2388,18 @@ def _python_fs_guard_preamble(allowed_roots: Sequence[Path]) -> str:
 
     加えて、`subprocess.Popen`（`run`/`call`/`check_call`/`check_output`
     もこれを経由する）・`os.system`・`os.popen` をモンキーパッチし、
-    コマンド名（basename、拡張子は無視）が git / npm / pip / pip3 の
-    いずれかに一致する場合は場所を問わず PermissionError にする。
-    生成・実行させたコードが誤ってリポジトリ操作やパッケージインストールを
-    行う事故を防ぐためで、こちらは allowed_roots による除外はない
-    （常に全面禁止）。
+    コマンド名（basename、拡張子は無視）が git / npm / pip / pip3 、
+    および copy / xcopy / move / robocopy / del / erase / ren / rename /
+    rd / rmdir 等のファイル操作コマンド、cmd / cmd.exe / powershell / pwsh
+    等のシェルラッパーのいずれかに一致する場合は場所を問わず
+    PermissionError にする。生成・実行させたコードが誤ってリポジトリ操作や
+    パッケージインストールを行う事故を防ぐことに加え、`open`/`os`/`shutil`
+    への書き込みガードを `os.system("copy ...")` 等のシェル経由で回避
+    されるのを防ぐ（tune-prompt iter1でsystem_prompt_scale/002実行中、
+    LLMが実際にこの手口で allowed_roots 外へファイルをコピーすることに
+    成功した事例を確認したため追加。`cmd /c copy ...` のような多段の
+    シェルラッパー経由でのコマンド名偽装までは防げないベストエフォートの
+    対策）。こちらは allowed_roots による除外はない（常に全面禁止）。
 
     Args:
         allowed_roots: 書き込み・削除を許可するディレクトリの一覧
@@ -2479,7 +2486,12 @@ del _guard_name, _guard_orig
 
 import subprocess as _guard_subprocess
 
-_GUARD_BLOCKED_CMDS = {{"git", "npm", "pip", "pip3"}}
+_GUARD_BLOCKED_CMDS = {{
+    "git", "npm", "pip", "pip3",
+    "copy", "xcopy", "move", "robocopy", "del", "erase",
+    "ren", "rename", "rd", "rmdir",
+    "cmd", "cmd.exe", "powershell", "pwsh",
+}}
 
 
 def _guard_cmd_basename(_arg):

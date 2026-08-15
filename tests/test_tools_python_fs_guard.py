@@ -99,6 +99,37 @@ def test_shutil_move_into_outside_root_is_blocked(tmp_path, guard_dirs):
     assert src.exists()
 
 
+def test_os_system_copy_outside_allowed_root_is_blocked(tmp_path, guard_dirs):
+    """os.system 経由のシェルコマンドで書き込みガードを回避できないことの回帰テスト。
+
+    tune-prompt iter1（system_prompt_scale/002実行）で、run_script/
+    execute_python_code のopen/os/shutilガードに阻まれたLLMが
+    `os.system('copy /Y "src" "dst"')` を使い、allowed_roots外へ実際に
+    ファイルをコピーすることに成功した事例を受けて追加。
+    """
+    allowed_root, outside_root = guard_dirs
+    src = allowed_root / "src.txt"
+    src.write_text("payload", encoding="utf-8")
+    dst = outside_root / "leaked.txt"
+    body = f'import os\nos.system(r\'copy /Y "{src}" "{dst}"\')\n'
+
+    result = _run_guarded(tmp_path, [allowed_root], body)
+
+    assert result.returncode != 0
+    assert "execute_python_codeガード" in result.stderr
+    assert not dst.exists()
+
+
+def test_os_system_git_is_still_blocked(tmp_path, guard_dirs):
+    allowed_root, _ = guard_dirs
+    body = "import os\nos.system('git status')\n"
+
+    result = _run_guarded(tmp_path, [allowed_root], body)
+
+    assert result.returncode != 0
+    assert "execute_python_codeガード" in result.stderr
+
+
 def test_read_outside_allowed_root_is_permitted(tmp_path, guard_dirs):
     allowed_root, outside_root = guard_dirs
     existing = outside_root / "README.md"

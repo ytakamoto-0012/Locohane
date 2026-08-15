@@ -73,7 +73,7 @@
   見た目の一貫性のため、`pptx-create`/`excel-edit`/`docx-create`/`pdf-tools` は
   同じ8色の配色テーマ（`charcoal`/`navy` 等、Anthropic公式pptxスキルのDesign
   Ideas準拠）を共有している。`pdf-tools`（`create_pdf.py`）だけは例外的に
-  セマンティックHTML（`xhtml2pdf` 経由、JS実行なし）を LLM に直接書かせている —
+  セマンティックHTML（自前パーサーで`reportlab`のFlowableへ変換、JS実行なし）を LLM に直接書かせている —
   HTML は xlsx/pptx/docx の XMLベース形式と違い多少崩れても致命的にファイルが
   壊れないため、この原則の範囲内で安全に表現力を確保できる。
 
