@@ -88,6 +88,16 @@ class TestGlobSearch:
         with pytest.raises(ValueError, match="見つかりません"):
             file_tools.glob_search(tmp_path / "nope", "*.py")
 
+    def test_undecodable_file_does_not_abort_search(self, tmp_path) -> None:
+        (tmp_path / "a.py").write_text("line1\n", encoding="utf-8")
+        (tmp_path / "bad.py").write_bytes(b"\x81\xff not decodable as utf-8 or cp932")
+
+        result = file_tools.glob_search(tmp_path, "*.py")
+
+        assert result["total_matches"] == 2
+        detail = next(d for d in result["file_details"] if d["path"] == str((tmp_path / "bad.py").resolve()))
+        assert detail == {"path": str((tmp_path / "bad.py").resolve()), "binary": False, "total_lines": None}
+
     def test_base_not_a_directory_raises(self, tmp_path) -> None:
         f = tmp_path / "a.txt"
         f.write_text("x", encoding="utf-8")
@@ -141,6 +151,15 @@ class TestGrepSearch:
     def test_missing_base_raises(self, tmp_path) -> None:
         with pytest.raises(ValueError, match="見つかりません"):
             file_tools.grep_search(tmp_path / "nope", "TODO")
+
+    def test_undecodable_file_is_skipped_not_fatal(self, tmp_path) -> None:
+        (tmp_path / "a.py").write_text("TODO: fix\n", encoding="utf-8")
+        (tmp_path / "bad.py").write_bytes(b"\x81\xff TODO but not decodable as utf-8 or cp932")
+
+        result = file_tools.grep_search(tmp_path, "TODO", glob="*.py", output_mode="files_with_matches")
+
+        assert result["matched"] is True
+        assert result["files"] == [str((tmp_path / "a.py").resolve())]
 
     def test_invalid_regex_raises(self, tmp_path) -> None:
         with pytest.raises(ValueError, match="正規表現"):

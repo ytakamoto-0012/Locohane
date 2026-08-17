@@ -115,7 +115,7 @@ def read_file(path: Path, offset: int = 0, limit: int = 10) -> dict:
         text = read_text_with_fallback(path)
     except PermissionError as e:
         raise ValueError(f"ファイルへのアクセス権限がありません: {path}") from e
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise ValueError(f"ファイル読み込みに失敗しました: {e}") from e
 
     lines = text.splitlines()
@@ -157,7 +157,7 @@ def _file_detail(path: Path) -> dict:
         return {"path": resolved, "binary": True, "total_lines": None}
     try:
         text = read_text_with_fallback(path)
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return {"path": resolved, "binary": False, "total_lines": None}
     return {"path": resolved, "binary": False, "total_lines": len(text.splitlines())}
 
@@ -276,7 +276,7 @@ def grep_search(
             continue
         try:
             text = read_text_with_fallback(file_path)
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
 
         lines = text.splitlines()
@@ -354,7 +354,7 @@ def query_json(query: str, file_path: Path | None = None, json_text: str | None 
             raise ValueError(f"ファイルが見つかりません: {file_path}")
         try:
             raw = read_text_with_fallback(file_path)
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             raise ValueError(f"ファイル読み込みに失敗しました: {e}") from e
     else:
         raw = json_text or ""
