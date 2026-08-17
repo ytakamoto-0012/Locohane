@@ -41,11 +41,18 @@ class LLMEndpoint:
         base_url: llama.cpp server（OpenAI 互換）のベース URL。
         api_key: LLM API キー。llama.cpp は認証不要のためダミー値でよい。
         model: 使用するモデル名（llama-server の --model / --alias と一致させる）。
+        start: この接続先が使用可能になる時刻（時間単位、0〜24の小数、分は
+            小数点で表す。例: 9.5 = 9:30）。end とセットで指定し、片方のみの
+            指定は不可。両方 None の場合は常時使用可能。start > end の場合は
+            日をまたぐ範囲（例: start=22, end=6 なら22:00〜翌6:00）として扱う。
+        end: この接続先が使用可能でなくなる時刻（start参照）。
     """
 
     base_url: str
     api_key: str
     model: str
+    start: float | None = None
+    end: float | None = None
 
 
 @dataclass(frozen=True)
@@ -270,6 +277,18 @@ class Config:
             .format() で {wait_remaining}/{job_id}/{min_interval} を
             埋め込む。空欄なら DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE
             を使う。
+        script_background_inline_wait_max_seconds: run_script_background/
+            execute_python_code_background のツール呼び出しが、ジョブ完了を
+            この秒数までLLMを介さずコード側で待つ上限秒数。この秒数を
+            超えてもまだ実行中の場合のみ job_id を返してLLMへ制御を戻す。
+            ジョブ自体はこの上限に達してもキャンセルされず動き続ける。
+            0以下を指定すると無期限に待つ（フォールバック経路が事実上
+            無効になる。subagent_background_inline_wait_max_seconds と
+            同じ設計）。
+        script_background_progress_push_interval_seconds: 上記の待機中、
+            人間向けに経過秒数・標準出力/標準エラー末尾をチャットへ直接
+            送る間隔（秒）。cl.Message送信のみでLLM呼び出しを伴わず
+            トークンを消費しない。
         script_plan_approval_exempt_scripts: run_script/run_script_background
             の計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト（{(スキル名, スクリプトファイル名), ...}）。
@@ -594,6 +613,8 @@ class Config:
     script_background_job_retention_seconds: int
     script_background_min_poll_interval_seconds: int
     script_background_min_poll_message: str
+    script_background_inline_wait_max_seconds: int
+    script_background_progress_push_interval_seconds: int
 
     # --- run_script/run_script_background の計画承認免除ホワイトリスト ---
     script_plan_approval_exempt_scripts: frozenset[tuple[str, str]]
@@ -951,6 +972,32 @@ def _validate_poll_message_template(text: str) -> str:
     return text
 
 
+def _as_llm_endpoint_time(value: Any, key_name: str, field_name: str) -> float | None:
+    """[llm].main_url / sub_url の各要素の start/end キーを検証してfloatへ変換する。
+
+    Args:
+        value: item.get("start") / item.get("end") の生値。未指定または空文字は
+            None（常時使用可能）として扱う。
+        key_name: エラーメッセージに使う設定キー名（例: "main_url"）。
+        field_name: エラーメッセージに使うフィールド名（"start" または "end"）。
+
+    Returns:
+        0.0〜24.0 の範囲に収まる時刻（時間単位）、または未指定時は None。
+
+    Raises:
+        ValueError: 数値に変換できない、または0〜24の範囲外の場合。
+    """
+    if value is None or value == "":
+        return None
+    try:
+        hour = float(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"[llm].{key_name} の {field_name} は数値（時間、分は小数で指定）にしてください: {value!r}") from e
+    if not (0.0 <= hour <= 24.0):
+        raise ValueError(f"[llm].{key_name} の {field_name} は0〜24の範囲で指定してください: {value!r}")
+    return hour
+
+
 def _as_llm_endpoints(value: str | None, key_name: str) -> tuple[LLMEndpoint, ...]:
     """[llm].main_url / sub_url のJSON/Python風リスト値を LLMEndpoint のタプルに変換する。
 
@@ -958,16 +1005,24 @@ def _as_llm_endpoints(value: str | None, key_name: str) -> tuple[LLMEndpoint, ..
     "model": "local-model"}]'。_as_message_list() と同じく ast.literal_eval を
     使い、末尾カンマ等の緩い記法を許容する。
 
+    各要素には任意で start/end（使用可能時間帯、時間単位・0〜24・分は小数）を
+    指定できる。両方セットで指定するか、両方省略（常時使用可能）のいずれか。
+    リスト全体で最低1件は start/end を両方省略した「常時使用可能」な接続先が
+    必要（すべて時間帯限定だと、どの時間帯にも当てはまらない瞬間に接続先が
+    無くなってしまうため）。
+
     Args:
         value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
         key_name: エラーメッセージに使う設定キー名（例: "main_url"）。
 
     Returns:
-        パースした LLMEndpoint のタプル（1件以上）。
+        パースした LLMEndpoint のタプル（1件以上、うち最低1件は start/end 未指定）。
 
     Raises:
         ValueError: リスト（配列）として解釈できない、空リスト、要素が
-            dict でない、または必須キー（base_url/model）が欠けている場合。
+            dict でない、必須キー（base_url/model）が欠けている、start/end が
+            片方のみ指定されている、start/end が範囲外、または start/end を
+            両方省略した接続先が1件も無い場合。
     """
     text = str(value or "").strip()
     if not text:
@@ -984,13 +1039,23 @@ def _as_llm_endpoints(value: str | None, key_name: str) -> tuple[LLMEndpoint, ..
             raise ValueError(f"[llm].{key_name} の各要素は " '{"base_url":..., "api_key":..., "model":...} の' f"dict にしてください: {item!r}")
         if not item.get("base_url") or not item.get("model"):
             raise ValueError(f"[llm].{key_name} の各要素には base_url と model が必須です: {item!r}")
+        start = _as_llm_endpoint_time(item.get("start"), key_name, "start")
+        end = _as_llm_endpoint_time(item.get("end"), key_name, "end")
+        if (start is None) != (end is None):
+            raise ValueError(f"[llm].{key_name} の各要素は start と end をどちらも指定するか、どちらも省略してください: {item!r}")
+        if start is not None and end is not None and start == end:
+            raise ValueError(f"[llm].{key_name} の start と end が同じ値です（使用可能な時間帯が無くなります）: {item!r}")
         endpoints.append(
             LLMEndpoint(
                 base_url=str(item["base_url"]),
                 api_key=str(item.get("api_key") or "dummy-not-used"),
                 model=str(item["model"]),
+                start=start,
+                end=end,
             )
         )
+    if not any(e.start is None and e.end is None for e in endpoints):
+        raise ValueError(f"[llm].{key_name} には start/end を両方省略した（常時使用可能な）接続先が最低1件必要です: {text!r}")
     return tuple(endpoints)
 
 
@@ -1439,6 +1504,18 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "SCRIPT_BACKGROUND_MIN_POLL_MESSAGE",
                 scripts.get("background_min_poll_message", "") or DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE,
+            )
+        ),
+        script_background_inline_wait_max_seconds=int(
+            os.getenv(
+                "SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS",
+                scripts.get("background_inline_wait_max_seconds", 0),
+            )
+        ),
+        script_background_progress_push_interval_seconds=int(
+            os.getenv(
+                "SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS",
+                scripts.get("background_progress_push_interval_seconds", 20),
             )
         ),
         script_plan_approval_exempt_scripts=_parse_plan_approval_exempt_scripts(

@@ -781,6 +781,29 @@ _STICKY_ASSIGNED_INDEX: dict[tuple[str, str], int] = {}
 _STICKY_ENDPOINT_OCCUPANTS: dict[tuple[str, int], set[str]] = {}
 
 
+def _endpoint_available_now(endpoint: LLMEndpoint) -> bool:
+    """LLMEndpoint.start/end（使用可能時間帯、時間単位・0〜24）に基づき、現在時刻が範囲内かを判定する。
+
+    start/end が両方 None（未指定）の接続先は常に True。start > end の場合は
+    日をまたぐ範囲（例: start=22, end=6 なら22:00〜翌6:00）として扱う。
+
+    Args:
+        endpoint: 判定対象の接続先。
+
+    Returns:
+        現在時刻（ローカルタイム）が使用可能時間帯内なら True。
+    """
+    if endpoint.start is None and endpoint.end is None:
+        return True
+    now = time.localtime()
+    now_hour = now.tm_hour + now.tm_min / 60.0 + now.tm_sec / 3600.0
+    start = endpoint.start if endpoint.start is not None else 0.0
+    end = endpoint.end if endpoint.end is not None else 24.0
+    if start <= end:
+        return start <= now_hour < end
+    return now_hour >= start or now_hour < end
+
+
 def _select_endpoint(
     role: str,
     endpoints: tuple[LLMEndpoint, ...],
@@ -789,6 +812,12 @@ def _select_endpoint(
     inherit_from_role: str | None = None,
 ) -> LLMEndpoint:
     """config.ini [llm].main_routing_strategy / sub_routing_strategy に従って接続先を1つ選ぶ。
+
+    選択対象は、まず endpoints のうち現在時刻が start/end の使用可能時間帯内の
+    ものだけに絞り込む（_endpoint_available_now 参照）。start/end 未指定の
+    接続先は常に対象に含まれるため、config.py の _as_llm_endpoints が最低1件の
+    常時使用可能な接続先を要求しており、絞り込み結果が空になることは無い
+    （念のため空になった場合は全件にフォールバックする）。
 
     Args:
         role: "main" または "sub"（ルーティング状態を役割ごとに分けるためのキー）。
@@ -807,7 +836,8 @@ def _select_endpoint(
             いない）場合のみ、安全側として通常のロジックへフォールバックする。
 
     Returns:
-        選ばれた LLMEndpoint。要素数が1件の場合は strategy に関わらず常にそれを返す。
+        選ばれた LLMEndpoint。使用可能な接続先が1件の場合は strategy に
+        関わらず常にそれを返す。
     """
     # sticky のハッシュキー、および mark_last_endpoint_failed() が後で
     # 引けるようにするための「選択時点の会話ID」。未設定（サブエージェント
@@ -821,12 +851,17 @@ def _select_endpoint(
             _LAST_SELECTED_INDEX[state_key] = inherited_index
             return endpoints[inherited_index]
 
-    if len(endpoints) == 1:
-        _LAST_SELECTED_INDEX[state_key] = 0
-        return endpoints[0]
+    eligible_indices = [i for i, e in enumerate(endpoints) if _endpoint_available_now(e)]
+    if not eligible_indices:
+        eligible_indices = list(range(len(endpoints)))
+
+    if len(eligible_indices) == 1:
+        index = eligible_indices[0]
+        _LAST_SELECTED_INDEX[state_key] = index
+        return endpoints[index]
 
     if strategy == "random":
-        index = random.randrange(len(endpoints))
+        index = random.choice(eligible_indices)
     elif strategy == "sticky":
         # 会話（thread_id）単位で常に同じ接続先を選ぶ。llama.cpp はプロンプト
         # 先頭が同じだとKVキャッシュが効くため、同一会話を毎回同じサーバーに
@@ -834,34 +869,39 @@ def _select_endpoint(
         # 一度固定した接続先は forget_session() でこの会話が片付けられる
         # まで変えない（既にKVキャッシュが載っている接続先から動かすと
         # sticky本来の目的を損なうため、以降の呼び出しでは空き状況を見ない）。
-        if state_key in _STICKY_ASSIGNED_INDEX:
+        # ただし、固定していた接続先が使用可能時間帯を外れた場合は、この
+        # 呼び出しに限り現在使用可能な接続先の中から再固定する。
+        if state_key in _STICKY_ASSIGNED_INDEX and _STICKY_ASSIGNED_INDEX[state_key] in eligible_indices:
             index = _STICKY_ASSIGNED_INDEX[state_key]
         else:
-            # 初回選択時のみ、他のどの会話もsticky固定していない接続先
-            # （＝ _STICKY_ENDPOINT_OCCUPANTS が空）を優先する。複数の
-            # 空き接続先があるときはハッシュで決定的に選ぶ（同じ会話なら
-            # 毎回同じ計算結果になる）。空きが無ければ従来通り全接続先から
-            # ハッシュで選ぶ（衝突を許容する）。
+            if state_key in _STICKY_ASSIGNED_INDEX:
+                stale_index = _STICKY_ASSIGNED_INDEX[state_key]
+                _STICKY_ENDPOINT_OCCUPANTS.get((role, stale_index), set()).discard(session_id)
+            # 初回選択時（または再固定時）は、他のどの会話もsticky固定して
+            # いない接続先（＝ _STICKY_ENDPOINT_OCCUPANTS が空）を優先する。
+            # 複数の空き接続先があるときはハッシュで決定的に選ぶ（同じ会話
+            # なら毎回同じ計算結果になる）。空きが無ければ現在使用可能な
+            # 接続先からハッシュで選ぶ（衝突を許容する）。
             occupied_indices = {i for (r, i), sessions in _STICKY_ENDPOINT_OCCUPANTS.items() if r == role and sessions}
-            free_indices = [i for i in range(len(endpoints)) if i not in occupied_indices]
-            if free_indices:
-                index = free_indices[zlib.crc32(session_id.encode("utf-8")) % len(free_indices)]
-            else:
-                index = zlib.crc32(session_id.encode("utf-8")) % len(endpoints)
+            free_indices = [i for i in eligible_indices if i not in occupied_indices]
+            candidates = free_indices if free_indices else eligible_indices
+            index = candidates[zlib.crc32(session_id.encode("utf-8")) % len(candidates)]
             _STICKY_ASSIGNED_INDEX[state_key] = index
             _STICKY_ENDPOINT_OCCUPANTS.setdefault((role, index), set()).add(session_id)
     elif strategy == "priority_failover":
-        # 先頭から順に見て、クールダウン中でない最初の接続先を使う。
-        # 全滅時は安全側として先頭(0)へフォールバックする。
+        # 使用可能な接続先を先頭から順に見て、クールダウン中でない最初の
+        # 接続先を使う。全滅時は安全側として使用可能な先頭へフォールバック
+        # する。
         now = time.time()
-        index = 0
-        for i in range(len(endpoints)):
+        index = eligible_indices[0]
+        for i in eligible_indices:
             if _ENDPOINT_COOLDOWN_UNTIL.get((role, i), 0.0) <= now:
                 index = i
                 break
     else:  # "round_robin"（既定）
-        index = _ROUND_ROBIN_COUNTERS.get(role, 0) % len(endpoints)
-        _ROUND_ROBIN_COUNTERS[role] = index + 1
+        counter = _ROUND_ROBIN_COUNTERS.get(role, 0)
+        index = eligible_indices[counter % len(eligible_indices)]
+        _ROUND_ROBIN_COUNTERS[role] = counter + 1
 
     _LAST_SELECTED_INDEX[state_key] = index
     return endpoints[index]
