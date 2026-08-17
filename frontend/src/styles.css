@@ -476,7 +476,7 @@
   gap: 5px;
   font-size: 12px;
   text-decoration: none;
-  color: inherit;
+  color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 3px 9px;
