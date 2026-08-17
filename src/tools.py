@@ -245,6 +245,8 @@ _SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS: int = 3600
 _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS: int = 1800
 _SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS: int = 20
 _SCRIPT_BACKGROUND_MIN_POLL_MESSAGE: str = DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE
+_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS: int = 0
+_SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS: int = 20
 _DEFAULT_WORKDIR: Path | None = None
 _LLM_CONFIG: Config | None = None
 _AGENT_TYPES: dict[str, ResolvedAgentType] = {}
@@ -314,6 +316,8 @@ def init_tools(
     script_background_job_retention_seconds: int = 1800,
     script_background_min_poll_interval_seconds: int = 20,
     script_background_min_poll_message: str = DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE,
+    script_background_inline_wait_max_seconds: int = 0,
+    script_background_progress_push_interval_seconds: int = 20,
     dispatch_agent_background_job_retention_seconds: int = 1800,
     dispatch_agent_background_min_poll_interval_seconds: int = 20,
     dispatch_agent_background_min_poll_message: str = DEFAULT_DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE,
@@ -413,6 +417,19 @@ def init_tools(
             .format() で {wait_remaining}（あと何秒待つべきか）/
             {job_id}（対象ジョブID、repr形式）/{min_interval}（設定値
             そのもの）を埋め込める。
+        script_background_inline_wait_max_seconds: run_script_background/
+            execute_python_code_background がジョブ完了をLLMを介さず
+            コード側で待つ上限秒数（config.ini の
+            [scripts].background_inline_wait_max_seconds 由来）。この秒数を
+            超えてもまだ実行中の場合のみ job_id を返してLLMへ制御を戻す。
+            ジョブ自体はこの上限に達してもキャンセルされず動き続ける。
+            0以下を指定すると無期限に待つ（フォールバック経路が事実上無効に
+            なる）。
+        script_background_progress_push_interval_seconds: 上記の待機中、
+            人間向けに経過秒数・標準出力/標準エラー末尾をチャットへ直接送る
+            間隔（秒）。cl.Message送信のみでLLM呼び出しを伴わずトークンを
+            消費しない（config.ini の
+            [scripts].background_progress_push_interval_seconds 由来）。
         dispatch_agent_background_job_retention_seconds: dispatch_agent の
             ジョブが終了後、check_dispatch_agent_job で一度も取得されないまま
             registry に残ってよい秒数（config.ini の
@@ -470,6 +487,7 @@ def init_tools(
     global _CODE_EXEC_ENABLED
     global _SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS, _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS
     global _SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS, _SCRIPT_BACKGROUND_MIN_POLL_MESSAGE
+    global _SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS, _SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS
     global _DISPATCH_AGENT_BACKGROUND_JOB_RETENTION_SECONDS, _DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS
     global _DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE
     global _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS, _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS
@@ -496,6 +514,8 @@ def init_tools(
     _SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS = script_background_job_retention_seconds
     _SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS = script_background_min_poll_interval_seconds
     _SCRIPT_BACKGROUND_MIN_POLL_MESSAGE = script_background_min_poll_message
+    _SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS = script_background_inline_wait_max_seconds
+    _SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS = script_background_progress_push_interval_seconds
     _DISPATCH_AGENT_BACKGROUND_JOB_RETENTION_SECONDS = dispatch_agent_background_job_retention_seconds
     _DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS = dispatch_agent_background_min_poll_interval_seconds
     _DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE = dispatch_agent_background_min_poll_message
@@ -2006,14 +2026,65 @@ async def _read_stream_into(stream: "asyncio.StreamReader | None", chunks: list[
         chunks.append(line.decode("utf-8", errors="replace"))
 
 
-async def _run_background_job(job: "_BackgroundJob") -> None:
+def _format_background_job_progress(job: "_BackgroundJob", job_id: str) -> str:
+    """run_script_background/execute_python_code_background ジョブの実行中の
+    状況を表す文字列を組み立てる。
+
+    _push_background_job_progress（人間向けのUI直接push）と check_script_job
+    の running 分岐（フォールバック経路でのLLM向け応答）の両方から呼ぶ、
+    表示フォーマット共通化のためのヘルパー（dispatch_agent の
+    _format_dispatch_agent_progress と同じ役割）。
+    """
+    elapsed = int(time.monotonic() - job.started_at)
+    parts = [f"実行中です（経過 {elapsed} 秒・job_id={job_id}）。"]
+    stdout_tail = "".join(job.stdout_chunks)[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
+    stderr_tail = "".join(job.stderr_chunks)[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
+    if stdout_tail:
+        parts.append(f"[標準出力（末尾）]\n{stdout_tail}")
+    if stderr_tail:
+        parts.append(f"[標準エラー（末尾）]\n{stderr_tail}")
+    return "\n".join(parts)
+
+
+async def _push_background_job_progress(job: "_BackgroundJob", job_id: str) -> None:
+    """run_script_background/execute_python_code_background の実行中、人間向けに
+    進捗をチャットへ直接pushする。
+
+    cl.Message送信のみでLLM呼び出しを一切伴わないためトークンを消費しない
+    （dispatch_agent の _push_dispatch_agent_progress と同じ設計）。
+    author=_SUBAGENT_MESSAGE_AUTHOR は使わない（サブエージェントの最終回答
+    専用の識別子のため）。代わりに type="system_message" を使う
+    （app.py がコンテキスト圧縮の通知等、既存の一時的なシステム通知に
+    使っている慣習と同じ）。
+
+    _run_background_job の finally で確実にキャンセルされる想定
+    （_push_dispatch_agent_progress と同じ理由）。
+    """
+    while job.status == "running":
+        await asyncio.sleep(_SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS)
+        if job.status != "running":
+            break
+        await cl.Message(
+            content=_format_background_job_progress(job, job_id),
+            type="system_message",
+        ).send()
+
+
+async def _run_background_job(job: "_BackgroundJob", job_id: str) -> None:
     """バックグラウンドジョブのランナータスク本体。
 
     stdout/stderr の読み取りと終了コード取得を並行して行い、
     background_max_runtime_seconds を超えたら強制終了する。
     stop_script_job が先に status を "killed" にしていた場合はそれを
     上書きしない。
+
+    進捗push タスク（_push_background_job_progress）をここで生成・管理する。
+    run_script_background/execute_python_code_background 自身が安全上限
+    フォールバックでターンを終えた後も、このタスク（＝ジョブ本体）が生きて
+    いる限り進捗pushは動き続ける（dispatch_agent の _run_dispatch_agent_job
+    と同じ設計）。
     """
+    progress_task = asyncio.create_task(_push_background_job_progress(job, job_id))
     try:
         try:
             await asyncio.wait_for(
@@ -2042,6 +2113,11 @@ async def _run_background_job(job: "_BackgroundJob") -> None:
             return
         job.status = "completed" if job.returncode == 0 else "failed"
     finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
         # execute_python_code_background が書き出した一時 .py ファイルの後始末。
         # run_script_background 由来のジョブでは tmp_path が None のため何もしない。
         if job.tmp_path is not None:
@@ -2090,7 +2166,15 @@ def _format_job_result(job: "_BackgroundJob") -> str:
 
 
 def _background_job_started_message(job_id: str) -> str:
-    """バックグラウンドジョブ起動直後にLLMへ返す案内文。
+    """run_script_background/execute_python_code_background が安全上限
+    （[scripts].background_inline_wait_max_seconds）に達してもなおジョブが
+    終わっていない場合に、フォールバックとしてLLMへ返す案内文。
+
+    通常はこの文言に到達しない（run_script_background/
+    execute_python_code_background 自身がジョブ完了までツール呼び出し内で
+    待ち続け、最終結果を直接返すため）。到達するのは、設定された安全上限を
+    超えるほど長時間のジョブだけである（dispatch_agent の
+    _dispatch_agent_job_started_message と同じ設計）。
 
     以前は「途中で打ち切る場合は stop_script_job を使ってください」という
     表現だけだったが、これが「長時間かかる処理は打ち切るべきもの」という
@@ -2099,7 +2183,8 @@ def _background_job_started_message(job_id: str) -> str:
     処理時間の長さ自体は打ち切る理由にならないことを明記する。
     """
     return (
-        f"バックグラウンドで起動しました。job_id={job_id}\n"
+        f"バックグラウンドで実行中です（job_id={job_id}）。長時間かかっているため、"
+        "いったんこのターンを終えて制御を返します（ジョブ自体は裏側で動き続けます）。\n"
         "完了確認・結果取得には check_script_job（job_id指定）を使うこと。"
         "処理に時間がかかっていること自体は打ち切る理由にはならない。"
         "ユーザーから明示的に中断・キャンセルを指示された場合にのみ"
@@ -2118,15 +2203,47 @@ def _resolve_job(job_id: str) -> "_BackgroundJob | str":
     return job
 
 
+def _finalize_script_job_result(job: "_BackgroundJob", job_id: str) -> str:
+    """終端状態（completed/failed/timeout/killed/error）のジョブを最終結果
+    文字列へ整形し、レジストリから取り除く。
+
+    run_script_background/execute_python_code_background（安全上限内に完了
+    した場合）と check_script_job（終端状態を取得した場合）の両方から呼ぶ、
+    ワンショット取得（一度取得したら同じ job_id は再利用できない）の共通処理
+    （dispatch_agent の _finalize_dispatch_agent_job_result と同じ役割）。
+    stop_script_job は自身がジョブを終端させた直後に独自の「強制終了しました。」
+    接頭辞で結果を返すため、こちらは使わない。
+    """
+    result = _format_job_result(job)
+    if job.status == "timeout":
+        result = f"エラー: バックグラウンド実行が {_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS} " f"秒の上限に達したため強制終了しました。\n{result}"
+    elif job.status == "killed":
+        result = f"stop_script_job により強制終了されました。\n{result}"
+    elif job.status == "error":
+        result = f"エラー: バックグラウンド実行中に問題が発生しました: {job.error_message}"
+    _BACKGROUND_JOBS.pop(job_id, None)
+    return result
+
+
 @tool
 async def run_script_background(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> str:
-    """スキルの scripts/ 配下のスクリプトをバックグラウンドで起動し、即座に job_id を返す。
+    """スキルの scripts/ 配下のスクリプトをバックグラウンドで起動する。
 
-    処理時間が長くなることが見込まれるスクリプト向け。run_script と異なり
-    完了を待たずに制御を返すため、長時間スクリプトを実行してもエージェントの
-    ターンをブロックしない。完了確認・結果取得には check_script_job を使う。
-    処理に時間がかかっていること自体は打ち切る理由にならない。ユーザーから
-    明示的に中断を指示された場合にのみ stop_script_job を使う。
+    処理時間が長くなることが見込まれるスクリプト向け。run_script と異なり、
+    このターン自体は（下記の安全上限に達しない限り）完了までブロックされる
+    （Chainlit UI上は「実行中」表示が続く）。待っている間、人間向けに
+    チャットへ直接進捗（経過秒数・標準出力/標準エラー末尾）が自動で通知
+    されるため、自分から check_script_job を繰り返し呼んでポーリングする
+    必要は無い（進捗はコード側が直接チャットへ送るため、LLMの呼び出し回数・
+    トークン消費は増えない）。1回の呼び出しで run_script と同じ形式の
+    最終結果がそのまま返る。
+
+    設定した安全上限（[scripts].background_inline_wait_max_seconds）を
+    超えてもなお完了しない場合に限り、job_id を含む案内文を返してこのターンを
+    終える（ジョブ自体は裏側で動き続ける）。この場合のみ、後続ターンで
+    check_script_job（結果取得）・stop_script_job（明示的な中断指示があった
+    場合のみ）を使う。
+
     引数解決・作業ディレクトリ解決・計画承認チェック（例外の扱いも含む）、
     および書き込みサンドボックスガード（出力先は作業ディレクトリ/
     default_workdir配下限定、詳細は run_script のdocstring参照）は
@@ -2139,9 +2256,10 @@ async def run_script_background(skill_name: str, script_filename: str, script_ar
         script_args: スクリプトへ渡す追加引数のリスト（省略可）。
 
     Returns:
-        起動に成功すれば job_id を含む案内文字列。引数不正・スクリプトが
-        見つからない・計画未承認・起動自体に失敗した場合は run_script 同様
-        「エラー: ...」形式の文字列を返す。
+        通常は run_script と同じ形式の最終結果文字列。安全上限に達した
+        場合のみ job_id を含む案内文字列。引数不正・スクリプトが見つからない・
+        計画未承認・起動自体に失敗した場合は run_script 同様「エラー: ...」
+        形式の文字列を返す（この場合 job は作られない）。
     """
     prepared = _prepare_script_execution(skill_name, script_filename, script_args)
     if isinstance(prepared, str):
@@ -2179,14 +2297,36 @@ async def run_script_background(skill_name: str, script_filename: str, script_ar
         error_message=None,
         guard_dir=guard_dir,
     )
-    job.runner_task = asyncio.create_task(_run_background_job(job))
+    job.runner_task = asyncio.create_task(_run_background_job(job, job_id))
     _BACKGROUND_JOBS[job_id] = job
-    return _background_job_started_message(job_id)
+
+    # asyncio.shield: このwait_forがタイムアウトして例外を送出しても、
+    # job.runner_task 自体はキャンセルされず裏側で動き続ける
+    # （安全上限超過時のフォールバック挙動の要。dispatch_agent と同じ設計）。
+    # 0以下は無期限待ち。
+    wait_timeout = _SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS if _SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS > 0 else None
+    try:
+        await asyncio.wait_for(asyncio.shield(job.runner_task), timeout=wait_timeout)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "run_script_background: 安全上限(%s秒)に達したため job_id を返してターンを終えます: job_id=%s",
+            wait_timeout,
+            job_id,
+        )
+        return _background_job_started_message(job_id)
+
+    return _finalize_script_job_result(job, job_id)
 
 
 @tool
 async def check_script_job(job_id: str) -> str:
-    """run_script_background で起動したジョブの状況・結果を確認する。
+    """run_script_background/execute_python_code_background で起動したジョブの
+    状況・結果を確認する。
+
+    通常は run_script_background/execute_python_code_background 自身が
+    ジョブ完了まで待ってから最終結果を直接返すため、このツールを呼ぶ必要は
+    無い。呼ぶのは、それらが安全上限に達して job_id を返した場合
+    （＝よほど長時間のジョブ）のみ。
 
     実行中であれば経過秒数と、現時点までの標準出力・標準エラーの末尾
     （最大4000文字）を返す。完了・失敗・タイムアウト・強制終了のいずれかで
@@ -2204,7 +2344,8 @@ async def check_script_job(job_id: str) -> str:
     間隔は20秒）。
 
     Args:
-        job_id: run_script_background の戻り値に含まれるID。
+        job_id: run_script_background/execute_python_code_background の
+            戻り値に含まれるID。
 
     Returns:
         状況または最終結果を表す文字列。job_id が不明・他セッションのもので
@@ -2232,25 +2373,9 @@ async def check_script_job(job_id: str) -> str:
                 min_interval=_SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS,
             )
         job.last_polled_at = now
-        elapsed = int(now - job.started_at)
-        stdout_tail = "".join(job.stdout_chunks)[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
-        stderr_tail = "".join(job.stderr_chunks)[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
-        parts = [f"実行中です（経過 {elapsed} 秒）。"]
-        if stdout_tail:
-            parts.append(f"[標準出力（末尾）]\n{stdout_tail}")
-        if stderr_tail:
-            parts.append(f"[標準エラー（末尾）]\n{stderr_tail}")
-        return "\n".join(parts)
+        return _format_background_job_progress(job, job_id)
 
-    result = _format_job_result(job)
-    if job.status == "timeout":
-        result = f"エラー: バックグラウンド実行が {_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS} " f"秒の上限に達したため強制終了しました。\n{result}"
-    elif job.status == "killed":
-        result = f"stop_script_job により強制終了されました。\n{result}"
-    elif job.status == "error":
-        result = f"エラー: バックグラウンド実行中に問題が発生しました: {job.error_message}"
-    _BACKGROUND_JOBS.pop(job_id, None)
-    return result
+    return _finalize_script_job_result(job, job_id)
 
 
 @tool
@@ -2788,19 +2913,28 @@ async def execute_python_code_readonly(code: str) -> str:
 
 @tool
 async def execute_python_code_background(code: str) -> str:
-    """LLMが生成したPythonコードをバックグラウンドで実行し、即座に job_id を返す。
+    """LLMが生成したPythonコードをバックグラウンドで実行する。
 
     処理時間が長くなることが見込まれるコード向け。execute_python_code と
-    異なり完了を待たずに制御を返すため、長時間コードを実行してもエージェントの
-    ターンをブロックしない。完了確認・結果取得には check_script_job を使う。
-    処理に時間がかかっていること自体は打ち切る理由にならない。ユーザーから
-    明示的に中断を指示された場合にのみ stop_script_job を使う
+    異なり、このターン自体は（下記の安全上限に達しない限り）完了まで
+    ブロックされる（Chainlit UI上は「実行中」表示が続く）。待っている間、
+    人間向けにチャットへ直接進捗（経過秒数・標準出力/標準エラー末尾）が
+    自動で通知されるため、自分から check_script_job を繰り返し呼んで
+    ポーリングする必要は無い（進捗はコード側が直接チャットへ送るため、
+    LLMの呼び出し回数・トークン消費は増えない）。1回の呼び出しで
+    execute_python_code と同じ形式の最終結果がそのまま返る
     （run_script_background のジョブと共通のレジストリ・ツールで扱われる）。
+
+    設定した安全上限（[scripts].background_inline_wait_max_seconds）を
+    超えてもなお完了しない場合に限り、job_id を含む案内文を返してこのターンを
+    終える（ジョブ自体は裏側で動き続ける）。この場合のみ、後続ターンで
+    check_script_job（結果取得）・stop_script_job（明示的な中断指示があった
+    場合のみ）を使う。
 
     引数チェック・作業ディレクトリ解決・計画承認チェック（免除なし、常に
     create_plan/approve_plan による承認が必要）・実行可否チェックは
     execute_python_code と同じ。生成・更新されたファイルは完了時に自動検知して
-    path_memory（`@N`）へ登録し、check_script_job の戻り値に含める。
+    path_memory（`@N`）へ登録し、結果に含める。
     バックグラウンドジョブを強制終了するまでの上限は既定3600秒。
 
     **重要: パスメモリ(@N)の活用**
@@ -2846,10 +2980,11 @@ async def execute_python_code_background(code: str) -> str:
         code: 実行する Python コード全文。
 
     Returns:
-        起動に成功すれば job_id を含む案内文字列。code が空・実行が
+        通常は execute_python_code と同じ形式の最終結果文字列。安全上限に
+        達した場合のみ job_id を含む案内文字列。code が空・実行が
         無効化されている・計画未承認・一時ファイル作成や起動自体に
         失敗した場合は execute_python_code 同様「エラー: ...」形式の
-        文字列を返す。
+        文字列を返す（この場合 job は作られない）。
     """
     if not code.strip():
         return "エラー: code が空です。"
@@ -2921,9 +3056,21 @@ async def execute_python_code_background(code: str) -> str:
         before_snapshot=before_snapshot,
         fell_back=fell_back,
     )
-    job.runner_task = asyncio.create_task(_run_background_job(job))
+    job.runner_task = asyncio.create_task(_run_background_job(job, job_id))
     _BACKGROUND_JOBS[job_id] = job
-    return _background_job_started_message(job_id)
+
+    wait_timeout = _SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS if _SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS > 0 else None
+    try:
+        await asyncio.wait_for(asyncio.shield(job.runner_task), timeout=wait_timeout)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "execute_python_code_background: 安全上限(%s秒)に達したため job_id を返してターンを終えます: job_id=%s",
+            wait_timeout,
+            job_id,
+        )
+        return _background_job_started_message(job_id)
+
+    return _finalize_script_job_result(job, job_id)
 
 
 def _append_scratch_note_hint(result: str) -> str:

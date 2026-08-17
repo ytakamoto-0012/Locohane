@@ -801,6 +801,8 @@ async def _setup() -> None:
         script_background_job_retention_seconds=_config.script_background_job_retention_seconds,
         script_background_min_poll_interval_seconds=_config.script_background_min_poll_interval_seconds,
         script_background_min_poll_message=_config.script_background_min_poll_message,
+        script_background_inline_wait_max_seconds=_config.script_background_inline_wait_max_seconds,
+        script_background_progress_push_interval_seconds=_config.script_background_progress_push_interval_seconds,
         dispatch_agent_background_job_retention_seconds=_config.subagent_background_job_retention_seconds,
         dispatch_agent_background_min_poll_interval_seconds=_config.subagent_background_min_poll_interval_seconds,
         dispatch_agent_background_min_poll_message=_config.subagent_background_min_poll_message,
