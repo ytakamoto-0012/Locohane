@@ -397,7 +397,7 @@ Locohane/
 
 ## データの保存場所と手動削除の手順
 
-すべて `data/` 配下（`config.ini` の `[paths]`/`[uploads]`/`[log]`/`[default_workdir]` 等の `dir` 系キーで変更可）。`data/` は `.gitignore` 済み。
+すべて `data/` 配下（`config.ini` の `[paths]`/`[uploads]`/`[log]`/`[default_workdir]` 等の `dir` 系キーで変更可）。`data/` は `.gitignore` 済み。保存先ルートをまとめて変更したい場合は、各キーを個別に書き換える代わりに `[paths] common_data_dir`（既定 `./data`）だけを変更すればよい（対応するキーの値は `${common_data_dir}` を参照する形で書かれている）。
 
 | パス | 中身 | 削除してよいタイミング | 削除方法 |
 |------|------|------------------------|----------|
@@ -751,6 +751,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `request_timeout_seconds` | LLMサーバーへの応答待ちタイムアウト秒数（read/write/pool） | `LLM_REQUEST_TIMEOUT_SECONDS` |
 | `[llm]` | `stream_chunk_timeout_seconds` | ストリーミング中にチャンクが届かない場合のタイムアウト秒数 | `LLM_STREAM_CHUNK_TIMEOUT_SECONDS` |
 | `[llm]` | `max_concurrent_requests` | llama-serverへの同時リクエスト数上限。1以上でSemaphore(N)ガード（既定1＝完全直列化）、0以下で無制限 | `LLM_MAX_CONCURRENT_REQUESTS` |
+| `[paths]` | `common_data_dir` | 各種データ保存先パスの共通ベースディレクトリ（既定 `./data`）。本セクションの`checkpoint_db`/`memory_dir`/`plans_dir`、および`[uploads]`/`[log]`/`[default_workdir]`/`[path_memory]`/`[chat_log]`の`dir`系キーの値に`${common_data_dir}`と書くとここで指定した値に置換される（configparser標準の補間ではなくconfig.py側の独自置換） | `COMMON_DATA_DIR` |
 | `[paths]` | `skills_dir` | スキルフォルダ | `SKILLS_DIR` |
 | `[paths]` | `agents_dir` | エージェント種別定義フォルダ（`dispatch_agent` の `agent_type`） | `AGENTS_DIR` |
 | `[paths]` | `project_locohane_dir` | プロジェクト固有の拡張ディレクトリ（ClaudeCode の `.claude/` 相当）。配下の `skills/`（`skills_dir` にマージ走査、同名は優先）・`agents/`（`agents_dir` にマージ走査、同名は優先）・`LOCOHANE.md`（プロジェクト固有指示、存在しなくてもエラーにならない）を自動検知する。`nudge_messages` と同じリスト形式で複数ディレクトリ指定可 | `PROJECT_LOCOHANE_DIR` |

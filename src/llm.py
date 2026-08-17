@@ -781,7 +781,13 @@ _STICKY_ASSIGNED_INDEX: dict[tuple[str, str], int] = {}
 _STICKY_ENDPOINT_OCCUPANTS: dict[tuple[str, int], set[str]] = {}
 
 
-def _select_endpoint(role: str, endpoints: tuple[LLMEndpoint, ...], strategy: str) -> LLMEndpoint:
+def _select_endpoint(
+    role: str,
+    endpoints: tuple[LLMEndpoint, ...],
+    strategy: str,
+    *,
+    inherit_from_role: str | None = None,
+) -> LLMEndpoint:
     """config.ini [llm].main_routing_strategy / sub_routing_strategy に従って接続先を1つ選ぶ。
 
     Args:
@@ -789,6 +795,16 @@ def _select_endpoint(role: str, endpoints: tuple[LLMEndpoint, ...], strategy: st
         endpoints: config.main_endpoints または config.sub_endpoints。
         strategy: config.main_routing_strategy または config.sub_routing_strategy
             （"round_robin"/"random"/"priority_failover"/"sticky" のいずれか）。
+            inherit_from_role が使われた場合は無視される。
+        inherit_from_role: 指定時（config.sub_endpoints_inherit_main が True の
+            ときの role="sub" 呼び出し）、strategy による独自選択は行わず、
+            同一セッションIDで inherit_from_role（"main"）が直近実際に選んだ
+            接続先indexをそのまま使う。dispatch_agent は同一 thread_id の
+            contextvar をそのまま引き継ぐため（src/subagent.py 参照）、これに
+            より「委譲元メインエージェントがこの会話で今使っている接続先」を
+            継承できる。まだ inherit_from_role 側の選択が行われていない
+            （このセッションでメインエージェントが一度もLLM呼び出しをして
+            いない）場合のみ、安全側として通常のロジックへフォールバックする。
 
     Returns:
         選ばれた LLMEndpoint。要素数が1件の場合は strategy に関わらず常にそれを返す。
@@ -798,6 +814,12 @@ def _select_endpoint(role: str, endpoints: tuple[LLMEndpoint, ...], strategy: st
     # 経由でset_current_session未実行など）なら空文字として扱う。
     session_id = _CURRENT_SESSION_ID.get() or ""
     state_key = (role, session_id)
+
+    if inherit_from_role is not None:
+        inherited_index = _LAST_SELECTED_INDEX.get((inherit_from_role, session_id))
+        if inherited_index is not None and inherited_index < len(endpoints):
+            _LAST_SELECTED_INDEX[state_key] = inherited_index
+            return endpoints[inherited_index]
 
     if len(endpoints) == 1:
         _LAST_SELECTED_INDEX[state_key] = 0
@@ -906,7 +928,11 @@ def build_model(config: Config, role: Literal["main", "sub"] = "main") -> ChatOp
             （ThinkingLoopDetected）に使う。
         role: "main"（メインエージェント、既定）または "sub"（サブエージェント
             ／dispatch_agent）。どちらの接続先リスト・ルーティング戦略を
-            使うかを切り替える（_select_endpoint() 参照）。
+            使うかを切り替える（_select_endpoint() 参照）。ただし
+            config.sub_endpoints_inherit_main が True（[llm].sub_url 未指定）
+            の場合、role="sub" は sub_routing_strategy を使わず、同一
+            セッションでメインエージェントが直近実際に使った接続先を
+            そのまま継承する。
 
     Returns:
         streaming=True で構築された ChatLlamaCpp インスタンス（未 bind_tools）。
@@ -923,7 +949,8 @@ def build_model(config: Config, role: Literal["main", "sub"] = "main") -> ChatOp
     """
     endpoints = config.main_endpoints if role == "main" else config.sub_endpoints
     routing_strategy = config.main_routing_strategy if role == "main" else config.sub_routing_strategy
-    endpoint = _select_endpoint(role, endpoints, routing_strategy)
+    inherit_from_role = "main" if role == "sub" and config.sub_endpoints_inherit_main else None
+    endpoint = _select_endpoint(role, endpoints, routing_strategy, inherit_from_role=inherit_from_role)
 
     extra_body: dict[str, Any] = {}
     if config.top_k is not None:

@@ -62,8 +62,17 @@ class Config:
         main_routing_strategy: main_endpoints が複数ある場合の選び方
             （"round_robin"/"random"/"priority_failover"/"sticky" のいずれか）。
         sub_endpoints: サブエージェント（dispatch_agent）用のLLM接続先リスト
-            （[llm].sub_url）。形式は main_endpoints と同じ。
-        sub_routing_strategy: sub_endpoints が複数ある場合の選び方。
+            （[llm].sub_url）。形式は main_endpoints と同じ。sub_url が未指定
+            （キー無し、または値が空）の場合は main_url をそのまま使う。
+        sub_endpoints_inherit_main: sub_url が未指定だったため sub_endpoints が
+            main_endpoints のコピーになっているかどうか。True の場合、
+            build_model(role="sub") は sub_routing_strategy による独自選択を
+            行わず、同一セッション内でメインエージェントが直近実際に使った
+            接続先をそのまま継承する（src/llm.py の _select_endpoint 参照。
+            接続先が1件だけ複数のうち別々に選ばれてKVキャッシュが分散する
+            事態を避けるため）。
+        sub_routing_strategy: sub_endpoints が複数ある場合の選び方
+            （sub_endpoints_inherit_main が True の場合は無視される）。
             形式は main_routing_strategy と同じ。
         temperature: 生成時のtemperature。
         top_p: 累積確率上位のみサンプリングする閾値。None なら未指定
@@ -495,6 +504,7 @@ class Config:
     main_endpoints: tuple[LLMEndpoint, ...]
     main_routing_strategy: str
     sub_endpoints: tuple[LLMEndpoint, ...]
+    sub_endpoints_inherit_main: bool
     sub_routing_strategy: str
     temperature: float
     top_p: float | None
@@ -713,6 +723,27 @@ def _resolve(base: Path, value: str) -> Path:
     """
     p = Path(value)
     return p if p.is_absolute() else (base / p).resolve()
+
+
+def _sub_common_data_dir(value: str, common_data_dir: Path) -> str:
+    """値中の ${common_data_dir} プレースホルダーを解決済みパスへ置換する。
+
+    [paths].common_data_dir を使った、configparser標準の補間機能に頼らない
+    独自のセクション横断プレースホルダー置換（BasicInterpolationは同一
+    セクション内でしか使えないため）。置換後は絶対パス文字列になるため、
+    後段の _resolve() はそのまま素通りする。
+
+    Args:
+        value: config.ini または環境変数から得た生の文字列。
+        common_data_dir: 解決済み（絶対パス化済み）の共通データディレクトリ。
+
+    Returns:
+        "${common_data_dir}" を含んでいれば置換した文字列、含んでいなければ
+        value をそのまま返す。
+    """
+    if "${common_data_dir}" not in value:
+        return value
+    return value.replace("${common_data_dir}", str(common_data_dir))
 
 
 def _as_bool(value: bool | str) -> bool:
@@ -1163,7 +1194,7 @@ def load_config(config_path: Path | None = None) -> Config:
       LLM_TOP_P / LLM_TOP_K / LLM_REPEAT_PENALTY / LLM_FREQUENCY_PENALTY / LLM_PRESENCE_PENALTY / LLM_MAX_TOKENS
       LLM_DRY_MULTIPLIER / LLM_DRY_BASE / LLM_DRY_ALLOWED_LENGTH / LLM_DRY_PENALTY_LAST_N / LLM_DRY_SEQUENCE_BREAKERS
       LLM_ENABLE_THINKING / LLM_TRACK_TOKEN_USAGE
-      SKILLS_DIR / AGENTS_DIR / PROJECT_LOCOHANE_DIR / SYSTEM_PROMPT_PATH / CHECKPOINT_DB / UPLOAD_DIR / LOG_DIR / LOG_LEVEL / LOG_CLEAR_ON_STARTUP / DEFAULT_WORKDIR / MEMORY_DIR / PLANS_DIR / HELP_PATH
+      COMMON_DATA_DIR / SKILLS_DIR / AGENTS_DIR / PROJECT_LOCOHANE_DIR / SYSTEM_PROMPT_PATH / CHECKPOINT_DB / UPLOAD_DIR / LOG_DIR / LOG_LEVEL / LOG_CLEAR_ON_STARTUP / DEFAULT_WORKDIR / MEMORY_DIR / PLANS_DIR / HELP_PATH
       UPLOAD_RETENTION_DAYS / UPLOAD_CLEANUP_INTERVAL_HOURS
       PATH_MEMORY_DIR / PATH_MEMORY_RETENTION_DAYS / PATH_MEMORY_CLEANUP_INTERVAL_HOURS / PATH_MEMORY_MAX_ENTRIES
       SCRIPT_TIMEOUT / SCRIPT_PYTHON / SCRIPT_REQUIRE_APPROVAL
@@ -1195,6 +1226,13 @@ def load_config(config_path: Path | None = None) -> Config:
     パス系の値はすべて _resolve() でプロジェクトルート基準の絶対パスへ
     解決し、checkpoint_db の親ディレクトリ・upload_dir・log_dir は
     存在しなければここで作成する（アプリ起動時に呼ぶことを想定）。
+
+    checkpoint_db/upload_dir/log_dir/default_workdir/memory_dir/plans_dir/
+    path_memory_dir/chat_log_dir の値に "${common_data_dir}" という文字列が
+    含まれる場合は、[paths].common_data_dir（環境変数 COMMON_DATA_DIR で
+    上書き可能。既定 "./data"）の解決済み絶対パスへ置換してから _resolve()
+    する（_sub_common_data_dir() 参照）。データ保存先ルートを一括で変更
+    したい場合に、各キーを個別に書き換えなくて済むようにするための仕組み。
 
     Args:
         config_path: 読み込む config.ini のパス。省略時は
@@ -1240,6 +1278,8 @@ def load_config(config_path: Path | None = None) -> Config:
     checkpointer = parser["checkpointer"] if parser.has_section("checkpointer") else {}
     ui = parser["ui"] if parser.has_section("ui") else {}
 
+    common_data_dir = _resolve(PROJECT_ROOT, os.getenv("COMMON_DATA_DIR", paths.get("common_data_dir", "./data")))
+
     project_locohane_dirs = _as_path_list(
         os.getenv("PROJECT_LOCOHANE_DIR", paths.get("project_locohane_dir", "./.locohane")),
         PROJECT_ROOT,
@@ -1249,9 +1289,18 @@ def load_config(config_path: Path | None = None) -> Config:
         PROJECT_ROOT,
     )
 
+    main_url_raw = os.getenv("LLM_MAIN_URL", llm.get("main_url", _DEFAULT_LLM_URL))
+    # sub_url が未指定（キー無し、または値が空）の場合、静的な接続先リストを
+    # main_url からコピーするだけでなく、実行時に「委譲元メインエージェントの
+    # このセッションが現在使っている接続先」をそのまま継承する
+    # （sub_endpoints_inherit_main、src/llm.py の _select_endpoint 参照）。
+    sub_url_configured_raw = os.getenv("LLM_SUB_URL", llm.get("sub_url", ""))
+    sub_endpoints_inherit_main = not str(sub_url_configured_raw or "").strip()
+    sub_url_raw = main_url_raw if sub_endpoints_inherit_main else sub_url_configured_raw
+
     cfg = Config(
         main_endpoints=_as_llm_endpoints(
-            os.getenv("LLM_MAIN_URL", llm.get("main_url", _DEFAULT_LLM_URL)),
+            main_url_raw,
             "main_url",
         ),
         main_routing_strategy=_as_routing_strategy(
@@ -1259,9 +1308,10 @@ def load_config(config_path: Path | None = None) -> Config:
             "main_routing_strategy",
         ),
         sub_endpoints=_as_llm_endpoints(
-            os.getenv("LLM_SUB_URL", llm.get("sub_url", _DEFAULT_LLM_URL)),
+            sub_url_raw,
             "sub_url",
         ),
+        sub_endpoints_inherit_main=sub_endpoints_inherit_main,
         sub_routing_strategy=_as_routing_strategy(
             os.getenv("LLM_SUB_ROUTING_STRATEGY", llm.get("sub_routing_strategy", "round_robin")),
             "sub_routing_strategy",
@@ -1308,14 +1358,28 @@ def load_config(config_path: Path | None = None) -> Config:
             PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", paths.get("system_prompt_path", "./system_prompt/system_prompt.md"))
         ),
         project_instructions_paths=[d / "LOCOHANE.md" for d in project_locohane_dirs],
-        checkpoint_db=_resolve(PROJECT_ROOT, os.getenv("CHECKPOINT_DB", paths.get("checkpoint_db", "./data/checkpoints.sqlite"))),
-        upload_dir=_resolve(PROJECT_ROOT, os.getenv("UPLOAD_DIR", uploads.get("dir", "./data/uploads"))),
-        log_dir=_resolve(PROJECT_ROOT, os.getenv("LOG_DIR", log_section.get("dir", "./data/logs"))),
+        checkpoint_db=_resolve(
+            PROJECT_ROOT,
+            _sub_common_data_dir(os.getenv("CHECKPOINT_DB", paths.get("checkpoint_db", "${common_data_dir}/checkpoints.sqlite")), common_data_dir),
+        ),
+        upload_dir=_resolve(
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("UPLOAD_DIR", uploads.get("dir", "${common_data_dir}/uploads")), common_data_dir)
+        ),
+        log_dir=_resolve(
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("LOG_DIR", log_section.get("dir", "${common_data_dir}/logs")), common_data_dir)
+        ),
         log_level=os.getenv("LOG_LEVEL", log_section.get("level", "info")).strip().lower(),
         log_clear_on_startup=_as_bool(os.getenv("LOG_CLEAR_ON_STARTUP", log_section.get("clear_on_startup", False))),
-        default_workdir=_resolve(PROJECT_ROOT, os.getenv("DEFAULT_WORKDIR", default_workdir_section.get("dir", "./"))),
-        memory_dir=_resolve(PROJECT_ROOT, os.getenv("MEMORY_DIR", paths.get("memory_dir", "./data/memory"))),
-        plans_dir=_resolve(PROJECT_ROOT, os.getenv("PLANS_DIR", paths.get("plans_dir", "./data/plans"))),
+        default_workdir=_resolve(
+            PROJECT_ROOT,
+            _sub_common_data_dir(os.getenv("DEFAULT_WORKDIR", default_workdir_section.get("dir", "${common_data_dir}/temp")), common_data_dir),
+        ),
+        memory_dir=_resolve(
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("MEMORY_DIR", paths.get("memory_dir", "${common_data_dir}/memory")), common_data_dir)
+        ),
+        plans_dir=_resolve(
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("PLANS_DIR", paths.get("plans_dir", "${common_data_dir}/plans")), common_data_dir)
+        ),
         help_path=_resolve(PROJECT_ROOT, os.getenv("HELP_PATH", paths.get("help_path", "./system_prompt/help.md"))),
         upload_retention_days=int(os.getenv("UPLOAD_RETENTION_DAYS", uploads.get("retention_days", 7))),
         upload_cleanup_interval_hours=float(os.getenv("UPLOAD_CLEANUP_INTERVAL_HOURS", uploads.get("cleanup_interval_hours", 1))),
@@ -1335,7 +1399,10 @@ def load_config(config_path: Path | None = None) -> Config:
         default_workdir_cleanup_interval_hours=float(
             os.getenv("DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS", default_workdir_section.get("cleanup_interval_hours", 1))
         ),
-        path_memory_dir=_resolve(PROJECT_ROOT, os.getenv("PATH_MEMORY_DIR", path_memory.get("dir", "./data/path_memory"))),
+        path_memory_dir=_resolve(
+            PROJECT_ROOT,
+            _sub_common_data_dir(os.getenv("PATH_MEMORY_DIR", path_memory.get("dir", "${common_data_dir}/path_memory")), common_data_dir),
+        ),
         path_memory_retention_days=int(os.getenv("PATH_MEMORY_RETENTION_DAYS", path_memory.get("retention_days", 1))),
         path_memory_cleanup_interval_hours=float(os.getenv("PATH_MEMORY_CLEANUP_INTERVAL_HOURS", path_memory.get("cleanup_interval_hours", 1))),
         path_memory_max_entries=int(os.getenv("PATH_MEMORY_MAX_ENTRIES", path_memory.get("max_entries", 500))),
@@ -1343,7 +1410,9 @@ def load_config(config_path: Path | None = None) -> Config:
         log_retention_days=int(os.getenv("LOG_RETENTION_DAYS", log_section.get("retention_days", 7))),
         log_cleanup_interval_hours=float(os.getenv("LOG_CLEANUP_INTERVAL_HOURS", log_section.get("cleanup_interval_hours", 1))),
         chat_log_enabled=_as_bool(os.getenv("CHAT_LOG_ENABLED", chat_log.get("enabled", False))),
-        chat_log_dir=_resolve(PROJECT_ROOT, os.getenv("CHAT_LOG_DIR", chat_log.get("dir", "./data/logs_chat"))),
+        chat_log_dir=_resolve(
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("CHAT_LOG_DIR", chat_log.get("dir", "${common_data_dir}/logs_chat")), common_data_dir)
+        ),
         chat_starter_prompts=_as_message_list(os.getenv("CHAT_STARTER_PROMPTS", chat_starters.get("prompts", ""))),
         script_timeout=int(os.getenv("SCRIPT_TIMEOUT", scripts.get("timeout", 60))),
         script_python=os.getenv("SCRIPT_PYTHON", scripts.get("python", "python")),
