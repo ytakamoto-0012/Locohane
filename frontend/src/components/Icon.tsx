@@ -1,4 +1,16 @@
-type IconName = 'paperclip' | 'folder' | 'palette' | 'sun' | 'moon' | 'monitor' | 'plus' | 'x' | 'arrow-down';
+type IconName =
+  | 'paperclip'
+  | 'folder'
+  | 'palette'
+  | 'sun'
+  | 'moon'
+  | 'monitor'
+  | 'plus'
+  | 'x'
+  | 'arrow-down'
+  | 'trash'
+  | 'pencil'
+  | 'panel-left';
 
 function IconPath({ name }: { name: IconName }) {
   switch (name) {
@@ -40,6 +52,21 @@ function IconPath({ name }: { name: IconName }) {
       return <path d="M18 6L6 18M6 6l12 12" />;
     case 'arrow-down':
       return <path d="M12 4v16M6 14l6 6 6-6" />;
+    case 'trash':
+      return (
+        <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16zM10 11v6M14 11v6" />
+      );
+    case 'pencil':
+      return (
+        <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+      );
+    case 'panel-left':
+      return (
+        <>
+          <rect x="2.5" y="4" width="19" height="16" rx="2" />
+          <path d="M9.5 4v16" />
+        </>
+      );
   }
 }
 

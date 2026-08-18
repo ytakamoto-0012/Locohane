@@ -1,0 +1,202 @@
+"""src/thread_store.py（会話スレッド一覧・再開用の軽量ストア）の回帰テスト。"""
+
+from __future__ import annotations
+
+import os
+import time
+
+import pytest
+from chainlit.user import User
+
+from src import chat_log, thread_store
+
+
+@pytest.mark.asyncio
+async def test_init_db_is_idempotent(tmp_path) -> None:
+    db_path = tmp_path / "chat_threads.sqlite"
+    conn1 = await thread_store.init_db(db_path)
+    await conn1.close()
+    # 2回目の呼び出し（既存ファイルに対する再初期化）でもエラーにならない。
+    conn2 = await thread_store.init_db(db_path)
+    await conn2.close()
+
+
+@pytest.mark.asyncio
+async def test_save_thread_upsert_and_metadata_merge(tmp_path) -> None:
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        # 新規作成
+        await thread_store.save_thread(conn, "t1", owner="anonymous", metadata={"work_dir": "/a"})
+        detail = await thread_store.get_thread_detail(conn, "t1")
+        assert detail is not None
+        assert detail["metadata"] == {"work_dir": "/a"}
+        assert detail["name"] is None
+
+        # 既存行への name 更新 + metadata の統合（置き換えではなくmerge）
+        await thread_store.save_thread(conn, "t1", name="Hello", metadata={"plan": [1, 2]})
+        detail = await thread_store.get_thread_detail(conn, "t1")
+        assert detail["name"] == "Hello"
+        assert detail["metadata"] == {"work_dir": "/a", "plan": [1, 2]}
+
+        # name=None を渡しても既存のnameは消えない（COALESCE）
+        await thread_store.save_thread(conn, "t1", metadata={"work_dir": "/b"})
+        detail = await thread_store.get_thread_detail(conn, "t1")
+        assert detail["name"] == "Hello"
+        assert detail["metadata"]["work_dir"] == "/b"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_get_thread_detail_id_always_matches_requested_id(tmp_path) -> None:
+    """@chainlit/react-client の resume_thread ハンドラは thread.id が要求した
+    thread_id と異なると window.location.href='/thread/<id>' へハードナビゲート
+    する（このSPAには存在しないルート）ため、常に引数のIDを返すことの回帰テスト。
+    """
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        await thread_store.save_thread(conn, "abc-123", owner="anonymous", name="x")
+        detail = await thread_store.get_thread_detail(conn, "abc-123")
+        assert detail["id"] == "abc-123"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_steps_are_ordered_by_created_at(tmp_path) -> None:
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        await thread_store.save_thread(conn, "t1", owner="anonymous")
+        await thread_store.upsert_step_row(
+            conn, {"id": "s3", "threadId": "t1", "createdAt": "2024-01-01T00:00:03"}
+        )
+        await thread_store.upsert_step_row(
+            conn, {"id": "s1", "threadId": "t1", "createdAt": "2024-01-01T00:00:01"}
+        )
+        await thread_store.upsert_step_row(
+            conn, {"id": "s2", "threadId": "t1", "createdAt": "2024-01-01T00:00:02"}
+        )
+        detail = await thread_store.get_thread_detail(conn, "t1")
+        assert [s["id"] for s in detail["steps"]] == ["s1", "s2", "s3"]
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_thread_cascades_to_steps(tmp_path) -> None:
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        await thread_store.save_thread(conn, "t1", owner="anonymous")
+        await thread_store.upsert_step_row(conn, {"id": "s1", "threadId": "t1", "createdAt": "2024-01-01"})
+        await thread_store.delete_thread_row(conn, "t1")
+        assert await thread_store.get_thread_detail(conn, "t1") is None
+        cursor = await conn.execute("SELECT COUNT(*) FROM steps WHERE thread_id = ?", ("t1",))
+        row = await cursor.fetchone()
+        assert row[0] == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_list_threads_summary_isolates_owners_and_sorts_desc(tmp_path) -> None:
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        await thread_store.save_thread(conn, "a1", owner="anonymous", name="first")
+        await thread_store.save_thread(conn, "a2", owner="anonymous", name="second")
+        await thread_store.save_thread(conn, "b1", owner="bob", name="bobs thread")
+
+        items, cursor = await thread_store.list_threads_summary(conn, "anonymous", limit=30)
+        assert [i["id"] for i in items] == ["a2", "a1"]  # 更新が新しい順
+        assert cursor is None
+
+        items, _ = await thread_store.list_threads_summary(conn, "bob", limit=30)
+        assert [i["id"] for i in items] == ["b1"]
+    finally:
+        await conn.close()
+
+
+def test_resolve_owner_matches_chat_log_username_resolution() -> None:
+    assert thread_store.resolve_owner(None) == chat_log.resolve_log_username(None) == "anonymous"
+    user = User(identifier="alice/bob")
+    assert thread_store.resolve_owner(user) == chat_log.resolve_log_username("alice/bob")
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_round_trip(tmp_path) -> None:
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        assert await thread_store.get_user_row(conn, "alice") is None
+        created = await thread_store.create_user_row(conn, User(identifier="alice"))
+        assert created.identifier == "alice"
+        fetched = await thread_store.get_user_row(conn, "alice")
+        assert fetched is not None
+        assert fetched.id == created.id == "alice"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_old_threads_noop_when_retention_non_positive(tmp_path) -> None:
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        await thread_store.save_thread(conn, "t1", owner="anonymous")
+        deleted = await thread_store.cleanup_old_threads(conn, 0)
+        assert deleted == 0
+        assert await thread_store.get_thread_detail(conn, "t1") is not None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_old_threads_deletes_expired_and_cascades(tmp_path) -> None:
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        await thread_store.save_thread(conn, "old", owner="anonymous")
+        await thread_store.upsert_step_row(conn, {"id": "s1", "threadId": "old", "createdAt": "2024-01-01"})
+        await thread_store.save_thread(conn, "recent", owner="anonymous")
+
+        old_iso = "2000-01-01T00:00:00+00:00"
+        await conn.execute("UPDATE threads SET updated_at = ? WHERE id = ?", (old_iso, "old"))
+        await conn.commit()
+
+        deleted = await thread_store.cleanup_old_threads(conn, retention_days=7)
+        assert deleted == 1
+        assert await thread_store.get_thread_detail(conn, "old") is None
+        assert await thread_store.get_thread_detail(conn, "recent") is not None
+        cursor = await conn.execute("SELECT COUNT(*) FROM steps WHERE thread_id = ?", ("old",))
+        row = await cursor.fetchone()
+        assert row[0] == 0
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_data_layer_create_step_creates_thread_stub_and_no_op_stubs_are_safe(tmp_path) -> None:
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        dl = thread_store.ChatThreadDataLayer(conn)
+
+        # create_step より前に update_thread が走らなくても、FK制約を満たす
+        # スレッド行が自動的に用意されること（Chainlit側の実行順序は保証されない）。
+        await dl.create_step({"id": "s1", "threadId": "th1", "createdAt": "2024-01-01T00:00:00"})
+        thread = await dl.get_thread("th1")
+        assert thread is not None
+        assert len(thread["steps"]) == 1
+
+        await dl.update_thread("th1", name="first message", user_id=None)
+        thread = await dl.get_thread("th1")
+        assert thread["name"] == "first message"
+
+        author = await dl.get_thread_author("th1")
+        assert author == "anonymous"
+        with pytest.raises(ValueError):
+            await dl.get_thread_author("missing")
+
+        # 添付ファイル・フィードバック系はv1では安全なno-opであること。
+        assert await dl.get_element("th1", "e1") is None
+        assert await dl.create_element(None) is None
+        assert await dl.delete_element("e1") is None
+        assert await dl.get_favorite_steps("anonymous") == []
+        assert await dl.delete_feedback("x") is True
+    finally:
+        await conn.close()

@@ -24,9 +24,15 @@ export function Header() {
   }, []);
 
   const handleNewChat = () => {
-    if (window.confirm('新しい会話を開始しますか？現在の会話は失われます。')) {
-      window.location.reload();
-    }
+    // 会話スレッド一覧（左サイドバー）が有効な場合、現在の会話は失われず
+    // 一覧に残り続けるため、以前のような確認ダイアログは不要
+    // （[thread_store].enabled=false でサイドバー自体が無い場合は、
+    // 会話が本当に失われるが、その場合も従来通り実害は小さいため確認は省略する）。
+    // ?thread=<id> を落とした素のURLへ遷移するだけで新規チャットになる
+    // （Sidebar.tsx の goToThread(null) と同じ仕組み）。
+    const url = new URL(window.location.href);
+    url.searchParams.delete('thread');
+    window.location.href = url.pathname + url.search;
   };
 
   return (

@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
-import { useAuth, useChatSession, useChatMessages, useChatData } from '@chainlit/react-client';
+import { useEffect, useState } from 'react';
+import { useAuth, useChatSession, useChatInteract, useChatMessages, useChatData } from '@chainlit/react-client';
 import { Header } from './components/Header';
 import { LoginForm } from './components/LoginForm';
 import { MessagePane } from './components/MessagePane';
+import { Sidebar } from './components/Sidebar';
 import { SidePanel } from './components/SidePanel';
 import { Composer } from './components/Composer';
 import { AskActionBar } from './components/AskActionBar';
@@ -26,17 +27,31 @@ import './styles.css';
 function App() {
   const { data: authData, isReady: authReady, isAuthenticated } = useAuth();
   const { connect } = useChatSession();
+  const { setIdToResume } = useChatInteract();
   const { messages } = useChatMessages();
   const { loading } = useChatData();
 
   const requireLogin = authData?.requireLogin ?? false;
   const canConnect = authReady && (!requireLogin || isAuthenticated);
 
+  // ?thread=<id> があれば再開対象としてrecoil状態へ書き込んでからconnectする。
+  // useChatSession().connect は threadIdToResumeState を読むdebounce関数のため、
+  // setIdToResume 直後に同期的にconnectするとReactのstate反映タイミングと
+  // 競合し古い値（未指定）が送られるリスクがある。seeded で「recoilへの
+  // 書き込み確定後にのみconnectする」ことを保証する（Sidebar.tsx参照）。
+  const [seeded, setSeeded] = useState(false);
   useEffect(() => {
-    if (!canConnect) return;
+    const threadId = new URLSearchParams(window.location.search).get('thread');
+    if (threadId) setIdToResume(threadId);
+    setSeeded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!canConnect || !seeded) return;
     connect({ userEnv: {} });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canConnect]);
+  }, [canConnect, seeded]);
 
   const mainMessages = selectMainThread(messages);
   const sideSteps = selectSideSteps(messages);
@@ -70,6 +85,7 @@ function App() {
 
   return (
     <div className="app-shell">
+      <Sidebar />
       <div className="main-column">
         <Header />
         <MessagePane messages={displayMessages} showTyping={showTyping} />

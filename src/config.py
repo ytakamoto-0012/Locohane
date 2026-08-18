@@ -204,6 +204,20 @@ class Config:
         chat_log_dir: 会話ログの保存先ルートディレクトリの絶対パス。
             実際には <chat_log_dir>/<ユーザー名>/<日付>_<thread_id>.log の
             構成で書き出す（src/chat_log.py 参照）。
+        thread_store_enabled: 会話スレッド一覧（左サイドバー）・再開機能の
+            有効/無効（[thread_store].enabled）。Chainlit の BaseDataLayer
+            実装（src/thread_store.py）を登録するかどうかを決める。
+        thread_store_db: スレッド一覧・Step 履歴を保存する SQLite ファイルの
+            絶対パス（data/checkpoints.sqlite とは別ファイル。LangGraph の
+            会話状態そのものではなく、一覧表示・再開に必要なメタデータのみ
+            を持つ）。
+        thread_store_retention_days: スレッド一覧の保持日数。この日数
+            更新が無いスレッドを自動削除する。0以下で無効化（既定、
+            会話履歴はアップロード等より価値が高いため無期限保持が既定）。
+            LangGraph 側の checkpoints.sqlite は削除しない（孤立データが
+            残るのは許容するトレードオフ）。
+        thread_store_cleanup_interval_hours: 上記の自動削除チェックの
+            実行間隔（時間）。
         chat_starter_prompts: チャット開始時に表示する定型文ボタンの候補
             リスト（[chat_starters].prompts）。クリックするとそのまま
             メッセージとして送信される。空リストならボタンを表示しない。
@@ -599,6 +613,12 @@ class Config:
     # --- 会話ログ（[chat_log]） ---
     chat_log_enabled: bool
     chat_log_dir: Path
+
+    # --- 会話スレッド一覧・再開（[thread_store]） ---
+    thread_store_enabled: bool
+    thread_store_db: Path
+    thread_store_retention_days: int
+    thread_store_cleanup_interval_hours: float
 
     # --- チャット開始時の定型文ボタン（[chat_starters]） ---
     chat_starter_prompts: list[str]
@@ -1283,6 +1303,8 @@ def load_config(config_path: Path | None = None) -> Config:
       AUTH_ENABLED / AUTH_REQUIRE_PASSWORD / AUTH_USERS（AUTH_USERS は .env 専用、
       config.ini 側フォールバックを持たない）
       CHAT_LOG_ENABLED / CHAT_LOG_DIR
+      THREAD_STORE_ENABLED / THREAD_STORE_DB / THREAD_STORE_RETENTION_DAYS /
+      THREAD_STORE_CLEANUP_INTERVAL_HOURS
       CHAT_STARTER_PROMPTS
       MCP_ENABLED / MCP_SETTINGS_PATH / MCP_CONNECT_TIMEOUT_SECONDS / MCP_CALL_TIMEOUT_SECONDS
       （これら4値は .locohane/settings.json の "mcp" ブロックがあればさらに
@@ -1327,6 +1349,7 @@ def load_config(config_path: Path | None = None) -> Config:
     path_memory = parser["path_memory"] if parser.has_section("path_memory") else {}
     log_section = parser["log"] if parser.has_section("log") else {}
     chat_log = parser["chat_log"] if parser.has_section("chat_log") else {}
+    thread_store = parser["thread_store"] if parser.has_section("thread_store") else {}
     chat_starters = parser["chat_starters"] if parser.has_section("chat_starters") else {}
     scripts = parser["scripts"] if parser.has_section("scripts") else {}
     file_tools_duplicate_guard = parser["file_tools_duplicate_guard"] if parser.has_section("file_tools_duplicate_guard") else {}
@@ -1477,6 +1500,14 @@ def load_config(config_path: Path | None = None) -> Config:
         chat_log_enabled=_as_bool(os.getenv("CHAT_LOG_ENABLED", chat_log.get("enabled", False))),
         chat_log_dir=_resolve(
             PROJECT_ROOT, _sub_common_data_dir(os.getenv("CHAT_LOG_DIR", chat_log.get("dir", "${common_data_dir}/logs_chat")), common_data_dir)
+        ),
+        thread_store_enabled=_as_bool(os.getenv("THREAD_STORE_ENABLED", thread_store.get("enabled", True))),
+        thread_store_db=_resolve(
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("THREAD_STORE_DB", thread_store.get("db", "${common_data_dir}/chat_threads.sqlite")), common_data_dir)
+        ),
+        thread_store_retention_days=int(os.getenv("THREAD_STORE_RETENTION_DAYS", thread_store.get("retention_days", 0))),
+        thread_store_cleanup_interval_hours=float(
+            os.getenv("THREAD_STORE_CLEANUP_INTERVAL_HOURS", thread_store.get("cleanup_interval_hours", 1))
         ),
         chat_starter_prompts=_as_message_list(os.getenv("CHAT_STARTER_PROMPTS", chat_starters.get("prompts", ""))),
         script_timeout=int(os.getenv("SCRIPT_TIMEOUT", scripts.get("timeout", 60))),
@@ -1807,6 +1838,7 @@ def load_config(config_path: Path | None = None) -> Config:
 
     # data 配下のディレクトリを確実に用意する（checkpoint_db は親ディレクトリを作る）。
     cfg.checkpoint_db.parent.mkdir(parents=True, exist_ok=True)
+    cfg.thread_store_db.parent.mkdir(parents=True, exist_ok=True)
     cfg.upload_dir.mkdir(parents=True, exist_ok=True)
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     cfg.path_memory_dir.mkdir(parents=True, exist_ok=True)

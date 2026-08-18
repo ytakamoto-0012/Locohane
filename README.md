@@ -318,6 +318,7 @@ Locohane/
 │   ├── subagent.py          # dispatch_agent の内部ReActループ
 │   ├── mcp_client.py        # MCPサーバー接続（stdio）・ツール変換
 │   ├── chat_log.py          # 会話ログのテキストファイル記録
+│   ├── thread_store.py      # 会話スレッド一覧（左サイドバー）・再開用の軽量ストア
 │   ├── cleanup.py           # 不要ファイルの自動削除
 │   ├── files.py             # ファイルアップロード処理
 │   ├── images.py            # 画像処理・Data URL変換
@@ -401,6 +402,7 @@ Locohane/
 | パス | 中身 | 削除してよいタイミング | 削除方法 |
 |------|------|------------------------|----------|
 | `data/checkpoints.sqlite` | LangGraph の会話状態（全スレッドの履歴） | 過去の会話履歴が不要になったとき | ファイルを削除（アプリ停止中に） |
+| `data/chat_threads.sqlite` | 会話スレッド一覧（画面左サイドバー）・再開用のメタデータ（スレッド名・所有者・Chainlitの Step 履歴）。`checkpoints.sqlite` とは別ファイル（`[thread_store]`参照） | 一覧・再開機能が不要になったとき | ファイルを削除（アプリ停止中に。`checkpoints.sqlite` 自体は消えないため会話状態は失われない） |
 | `data/uploads/` | Chainlit にアップロードされたファイル | アップロード資料が不要になったとき | フォルダ内を削除 |
 | `data/logs/app.log` | アプリの動作ログ | いつでも | ファイルを削除 |
 | `data/memory/` | 永続メモリー（`user`/`feedback`/`project`/`reference` サブフォルダ＋`MEMORY.md`索引） | 蓄積した記憶が不要になったとき | フォルダ内を削除（`MEMORY.md`は次回保存時に再生成される） |
@@ -839,6 +841,10 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[auth]` | `require_password` | 認証ON時、パスワード一致を必須にするか（`false`＝ユーザー名のみで通す） | `AUTH_REQUIRE_PASSWORD` |
 | `[chat_log]` | `enabled` | 会話ログ（ユーザー発言・AI最終応答）のテキストファイル記録の有効/無効 | `CHAT_LOG_ENABLED` |
 | `[chat_log]` | `dir` | 会話ログの保存先ルートディレクトリ | `CHAT_LOG_DIR` |
+| `[thread_store]` | `enabled` | 会話スレッド一覧（画面左サイドバー）・再開機能の有効/無効 | `THREAD_STORE_ENABLED` |
+| `[thread_store]` | `db` | スレッド一覧・Step履歴の保存先SQLiteファイル（`data/checkpoints.sqlite`とは別ファイル） | `THREAD_STORE_DB` |
+| `[thread_store]` | `retention_days` | スレッド一覧の保持日数（0以下で無期限保持、既定）。削除してもLangGraph側の会話状態自体は消えない | `THREAD_STORE_RETENTION_DAYS` |
+| `[thread_store]` | `cleanup_interval_hours` | 上記の自動削除チェックの実行間隔（時間） | `THREAD_STORE_CLEANUP_INTERVAL_HOURS` |
 | `[chat_starters]` | `prompts` | チャット開始時に表示する定型文ボタン（クリックでそのまま送信、複数指定可） | `CHAT_STARTER_PROMPTS` |
 | `[checkpointer]` | `op_timeout_seconds` | LangGraphの会話状態SQLite（`[paths].checkpoint_db`）に対する1回あたりの操作（aget_tuple/aput_writes等）タイムアウト秒数。超過時はcheckpointer再構築へフォールバック | `CHECKPOINTER_OP_TIMEOUT_SECONDS` |
 | `[checkpointer]` | `close_timeout_seconds` | checkpointer再構築時に旧DB接続をクローズする際のタイムアウト秒数 | `CHECKPOINTER_CLOSE_TIMEOUT_SECONDS` |
@@ -894,6 +900,36 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
   で未ログインの場合は `anonymous` にまとめる。
 - 1つのチャットセッション（タブ）につき1ファイルへ追記し続ける（日をまたいでも
   ファイルは変わらない）。
+
+## 会話スレッド一覧・再開（左サイドバー）
+
+`[thread_store] enabled = true`（既定）にすると、画面左に過去の会話一覧が
+サイドバー表示され、選ぶとLangGraphの会話状態ごとその続きを再開できる
+（ChatGPT/Claude 同様）。実装は `src/thread_store.py`（Chainlit の
+`BaseDataLayer` を実装した軽量な独自ストア、`data/chat_threads.sqlite`）と
+`frontend/src/components/Sidebar.tsx`。
+
+- **所有者の分け方**: `[auth] enabled = false`（既定）では全会話を
+  `anonymous` という1つのバケットにまとめ、単一の一覧として表示する
+  （`[chat_log]` と同じ挙動）。`[auth] enabled = true` ではログインユーザー
+  ごとに自分のスレッドのみが見える。
+- **一覧・リネーム・削除**: 独自の `GET/PUT/DELETE /locohane/threads*`
+  エンドポイント（`app.py`）を使う。Chainlit公式の `/project/threads*` は
+  匿名モードで常に401になり使えないため採用していない。
+- **再開の仕組み**: Chainlit自身のスレッドID（`cl.context.session.thread_id`）
+  をそのままLangGraphのチェックポイント分離キーとして使う（`on_chat_start`）。
+  再開時は同じIDが渡されるため、LangGraph側の会話状態が自動的に引き継がれる。
+  `@cl.on_chat_resume` は `on_chat_start` の軽量版で、ウェルカムメッセージ等は
+  再送しない（過去のメッセージは resume 時に自動再生されるため）。
+- **匿名モードでの再開有効化**: Chainlit本体の `resume_thread()`
+  （`chainlit/socket.py`）は `session.user` が `None` だと無条件で
+  早期returnする設計のため、匿名モードのままではスレッド再開が発火しない。
+  `app.py` の `_patch_chainlit_anonymous_resume()` が、匿名モード時のみ
+  `chainlit.socket.resume_thread` をモジュール関数単位で差し替え、再開時に
+  一時的な `anonymous` ユーザーを補ってから元の実装を呼ぶ。
+- **v1のスコープ外**: 添付ファイル（`show_image`/`analyze_image`/
+  `provide_download` 等）は再開したスレッドの過去メッセージ内では表示が
+  欠落する（本文・ツール呼び出し履歴は問題なく再現される）。
 
 ---
 

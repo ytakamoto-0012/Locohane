@@ -90,6 +90,8 @@ from src.memory import render_memory_block
 from src.project_instructions import render_project_instructions_block
 from src.skills import build_system_prompt, render_skills_block, scan_skills
 from src.subagent import is_truncated_result
+from src.thread_store import ChatThreadDataLayer
+from src import thread_store
 from src.tools import (
     WorkDirAccessStatus,
     forget_session_tool_semaphores,
@@ -163,6 +165,10 @@ _config = load_config()
 # 使い回すため保持しておく。
 _system_prompt = None
 _checkpointer = None
+# 会話スレッド一覧（左サイドバー）・再開機能用の軽量ストア（[thread_store].enabled
+# のときのみ使う）。接続はアプリ寿命で1つを共有する（_checkpointer と同じ方針）。
+_thread_store_conn = None
+_thread_data_layer: ChatThreadDataLayer | None = None
 
 
 class _CheckpointerTimeout(Exception):
@@ -279,6 +285,124 @@ if _config.auth_enabled:
         return cl.User(identifier=username)
 
 
+if _config.thread_store_enabled:
+
+    @cl.data_layer
+    def _get_thread_data_layer():
+        """会話スレッド一覧・再開用の BaseDataLayer を Chainlit へ登録する。
+
+        config.code.data_layer には関数（ファクトリ）を渡すだけでよく、実際の
+        呼び出し（このファクトリの実行）は Chainlit 側が初回 get_data_layer()
+        時に1回だけ遅延実行するため、_thread_data_layer の実体は _setup() が
+        後から構築しても問題ない（この関数定義自体は _setup() より前で構わない）。
+        """
+        assert _thread_data_layer is not None, "_setup() が完了する前に data layer が参照されました"
+        return _thread_data_layer
+
+
+def _patch_chainlit_anonymous_resume() -> None:
+    """[auth] enabled=false（匿名モード）でもスレッド再開（on_chat_resume）が
+    発火するようにする、chainlit.socket.resume_thread のモンキーパッチ。
+
+    Chainlit本体の resume_thread()（chainlit/socket.py）は
+    `if not data_layer or not session.user or not session.thread_id_to_resume: return`
+    という無条件ガードを持つ。匿名モードでは connect ハンドラが
+    require_login()=False のため session.user を一切設定せず常に None のまま
+    のため、パッチ無しではスレッドが存在してもこのガードで毎回弾かれ
+    on_chat_resume が永久に呼ばれない。
+
+    resume_thread は chainlit/socket.py 内で無条件名参照（同一モジュール内の
+    呼び出し）されるため、chainlit.socket.resume_thread をこの関数で
+    差し替えるだけで確実に効く（_patch_chainlit_connection_successful_task_end
+    のように @sio.on() でイベントハンドラ自体を再登録する必要は無く、
+    登録順を気にしなくてよい）。
+
+    所有者の解決自体（会話ログ・スレッド一覧のバケット分け）はこの関数とは
+    無関係に thread_store._current_owner() が cl.context 経由で毎回独立に
+    行う（session.user が None のままでも "anonymous" に解決される）。
+    ここで補うのは、あくまで resume_thread() 内の truthy性チェックを
+    通すためだけの最小限の処置。
+    """
+    import chainlit.socket as _cl_socket
+
+    _original_resume_thread = _cl_socket.resume_thread
+
+    async def _resume_thread_anonymous(session):
+        if session.user is None:
+            session.user = cl.User(identifier=thread_store.ANONYMOUS_OWNER)
+        return await _original_resume_thread(session)
+
+    _cl_socket.resume_thread = _resume_thread_anonymous
+    logging.getLogger(__name__).info("匿名モード用のスレッド再開有効化パッチを適用しました。")
+
+
+if _config.thread_store_enabled:
+    from chainlit.auth import get_current_user as _cl_get_current_user
+    from chainlit.server import app as _chainlit_asgi_app
+    from fastapi import Depends, HTTPException
+    from pydantic import BaseModel
+
+    class _RenameThreadBody(BaseModel):
+        name: str
+
+    async def _assert_owns_thread(thread_id: str, current_user) -> None:
+        """指定スレッドの所有者が current_user（匿名モードでは None）と一致するか確認する。
+
+        Chainlit公式の /project/threads* は匿名モードで current_user が常に
+        None になり無条件401になるため使えない（chainlit.auth.get_current_user
+        は require_login()=False のとき常に None を返す設計）。このアプリ独自の
+        ルートは thread_store.resolve_owner(None) が "anonymous" に解決される
+        ことを利用し、認証あり/なし両方を同じコードパスで扱う。
+        """
+        if _thread_store_conn is None:
+            # _setup() が一度も完了していない（起動直後にブラウザ側の
+            # REST呼び出しがWebSocket接続より先に届いた等）。この時点では
+            # どのスレッドも存在しえないため、素直に見つからない扱いにする。
+            raise HTTPException(status_code=404, detail="Thread not found")
+        owner = await thread_store.get_thread_owner(_thread_store_conn, thread_id)
+        if owner is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        if owner != thread_store.resolve_owner(current_user):
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+    @_chainlit_asgi_app.get("/locohane/threads")
+    async def _locohane_list_threads(
+        limit: int = 30,
+        before: str | None = None,
+        current_user=Depends(_cl_get_current_user),
+    ):
+        """左サイドバー用の軽量なスレッド一覧（{id,name,updatedAt}[]）。
+
+        Chainlit公式の /project/threads は匿名モードで使えないため独自実装
+        （_assert_owns_thread のdocstring参照）。認証ありモードでは
+        current_user がログイン中のユーザーに解決され、そのユーザー分だけを返す。
+        """
+        if _thread_store_conn is None:
+            # _setup() が一度も完了していない（起動直後にブラウザ側のREST呼び出しが
+            # WebSocket接続より先に届いた等）。空一覧を返せば十分（実害なし、
+            # フロントは on_chat_start 完了後に再度取得し直す）。
+            return {"threads": [], "nextCursor": None}
+        owner = thread_store.resolve_owner(current_user)
+        items, next_cursor = await thread_store.list_threads_summary(_thread_store_conn, owner, limit, before)
+        return {"threads": items, "nextCursor": next_cursor}
+
+    @_chainlit_asgi_app.put("/locohane/threads/{thread_id}")
+    async def _locohane_rename_thread(
+        thread_id: str,
+        payload: _RenameThreadBody,
+        current_user=Depends(_cl_get_current_user),
+    ):
+        await _assert_owns_thread(thread_id, current_user)
+        await thread_store.rename_thread(_thread_store_conn, thread_id, payload.name)
+        return {"success": True}
+
+    @_chainlit_asgi_app.delete("/locohane/threads/{thread_id}")
+    async def _locohane_delete_thread(thread_id: str, current_user=Depends(_cl_get_current_user)):
+        await _assert_owns_thread(thread_id, current_user)
+        await thread_store.delete_thread_row(_thread_store_conn, thread_id)
+        return {"success": True}
+
+
 @cl.on_app_startup
 async def _on_app_startup() -> None:
     """プロセス起動時（最初のセッション接続より前）に一度だけ呼ばれる。
@@ -302,6 +426,14 @@ async def _on_app_shutdown() -> None:
     """
     await shutdown_mcp_tools()
     await _close_checkpointer_gracefully()
+    if _thread_store_conn is not None:
+        try:
+            await _thread_store_conn.close()
+        except Exception:  # noqa: BLE001 - シャットダウン時はベストエフォート、ログのみ
+            logging.getLogger(__name__).debug(
+                "シャットダウン時のスレッドストア接続クローズに失敗しました（リークを許容）",
+                exc_info=True,
+            )
 
 
 async def _close_checkpointer_gracefully() -> None:
@@ -676,7 +808,7 @@ async def _setup() -> None:
         None。副作用としてモジュール globals（_system_prompt, _checkpointer）
         を設定する。
     """
-    global _system_prompt, _checkpointer
+    global _system_prompt, _checkpointer, _thread_store_conn, _thread_data_layer
     if _system_prompt is not None:
         return
 
@@ -817,6 +949,25 @@ async def _setup() -> None:
 
     # チェックポインタ（会話状態の永続化）。接続はアプリ寿命で保持する。
     _checkpointer = await _build_checkpointer()
+
+    # 会話スレッド一覧（左サイドバー）・再開機能用の軽量ストア。
+    # data/checkpoints.sqlite（LangGraphの会話状態そのもの）とは別ファイル。
+    if _config.thread_store_enabled:
+        _thread_store_conn = await thread_store.init_db(_config.thread_store_db)
+        _thread_data_layer = ChatThreadDataLayer(_thread_store_conn)
+        # 期限切れスレッドの起動時1回削除＋以降の定期削除（retention_days<=0で無効）。
+        await thread_store.cleanup_old_threads(_thread_store_conn, _config.thread_store_retention_days)
+        if _config.thread_store_retention_days > 0:
+            asyncio.create_task(
+                thread_store.run_cleanup_loop(
+                    _thread_store_conn,
+                    _config.thread_store_retention_days,
+                    _config.thread_store_cleanup_interval_hours,
+                )
+            )
+        # 匿名モードではこのパッチが無いとスレッド再開が発火しない（関数docstring参照）。
+        if not _config.auth_enabled:
+            _patch_chainlit_anonymous_resume()
 
     # on_stop でのグラフ再構築（_rebuild_graph）に使い回すため保持する。
     _system_prompt = system_prompt
@@ -1024,9 +1175,14 @@ async def on_chat_start() -> None:
         ウェルカムメッセージの送信を行う。
     """
     await _setup()
-    # 会話ごとに thread_id を発行（チェックポイントの分離キー、かつ
-    # LLMクライアントのセッションスコープ分離キーにも流用する）。
-    thread_id = str(uuid.uuid4())
+    # LangGraphチェックポイントの分離キー（かつLLMクライアントのセッション
+    # スコープ分離キーにも流用する）は、Chainlit自身のスレッドID
+    # （cl.context.session.thread_id）をそのまま使う。新規接続時はこれも
+    # 結局 uuid4() で新規発行される（chainlit/session.py 参照）ため従来と
+    # 挙動は変わらないが、再開時（on_chat_resume）は要求されたIDがそのまま
+    # 入るため、LangGraph側のチェックポイントとChainlit側のスレッドが
+    # 自動的に一致し、同じ会話状態を引き継げる（[thread_store] 参照）。
+    thread_id = cl.context.session.thread_id
     cl.user_session.set("thread_id", thread_id)
     # 会話ログ（[chat_log].enabled=true の場合のみ）の書き出し先を
     # セッション開始時に1回だけ確定する（日をまたいでも同じファイルに
@@ -1091,6 +1247,64 @@ async def on_chat_start() -> None:
     await cl.Message(
         content=MAX_DISPLAY_SIDE_STEPS_PREFIX + json.dumps(_config.ui_max_display_side_steps)
     ).send()
+
+
+if _config.thread_store_enabled:
+
+    @cl.on_chat_resume
+    async def on_chat_resume(thread: dict) -> None:
+        """左サイドバーで過去のスレッドを選んだ際に、on_chat_start の代わりに呼ばれる。
+
+        ウェルカムメッセージ・定型文ボタン・作業ディレクトリカード・表示件数上限
+        マーカーは再送しない（resume_thread イベントで過去の cl.Message が
+        そのまま frontend の messagesState へ再生されるため、再送すると
+        画面上で二重表示になる）。cl.ChatSettings(...) だけは再送が必要
+        （ステップとして永続化されないライブ push のみの情報のため、
+        再開直後はギアアイコンのパネルが空になってしまう）。
+
+        work_dir/plan/plan_approved/トークン累計は on_message 側で毎ターン
+        thread_store へスナップショットした値（thread["metadata"]）から
+        復元する（無ければ on_chat_start と同じ既定値）。これが無いと、
+        Plan Mode中のタスク一覧・承認状態は cl.user_session 限定の状態
+        （LangGraph側には保存されない）のため、再開のたびに静かに失われる。
+        """
+        await _setup()
+        thread_id = cl.context.session.thread_id
+        cl.user_session.set("thread_id", thread_id)
+
+        if _config.chat_log_enabled:
+            user = cl.user_session.get("user")
+            username = resolve_log_username(user.identifier if user else None)
+            # 再開のたびに新しい日時サフィックスのファイルにする（既存ファイルへの
+            # 追記継続だと「いつ再開したか」が分からなくなるため）。
+            cl.user_session.set("chat_log_path", build_log_path(_config.chat_log_dir, username, thread_id))
+
+        _rebuild_graph(thread_id)
+
+        meta = thread.get("metadata") or {}
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        cl.user_session.set("work_dir", meta.get("work_dir"))
+        cl.user_session.set("work_dir_access", None)
+        cl.user_session.set("work_dir_notice_pending", True)
+        cl.user_session.set("plan", meta.get("plan"))
+        cl.user_session.set("plan_message", None)
+        cl.user_session.set("plan_approved", bool(meta.get("plan_approved")))
+        cl.user_session.set("token_usage_cumulative", meta.get("token_usage_cumulative") or _new_usage_totals())
+        cl.user_session.set("token_usage_cumulative_main", meta.get("token_usage_cumulative_main") or _new_usage_totals())
+
+        await cl.ChatSettings(
+            [
+                TextInput(
+                    id="work_dir",
+                    label="作業ディレクトリ",
+                    initial="",
+                    placeholder=rf"例: C:\Users\me\project（未入力なら既定値 {_config.default_workdir} を使用）",
+                )
+            ]
+        ).send()
+
+        logging.getLogger(__name__).info("スレッドを再開しました thread_id=%s", thread_id)
 
 
 @cl.on_chat_end
@@ -2598,6 +2812,23 @@ async def on_message(message: cl.Message) -> None:
             message.content,
             ai_text,
             token_usage_cumulative=cl.user_session.get("token_usage_cumulative"),
+        )
+
+    # スレッド再開（on_chat_resume）用に、cl.user_session限定でLangGraph側には
+    # 保存されない付帯状態（work_dir/plan/トークン累計）をターン完了ごとに
+    # thread_store へスナップショットする（ベストエフォート。無くても会話の
+    # 続き自体はLangGraphのチェックポイントから正しく再開できる）。
+    if _config.thread_store_enabled and _thread_store_conn is not None:
+        await thread_store.save_thread(
+            _thread_store_conn,
+            thread_id,
+            metadata={
+                "work_dir": cl.user_session.get("work_dir"),
+                "plan": cl.user_session.get("plan"),
+                "plan_approved": cl.user_session.get("plan_approved"),
+                "token_usage_cumulative": cl.user_session.get("token_usage_cumulative"),
+                "token_usage_cumulative_main": cl.user_session.get("token_usage_cumulative_main"),
+            },
         )
 
     # コンテキスト圧縮（ClaudeCodeのcompact相当）。ターン内の安全な区切り
