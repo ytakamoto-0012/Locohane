@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 
@@ -68,6 +69,31 @@ async def test_save_thread_upsert_and_metadata_merge(tmp_path) -> None:
         detail = await thread_store.get_thread_detail(conn, "t1")
         assert detail["name"] == "Hello"
         assert detail["metadata"]["work_dir"] == "/b"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_save_thread_and_upsert_thread_stub_race_safely_on_new_thread(tmp_path) -> None:
+    """新規スレッドの最初のメッセージでは、create_step（upsert_thread_stub）と
+    Chainlit本体のinit_thread()（→save_thread、スレッド命名）がほぼ同時に
+    呼ばれる（chainlit/emitter.py process_message が両方を asyncio.create_task
+    で同時起動するため）。以前の実装は「SELECTして行が無ければINSERT」という
+    非原子的な分岐だったため、両者がほぼ同時に呼ばれると片方のINSERTが
+    `UNIQUE constraint failed: threads.id` で失敗し、スレッド名が永久に
+    「無題の会話」のまま確定しなくなる不具合があった（2026-08-19 ユーザー報告、
+    tests/test_ui_action_thread_naming.py で実際の呼び出し経路からも再現済み）。
+    ここでは thread_store の2関数だけを使い、決定的に競合させて確認する。
+    """
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        await asyncio.gather(
+            thread_store.upsert_thread_stub(conn, "t1", "anonymous"),
+            thread_store.save_thread(conn, "t1", owner="anonymous", name="hello world"),
+        )
+        detail = await thread_store.get_thread_detail(conn, "t1")
+        assert detail is not None
+        assert detail["name"] == "hello world"
     finally:
         await conn.close()
 

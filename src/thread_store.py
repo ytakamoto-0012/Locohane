@@ -141,42 +141,52 @@ async def save_thread(
     on_message 側の毎ターンのスナップショット（work_dir/plan/token使用量）と
     Chainlit本体からの update_thread(name=...) 呼び出しの両方がこの関数を
     経由するため、片方が持つキーをもう片方が消してしまわないようにするため。
+
+    「行の有無をSELECTしてからINSERT/UPDATEを選ぶ」を1つの関数内で完結させると、
+    同じ thread_id に対して create_step（upsert_thread_stub）とこの関数が
+    ほぼ同時に呼ばれた場合に競合する。process_message()（chainlit本体）は
+    最初のユーザーメッセージ受信時、message._create()（→create_step経由で
+    upsert_thread_stub）と init_thread()（→flush_thread_queues経由で
+    この関数）を asyncio.create_task で同時に2つ起動するため、新規スレッドの
+    最初のメッセージでは必ずこの競合が起こりうる。両者のSELECTが互いの
+    INSERT前に割り込むと、後からINSERTした側が
+    `UNIQUE constraint failed: threads.id` で失敗する（Chainlit本体側の
+    flush_thread_queuesはこの例外をログに残すだけで再送しないため、
+    スレッド名が永久に「無題の会話」のまま確定しなくなる。
+    2026-08-19 ユーザー報告で実際に再現・確認済み）。
+
+    このため「行の存在を保証する」部分を upsert_thread_stub と全く同じ
+    `INSERT OR IGNORE`（原子的・競合しても安全）に分離し、続けて
+    （この時点で行の存在が保証された状態で）無条件の UPDATE のみで
+    統合更新する。UPDATE側にはINSERT分岐が無いためUNIQUE制約に触れない。
     """
     now = _now()
+    await conn.execute(
+        "INSERT OR IGNORE INTO threads (id, owner, name, created_at, updated_at, metadata_json) "
+        "VALUES (?, ?, NULL, ?, ?, '{}')",
+        (thread_id, owner or ANONYMOUS_OWNER, now, now),
+    )
+    await conn.commit()
+
     cursor = await conn.execute("SELECT owner, metadata_json, tags_json FROM threads WHERE id = ?", (thread_id,))
     row = await cursor.fetchone()
-    if row is None:
-        await conn.execute(
-            "INSERT INTO threads (id, owner, name, created_at, updated_at, metadata_json, tags_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                thread_id,
-                owner or ANONYMOUS_OWNER,
-                name,
-                now,
-                now,
-                json.dumps(metadata or {}, ensure_ascii=False),
-                json.dumps(tags, ensure_ascii=False) if tags is not None else None,
-            ),
-        )
-    else:
-        existing_owner, existing_metadata_json, existing_tags_json = row
-        merged_metadata = json.loads(existing_metadata_json or "{}")
-        if metadata:
-            merged_metadata.update(metadata)
-        new_tags_json = json.dumps(tags, ensure_ascii=False) if tags is not None else existing_tags_json
-        await conn.execute(
-            "UPDATE threads SET owner = ?, name = COALESCE(?, name), updated_at = ?, "
-            "metadata_json = ?, tags_json = ? WHERE id = ?",
-            (
-                owner or existing_owner,
-                name,
-                now,
-                json.dumps(merged_metadata, ensure_ascii=False),
-                new_tags_json,
-                thread_id,
-            ),
-        )
+    existing_owner, existing_metadata_json, existing_tags_json = row
+    merged_metadata = json.loads(existing_metadata_json or "{}")
+    if metadata:
+        merged_metadata.update(metadata)
+    new_tags_json = json.dumps(tags, ensure_ascii=False) if tags is not None else existing_tags_json
+    await conn.execute(
+        "UPDATE threads SET owner = ?, name = COALESCE(?, name), updated_at = ?, "
+        "metadata_json = ?, tags_json = ? WHERE id = ?",
+        (
+            owner or existing_owner,
+            name,
+            now,
+            json.dumps(merged_metadata, ensure_ascii=False),
+            new_tags_json,
+            thread_id,
+        ),
+    )
     await conn.commit()
 
 

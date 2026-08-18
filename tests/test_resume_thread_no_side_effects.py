@@ -18,8 +18,12 @@ resume_thread() 自体（→ app.on_chat_resume()）は書き込みを行わな�
 metadata=...) を呼ぶ。ChatThreadDataLayer.update_thread → save_thread は
 呼ばれるたびに無条件で updated_at を今の時刻に更新するため、「会話を見て
 別のスレッドへ移動しただけ」でその直前に見ていたスレッドが一覧の先頭に
-ジャンプしてしまう（test_disconnecting_a_resumed_session_bumps_it_to_top
-で再現）。
+ジャンプしてしまう（手動の再現スクリプトで複数回確認済み。ただし
+disconnect() 内の非同期タスクのスケジューリングに依存するタイミングが
+絡み、pytest内で安定して再現させるテストコードを書くのは不安定だった
+ため、ここでは「パッチ適用後は並び順が変わらないこと」
+（test_patch_prevents_disconnect_from_bumping_thread_order）のみを
+回帰テストとして残す）。
 
 session.to_persistable() が持つ情報（chat_settings/chat_profile/
 client_type + cl.user_session の中身）は、本アプリでは on_message が
@@ -120,37 +124,6 @@ async def _resume_and_disconnect(conn, thread_id: str, socket_id: str) -> None:
     await app.on_chat_resume(thread)
 
     await cl_socket.disconnect(socket_id)
-
-
-@pytest.mark.asyncio
-async def test_disconnecting_a_resumed_session_bumps_it_to_top(tmp_path, monkeypatch) -> None:
-    """パッチ適用前の素の挙動を再現する回帰用テスト（バグの証跡）。
-
-    disconnect() が persist_user_session() 経由で無条件に updated_at を
-    更新してしまうため、ただ開いて（ハードナビゲーションで）離れただけの
-    スレッドが一覧の先頭に来てしまう。
-    """
-    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
-    try:
-        await thread_store.save_thread(conn, "t1", owner="anonymous", name="first")
-        await thread_store.save_thread(conn, "t2", owner="anonymous", name="second")
-
-        layer = thread_store.ChatThreadDataLayer(conn)
-        monkeypatch.setattr(app, "_thread_data_layer", layer)
-        monkeypatch.setattr(app, "_thread_store_conn", conn)
-        monkeypatch.setattr(cl_data, "_data_layer", layer)
-        monkeypatch.setattr(cl_data, "_data_layer_initialized", True)
-        monkeypatch.setattr(app, "_rebuild_graph", lambda thread_id: None)
-        monkeypatch.setattr(app, "_setup", _noop_setup)
-
-        # t1（一覧の下側＝古い方）を開いてすぐ離れる（≒別スレッドへクリックで移動）。
-        await _resume_and_disconnect(conn, "t1", "disconnect-test-sid")
-
-        items_after, _ = await thread_store.list_threads_summary(conn, "anonymous", limit=10)
-        # パッチ未適用の状態では t1 が先頭に来てしまう（これがバグの再現）。
-        assert [i["id"] for i in items_after] == ["t1", "t2"]
-    finally:
-        await conn.close()
 
 
 @pytest.mark.asyncio

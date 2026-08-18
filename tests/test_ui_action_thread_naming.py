@@ -10,11 +10,13 @@ ChainlitEmitter.init_thread(action.name) を呼ぶ。これはチャット入力
 参照）。
 """
 
+import chainlit.data as cl_data
 import pytest
 from chainlit.context import ChainlitContext, context_var
 from chainlit.session import WebsocketSession
 
 import app
+from src import thread_store
 
 
 def _activate_fake_session() -> WebsocketSession:
@@ -112,3 +114,102 @@ async def test_real_chat_interaction_is_unaffected_by_the_patch(monkeypatch) -> 
         assert session.has_first_interaction is True
     finally:
         cl_emitter.ChainlitEmitter.flush_thread_queues = original
+
+
+@pytest.mark.asyncio
+async def test_real_first_message_still_names_the_thread_with_real_data_layer(tmp_path, monkeypatch) -> None:
+    """パッチ適用後も、実際のチャット本文による通常の命名（実データレイヤー越し）
+    が壊れていないことのエンドツーエンド確認（2026-08-19 ユーザー報告:
+    UIボタンの不具合修正後、新規会話が「無題」のまま変わらなくなった疑い）。
+    """
+    import chainlit.emitter as cl_emitter
+
+    original = cl_emitter.ChainlitEmitter.flush_thread_queues
+    app._patch_chainlit_ignore_ui_action_first_interaction()
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        layer = thread_store.ChatThreadDataLayer(conn)
+        monkeypatch.setattr(cl_data, "_data_layer", layer)
+        monkeypatch.setattr(cl_data, "_data_layer_initialized", True)
+
+        session = _activate_fake_session()
+        session.has_first_interaction = True  # process_message() が呼ぶ直前の状態
+
+        emitter = cl_emitter.ChainlitEmitter(session)
+        await emitter.flush_thread_queues("annual_schedule.xlsx を作って")
+        # flush_thread_queues 内の data_layer.update_thread は
+        # asyncio.create_task(...) で即実行ではなく非同期に発火するため、
+        # 完了まで1周待つ。
+        import asyncio
+
+        await asyncio.sleep(0)
+
+        detail = await thread_store.get_thread_detail(conn, "t1")
+        assert detail is not None
+        assert detail["name"] == "annual_schedule.xlsx を作って"
+    finally:
+        cl_emitter.ChainlitEmitter.flush_thread_queues = original
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_ui_action_click_then_real_first_message_still_names_thread(tmp_path, monkeypatch) -> None:
+    """実際に多い操作順序（送信前に作業フォルダアイコンをクリックしてから、
+    最初のメッセージを送る）を、chainlit.emitter.ChainlitEmitter.process_message
+    （client_messageソケットイベントの実処理そのもの）まで通して再現する。
+
+    UIボタンのクリックで has_first_interaction が一旦 False に戻された後、
+    実際の最初のメッセージ送信で正しく再度 True になり、スレッド名がその
+    メッセージ本文で確定することを確認する（2026-08-19 ユーザー報告:
+    UIボタンの不具合修正後、新規会話が「無題」のまま変わらなくなった疑い
+    への回帰テスト）。
+    """
+    import asyncio
+    import uuid
+
+    import chainlit.emitter as cl_emitter
+
+    original = cl_emitter.ChainlitEmitter.flush_thread_queues
+    app._patch_chainlit_ignore_ui_action_first_interaction()
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        layer = thread_store.ChatThreadDataLayer(conn)
+        monkeypatch.setattr(cl_data, "_data_layer", layer)
+        monkeypatch.setattr(cl_data, "_data_layer_initialized", True)
+
+        session = _activate_fake_session()
+        emitter = cl_emitter.ChainlitEmitter(session)
+
+        # 1) 送信前に作業フォルダアイコンをクリック（server.py call_action() が
+        #    action_callback 呼び出し前に立てる has_first_interaction=True を模倣）。
+        session.has_first_interaction = True
+        await emitter.flush_thread_queues("pick_work_dir")
+        assert session.has_first_interaction is False
+
+        # 2) 実際の最初のメッセージを送信する
+        #    （chainlit.socket.process_message が行うのと同じ呼び出し）。
+        payload = {
+            "message": {
+                "id": str(uuid.uuid4()),
+                "threadId": "t1",
+                "name": "あなた",
+                "type": "user_message",
+                "output": "annual_schedule.xlsx を作って",
+                "createdAt": "2026-08-19T00:00:00",
+                "metadata": {},
+            },
+            "fileReferences": None,
+        }
+        await emitter.process_message(payload)
+        # process_message 内の message._create()/init_thread() は
+        # asyncio.create_task による非同期実行（かつ内部でaiosqlite経由の
+        # 複数回のDB往復を伴う）のため、pure sleep(0)の数回yieldでは
+        # 完了を待ちきれないことがある。実時間で待つ。
+        await asyncio.sleep(0.1)
+
+        detail = await thread_store.get_thread_detail(conn, "t1")
+        assert detail is not None
+        assert detail["name"] == "annual_schedule.xlsx を作って"
+    finally:
+        cl_emitter.ChainlitEmitter.flush_thread_queues = original
+        await conn.close()
