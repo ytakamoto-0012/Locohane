@@ -848,6 +848,28 @@
   cursor: not-allowed;
 }
 
+.composer-remote-generating-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 720px;
+  margin: 0 auto 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.composer-remote-generating-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: thread-generating-pulse 1.4s ease-in-out infinite;
+}
+
 .thread-sidebar {
   width: 240px;
   flex-shrink: 0;

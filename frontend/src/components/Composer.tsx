@@ -12,7 +12,7 @@ interface PendingAttachment {
   uploading: boolean;
 }
 
-export function Composer({ plan }: { plan?: IStep }) {
+export function Composer({ plan, remoteGenerating }: { plan?: IStep; remoteGenerating?: boolean }) {
   const { askUser, disabled, loading } = useChatData();
   const { sendMessage, replyMessage, uploadFile, stopTask } = useChatInteract();
   const [value, setValue] = useState('');
@@ -20,6 +20,9 @@ export function Composer({ plan }: { plan?: IStep }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isReplying = askUser?.spec.type === 'text';
+  // 他セッションでこのスレッドが処理中の間は、このセッションには停止できる
+  // タスクが無い（停止ボタンを出しても機能しない）ため、送信自体を止める。
+  const inputBlocked = disabled || Boolean(remoteGenerating);
 
   const handleAttach = (files: FileList | File[] | null) => {
     if (!files) return;
@@ -61,7 +64,7 @@ export function Composer({ plan }: { plan?: IStep }) {
   };
 
   const submit = () => {
-    if (disabled || (!value.trim() && attachments.length === 0)) return;
+    if (inputBlocked || (!value.trim() && attachments.length === 0)) return;
 
     const message: IStep = {
       threadId: '',
@@ -94,6 +97,12 @@ export function Composer({ plan }: { plan?: IStep }) {
 
   return (
     <div className="composer">
+      {remoteGenerating ? (
+        <div className="composer-remote-generating-banner">
+          <span className="composer-remote-generating-dot" />
+          他のセッションでこの会話は生成中です。完了すると自動的に読み込み直します…
+        </div>
+      ) : null}
       {attachments.length > 0 ? (
         <div className="composer-attachments">
           {attachments.map((a, i) => (
@@ -116,8 +125,10 @@ export function Composer({ plan }: { plan?: IStep }) {
         <textarea
           className="composer-textarea"
           value={value}
-          placeholder={isReplying ? '応答を入力...' : 'メッセージを入力...'}
-          disabled={disabled}
+          placeholder={
+            remoteGenerating ? '他のセッションで生成中です...' : isReplying ? '応答を入力...' : 'メッセージを入力...'
+          }
+          disabled={inputBlocked}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
@@ -149,7 +160,7 @@ export function Composer({ plan }: { plan?: IStep }) {
                 停止
               </button>
             ) : (
-              <button type="button" className="composer-submit-button" onClick={submit} disabled={disabled}>
+              <button type="button" className="composer-submit-button" onClick={submit} disabled={inputBlocked}>
                 送信
               </button>
             )}

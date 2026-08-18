@@ -439,6 +439,23 @@ if _config.thread_store_enabled:
         await thread_store.delete_thread_row(_thread_store_conn, thread_id)
         return {"success": True}
 
+    @_chainlit_asgi_app.get("/locohane/threads/{thread_id}/status")
+    async def _locohane_thread_status(thread_id: str, current_user=Depends(_cl_get_current_user)):
+        """今開いているスレッドが、他セッションで今も生成中かどうかの単発確認用。
+
+        /locohane/threads の一覧は limit 件でページングされ、かつ更新頻度次第では
+        開いているスレッドがそこに含まれるとは限らない。フロントエンド
+        （App.tsx）は現在表示中のスレッドについてこのエンドポイントを個別に
+        ポーリングし、他セッションで処理中なら入力欄を無効化し、処理完了を
+        検知した時点で再読み込みして確定内容を取り込む（生成中に別スレッドへ
+        移動すると、元のセッションの画面が更新されないまま「会話が終了した
+        ように見える」というユーザー報告（2026-08-19）への対応。この画面自体は
+        別セッションの生成タスクを引き継げないため、真のライブストリーミング
+        ではなく「待って自動再読み込み」に倒す）。
+        """
+        await _assert_owns_thread(thread_id, current_user)
+        return {"isGenerating": thread_id in _generating_thread_ids}
+
     def _reorder_locohane_routes_before_spa_catchall() -> None:
         """直前に登録した /locohane/threads* ルートを、Chainlit本体のSPA
         catch-all（GET /{full_path:path}）より前へ移動する（上のコメント参照）。

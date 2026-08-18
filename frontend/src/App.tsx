@@ -1,5 +1,15 @@
-import { useEffect, useState } from 'react';
-import { useAuth, useChatSession, useChatInteract, useChatMessages, useChatData } from '@chainlit/react-client';
+import { useEffect, useRef, useState } from 'react';
+import { useRecoilValue } from 'recoil';
+import {
+  useAuth,
+  useChatSession,
+  useChatInteract,
+  useChatMessages,
+  useChatData,
+  useConfig,
+  currentThreadIdState
+} from '@chainlit/react-client';
+import { BACKEND_URL } from './chainlitClient';
 import { Header } from './components/Header';
 import { LoginForm } from './components/LoginForm';
 import { MessagePane } from './components/MessagePane';
@@ -24,12 +34,19 @@ import {
 } from './utils/messageTree';
 import './styles.css';
 
+// 他セッション（別スレッドを開いた同じタブ・別タブ）が裏で処理中かどうかを
+// 知るライブpushの仕組みが無いため、ポーリングで代替する（app.pyの
+// _generating_thread_ids/on_message、/locohane/threads/{id}/status参照）。
+const REMOTE_GENERATING_POLL_INTERVAL_MS = 3000;
+
 function App() {
   const { data: authData, isReady: authReady, isAuthenticated } = useAuth();
   const { connect } = useChatSession();
   const { setIdToResume } = useChatInteract();
   const { messages } = useChatMessages();
   const { loading } = useChatData();
+  const { config } = useConfig();
+  const currentThreadId = useRecoilValue(currentThreadIdState);
 
   const requireLogin = authData?.requireLogin ?? false;
   const canConnect = authReady && (!requireLogin || isAuthenticated);
@@ -52,6 +69,54 @@ function App() {
     connect({ userEnv: {} });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canConnect, seeded]);
+
+  // 生成中に別スレッドへ移動すると、元のセッションはソケット切断され
+  // ライブストリーミングが届かなくなる（バックエンド側の処理自体は
+  // on_chat_end 経由でバックグラウンド継続するがpushする相手がいない）。
+  // そのまま何も表示しないと「会話が終了したように見える」ため、開いている
+  // スレッドが他セッションで処理中かをポーリングし、入力欄を無効化した上で
+  // 完了を検知したら再読み込みして確定内容を取り込む。
+  const [remoteGenerating, setRemoteGenerating] = useState(false);
+  const wasRemoteGeneratingRef = useRef(false);
+  const loadingRef = useRef(loading);
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    wasRemoteGeneratingRef.current = false;
+    setRemoteGenerating(false);
+    if (!currentThreadId || !config?.dataPersistence) return;
+
+    let cancelled = false;
+    const poll = () => {
+      fetch(`${BACKEND_URL}/locohane/threads/${currentThreadId}/status`, { credentials: 'include' })
+        .then((res) => (res.ok ? res.json() : Promise.reject()))
+        .then((data: { isGenerating: boolean }) => {
+          if (cancelled) return;
+          // 自分自身がまさに送信中のターンは loading 側で表現される。ここで
+          // 除外しないと、自分の送信完了直後に強制リロードがかかってしまう。
+          const remote = data.isGenerating && !loadingRef.current;
+          if (remote) {
+            wasRemoteGeneratingRef.current = true;
+            setRemoteGenerating(true);
+            return;
+          }
+          if (wasRemoteGeneratingRef.current) {
+            window.location.reload();
+            return;
+          }
+          setRemoteGenerating(false);
+        })
+        .catch(() => {});
+    };
+    poll();
+    const timer = setInterval(poll, REMOTE_GENERATING_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [currentThreadId, config?.dataPersistence]);
 
   const mainMessages = selectMainThread(messages);
   const sideSteps = selectSideSteps(messages);
@@ -97,7 +162,7 @@ function App() {
         {!mainMessages.some((m) => m.type === 'user_message') && (
           <StarterPrompts prompts={starterPrompts} />
         )}
-        <Composer plan={plan} />
+        <Composer plan={plan} remoteGenerating={remoteGenerating} />
       </div>
       <SidePanel sideSteps={displaySideSteps} tokenUsage={tokenUsage} workDir={workDir} plan={plan} />
     </div>
