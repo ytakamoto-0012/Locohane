@@ -2062,6 +2062,20 @@ async def on_message(message: cl.Message) -> None:
                 elif kind == "on_tool_end":
                     step = steps.pop(event["run_id"], None)
                     if step is not None:
+                        # dispatch_agent 実行中、内部のサブエージェント回答を
+                        # author=SUBAGENT_MESSAGE_AUTHOR の answer として
+                        # ストリーム表示している場合がある（上のon_chat_model_stream
+                        # 参照）。このツール終了時点で確定させておかないと、続く
+                        # メインエージェントの最終回答が（間に別のon_tool_startを
+                        # 挟まない限り）answer is None判定を通らず、このSUB名義の
+                        # Messageへそのまま追記されてしまう
+                        # （チャット画面でメインの回答がサブエージェント名義に
+                        # 見える不具合の原因）。on_tool_startの冒頭と同じ
+                        # flush/resetをここでも行い、ツール境界を必ず区切る。
+                        thinking = await _close_thinking(thinking)
+                        if answer is not None:
+                            await _send_answer(answer)
+                            answer = None
                         output = event["data"].get("output")
                         content = getattr(output, "content", output)
                         step.output = content
