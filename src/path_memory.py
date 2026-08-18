@@ -207,6 +207,31 @@ def list_entries(thread_id: str, path_memory_dir: Path) -> list[dict]:
     ]
 
 
+def exec_tmp_dir(category: str | None = None) -> Path:
+    """execute_python_code の中間生成物と同じ `_tmp_<thread_id>/` を返す（無ければ作成する）。
+
+    run_script 経由でサブプロセス起動される他スキルのスクリプトが、cwd
+    （= run_script の cwd、_resolve_workdir() の結果である作業ディレクトリ）
+    直下に自分専用の中間生成物置き場を作りたい場合に使う。cwd を基準にする
+    ため、run_script 経由の実行を前提とする（cwd が異なる文脈で呼ぶと
+    別の場所を指す）。thread_id は env_params() と同じ AGENT_THREAD_ID を
+    読むため、未設定時は "_no_session" にフォールバックする。
+
+    Args:
+        category: `_tmp_<thread_id>` 直下にさらに切るサブディレクトリ名
+            （例: "pdf_rendered"）。省略時は `_tmp_<thread_id>` 自体を返す。
+
+    Returns:
+        作成済みの絶対パス。
+    """
+    thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
+    out_dir = Path.cwd() / f"_tmp_{thread_id}"
+    if category:
+        out_dir = out_dir / category
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
 def env_params() -> tuple[str, Path, int]:
     """環境変数から (thread_id, path_memory_dir, max_entries) を読む。
 

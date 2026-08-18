@@ -188,6 +188,58 @@ Chainlit UI上に `cl.File`（または画像なら `cl.Image`）付きメッセ
     | 2 | 2枚目 | ![2枚目](C:\...\out2.png) |
 ```
 
+### 4-6. 中間生成物の一時保存先: `_tmp_<thread_id>/` と `exec_tmp_dir()`
+
+`run_script` の cwd（4-2参照）直下には、会話終了時に自動削除されるセッション専用の
+一時フォルダ `_tmp_<thread_id>/` を作れる。中間生成物（変換途中のPDF、レンダリング
+画像など、最終成果物ではないファイル）はここに書き、作業ディレクトリ本体を
+汚さないこと。
+
+`src/path_memory.py` に、このフォルダを作成して返すヘルパー `exec_tmp_dir()` がある
+（`execute_python_code` が内部で使う `_resolve_exec_workdir()` と同じ命名規約）。
+スキルスクリプトから使う場合は、`register_output_path`（4-1参照）と同じ手順で
+`AGENT_SRC_DIR` 経由で import する:
+
+```python
+import os, sys
+src_dir = os.environ.get("AGENT_SRC_DIR")
+if src_dir and src_dir not in sys.path:
+    sys.path.insert(0, src_dir)
+import path_memory
+
+out_dir = path_memory.exec_tmp_dir("pdf_pages")  # _tmp_<thread_id>/pdf_pages を作成して返す
+```
+
+**互換性の注意**: `register_output_path`（4-1）は「`AGENT_SRC_DIR` 未設定・import失敗
+時は例外を出さず None へフォールバックする」ソフト依存だが、`exec_tmp_dir()` は違う。
+呼び出すには先に `import path_memory` が成功している必要があり、それが失敗する環境
+（`AGENT_SRC_DIR` を注入しない Agent Skills ランタイム等）では import 文の時点で
+スクリプトが動かなくなる。`_tmp_<thread_id>/` の作成自体は本来 `os.environ` と
+`pathlib` だけで完結する処理であり、これを `path_memory` の import に依存させると、
+Locohane 以外の環境でも単体で動くことを前提にしたスキル（`skills/OFFICE_SKILLS_README.md`
+2節参照）の可搬性を落としてしまう。
+
+そのため、**他の Agent Skills 対応環境でも動かしたい／互換性を保ちたいスキルでは
+`exec_tmp_dir()` を import せず、同じロジックをスクリプト側に直接実装する**こと
+（`src/path_memory.py` に依存しない、標準ライブラリのみの実装）:
+
+```python
+import os
+from pathlib import Path
+
+def _exec_tmp_dir(category: str | None = None) -> Path:
+    thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
+    out_dir = Path.cwd() / f"_tmp_{thread_id}"
+    if category:
+        out_dir = out_dir / category
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+```
+
+（`skills/pdf-tools/scripts/_common.py` の `write_json_result` などは実際にこの
+インライン実装のまま運用されている。`path_memory.exec_tmp_dir()` と処理内容は
+同一だが、依存を持たせない意図で意図的に重複させている。）
+
 ## 5. 新しいスキルを追加する手順
 
 1. `skills/<skill-name>/SKILL.md` を作成（frontmatter必須、`name` はディレクトリ名と一致）。
