@@ -12,7 +12,21 @@ interface PendingAttachment {
   uploading: boolean;
 }
 
-export function Composer({ plan, remoteGenerating }: { plan?: IStep; remoteGenerating?: boolean }) {
+interface ComposerProps {
+  plan?: IStep;
+  // 今開いているスレッド自体が、他セッションで処理中（true）。
+  remoteGenerating?: boolean;
+  // /locohane/threads/{id}/stop を呼び、remoteGenerating中の停止ボタンから
+  // 実際の生成タスクを cancel() させる（このセッションには
+  // session.current_task が無く、純正の stopTask は機能しないため）。
+  onStopRemote?: () => void;
+  // 今開いているスレッドは処理中ではないが、同じ所有者の別スレッドが処理中
+  // （新規チャット・他スレッドからの並列送信を防ぐ。停止操作は提供しない —
+  // 対象スレッドを開いてそちら側の停止ボタンを使ってもらう）。
+  blockedByOtherThread?: boolean;
+}
+
+export function Composer({ plan, remoteGenerating, onStopRemote, blockedByOtherThread }: ComposerProps) {
   const { askUser, disabled, loading } = useChatData();
   const { sendMessage, replyMessage, uploadFile, stopTask } = useChatInteract();
   const [value, setValue] = useState('');
@@ -20,9 +34,9 @@ export function Composer({ plan, remoteGenerating }: { plan?: IStep; remoteGener
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isReplying = askUser?.spec.type === 'text';
-  // 他セッションでこのスレッドが処理中の間は、このセッションには停止できる
-  // タスクが無い（停止ボタンを出しても機能しない）ため、送信自体を止める。
-  const inputBlocked = disabled || Boolean(remoteGenerating);
+  // 他セッションでこのスレッドが処理中、または同じ所有者の別スレッドが
+  // 処理中の間は送信自体を止める。
+  const inputBlocked = disabled || Boolean(remoteGenerating) || Boolean(blockedByOtherThread);
 
   const handleAttach = (files: FileList | File[] | null) => {
     if (!files) return;
@@ -102,6 +116,11 @@ export function Composer({ plan, remoteGenerating }: { plan?: IStep; remoteGener
           <span className="composer-remote-generating-dot" />
           他のセッションでこの会話は生成中です。完了すると自動的に読み込み直します…
         </div>
+      ) : blockedByOtherThread ? (
+        <div className="composer-remote-generating-banner">
+          <span className="composer-remote-generating-dot" />
+          他の会話が処理中です。完了するまで新しい送信はできません。
+        </div>
       ) : null}
       {attachments.length > 0 ? (
         <div className="composer-attachments">
@@ -126,7 +145,13 @@ export function Composer({ plan, remoteGenerating }: { plan?: IStep; remoteGener
           className="composer-textarea"
           value={value}
           placeholder={
-            remoteGenerating ? '他のセッションで生成中です...' : isReplying ? '応答を入力...' : 'メッセージを入力...'
+            remoteGenerating
+              ? '他のセッションで生成中です...'
+              : blockedByOtherThread
+                ? '他の会話が処理中です...'
+                : isReplying
+                  ? '応答を入力...'
+                  : 'メッセージを入力...'
           }
           disabled={inputBlocked}
           onChange={(e) => setValue(e.target.value)}
@@ -157,6 +182,10 @@ export function Composer({ plan, remoteGenerating }: { plan?: IStep; remoteGener
             <PlanModeBadge step={plan} />
             {loading ? (
               <button type="button" className="composer-stop-button" onClick={stopTask}>
+                停止
+              </button>
+            ) : remoteGenerating && onStopRemote ? (
+              <button type="button" className="composer-stop-button" onClick={onStopRemote}>
                 停止
               </button>
             ) : (

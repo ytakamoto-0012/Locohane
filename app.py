@@ -176,14 +176,118 @@ _thread_data_layer: ChatThreadDataLayer | None = None
 # on_message の開始/終了で _mark_thread_generating/_unmark_thread_generating が
 # 更新し、/locohane/threads がこれを参照する。
 _generating_thread_ids: set[str] = set()
+# thread_id -> 実際に処理中の asyncio.Task（on_message の外側タスク）。
+# 別セッション（このスレッドを開いただけの閲覧側）から停止ボタンを押したときに
+# 該当タスクを cancel() するための参照（_stop_thread_generating 参照）。
+# _generating_thread_ids とは別集合にしてあるのは、こちらは同期関数の単体テスト
+# （test_mark_and_unmark_are_idempotent）からも安全に呼べるようにするため
+# （asyncio.current_task() の取得はイベントループ内でしか行えない）。
+_generating_thread_tasks: dict[str, "asyncio.Task"] = {}
+# owner（thread_store.resolve_owner の結果）-> 現在生成中のthread_id。
+# 同じ所有者（匿名モードなら"anonymous"に一元化、認証ありならログイン
+# ユーザー単位）が、別タブ/別スレッドから同時に2つ目のターンを開始する
+# （新規チャットでの送信・他スレッドでの送信）のを防ぐために使う
+# （LangGraphのcheckpointerは1 thread_idにつき1回の会話進行を前提とした
+# 設計であり、同じ所有者が複数スレッドで同時にLLM呼び出しを行うと
+# サーバー・GPUリソースを圧迫するうえ、そもそも「一度に1つの会話しか
+# 進めない」という単純な運用制約を想定している。2026-08-19 ユーザー要望）。
+# 値は常に1つのthread_idのみ（同じ所有者が同時に処理できるスレッドは1つに
+# 制限する）。on_message側の直前チェックからマーク/解除まで await を挟まない
+# ため、単一プロセスのasyncioイベントループ上で競合なく安全に更新できる。
+_generating_owner_threads: dict[str, str] = {}
+# session.emit を中継してよいイベントの許可リスト（内容の表示に関わるものだけ）。
+# 'ask'系プロンプトは session.emit_call 経由で送られるため中継対象に含まれず、
+# 閲覧側セッションに二重の承認UIが出る心配は無い。task_start/task_end もあえて
+# 対象外にしている（_make_relayed_emit のdocstring参照）。
+_RELAYED_EMIT_EVENTS = frozenset(
+    {"new_message", "update_message", "delete_message", "stream_start", "stream_token", "element"}
+)
 
 
-def _mark_thread_generating(thread_id: str) -> None:
+def _mark_thread_generating(thread_id: str, owner: str | None = None) -> None:
     _generating_thread_ids.add(thread_id)
+    if owner is not None:
+        _generating_owner_threads[owner] = thread_id
 
 
-def _unmark_thread_generating(thread_id: str) -> None:
+def _unmark_thread_generating(thread_id: str, owner: str | None = None) -> None:
     _generating_thread_ids.discard(thread_id)
+    _generating_thread_tasks.pop(thread_id, None)
+    if owner is not None and _generating_owner_threads.get(owner) == thread_id:
+        _generating_owner_threads.pop(owner, None)
+
+
+def _make_relayed_emit(session, thread_id: str, original_emit):
+    """session.emit を、同じ thread_id を今まさに開いている他セッションにも
+    中継するようラップして返す（生成中のスレッドを別セッションで開いたときに、
+    そこにも思考ステップ・回答のストリーミングが見えるようにするための処置。
+    2026-08-19 ユーザー報告: サイドバーのインジケーターだけでは、実際に
+    そのスレッドを開いた画面自体は生成中の内容が全く見えず「止まって見える」
+    問題が残っていた）。
+
+    中継は _RELAYED_EMIT_EVENTS の許可リストに限定する。'ask'系（Plan Mode
+    承認等の対話プロンプト）は session.emit ではなく session.emit_call
+    経由で送られるため、そもそもこの関数の対象外＝自動的に中継されない
+    （閲覧側セッションは常に読み取り専用のまま）。task_start/task_end も
+    意図的に中継しない — 中継すると閲覧側の useChatData().loading が真になり
+    Chainlit純正の「停止」ボタンが表示されてしまうが、それは閲覧側の
+    session.current_task（常にNone）しか操作できず実際の生成テスクは
+    止められない、見た目だけのボタンになってしまう（停止は
+    /locohane/threads/{id}/stop に一本化する。_stop_thread_generating 参照）。
+
+    ChatThreadDataLayer.create_step/update_step は元セッション側で通常通り
+    呼ばれ続けるため、DBへの永続化（=あとから開いたときの再現）はこの中継の
+    有無に関わらず従来通り機能する。中継はあくまで「今まさに開いている」
+    セッションへのライブ配送のみを担う。
+    """
+    from chainlit.session import ws_sessions_sid
+
+    def relayed_emit(event, data):
+        if event in _RELAYED_EMIT_EVENTS:
+            for other in list(ws_sessions_sid.values()):
+                if other is session or other.thread_id != thread_id:
+                    continue
+                try:
+                    asyncio.create_task(other.emit(event, data))
+                except Exception:  # noqa: BLE001 - 中継はベストエフォート
+                    logging.getLogger(__name__).debug(
+                        "スレッド中継emitに失敗しました（event=%s）", event, exc_info=True
+                    )
+        return original_emit(event, data)
+
+    return relayed_emit
+
+
+async def _stop_thread_generating(thread_id: str) -> bool:
+    """他セッション（このスレッドを開いただけの閲覧側）から、生成中タスクを
+    止める。@cl.on_stop の thread_id 指定版（app.py:1175 on_stop 参照）。
+
+    session.current_task.cancel() 相当（対象タスクへ asyncio.CancelledError
+    を投げ込む）に加え、on_stop() と同様に aclose_active_llm_clients で
+    LLMサーバーへのHTTP接続も強制切断する（cancel()だけでは接続が生きたまま
+    CPU/GPU使用率が下がらないため。on_stop()のdocstring参照）。
+
+    on_stop()と異なりグラフの再構築（_rebuild_graph）はここでは行わない。
+    呼び出し元は「このスレッドを閲覧しているだけの別セッション」であり、
+    cl.user_session はそのセッション自身のものしか書き換えられないため、
+    ここで _rebuild_graph を呼ぶと新しいグラフが無関係な閲覧側セッションへ
+    紐づいてしまい、肝心の生成元セッションには反映されない。生成元セッションは
+    次に resume/reconnect した際 on_chat_resume が _rebuild_graph(thread_id)
+    を呼ぶため、そこで自然に復旧する。
+    """
+    task = _generating_thread_tasks.get(thread_id)
+    if task is None or task.done():
+        return False
+    task.cancel()
+    try:
+        await aclose_active_llm_clients(thread_id)
+    except Exception:  # noqa: BLE001 - ベストエフォート、失敗してもcancel()自体は有効
+        logging.getLogger(__name__).debug(
+            "cross-session停止: LLMクライアントの強制クローズに失敗しました [thread_id=%s]",
+            thread_id,
+            exc_info=True,
+        )
+    return True
 
 
 class _CheckpointerTimeout(Exception):
@@ -455,6 +559,40 @@ if _config.thread_store_enabled:
         """
         await _assert_owns_thread(thread_id, current_user)
         return {"isGenerating": thread_id in _generating_thread_ids}
+
+    @_chainlit_asgi_app.post("/locohane/threads/{thread_id}/stop")
+    async def _locohane_stop_thread(thread_id: str, current_user=Depends(_cl_get_current_user)):
+        """他セッション（このスレッドを開いただけの閲覧側）から生成を停止する。
+
+        Composerは、自分自身がそのターンを開始したセッションでは Chainlit純正の
+        「停止」ボタン（session.current_task.cancel()）を使うが、生成中に別の
+        タブ・別スレッドへ移動した後に戻ってきた閲覧側セッションは
+        session.current_task を持たない（=純正の停止ボタンは機能しない）ため、
+        このエンドポイントが _stop_thread_generating 経由で実際のタスクを
+        cancel() する（そのdocstring参照）。
+        """
+        await _assert_owns_thread(thread_id, current_user)
+        stopped = await _stop_thread_generating(thread_id)
+        return {"stopped": stopped}
+
+    @_chainlit_asgi_app.get("/locohane/threads/generating")
+    async def _locohane_owner_generating_thread(
+        exclude: str | None = None,
+        current_user=Depends(_cl_get_current_user),
+    ):
+        """呼び出し元と同じ所有者が、他に生成中のスレッドを持っていないかを返す。
+
+        Composer（App.tsx）はこれをポーリングし、新規チャット・他スレッドからの
+        並列送信をフロントエンド側でも事前に防ぐ（バックエンド側の実際の拒否は
+        on_message の _generating_owner_threads チェック。ここはそのUI反映用）。
+        exclude に現在開いているスレッドIDを渡すと、それ自身が生成中でも
+        「他のスレッド」としては数えない（新規チャットから呼ぶ場合は省略可）。
+        """
+        owner = thread_store.resolve_owner(current_user)
+        conflicting_thread_id = _generating_owner_threads.get(owner)
+        if conflicting_thread_id is not None and conflicting_thread_id == exclude:
+            conflicting_thread_id = None
+        return {"threadId": conflicting_thread_id}
 
     def _reorder_locohane_routes_before_spa_catchall() -> None:
         """直前に登録した /locohane/threads* ルートを、Chainlit本体のSPA
@@ -2937,14 +3075,51 @@ async def on_message(message: cl.Message) -> None:
     開いた同じタブ）が知る手段が無く、あたかも会話が終了したかのように見えて
     いた（2026-08-19 ユーザー報告）。
 
-    try/finally で必ず記録を消すため、正常終了・例外・停止ボタンによる
-    CancelledError のいずれの経路でも取りこぼさない。
+    合わせて以下2点も他セッションから見えるようにする（同日の追加報告）:
+    - session.emit を _make_relayed_emit でラップし、同じスレッドを今まさに
+      開いている他セッションへ思考ステップ・回答のストリーミングを中継する。
+    - asyncio.current_task() を _generating_thread_tasks へ登録し、閲覧側の
+      「停止」ボタン（/locohane/threads/{id}/stop）からこのタスクを
+      cancel() できるようにする。
+
+    さらに、同じ所有者（thread_store.resolve_owner。匿名モードでは
+    "anonymous"に一元化）が別スレッドで既に生成中の場合、このメッセージは
+    実行せず拒否する（新規チャット・他の会話履歴からの並列送信を防ぐ。
+    2026-08-19 ユーザー要望）。_generating_owner_threads の確認〜マークの
+    間に await を挟まないため、asyncioの単一イベントループ上で競合なく
+    安全に判定できる。
+
+    try/finally で必ず記録・中継設定を元に戻すため、正常終了・例外・
+    停止ボタンによる CancelledError のいずれの経路でも取りこぼさない。
     """
     thread_id = cl.user_session.get("thread_id")
-    if thread_id is not None:
-        _mark_thread_generating(thread_id)
+    session = cl.context.session if thread_id is not None else None
+    owner = thread_store.resolve_owner(session.user) if session is not None else None
+
+    if thread_id is not None and owner is not None:
+        conflicting_thread = _generating_owner_threads.get(owner)
+        if conflicting_thread is not None and conflicting_thread != thread_id:
+            logging.getLogger(__name__).info(
+                "on_message: 所有者 %s の別スレッド(thread_id=%s)が生成中のため、"
+                "このメッセージ(thread_id=%s)は実行せず拒否しました。",
+                owner,
+                conflicting_thread,
+                thread_id,
+            )
+            await cl.Message(
+                content="他の会話が処理中です。完了してから送信してください。",
+                type="system_message",
+            ).send()
+            return
+
+    original_emit = session.emit if session is not None else None
+    if thread_id is not None and session is not None:
+        _mark_thread_generating(thread_id, owner)
+        _generating_thread_tasks[thread_id] = asyncio.current_task()
+        session.emit = _make_relayed_emit(session, thread_id, original_emit)
     try:
         await _on_message_impl(message)
     finally:
-        if thread_id is not None:
-            _unmark_thread_generating(thread_id)
+        if thread_id is not None and session is not None:
+            session.emit = original_emit
+            _unmark_thread_generating(thread_id, owner)

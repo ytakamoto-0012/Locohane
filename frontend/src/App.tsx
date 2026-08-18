@@ -118,6 +118,45 @@ function App() {
     };
   }, [currentThreadId, config?.dataPersistence]);
 
+  // このセッションには生成中タスクへの参照（session.current_task）が無いため、
+  // Chainlit純正の stopTask は機能しない。代わりにバックエンドへ「このスレッドの
+  // 生成中タスクをcancel()して」と依頼する（app.pyの _stop_thread_generating参照）。
+  const stopRemoteGenerating = () => {
+    if (!currentThreadId) return;
+    fetch(`${BACKEND_URL}/locohane/threads/${currentThreadId}/stop`, {
+      method: 'POST',
+      credentials: 'include'
+    }).catch(() => {});
+  };
+
+  // 同じ所有者（匿名モードでは全会話が"anonymous"に一元化）が別スレッドで
+  // 既に生成中の場合、新規チャット・他の会話履歴からの並列送信をフロント側でも
+  // 事前に防ぐ（実際の拒否は on_message 側の _generating_owner_threads
+  // チェックが最終防衛線。ここはUIへの反映のみ）。
+  const [blockingThreadId, setBlockingThreadId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!config?.dataPersistence) {
+      setBlockingThreadId(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = () => {
+      const query = currentThreadId ? `?exclude=${encodeURIComponent(currentThreadId)}` : '';
+      fetch(`${BACKEND_URL}/locohane/threads/generating${query}`, { credentials: 'include' })
+        .then((res) => (res.ok ? res.json() : Promise.reject()))
+        .then((data: { threadId: string | null }) => {
+          if (!cancelled) setBlockingThreadId(data.threadId);
+        })
+        .catch(() => {});
+    };
+    poll();
+    const timer = setInterval(poll, REMOTE_GENERATING_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [currentThreadId, config?.dataPersistence]);
+
   const mainMessages = selectMainThread(messages);
   const sideSteps = selectSideSteps(messages);
   const tokenUsage = selectLatestTokenUsage(messages);
@@ -162,7 +201,12 @@ function App() {
         {!mainMessages.some((m) => m.type === 'user_message') && (
           <StarterPrompts prompts={starterPrompts} />
         )}
-        <Composer plan={plan} remoteGenerating={remoteGenerating} />
+        <Composer
+          plan={plan}
+          remoteGenerating={remoteGenerating}
+          onStopRemote={stopRemoteGenerating}
+          blockedByOtherThread={blockingThreadId !== null}
+        />
       </div>
       <SidePanel sideSteps={displaySideSteps} tokenUsage={tokenUsage} workDir={workDir} plan={plan} />
     </div>
