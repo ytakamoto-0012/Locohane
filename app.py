@@ -470,6 +470,45 @@ def _patch_chainlit_anonymous_resume() -> None:
     logging.getLogger(__name__).info("匿名モード用のスレッド再開有効化パッチを適用しました。")
 
 
+def _patch_chainlit_disable_disconnect_thread_touch() -> None:
+    """会話履歴を開いて（別スレッドへクリックで移動して）閉じるだけで、その
+    スレッドが一覧の先頭にジャンプしてしまう不具合を防ぐ、
+    chainlit.socket.persist_user_session の無効化パッチ（2026-08-19
+    ユーザー報告）。
+
+    chainlit.socket.disconnect()（WebSocket切断時に必ず呼ばれる）は、
+    `if session.thread_id and session.has_first_interaction:` の条件下で
+    無条件に `persist_user_session(thread_id, session.to_persistable())`
+    を呼ぶ。session.has_first_interaction はスレッド再開（resume_thread）
+    でも True になるため、単に会話を開いて（サイドバーの左サイドバーの
+    goToThread() によるハードナビゲーションで）別のスレッドへ移ると、
+    直前まで見ていたスレッドで必ずこれが発火する。
+    persist_user_session() は data_layer.update_thread(thread_id,
+    metadata=...) を呼び、ChatThreadDataLayer.update_thread → save_thread
+    は呼ばれるたびに無条件で updated_at を更新するため、実際の会話進行が
+    一切無くても「見て、離れた」だけでそのスレッドが一覧の先頭に来てしまう
+    （list_threads_summary は updated_at DESC でソートするため）。
+
+    session.to_persistable() が持つ情報（chat_settings/chat_profile/
+    client_type + cl.user_session の中身）は、このアプリでは on_message が
+    ターン完了ごとに thread_store へ明示的にスナップショットする値
+    （work_dir/plan/token使用量。on_chat_resume 参照）と完全に重複して
+    おり、このアプリ自身はこの汎用persist機構に一切依存していない。その
+    ため丸ごと no-op化しても実害が無く、意図した通り「実際に会話が進んだ
+    ときだけ updated_at が動く」に戻せる。
+    """
+    import chainlit.socket as _cl_socket
+
+    async def _persist_user_session_disabled(thread_id: str, metadata: dict) -> None:
+        return None
+
+    _cl_socket.persist_user_session = _persist_user_session_disabled
+    logging.getLogger(__name__).info(
+        "会話履歴を開いて離れるだけでは並び順が変わらないよう、"
+        "セッション切断時の自動メタデータ保存を無効化しました。"
+    )
+
+
 # チャット送信ではなく独自フロントエンドのUIボタン（ツールバーの各アイコン）から
 # 呼ばれる action_callback。これらのクリックは「最初の発言」ではないが、
 # Chainlit本体側にその区別が無い（_patch_chainlit_ignore_ui_action_first_interaction
@@ -743,6 +782,9 @@ async def _on_app_startup() -> None:
         # data_layer登録時のみ意味を持つ不具合（flush_thread_queuesはdata_layer
         # 未登録時は何もしないため）。関数docstring参照。
         _patch_chainlit_ignore_ui_action_first_interaction()
+        # 同上（persist_user_session内のget_data_layer()がNoneなら何もしない
+        # ため、data_layer未登録時は無害だがガードして明示する）。関数docstring参照。
+        _patch_chainlit_disable_disconnect_thread_touch()
 
     if not _config.mcp_enabled:
         logging.getLogger(__name__).info("MCP機能は無効化されています（[mcp].enabled=false）")
