@@ -931,6 +931,25 @@
   white-space: nowrap;
 }
 
+.thread-list-item-generating {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: thread-generating-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes thread-generating-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
 .thread-list-item-actions {
   display: flex;
   gap: 2px;

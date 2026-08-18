@@ -8,7 +8,13 @@ interface ThreadSummary {
   id: string;
   name: string | null;
   updatedAt: string;
+  isGenerating: boolean;
 }
+
+// 他のセッション（別スレッドを開いた同じタブ・別タブ）が裏で処理中かどうかを
+// 知るライブpushの仕組みが無いため、ポーリングで代替する（app.pyの
+// _generating_thread_ids/on_message参照）。
+const GENERATING_POLL_INTERVAL_MS = 3000;
 
 /** ?thread=<id> の付け外しだけを行い、リロードで新規/再開を切り替える。
  * useChatSession().connect は threadIdToResumeState を読むdebounce関数のため、
@@ -43,6 +49,15 @@ export function Sidebar() {
   useEffect(() => {
     refresh();
   }, [refresh, firstInteraction]);
+
+  // 「生成中」インジケーターは他セッションの状態のためライブpushできず、
+  // ポーリングで更新する（config取得前でも[thread_store]有効なら回してよい
+  // ため、後述のearly returnより前に置く）。
+  useEffect(() => {
+    if (!config?.dataPersistence) return;
+    const timer = setInterval(refresh, GENERATING_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [refresh, config?.dataPersistence]);
 
   // [thread_store].enabled=false（データレイヤー未登録）なら何も描画しない。
   if (!config?.dataPersistence) return null;
@@ -114,6 +129,9 @@ export function Sidebar() {
             }
             onClick={() => goToThread(thread.id)}
           >
+            {thread.isGenerating && (
+              <span className="thread-list-item-generating" title="生成中" aria-label="生成中" />
+            )}
             <span className="thread-list-item-name">{thread.name || '無題の会話'}</span>
             <span className="thread-list-item-actions">
               <button type="button" title="名前を変更" onClick={(event) => handleRename(thread, event)}>

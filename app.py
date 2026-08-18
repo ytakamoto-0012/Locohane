@@ -169,6 +169,21 @@ _checkpointer = None
 # のときのみ使う）。接続はアプリ寿命で1つを共有する（_checkpointer と同じ方針）。
 _thread_store_conn = None
 _thread_data_layer: ChatThreadDataLayer | None = None
+# 現在ターン処理中（LLM呼び出し・ツール実行の真っ最中）の thread_id 集合。
+# セッション（cl.user_session）を跨いだプロセス全体の一時状態で、DBには
+# 永続化しない（プロセス再起動をまたいで意味を持つ情報ではないため）。
+# 左サイドバーが「別の会話が裏で処理中」を表示するために、
+# on_message の開始/終了で _mark_thread_generating/_unmark_thread_generating が
+# 更新し、/locohane/threads がこれを参照する。
+_generating_thread_ids: set[str] = set()
+
+
+def _mark_thread_generating(thread_id: str) -> None:
+    _generating_thread_ids.add(thread_id)
+
+
+def _unmark_thread_generating(thread_id: str) -> None:
+    _generating_thread_ids.discard(thread_id)
 
 
 class _CheckpointerTimeout(Exception):
@@ -385,11 +400,17 @@ if _config.thread_store_enabled:
         before: str | None = None,
         current_user=Depends(_cl_get_current_user),
     ):
-        """左サイドバー用の軽量なスレッド一覧（{id,name,updatedAt}[]）。
+        """左サイドバー用の軽量なスレッド一覧（{id,name,updatedAt,isGenerating}[]）。
 
         Chainlit公式の /project/threads は匿名モードで使えないため独自実装
         （_assert_owns_thread のdocstring参照）。認証ありモードでは
         current_user がログイン中のユーザーに解決され、そのユーザー分だけを返す。
+
+        isGenerating は _generating_thread_ids（on_message の薄いラッパーが
+        管理するプロセス全体の一時状態）との突き合わせ。他のブラウザタブ・
+        別スレッドを開いた同じタブから見て「このスレッドは今も裏で処理中」を
+        表すための項目で、フロントは定期的にこのエンドポイントを
+        ポーリングして表示を更新する（ライブpushの仕組みが無いため）。
         """
         if _thread_store_conn is None:
             # _setup() が一度も完了していない（起動直後にブラウザ側のREST呼び出しが
@@ -398,6 +419,8 @@ if _config.thread_store_enabled:
             return {"threads": [], "nextCursor": None}
         owner = thread_store.resolve_owner(current_user)
         items, next_cursor = await thread_store.list_threads_summary(_thread_store_conn, owner, limit, before)
+        for item in items:
+            item["isGenerating"] = item["id"] in _generating_thread_ids
         return {"threads": items, "nextCursor": next_cursor}
 
     @_chainlit_asgi_app.put("/locohane/threads/{thread_id}")
@@ -2094,8 +2117,7 @@ def _should_retry_after_loop(
     return loop_exc is not None and loop_attempt < loop_max_retries
 
 
-@cl.on_message
-async def on_message(message: cl.Message) -> None:
+async def _on_message_impl(message: cl.Message) -> None:
     """Chainlit がユーザーからのメッセージを受け取るたびに呼ばれるフック。
 
     セッションの thread_id を使って LangGraph のグラフを astream_events
@@ -2883,3 +2905,29 @@ async def on_message(message: cl.Message) -> None:
     # かかりうる（実測97秒）ため、_run_context_compaction_visible で
     # Stepを表示し「思考中のまま何も起きていないように見える」状態を防ぐ。
     await _run_context_compaction_visible(graph, config, thread_id, last_usage)
+
+
+@cl.on_message
+async def on_message(message: cl.Message) -> None:
+    """_on_message_impl の薄いラッパー。
+
+    会話履歴（左サイドバー）で「他のスレッドが裏で処理中」を示すインジケーター
+    表示のため、ターン処理の開始/終了を _generating_thread_ids へ記録する。
+    ユーザーがこのタブから離れて別のスレッドをクリックしても（フロントエンドは
+    完全に別セッションとして新規接続し直すため）、LangGraph側の処理自体は
+    documented通りバックグラウンドで継続する（on_chat_end 参照）。しかし従来は
+    「今も裏で動いている」ことを他のセッション（他のブラウザタブ・別スレッドを
+    開いた同じタブ）が知る手段が無く、あたかも会話が終了したかのように見えて
+    いた（2026-08-19 ユーザー報告）。
+
+    try/finally で必ず記録を消すため、正常終了・例外・停止ボタンによる
+    CancelledError のいずれの経路でも取りこぼさない。
+    """
+    thread_id = cl.user_session.get("thread_id")
+    if thread_id is not None:
+        _mark_thread_generating(thread_id)
+    try:
+        await _on_message_impl(message)
+    finally:
+        if thread_id is not None:
+            _unmark_thread_generating(thread_id)
