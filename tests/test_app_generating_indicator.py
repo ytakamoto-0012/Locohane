@@ -36,12 +36,15 @@ class _FakeEmitSession:
     """cl.context.session の最小限のフェイク。on_message が参照するのは
     .emit（差し替え可能な callable）・.thread_id（_make_relayed_emit が
     中継先セッションを絞り込むのに使う）・.user（所有者解決に使う。Noneなら
-    thread_store.resolve_owner が "anonymous" に解決する）のみ。
+    thread_store.resolve_owner が "anonymous" に解決する）・.id（session_id。
+    /locohane/threads/{id}/status が「自分自身のターンかどうか」を判定する
+    のに使う _generating_thread_session_ids のキー）のみ。
     """
 
-    def __init__(self, thread_id: str, user=None):
+    def __init__(self, thread_id: str, user=None, session_id: str = "test-sid"):
         self.thread_id = thread_id
         self.user = user
+        self.id = session_id
         self.emit = lambda event, data: None
 
 
@@ -249,6 +252,36 @@ async def test_on_message_registers_and_clears_generating_task(monkeypatch) -> N
 
     assert seen["registered_as_current_task"] is True
     assert "t1" not in app._generating_thread_tasks
+
+
+@pytest.mark.asyncio
+async def test_on_message_registers_own_session_id_and_clears_it(monkeypatch) -> None:
+    """/locohane/threads/{id}/status が「自分自身のターンかどうか」を判定できる
+    よう、on_message は cl.context.session.id を _generating_thread_session_ids
+    へ登録し、終了時に確実に消す（2026-08-19 ユーザー報告の並列送信検知バグの
+    根本原因: これが無いと、フロントは useChatData().loading（Plan Mode承認待ち
+    等の一時的な ask 中は false になりうる）でしか自分自身のターンを判別できず、
+    誤って「他セッションで生成中」と判定して window.location.reload() を
+    発火させ、自分自身のターンを見失って無題の会話が増殖していた）。
+    """
+    app._generating_thread_ids.clear()
+    app._generating_owner_threads.clear()
+    app._generating_thread_tasks.clear()
+    app._generating_thread_session_ids.clear()
+    monkeypatch.setattr(app.cl, "user_session", _FakeUserSession("t1"))
+    monkeypatch.setattr(app.cl, "context", _FakeContext(_FakeEmitSession("t1", session_id="my-session")))
+
+    seen = {}
+
+    async def fake_impl(message):
+        seen["session_id_during_impl"] = app._generating_thread_session_ids.get("t1")
+
+    monkeypatch.setattr(app, "_on_message_impl", fake_impl)
+
+    await app.on_message(object())
+
+    assert seen["session_id_during_impl"] == "my-session"
+    assert "t1" not in app._generating_thread_session_ids
 
 
 @pytest.mark.asyncio

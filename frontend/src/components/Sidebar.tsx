@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import { useRecoilValue } from 'recoil';
-import { currentThreadIdState, firstUserInteraction, useConfig } from '@chainlit/react-client';
+import { currentThreadIdState, firstUserInteraction, sessionIdState, useConfig } from '@chainlit/react-client';
 import { BACKEND_URL } from '../chainlitClient';
 import { Icon } from './Icon';
 
@@ -34,15 +34,19 @@ export function Sidebar() {
   const { config } = useConfig();
   const currentThreadId = useRecoilValue(currentThreadIdState);
   const firstInteraction = useRecoilValue(firstUserInteraction);
+  const sessionId = useRecoilValue(sessionIdState);
   const [collapsed, setCollapsed] = useState(false);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
 
   const refresh = useCallback(() => {
-    fetch(`${BACKEND_URL}/locohane/threads`, { credentials: 'include' })
+    // session_id を渡すと、自分自身が生成中のスレッドにはパルスドットを
+    // 出さない（app.py の /locohane/threads のdocstring参照）。
+    const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+    fetch(`${BACKEND_URL}/locohane/threads${query}`, { credentials: 'include' })
       .then((res) => (res.ok ? res.json() : Promise.reject()))
       .then((data) => setThreads(data.threads ?? []))
       .catch(() => {});
-  }, []);
+  }, [sessionId]);
 
   // マウント時、および新規スレッドがChainlit本体により命名された直後
   // （firstUserInteractionが変化するタイミング）に再取得する。

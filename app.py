@@ -195,6 +195,15 @@ _generating_thread_tasks: dict[str, "asyncio.Task"] = {}
 # 制限する）。on_message側の直前チェックからマーク/解除まで await を挟まない
 # ため、単一プロセスのasyncioイベントループ上で競合なく安全に更新できる。
 _generating_owner_threads: dict[str, str] = {}
+# thread_id -> そのターンを開始した cl.context.session.id（Chainlitのセッション
+# ID。sessionIdState としてフロントにも渡っている値と同じ）。
+# /locohane/threads/{id}/status がこれを見て「生成中ではあるが、それは
+# 質問元セッション自身のターンである」場合に isGenerating=false を返すために使う
+# （2026-08-19 ユーザー報告: 自分自身のターンなのに「他のセッションで生成中」の
+# バナー・入力欄無効化が誤って出て、完了扱いで window.location.reload() まで
+# 発火し、URLに?threadが無い新規チャットとして再接続され「無題の会話」が
+# 増殖するバグがあった）。
+_generating_thread_session_ids: dict[str, str] = {}
 # session.emit を中継してよいイベントの許可リスト（内容の表示に関わるものだけ）。
 # 'ask'系プロンプトは session.emit_call 経由で送られるため中継対象に含まれず、
 # 閲覧側セッションに二重の承認UIが出る心配は無い。task_start/task_end もあえて
@@ -204,15 +213,18 @@ _RELAYED_EMIT_EVENTS = frozenset(
 )
 
 
-def _mark_thread_generating(thread_id: str, owner: str | None = None) -> None:
+def _mark_thread_generating(thread_id: str, owner: str | None = None, session_id: str | None = None) -> None:
     _generating_thread_ids.add(thread_id)
     if owner is not None:
         _generating_owner_threads[owner] = thread_id
+    if session_id is not None:
+        _generating_thread_session_ids[thread_id] = session_id
 
 
 def _unmark_thread_generating(thread_id: str, owner: str | None = None) -> None:
     _generating_thread_ids.discard(thread_id)
     _generating_thread_tasks.pop(thread_id, None)
+    _generating_thread_session_ids.pop(thread_id, None)
     if owner is not None and _generating_owner_threads.get(owner) == thread_id:
         _generating_owner_threads.pop(owner, None)
 
@@ -555,6 +567,7 @@ if _config.thread_store_enabled:
     async def _locohane_list_threads(
         limit: int = 30,
         before: str | None = None,
+        session_id: str | None = None,
         current_user=Depends(_cl_get_current_user),
     ):
         """左サイドバー用の軽量なスレッド一覧（{id,name,updatedAt,isGenerating}[]）。
@@ -568,6 +581,10 @@ if _config.thread_store_enabled:
         別スレッドを開いた同じタブから見て「このスレッドは今も裏で処理中」を
         表すための項目で、フロントは定期的にこのエンドポイントを
         ポーリングして表示を更新する（ライブpushの仕組みが無いため）。
+        session_id（sessionIdState）を渡すと、そのスレッドを生成中なのが
+        呼び出し元自身のセッションである場合は isGenerating=false になる
+        （/locohane/threads/{id}/status のdocstring参照。自分自身の生成中
+        スレッドにもパルスドットが出てしまう見た目の紛らわしさを防ぐ）。
         """
         if _thread_store_conn is None:
             # _setup() が一度も完了していない（起動直後にブラウザ側のREST呼び出しが
@@ -577,7 +594,10 @@ if _config.thread_store_enabled:
         owner = thread_store.resolve_owner(current_user)
         items, next_cursor = await thread_store.list_threads_summary(_thread_store_conn, owner, limit, before)
         for item in items:
-            item["isGenerating"] = item["id"] in _generating_thread_ids
+            is_generating = item["id"] in _generating_thread_ids
+            if is_generating and session_id is not None and _generating_thread_session_ids.get(item["id"]) == session_id:
+                is_generating = False
+            item["isGenerating"] = is_generating
         return {"threads": items, "nextCursor": next_cursor}
 
     @_chainlit_asgi_app.put("/locohane/threads/{thread_id}")
@@ -597,7 +617,11 @@ if _config.thread_store_enabled:
         return {"success": True}
 
     @_chainlit_asgi_app.get("/locohane/threads/{thread_id}/status")
-    async def _locohane_thread_status(thread_id: str, current_user=Depends(_cl_get_current_user)):
+    async def _locohane_thread_status(
+        thread_id: str,
+        session_id: str | None = None,
+        current_user=Depends(_cl_get_current_user),
+    ):
         """今開いているスレッドが、他セッションで今も生成中かどうかの単発確認用。
 
         /locohane/threads の一覧は limit 件でページングされ、かつ更新頻度次第では
@@ -609,9 +633,22 @@ if _config.thread_store_enabled:
         ように見える」というユーザー報告（2026-08-19）への対応。この画面自体は
         別セッションの生成タスクを引き継げないため、真のライブストリーミング
         ではなく「待って自動再読み込み」に倒す）。
+
+        session_id（sessionIdState。呼び出し元自身の Chainlit セッションID）を
+        渡すと、そのスレッドを生成中なのが呼び出し元自身のセッションである場合
+        isGenerating=false を返す。これが無いと、自分自身のターンでも
+        Plan Mode承認待ち等で一時的に useChatData().loading が false になる
+        瞬間（session.emit_call経由の"ask"はtask_end/task_startを挟むため）
+        フロントが「他セッションが生成中」と誤検知し、待っても終わらない
+        ため window.location.reload() が発火して自分自身のターンを見失い、
+        URLに?threadが無い新規チャットとして再接続されてしまう
+        （2026-08-19 ユーザー報告: 送信するたびに無題の会話が増殖するバグ）。
         """
         await _assert_owns_thread(thread_id, current_user)
-        return {"isGenerating": thread_id in _generating_thread_ids}
+        is_generating = thread_id in _generating_thread_ids
+        if is_generating and session_id is not None and _generating_thread_session_ids.get(thread_id) == session_id:
+            is_generating = False
+        return {"isGenerating": is_generating}
 
     @_chainlit_asgi_app.post("/locohane/threads/{thread_id}/stop")
     async def _locohane_stop_thread(thread_id: str, current_user=Depends(_cl_get_current_user)):
@@ -3170,7 +3207,7 @@ async def on_message(message: cl.Message) -> None:
 
     original_emit = session.emit if session is not None else None
     if thread_id is not None and session is not None:
-        _mark_thread_generating(thread_id, owner)
+        _mark_thread_generating(thread_id, owner, session.id)
         _generating_thread_tasks[thread_id] = asyncio.current_task()
         session.emit = _make_relayed_emit(session, thread_id, original_emit)
     try:

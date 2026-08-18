@@ -7,7 +7,8 @@ import {
   useChatMessages,
   useChatData,
   useConfig,
-  currentThreadIdState
+  currentThreadIdState,
+  sessionIdState
 } from '@chainlit/react-client';
 import { BACKEND_URL } from './chainlitClient';
 import { Header } from './components/Header';
@@ -47,6 +48,7 @@ function App() {
   const { loading } = useChatData();
   const { config } = useConfig();
   const currentThreadId = useRecoilValue(currentThreadIdState);
+  const sessionId = useRecoilValue(sessionIdState);
 
   const requireLogin = authData?.requireLogin ?? false;
   const canConnect = authReady && (!requireLogin || isAuthenticated);
@@ -76,28 +78,33 @@ function App() {
   // そのまま何も表示しないと「会話が終了したように見える」ため、開いている
   // スレッドが他セッションで処理中かをポーリングし、入力欄を無効化した上で
   // 完了を検知したら再読み込みして確定内容を取り込む。
+  //
+  // 「他セッションで処理中」の判定は sessionIdState（このセッション自身の
+  // Chainlit セッションID）をバックエンドへ渡し、生成中セッションと突き合わせて
+  // もらう（app.py の /locohane/threads/{id}/status 参照）。以前は
+  // useChatData().loading で自分自身のターンを除外していたが、Plan Mode承認待ち
+  // 等の一時的な "ask" 中は自分自身のターンでも loading が false になる
+  // （session.emit_call 経由でtask_end/task_startを挟むため）ため、
+  // 自分自身の送信中にもかかわらず「他セッションで生成中」と誤検知し、
+  // window.location.reload() が発火して自分自身のターンを見失い、URLに
+  // ?thread が無い新規チャットとして再接続され続ける不具合があった
+  // （2026-08-19 ユーザー報告: 送信するたびに無題の会話が増殖するバグ）。
   const [remoteGenerating, setRemoteGenerating] = useState(false);
   const wasRemoteGeneratingRef = useRef(false);
-  const loadingRef = useRef(loading);
-  useEffect(() => {
-    loadingRef.current = loading;
-  }, [loading]);
 
   useEffect(() => {
     wasRemoteGeneratingRef.current = false;
     setRemoteGenerating(false);
-    if (!currentThreadId || !config?.dataPersistence) return;
+    if (!currentThreadId || !sessionId || !config?.dataPersistence) return;
 
     let cancelled = false;
     const poll = () => {
-      fetch(`${BACKEND_URL}/locohane/threads/${currentThreadId}/status`, { credentials: 'include' })
+      const query = `?session_id=${encodeURIComponent(sessionId)}`;
+      fetch(`${BACKEND_URL}/locohane/threads/${currentThreadId}/status${query}`, { credentials: 'include' })
         .then((res) => (res.ok ? res.json() : Promise.reject()))
         .then((data: { isGenerating: boolean }) => {
           if (cancelled) return;
-          // 自分自身がまさに送信中のターンは loading 側で表現される。ここで
-          // 除外しないと、自分の送信完了直後に強制リロードがかかってしまう。
-          const remote = data.isGenerating && !loadingRef.current;
-          if (remote) {
+          if (data.isGenerating) {
             wasRemoteGeneratingRef.current = true;
             setRemoteGenerating(true);
             return;
@@ -116,7 +123,7 @@ function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [currentThreadId, config?.dataPersistence]);
+  }, [currentThreadId, sessionId, config?.dataPersistence]);
 
   // このセッションには生成中タスクへの参照（session.current_task）が無いため、
   // Chainlit純正の stopTask は機能しない。代わりにバックエンドへ「このスレッドの
