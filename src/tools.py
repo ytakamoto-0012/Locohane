@@ -40,7 +40,9 @@ LangChain の @tool として定義する。read_skill/read_skill_file/run_scrip
 ディレクトリ配下に限定する（_safe_path でディレクトリトラバーサルを拒否）。保存・実行の
 パスがコードから追える事。analyze_image / read_tool(Read) / glob_tool(Glob) /
 grep_tool(Grep) は読み込み系ツールのため、パスの制限は行わない
-（_resolve_analyze_image_path / _resolve_file_tools_path）。
+（_resolve_analyze_image_path / _resolve_file_tools_path）。ただし
+`_tmp_<thread_id>`（他セッションの一時ディレクトリ）だけは例外で、
+自セッション以外は読み取り不可（_foreign_tmp_dir_error）。
 メモリー系ツールも同様に memory.py 側の _safe_memory_path で memory ルート配下に限定する。
 
 設定（skills ルート・Python 実行ファイル・タイムアウト・サブエージェント設定・
@@ -844,7 +846,70 @@ def _resolve_file_tools_path(raw: str) -> tuple[Path | None, str | None]:
     p = Path(resolved) if resolved else _resolve_workdir()
     if not p.is_absolute():
         p = _resolve_workdir() / p
+    tmp_error = _foreign_tmp_dir_error(p)
+    if tmp_error:
+        return None, tmp_error
     return p, None
+
+
+def _foreign_tmp_dir_error(path: Path) -> str | None:
+    """path が自セッション以外の `_tmp_<thread_id>` 配下なら拒否メッセージを返す。
+
+    `_tmp_<thread_id>`（execute_python_code系の中間生成物置き場、
+    `_resolve_exec_workdir()`）は作業ディレクトリ・default_workdir直下に
+    全セッション共通の兄弟フォルダとして並ぶため、素朴にパスを許可すると
+    他セッションの一時ファイルまで読めてしまう（LLMが他セッションの
+    残留ファイルを自セッションの生成物と誤認する事故の原因）。
+
+    誤検知を避けるため、「作業ディレクトリ/default_workdir 直下の
+    最初の階層が `_tmp_` で始まる名前かどうか」だけを見る（パスの
+    どこかに `_tmp_` を含む文字列があるかではない）。無関係な場所に
+    たまたま `_tmp_` で始まる名前のフォルダがあっても影響しない。
+
+    Args:
+        path: 解決済みの絶対パス（未解決でも内部で resolve() する）。
+
+    Returns:
+        他セッションの一時ディレクトリ配下と判定できればエラー文字列、
+        そうでなければ None。
+    """
+    own_name = f"_tmp_{cl.user_session.get('thread_id') or '_no_session'}"
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return None
+    for parent in _tmp_dir_parents(_resolve_workdir()):
+        try:
+            rel = resolved.relative_to(parent)
+        except ValueError:
+            continue
+        if not rel.parts:
+            continue
+        first = rel.parts[0]
+        if first.startswith("_tmp_") and first != own_name:
+            return f"エラー: 他セッションの一時ディレクトリ（{first}）は読み取れません。"
+        return None
+    return None
+
+
+def _foreign_tmp_dir_names() -> frozenset[str]:
+    """自セッション以外の `_tmp_<thread_id>` ディレクトリ名の集合を返す。
+
+    Glob/Grep が作業ディレクトリ本体などの祖先から再帰検索する際、
+    他セッションの `_tmp_<X>` サブツリーだけを走査・結果から除外するために
+    `file_tools.glob_search`/`grep_search` の `exclude_names` へ渡す。
+    """
+    own_name = f"_tmp_{cl.user_session.get('thread_id') or '_no_session'}"
+    names: set[str] = set()
+    for parent in _tmp_dir_parents(_resolve_workdir()):
+        try:
+            entries = list(parent.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.name.startswith("_tmp_") and entry.name != own_name and entry.is_dir():
+                names.add(entry.name)
+    return frozenset(names)
 
 
 def _check_file_tools_duplicate(tool_label: str, signature: str) -> str | None:
@@ -934,7 +999,11 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
     書き込むLocohane内部の状態ディレクトリ。ユーザー成果物の保存先では
     ないためexecute_python_code側のallowed_rootsとは異なりここにのみ追加）
     配下のみ。それ以外の場所（他ドライブ・Locohaneプロジェクト本体を含む）への
-    書き込み・削除は PermissionError でブロックされる。読み取りは対象外。
+    書き込み・削除は PermissionError でブロックされる。読み取りは対象外だが、
+    `_tmp_<thread_id>`（`workdir`直下に全セッション共通で並ぶ一時フォルダ）に
+    限っては、自セッション以外への読み取り・書き込み・削除を allowed_roots の
+    内外を問わず追加でブロックする（`_python_fs_guard_preamble` の
+    `tmp_dir_roots` 参照）。
 
     Args:
         workdir: このスクリプト実行の cwd（_resolve_workdir の解決結果）。
@@ -955,7 +1024,8 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
         allowed_roots.append(_PATH_MEMORY_DIR)
     try:
         guard_dir = Path(tempfile.mkdtemp(prefix="agent_fs_guard_"))
-        (guard_dir / "sitecustomize.py").write_text(_python_fs_guard_preamble(allowed_roots), encoding="utf-8")
+        guard_src = _python_fs_guard_preamble(allowed_roots, tmp_dir_roots=_tmp_dir_parents(workdir))
+        (guard_dir / "sitecustomize.py").write_text(guard_src, encoding="utf-8")
     except OSError:
         logger.warning("run_script: 書き込みガード用の一時ファイル作成に失敗したため、ガード無しで実行します。")
         return env, None
@@ -1105,7 +1175,8 @@ def provide_download(file_paths: list[str]) -> str:
     アップロード済みファイルや、Read/Glob 等で見つけた既存ファイル、以前の
     作業で生成済みのファイルなどを、あらためてユーザーがダウンロードできる
     ようにしたいときに使う。Read 等と同様にパスの制限は行わない
-    （ローカルファイルシステム上の任意の絶対パスを指定できる）。複数指定
+    （ローカルファイルシステム上の任意の絶対パスを指定できる。ただし
+    `_tmp_<thread_id>` の他セッション分だけは例外で提供できない）。複数指定
     した場合、1つのメッセージにダウンロードボタンがまとめて並んで表示
     される（1件だけの場合はリストに1件だけ入れて渡す）。
 
@@ -1125,6 +1196,9 @@ def provide_download(file_paths: list[str]) -> str:
         if not path.is_absolute():
             path = _resolve_workdir() / path
         path = path.resolve()
+        tmp_error = _foreign_tmp_dir_error(path)
+        if tmp_error:
+            return tmp_error
         if not path.is_file():
             return f"エラー: ファイルが見つかりません: {file_path}"
         resolved.append(path)
@@ -1147,7 +1221,8 @@ def show_image(file_path: str) -> str:
     生成済みの画像（グラフ・スクリーンショット等）や、アップロード済み・
     Glob で見つけた既存の画像をユーザーへ見せたいときに使う。
     provide_download と同様にパスの制限は行わない（ローカルファイルシステム上の
-    任意の絶対パスを指定できる）。
+    任意の絶対パスを指定できる。ただし `_tmp_<thread_id>` の他セッション分だけは
+    例外で表示できない）。
 
     Args:
         file_path: 表示したい画像ファイルの絶対パス（相対パスの場合は
@@ -1162,6 +1237,9 @@ def show_image(file_path: str) -> str:
     if not path.is_absolute():
         path = _resolve_workdir() / path
     path = path.resolve()
+    tmp_error = _foreign_tmp_dir_error(path)
+    if tmp_error:
+        return tmp_error
     if not path.is_file():
         return f"エラー: ファイルが見つかりません: {file_path}"
     if not is_image_file(path):
@@ -1408,6 +1486,40 @@ def _resolve_exec_workdir() -> tuple[Path, bool]:
         return fallback_d, True
 
 
+def _tmp_dir_parents(primary: Path) -> list[Path]:
+    """`_tmp_<thread_id>` が実際に作られうる親ディレクトリの一覧を返す。
+
+    `_resolve_exec_workdir()` は通常 `primary`（呼び出し元が渡す実行用
+    ディレクトリの親、または run_script の cwd そのもの）配下に
+    `_tmp_<thread_id>` を作るが、mkdir失敗時は `_DEFAULT_WORKDIR` 配下へ
+    フォールバックする（1402-1408行目）。他セッションの `_tmp_<X>` 検出
+    （`_foreign_tmp_dir_error`/`_foreign_tmp_dir_names`/ガードプリアンブルの
+    `tmp_dir_roots`）は、このフォールバック先も含めて両方を見る必要がある。
+
+    Args:
+        primary: 実行用ディレクトリの親（execute_python_code系）、または
+            run_script の cwd（run_script系。この場合それ自体が親）。
+
+    Returns:
+        重複・非存在を除いた既存ディレクトリのリスト。
+    """
+    candidates = [primary]
+    if _DEFAULT_WORKDIR is not None:
+        candidates.append(_DEFAULT_WORKDIR)
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for c in candidates:
+        try:
+            resolved = c.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not resolved.is_dir():
+            continue
+        seen.add(resolved)
+        result.append(resolved)
+    return result
+
+
 def _scratch_notes_path_for_run(run_id: str) -> Path:
     """write_scratch_note が書き込むスクラッチファイルの絶対パスを、
     指定した run_id から直接決める（_SUBAGENT_RUN_ID を読まない版）。
@@ -1646,7 +1758,8 @@ def read_tool(file_path: str, offset: int = 0, limit: int = 10) -> str:
     """ローカルファイルシステム上の任意のテキストファイルを行番号付きで読み込む。
 
     skills ディレクトリ配下限定の read_skill_file とは異なり、パスの制限は
-    行わない（ユーザーが指定した任意の絶対パスを読めることが目的）。
+    行わない（ユーザーが指定した任意の絶対パスを読めることが目的。ただし
+    `_tmp_<thread_id>` の他セッション分だけは例外で読み取れない）。
     スキル本文・補助資料を読むなら read_skill_file、ユーザーが指定した
     ファイルを読むならこちらを使う。読み取り専用のため、計画の有無に
     関わらずいつでも呼んでよい。
@@ -1720,7 +1833,7 @@ def glob_tool(pattern: str, path: str = "", head_limit: int = 200) -> str:
     if dup_error:
         return dup_error
     try:
-        result = file_tools.glob_search(base, pattern, head_limit=head_limit)
+        result = file_tools.glob_search(base, pattern, head_limit=head_limit, exclude_names=_foreign_tmp_dir_names())
     except ValueError as e:
         return f"エラー: {e}"
     path_memory = _register_path_memory([*result["files"], *[d["path"] for d in result["directories"]]])
@@ -1780,6 +1893,7 @@ def grep_tool(
             case_insensitive=case_insensitive,
             context=context,
             head_limit=head_limit,
+            exclude_names=_foreign_tmp_dir_names(),
         )
     except ValueError as e:
         return f"エラー: {e}"
@@ -2492,7 +2606,7 @@ def _exec_guard_roots(workdir: Path) -> list[Path]:
     return roots
 
 
-def _python_fs_guard_preamble(allowed_roots: Sequence[Path]) -> str:
+def _python_fs_guard_preamble(allowed_roots: Sequence[Path], tmp_dir_roots: Sequence[Path] = ()) -> str:
     """execute_python_code / run_script が実行するコードの先頭（または
     サブプロセスの sitecustomize.py）に連結する、書き込みサンドボックス用の
     ガードコードを生成する。
@@ -2526,9 +2640,23 @@ def _python_fs_guard_preamble(allowed_roots: Sequence[Path]) -> str:
     シェルラッパー経由でのコマンド名偽装までは防げないベストエフォートの
     対策）。こちらは allowed_roots による除外はない（常に全面禁止）。
 
+    さらに tmp_dir_roots 配下（`_tmp_<thread_id>`。execute_python_code系の
+    中間生成物置き場、`_resolve_exec_workdir()`）については、自セッション
+    以外の `_tmp_<X>` への読み取り（`open()`）・書き込み・削除・改名を
+    allowed_roots の内外を問わず一律ブロックする（他セッションの一時
+    ファイルをLLM生成コードが誤って読む・書き換える事故の防止。
+    ディレクトリ一覧取得 `os.listdir`/`os.scandir`/`Path.iterdir`/`os.walk`
+    はv1では対象外）。自セッション自身の `_tmp_<own>` はこれまで通り
+    無制限に読み書きできる。
+
     Args:
         allowed_roots: 書き込み・削除を許可するディレクトリの一覧
             （実行用ディレクトリと default_workdir）。
+        tmp_dir_roots: `_tmp_<thread_id>` が実際に作られうる親ディレクトリの
+            一覧（`_tmp_dir_parents()` の戻り値）。他セッション判定にのみ
+            使い、allowed_roots とは独立（execute_python_code_readonly は
+            allowed_roots=[] で全面書き込み禁止だが、他セッションtmp判定
+            自体はここに渡す tmp_dir_roots で別途機能する）。
 
     Returns:
         コード文字列の先頭に連結する、あるいは sitecustomize.py として
@@ -2541,6 +2669,7 @@ def _python_fs_guard_preamble(allowed_roots: Sequence[Path]) -> str:
     # ディレクトリを指す結果、書き込みガードが実質無効化される不具合が
     # あった。repr(tuple(...)) なら空リストは正しく "()" になる。
     allowed_repr = repr(tuple(str(p) for p in allowed_roots))
+    tmp_roots_repr = repr(tuple(str(p) for p in tmp_dir_roots))
     return f'''\
 import builtins as _guard_builtins
 import io as _guard_io
@@ -2548,9 +2677,30 @@ import os as _guard_os
 import shutil as _guard_shutil
 
 _GUARD_ALLOWED = [_guard_os.path.realpath(_p) for _p in {allowed_repr}]
+_GUARD_TMP_ROOTS = [_guard_os.path.realpath(_p) for _p in {tmp_roots_repr}]
+_GUARD_OWN_TMP_NAME = "_tmp_" + _guard_os.environ.get("AGENT_THREAD_ID", "_no_session")
+
+
+def _guard_check_foreign_tmp(_path):
+    try:
+        _target = _guard_os.path.realpath(_guard_os.fspath(_path))
+    except TypeError:
+        return
+    for _root in _GUARD_TMP_ROOTS:
+        if _target == _root:
+            return
+        if _target.startswith(_root + _guard_os.sep):
+            _first = _target[len(_root) + 1 :].split(_guard_os.sep, 1)[0]
+            if _first.startswith("_tmp_") and _first != _GUARD_OWN_TMP_NAME:
+                raise PermissionError(
+                    f"[一時ディレクトリガード] 他セッションの一時ディレクトリへは"
+                    f"アクセスできません: {{_path}}"
+                )
+            return
 
 
 def _guard_check(_path, _op):
+    _guard_check_foreign_tmp(_path)
     try:
         _target = _guard_os.path.realpath(_guard_os.fspath(_path))
     except TypeError:
@@ -2570,6 +2720,8 @@ _guard_orig_open = _guard_builtins.open
 def _guard_open(_file, _mode="r", *_args, **_kwargs):
     if any(_c in _mode for _c in ("w", "a", "x", "+")):
         _guard_check(_file, "書き込み")
+    else:
+        _guard_check_foreign_tmp(_file)
     return _guard_orig_open(_file, _mode, *_args, **_kwargs)
 
 
@@ -2766,7 +2918,7 @@ async def execute_python_code(code: str) -> str:
         before_snapshot = {}
 
     try:
-        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir))
+        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
@@ -2779,7 +2931,7 @@ async def execute_python_code(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
-            _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir))
+            _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
             tmp.write(_fs_guard + code)
             tmp.close()
@@ -2861,7 +3013,7 @@ async def execute_python_code_readonly(code: str) -> str:
     workdir, fell_back = _resolve_exec_workdir()
 
     try:
-        _fs_guard = _python_fs_guard_preamble([])
+        _fs_guard = _python_fs_guard_preamble([], tmp_dir_roots=_tmp_dir_parents(workdir.parent))
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
@@ -2872,7 +3024,7 @@ async def execute_python_code_readonly(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
-            _fs_guard = _python_fs_guard_preamble([])
+            _fs_guard = _python_fs_guard_preamble([], tmp_dir_roots=_tmp_dir_parents(workdir.parent))
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
             tmp.write(_fs_guard + code)
             tmp.close()
@@ -3002,7 +3154,7 @@ async def execute_python_code_background(code: str) -> str:
         before_snapshot = {}
 
     try:
-        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir))
+        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
@@ -3015,7 +3167,7 @@ async def execute_python_code_background(code: str) -> str:
         workdir.mkdir(parents=True, exist_ok=True)
         fell_back = True
         try:
-            _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir))
+            _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
             tmp.write(_fs_guard + code)
             tmp.close()
@@ -4068,7 +4220,8 @@ def analyze_image(relative_path: str) -> tuple[str, dict | None]:
     """画像ファイルをLLMへ視覚情報として見せ、自分（LLM）がその内容を解析・説明・判断するために使う。
 
     読み込み系ツールのため、ローカルファイルシステム上の任意の絶対パスを指定できる
-    （Read 等と同様、パスの制限は行わない）。
+    （Read 等と同様、パスの制限は行わない。ただし `_tmp_<thread_id>` の他セッション
+    分だけは例外で解析できない）。
 
     ユーザーが画像そのものを見たい（表示・プレビュー）だけなら、代わりに
     `show_image` を使うこと。このツールはあくまで自分が画像の中身を理解する
@@ -4100,6 +4253,9 @@ def analyze_image(relative_path: str) -> tuple[str, dict | None]:
     if error:
         return f"エラー: {error}", None
     path = _resolve_analyze_image_path(resolved_path)
+    tmp_error = _foreign_tmp_dir_error(path)
+    if tmp_error:
+        return tmp_error, None
     if not path.is_file():
         return f"エラー: ファイルが見つかりません: {relative_path}", None
     if not is_image_file(path):

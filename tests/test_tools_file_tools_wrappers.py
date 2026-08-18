@@ -183,6 +183,60 @@ class TestJsonQuery:
         assert not second.startswith("エラー:")
 
 
+class TestForeignTmpDirGuard:
+    """他セッションの `_tmp_<thread_id>` への読み取りを拒否するガードの回帰テスト。
+
+    file_tools_env フィクスチャは thread_id="thread-1" でセッションをモックする
+    （_FakeUserSession の既定値）。ここでは自セッション用の `_tmp_thread-1` と
+    他セッション用の `_tmp_thread-2` を作業ディレクトリ配下へ用意し、
+    自分は読める・他人は読めない・無関係なパスは今まで通り無制限、を確認する。
+    """
+
+    def test_read_foreign_tmp_dir_is_blocked(self, file_tools_env) -> None:
+        foreign = file_tools_env / "_tmp_thread-2"
+        foreign.mkdir()
+        leaked = foreign / "leaked.txt"
+        leaked.write_text("secret", encoding="utf-8")
+
+        result = tools.read_tool.func(file_path=str(leaked))
+
+        assert result.startswith("エラー:")
+        assert "他セッション" in result
+
+    def test_read_own_tmp_dir_still_succeeds(self, file_tools_env) -> None:
+        own = file_tools_env / "_tmp_thread-1"
+        own.mkdir()
+        f = own / "own.txt"
+        f.write_text("mine", encoding="utf-8")
+
+        result = json.loads(tools.read_tool.func(file_path=str(f)))
+
+        assert result["content"].endswith("mine")
+
+    def test_glob_over_workdir_excludes_foreign_tmp_but_keeps_siblings(self, file_tools_env) -> None:
+        (file_tools_env / "notes.txt").write_text("hello", encoding="utf-8")
+        foreign = file_tools_env / "_tmp_thread-2"
+        foreign.mkdir()
+        (foreign / "leaked.txt").write_text("secret", encoding="utf-8")
+
+        result = json.loads(tools.glob_tool.func(pattern="**/*", path=""))
+
+        registered_paths = set(result.get("path_memory", {}).values())
+        assert not any("leaked.txt" in p for p in registered_paths)
+        assert result["directories"] == []
+        assert any(p.endswith("notes.txt") for p in registered_paths)
+
+    def test_path_outside_workdir_is_completely_unaffected(self, file_tools_env, tmp_path) -> None:
+        unrelated = tmp_path / "unrelated"
+        unrelated.mkdir()
+        f = unrelated / "notes.txt"
+        f.write_text("hello\n", encoding="utf-8")
+
+        result = json.loads(tools.read_tool.func(file_path=str(f)))
+
+        assert result["content"].endswith("hello")
+
+
 @pytest.fixture
 def skill_tools_env(tmp_path, monkeypatch):
     """read_skill/read_skill_file/get_tool_source の重複ガードテスト用環境。

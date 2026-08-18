@@ -105,6 +105,20 @@ class TestGlobSearch:
         with pytest.raises(ValueError, match="ディレクトリではありません"):
             file_tools.glob_search(f, "*.py")
 
+    def test_exclude_names_prunes_results_and_counts(self, tmp_path) -> None:
+        (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
+        excluded = tmp_path / "_tmp_other"
+        excluded.mkdir()
+        (excluded / "leaked.txt").write_text("secret", encoding="utf-8")
+
+        result = file_tools.glob_search(tmp_path, "**/*", exclude_names=frozenset({"_tmp_other"}))
+
+        assert str((tmp_path / "notes.txt").resolve()) in result["files"]
+        assert not any("leaked.txt" in p for p in result["files"])
+        assert not any(d["path"] == str(excluded.resolve()) for d in result["directories"])
+        assert result["base_contents"]["file_count"] == 1
+        assert result["base_contents"]["directory_count"] == 0
+
 
 class TestGrepSearch:
     def test_files_with_matches_mode(self, tmp_path) -> None:
@@ -168,6 +182,19 @@ class TestGrepSearch:
     def test_invalid_output_mode_raises(self, tmp_path) -> None:
         with pytest.raises(ValueError, match="output_mode"):
             file_tools.grep_search(tmp_path, "TODO", output_mode="bogus")
+
+    def test_exclude_names_prunes_matches(self, tmp_path) -> None:
+        (tmp_path / "a.py").write_text("TODO: visible\n", encoding="utf-8")
+        excluded = tmp_path / "_tmp_other"
+        excluded.mkdir()
+        (excluded / "b.py").write_text("TODO: hidden\n", encoding="utf-8")
+
+        result = file_tools.grep_search(
+            tmp_path, "TODO", output_mode="files_with_matches", exclude_names=frozenset({"_tmp_other"})
+        )
+
+        assert result["matched"] is True
+        assert result["files"] == [str((tmp_path / "a.py").resolve())]
 
 
 class TestQueryJson:

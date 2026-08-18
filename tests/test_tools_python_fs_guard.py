@@ -33,11 +33,17 @@ def guard_dirs(tmp_path):
     return allowed_root, outside_root
 
 
-def _run_guarded(tmp_path, allowed_roots, body: str) -> subprocess.CompletedProcess:
-    guard_src = tools._python_fs_guard_preamble(allowed_roots)
+def _run_guarded(
+    tmp_path, allowed_roots, body: str, tmp_dir_roots=(), agent_thread_id: str | None = None
+) -> subprocess.CompletedProcess:
+    guard_src = tools._python_fs_guard_preamble(allowed_roots, tmp_dir_roots=tmp_dir_roots)
     script_path = tmp_path / "script.py"
     script_path.write_text(guard_src + "\n" + body, encoding="utf-8")
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    if agent_thread_id is not None:
+        env["AGENT_THREAD_ID"] = agent_thread_id
+    else:
+        env.pop("AGENT_THREAD_ID", None)
     return subprocess.run(
         [sys.executable, str(script_path)],
         capture_output=True,
@@ -140,3 +146,68 @@ def test_read_outside_allowed_root_is_permitted(tmp_path, guard_dirs):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "hello"
+
+
+def test_read_foreign_tmp_dir_is_blocked(tmp_path, guard_dirs):
+    allowed_root, _ = guard_dirs
+    foreign = allowed_root / "_tmp_thread-2"
+    foreign.mkdir()
+    leaked = foreign / "leaked.txt"
+    leaked.write_text("secret", encoding="utf-8")
+    body = f'open(r"{leaked}", "r", encoding="utf-8").read()\n'
+
+    result = _run_guarded(
+        tmp_path, [allowed_root], body, tmp_dir_roots=[allowed_root], agent_thread_id="thread-1"
+    )
+
+    assert result.returncode != 0
+    assert "一時ディレクトリガード" in result.stderr
+
+
+def test_read_own_tmp_dir_is_permitted(tmp_path, guard_dirs):
+    allowed_root, _ = guard_dirs
+    own = allowed_root / "_tmp_thread-1"
+    own.mkdir()
+    mine = own / "mine.txt"
+    mine.write_text("mine", encoding="utf-8")
+    body = f'print(open(r"{mine}", "r", encoding="utf-8").read())\n'
+
+    result = _run_guarded(
+        tmp_path, [allowed_root], body, tmp_dir_roots=[allowed_root], agent_thread_id="thread-1"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "mine"
+
+
+def test_remove_foreign_tmp_dir_is_blocked(tmp_path, guard_dirs):
+    allowed_root, _ = guard_dirs
+    foreign = allowed_root / "_tmp_thread-2"
+    foreign.mkdir()
+    target = foreign / "leaked.txt"
+    target.write_text("secret", encoding="utf-8")
+    body = f'import os\nos.remove(r"{target}")\n'
+
+    result = _run_guarded(
+        tmp_path, [allowed_root], body, tmp_dir_roots=[allowed_root], agent_thread_id="thread-1"
+    )
+
+    assert result.returncode != 0
+    assert "一時ディレクトリガード" in result.stderr
+    assert target.exists()
+
+
+def test_rmtree_foreign_tmp_dir_is_blocked(tmp_path, guard_dirs):
+    allowed_root, _ = guard_dirs
+    foreign = allowed_root / "_tmp_thread-2"
+    foreign.mkdir()
+    (foreign / "leaked.txt").write_text("secret", encoding="utf-8")
+    body = f'import shutil\nshutil.rmtree(r"{foreign}")\n'
+
+    result = _run_guarded(
+        tmp_path, [allowed_root], body, tmp_dir_roots=[allowed_root], agent_thread_id="thread-1"
+    )
+
+    assert result.returncode != 0
+    assert "一時ディレクトリガード" in result.stderr
+    assert foreign.exists()

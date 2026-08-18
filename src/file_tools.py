@@ -132,15 +132,21 @@ def read_file(path: Path, offset: int = 0, limit: int = 10) -> dict:
     }
 
 
-def _count_contents(path: Path) -> dict:
+def _count_contents(path: Path, exclude_names: frozenset[str] = frozenset()) -> dict:
     """path配下(再帰)に含まれるサブフォルダ数とファイル数を数える。
 
     サブエージェントへの分割委譲判断に使う概算値のため、権限エラー等の
     walk中の例外は無視して数えられた範囲だけを返す。
+
+    Args:
+        exclude_names: 走査から除外するディレクトリ名の集合（basenameで
+            一致判定。空なら従来通り無条件で全て数える）。
     """
     dir_count = 0
     file_count = 0
     for _root, dirs, files in os.walk(path, onerror=lambda e: None):
+        if exclude_names:
+            dirs[:] = [d for d in dirs if d not in exclude_names]
         dir_count += len(dirs)
         file_count += len(files)
     return {"directory_count": dir_count, "file_count": file_count}
@@ -162,13 +168,17 @@ def _file_detail(path: Path) -> dict:
     return {"path": resolved, "binary": False, "total_lines": len(text.splitlines())}
 
 
-def glob_search(base: Path, pattern: str, head_limit: int = 200) -> dict:
+def glob_search(base: Path, pattern: str, head_limit: int = 200, exclude_names: frozenset[str] = frozenset()) -> dict:
     """指定ディレクトリ配下でglobパターンに一致するファイル/ディレクトリを検索する（旧 glob_file.py 相当）。
 
     Args:
         base: 検索起点ディレクトリの絶対パス。
         pattern: globパターン（例: "**/*.py"）。
         head_limit: ファイル・ディレクトリそれぞれに独立に適用する上限件数。
+        exclude_names: 結果・件数から除外するディレクトリ名の集合
+            （basenameで一致するパス階層を含む一致は丸ごと除外。呼び出し元
+            が「他セッションの一時ディレクトリ」等、汎用的な理由で除外
+            したい名前を渡す。空なら従来通り無条件で全て対象）。
 
     Returns:
         {"base", "base_contents", "total_matches", "returned", "truncated",
@@ -190,6 +200,9 @@ def glob_search(base: Path, pattern: str, head_limit: int = 200) -> dict:
     except ValueError as e:
         raise ValueError(f"パターンが不正です: {e}") from e
 
+    if exclude_names:
+        all_matches = [p for p in all_matches if not (set(p.parts) & exclude_names)]
+
     file_matches = [p for p in all_matches if p.is_file()]
     dir_matches = [p for p in all_matches if p.is_dir()]
     file_matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -201,8 +214,10 @@ def glob_search(base: Path, pattern: str, head_limit: int = 200) -> dict:
     files = [str(p.resolve()) for p in truncated_files]
     directory_paths = [str(p.resolve()) for p in truncated_dirs]
     file_details = [_file_detail(p) for p in truncated_files]
-    directories = [{"path": path_str, **_count_contents(p)} for path_str, p in zip(directory_paths, truncated_dirs)]
-    base_contents = _count_contents(base)
+    directories = [
+        {"path": path_str, **_count_contents(p, exclude_names)} for path_str, p in zip(directory_paths, truncated_dirs)
+    ]
+    base_contents = _count_contents(base, exclude_names)
 
     return {
         "base": str(base.resolve()),
@@ -227,6 +242,7 @@ def grep_search(
     case_insensitive: bool = False,
     context: int = 0,
     head_limit: int = 50,
+    exclude_names: frozenset[str] = frozenset(),
 ) -> dict:
     """指定ファイル/ディレクトリ配下のテキストから正規表現で検索する（旧 grep_file.py 相当）。
 
@@ -238,6 +254,9 @@ def grep_search(
         case_insensitive: 大文字小文字を無視するか。
         context: "content" モード時、マッチ行の前後何行を含めるか。
         head_limit: 返却件数の上限。
+        exclude_names: 走査対象から除外するディレクトリ名の集合
+            （basenameで一致するディレクトリは配下ごと走査しない。空なら
+            従来通り無条件で全て対象）。
 
     Returns:
         output_mode に応じた形状の辞書（マッチ0件は
@@ -261,7 +280,9 @@ def grep_search(
     if base.is_file():
         target_files.append(base)
     else:
-        for root, _dirs, files in os.walk(base):
+        for root, dirs, files in os.walk(base):
+            if exclude_names:
+                dirs[:] = [d for d in dirs if d not in exclude_names]
             for name in files:
                 if glob and not fnmatch.fnmatch(name, glob):
                     continue

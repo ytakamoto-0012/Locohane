@@ -151,3 +151,42 @@ def test_subprocess_read_outside_workdir_is_permitted(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "hello"
+
+
+def test_subprocess_read_foreign_tmp_dir_is_blocked(tmp_path):
+    """_FakeUserSession の thread_id は "thread-1"（自セッション）。"""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    foreign = workdir / "_tmp_thread-2"
+    foreign.mkdir()
+    leaked = foreign / "leaked.txt"
+    leaked.write_text("secret", encoding="utf-8")
+    env, guard_dir = tools._run_script_guard_env(workdir)
+
+    try:
+        result = _run_script(workdir, f'open(r"{leaked}", "r", encoding="utf-8").read()\n', env)
+    finally:
+        if guard_dir is not None:
+            shutil.rmtree(guard_dir, ignore_errors=True)
+
+    assert result.returncode != 0
+    assert "一時ディレクトリガード" in result.stderr
+
+
+def test_subprocess_read_own_tmp_dir_is_permitted(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    own = workdir / "_tmp_thread-1"
+    own.mkdir()
+    mine = own / "mine.txt"
+    mine.write_text("mine", encoding="utf-8")
+    env, guard_dir = tools._run_script_guard_env(workdir)
+
+    try:
+        result = _run_script(workdir, f'print(open(r"{mine}", "r", encoding="utf-8").read())\n', env)
+    finally:
+        if guard_dir is not None:
+            shutil.rmtree(guard_dir, ignore_errors=True)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "mine"
