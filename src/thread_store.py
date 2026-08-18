@@ -26,6 +26,7 @@ from typing import Any
 
 import aiosqlite
 from chainlit.data.base import BaseDataLayer
+from chainlit.data.utils import queue_until_user_message
 from chainlit.types import Feedback, PageInfo, PaginatedResponse, Pagination, ThreadDict, ThreadFilter
 from chainlit.user import PersistedUser, User
 
@@ -362,6 +363,7 @@ class ChatThreadDataLayer(BaseDataLayer):
     async def upsert_feedback(self, feedback: Feedback) -> str:
         return feedback.id or str(uuid.uuid4())
 
+    @queue_until_user_message()
     async def create_element(self, element) -> None:
         # v1では添付ファイル（cl.Image/cl.File等）の永続化は行わない（no-op）。
         # 再開したスレッドでは本文・Step構造は再現されるが、show_image/
@@ -371,18 +373,42 @@ class ChatThreadDataLayer(BaseDataLayer):
     async def get_element(self, thread_id: str, element_id: str):
         return None
 
+    @queue_until_user_message()
     async def delete_element(self, element_id: str, thread_id: str | None = None) -> None:
         return None
 
+    @queue_until_user_message()
     async def create_step(self, step_dict: dict) -> None:
+        """StepDict を永続化する。
+
+        `chainlit.data.base.BaseDataLayer` は create_step/update_step/
+        delete_step/create_element/delete_element を
+        `@queue_until_user_message()` で装飾した状態の**抽象**メソッドとして
+        定義しているが、Python のデコレータは抽象メソッド定義に付けても
+        オーバーライドしたサブクラスの実装には引き継がれない（抽象メソッド
+        は単なるプレースホルダーであり、実際に呼ばれるのはこのサブクラス側の
+        実装そのものであるため）。装飾し忘れると、ユーザーが1文字も送信して
+        いない新規タブでも on_chat_start のウェルカムメッセージ等が即座に
+        永続化され、「新規チャット」ボタンを押すたびに無題のスレッドが
+        サイドバーに溜まり続けるバグになる（2026-08-19 実機で確認）。
+        このため各メソッドへ明示的に再度 `@queue_until_user_message()` を
+        付け直し、Chainlit本体が意図する「最初のユーザー発言まで永続化を
+        保留する」動作を回復させている。
+        """
         thread_id = step_dict.get("threadId")
         if thread_id:
             await upsert_thread_stub(self._conn, thread_id, _current_owner())
         await upsert_step_row(self._conn, step_dict)
 
+    @queue_until_user_message()
     async def update_step(self, step_dict: dict) -> None:
+        # create_step も同じ @queue_until_user_message() ガードを持つため、
+        # ここまで到達した時点（=ガードを通過済み）で呼べば二重にキューされる
+        # ことはない（ガードはメソッド単位ではなく毎回のセッション状態を見る
+        # だけなので、通過済みの呼び出しをさらに素通しするだけになる）。
         await self.create_step(step_dict)
 
+    @queue_until_user_message()
     async def delete_step(self, step_id: str) -> None:
         await delete_step_row(self._conn, step_id)
 

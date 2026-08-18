@@ -6,9 +6,34 @@ import os
 import time
 
 import pytest
+from chainlit.context import ChainlitContext, context_var
+from chainlit.session import WebsocketSession
 from chainlit.user import User
 
 from src import chat_log, thread_store
+
+
+def _activate_fake_session(*, has_first_interaction: bool) -> WebsocketSession:
+    """create_step等（@queue_until_user_message()でガードされる）のテスト用に、
+    実際のChainlitリクエスト文脈を模倣する。本番ではこれらのメソッドは常に
+    アクティブなセッション文脈内からしか呼ばれない。
+    """
+    session = WebsocketSession(
+        id="test-session",
+        socket_id="test-sid",
+        emit=lambda *a: None,
+        emit_call=lambda *a: None,
+        client_type="webapp",
+        user_env={},
+        user=None,
+        token=None,
+        chat_profile=None,
+        thread_id="unused",
+        environ={},
+    )
+    session.has_first_interaction = has_first_interaction
+    context_var.set(ChainlitContext(session))
+    return session
 
 
 @pytest.mark.asyncio
@@ -175,6 +200,7 @@ async def test_data_layer_create_step_creates_thread_stub_and_no_op_stubs_are_sa
     conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
     try:
         dl = thread_store.ChatThreadDataLayer(conn)
+        _activate_fake_session(has_first_interaction=True)
 
         # create_step より前に update_thread が走らなくても、FK制約を満たす
         # スレッド行が自動的に用意されること（Chainlit側の実行順序は保証されない）。
@@ -198,5 +224,42 @@ async def test_data_layer_create_step_creates_thread_stub_and_no_op_stubs_are_sa
         assert await dl.delete_element("e1") is None
         assert await dl.get_favorite_steps("anonymous") == []
         assert await dl.delete_feedback("x") is True
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_create_step_before_first_user_message_is_not_persisted(tmp_path) -> None:
+    """新規タブを開いただけ（ユーザーが1文字も送信していない）状態で on_chat_start が
+    送るウェルカムメッセージ等が create_step 経由で即座に永続化されてしまい、
+    「新規チャット」を押すたびに無題のスレッドがサイドバーへ溜まり続けるバグの
+    回帰テスト（2026-08-19 実機で確認）。
+
+    `chainlit.data.base.BaseDataLayer` は create_step 等を
+    `@queue_until_user_message()` で装飾した**抽象**メソッドとして定義しているが、
+    このデコレータは抽象メソッド自体にしか付いておらず、オーバーライドした
+    サブクラス（ChatThreadDataLayer）の実装には自動的には引き継がれない。
+    ChatThreadDataLayer側で明示的に再度デコレートし直すことで、Chainlit本体が
+    意図する「最初のユーザー発言まで永続化を保留する」動作を回復している。
+    """
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        dl = thread_store.ChatThreadDataLayer(conn)
+        _activate_fake_session(has_first_interaction=False)
+
+        # on_chat_start 相当（ユーザーはまだ何も送信していない）。
+        await dl.create_step({"id": "s1", "threadId": "th1", "createdAt": "2024-01-01T00:00:00"})
+        assert await dl.get_thread("th1") is None
+
+        cursor = await conn.execute("SELECT COUNT(*) FROM threads")
+        row = await cursor.fetchone()
+        assert row[0] == 0
+
+        # ユーザーが最初のメッセージを送信した後（has_first_interaction=True）は
+        # 即座に永続化される。
+        session = _activate_fake_session(has_first_interaction=True)
+        await dl.create_step({"id": "s2", "threadId": "th2", "createdAt": "2024-01-01T00:00:01"})
+        assert await dl.get_thread("th2") is not None
+        assert session.has_first_interaction is True
     finally:
         await conn.close()
