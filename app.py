@@ -458,6 +458,59 @@ def _patch_chainlit_anonymous_resume() -> None:
     logging.getLogger(__name__).info("匿名モード用のスレッド再開有効化パッチを適用しました。")
 
 
+# チャット送信ではなく独自フロントエンドのUIボタン（ツールバーの各アイコン）から
+# 呼ばれる action_callback。これらのクリックは「最初の発言」ではないが、
+# Chainlit本体側にその区別が無い（_patch_chainlit_ignore_ui_action_first_interaction
+# のdocstring参照）。
+_NON_CHAT_ACTION_NAMES = frozenset({"pick_work_dir", "toggle_plan_mode"})
+
+
+def _patch_chainlit_ignore_ui_action_first_interaction() -> None:
+    """作業フォルダ選択・Plan Modeバッジ等のUIボタンを、送信前に押しただけで
+    会話履歴（左サイドバー）に "pick_work_dir" 等という名前の会話が作られて
+    しまう不具合を防ぐ、chainlit.emitter.ChainlitEmitter.flush_thread_queues
+    のモンキーパッチ（2026-08-19 ユーザー報告）。
+
+    Chainlit本体の /project/action ハンドラ（chainlit/server.py call_action）は、
+    action_callback を呼ぶ前に無条件で
+    `if not session.has_first_interaction: session.has_first_interaction = True;
+    emitter.init_thread(action.name)` を実行する。これは元々「チャット入力欄に
+    最初の発言をした」ことを検知するための仕組みだが、action_callback（ツール
+    バーのボタン全般）にも同じ判定が働いてしまうため、区別が無い。
+    init_thread() は flush_thread_queues(interaction) を呼び、
+    (1) スレッド名を interaction（= 素の action.name 文字列）に設定し、
+    (2) @queue_until_user_message() で保留されていた create_step 等
+        （on_chat_start のwelcomeメッセージ等）を今すぐ永続化してしまう。
+    結果、ユーザーが1文字も発言していなくても "pick_work_dir" という名前の
+    会話が左サイドバーに現れる。
+
+    対策として、interaction が _NON_CHAT_ACTION_NAMES（UIボタン由来）のときは
+    flush_thread_queues の実処理を丸ごとスキップし、代わりに
+    session.has_first_interaction を False に戻す。これにより
+    「まだ最初の発言をしていない」状態に復元され、キュー済みのステップは
+    保留され続け、実際に最初のチャットメッセージが送られてきた時点で
+    （chainlit/emitter.py process_message の同じ判定により）正しく
+    フラッシュ・命名される。UIボタンだけクリックして一度もチャットしなかった
+    セッションでは、会話は一切永続化されない（元々の望ましい挙動）。
+    """
+    import chainlit.emitter as _cl_emitter
+
+    _original_flush_thread_queues = _cl_emitter.ChainlitEmitter.flush_thread_queues
+
+    async def _flush_thread_queues_ignoring_ui_actions(self, interaction: str):
+        if interaction in _NON_CHAT_ACTION_NAMES:
+            self.session.has_first_interaction = False
+            return
+        await _original_flush_thread_queues(self, interaction)
+
+    _cl_emitter.ChainlitEmitter.flush_thread_queues = _flush_thread_queues_ignoring_ui_actions
+    logging.getLogger(__name__).info(
+        "UIボタン（%s）クリックが会話履歴の命名・早期永続化を誤って"
+        "トリガーしないようにするパッチを適用しました。",
+        "、".join(sorted(_NON_CHAT_ACTION_NAMES)),
+    )
+
+
 if _config.thread_store_enabled:
     from chainlit.auth import get_current_user as _cl_get_current_user
     from chainlit.server import app as _chainlit_asgi_app
@@ -650,6 +703,9 @@ async def _on_app_startup() -> None:
         # 匿名モードではこのパッチが無いとスレッド再開が発火しない（関数docstring参照）。
         if not _config.auth_enabled:
             _patch_chainlit_anonymous_resume()
+        # data_layer登録時のみ意味を持つ不具合（flush_thread_queuesはdata_layer
+        # 未登録時は何もしないため）。関数docstring参照。
+        _patch_chainlit_ignore_ui_action_first_interaction()
 
     if not _config.mcp_enabled:
         logging.getLogger(__name__).info("MCP機能は無効化されています（[mcp].enabled=false）")
