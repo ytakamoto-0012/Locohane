@@ -345,6 +345,17 @@ if _config.thread_store_enabled:
     from fastapi import Depends, HTTPException
     from pydantic import BaseModel
 
+    # chainlit/server.py はモジュール読み込み時（import chainlit の時点で確定）に
+    # `@router.get("/{full_path:path}")`（SPA配信用のcatch-all）を含む router を
+    # `app.include_router(router)` で丸ごと登録済み。Starlette は app.router.routes
+    # を登録順に walk して最初にマッチしたものを使うため、この後 @_chainlit_asgi_app.get(...)
+    # で追加するルートは routes リストの末尾に足されるだけでは catch-all より後ろになり、
+    # 何を追加しても catch-all（あらゆるパスにマッチする）に先に食われて絶対に呼ばれない
+    # （200 OK で index.html が返るだけで例外も出ないため気づきにくい）。
+    # このため、登録直後に自分が追加した分だけ catch-all の手前へ並べ替える
+    # （_reorder_locohane_routes_before_spa_catchall 参照）。
+    _routes_before_registration = len(_chainlit_asgi_app.router.routes)
+
     class _RenameThreadBody(BaseModel):
         name: str
 
@@ -404,6 +415,27 @@ if _config.thread_store_enabled:
         await _assert_owns_thread(thread_id, current_user)
         await thread_store.delete_thread_row(_thread_store_conn, thread_id)
         return {"success": True}
+
+    def _reorder_locohane_routes_before_spa_catchall() -> None:
+        """直前に登録した /locohane/threads* ルートを、Chainlit本体のSPA
+        catch-all（GET /{full_path:path}）より前へ移動する（上のコメント参照）。
+
+        catch-all自体は app.include_router(router) で丸ごと1個の内部ラッパー
+        （型名は `_IncludedRouter` 等、FastAPIのバージョン依存の非公開実装）
+        として app.router.routes に入っており、パス文字列での検索はできない
+        （個々の子ルートへは分解されない）。このためパスでの探索はせず、単純に
+        自分が追加した分をリストの先頭へ移す（/locohane/* は他の固定パス
+        （/openapi.json 等）と衝突しないため、先頭に置いても副作用は無い）。
+        """
+        routes = _chainlit_asgi_app.router.routes
+        added = routes[_routes_before_registration:]
+        del routes[_routes_before_registration:]
+        routes[0:0] = added
+        logging.getLogger(__name__).info(
+            "スレッド一覧用ルート(%d件)を先頭へ並べ替えました（SPA catch-all対策）。", len(added)
+        )
+
+    _reorder_locohane_routes_before_spa_catchall()
 
 
 @cl.on_app_startup
