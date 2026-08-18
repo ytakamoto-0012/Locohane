@@ -293,10 +293,13 @@ if _config.thread_store_enabled:
 
         config.code.data_layer には関数（ファクトリ）を渡すだけでよく、実際の
         呼び出し（このファクトリの実行）は Chainlit 側が初回 get_data_layer()
-        時に1回だけ遅延実行するため、_thread_data_layer の実体は _setup() が
-        後から構築しても問題ない（この関数定義自体は _setup() より前で構わない）。
+        時に1回だけ遅延実行する。Chainlit本体は `/project/settings` 等、
+        WebSocket接続より前に届くHTTPリクエストの中でも get_data_layer() を
+        呼ぶため、_thread_data_layer の実体は @cl.on_app_startup（_on_app_startup）
+        で、サーバーがリクエストの受付を開始する前に必ず構築しておく
+        （この関数定義自体はそれより前で構わない。遅延実行されるため）。
         """
-        assert _thread_data_layer is not None, "_setup() が完了する前に data layer が参照されました"
+        assert _thread_data_layer is not None, "_on_app_startup() が完了する前に data layer が参照されました"
         return _thread_data_layer
 
 
@@ -410,7 +413,34 @@ async def _on_app_startup() -> None:
     .locohane/settings.json の mcpServers に定義された全MCPサーバーへ自動接続する
     （[mcp] enabled=false なら何もしない）。@cl.on_chat_start（セッションごとに
     複数回発火しうる）とは独立した、プロセス全体で1回のフック。
+
+    会話スレッド一覧（左サイドバー）用の thread_store 初期化もここで行う。
+    Chainlit本体は `/project/settings` 等、WebSocket接続（on_chat_start）より
+    前に届くHTTPリクエストの中で `get_data_layer()`（= `@cl.data_layer` で登録した
+    ファクトリ）を呼ぶため、_setup()（on_chat_start 発火時に初めて走る遅延初期化）
+    まで構築を待つと、その最初のHTTPリクエストの時点でまだ `_thread_data_layer`
+    が `None` のままファクトリが呼ばれてしまいエラーになる。on_app_startup は
+    ASGIのlifespan startupイベントとして、サーバーがHTTPリクエストの受付を
+    開始する前に必ず完了するため、ここで先に用意しておく必要がある。
     """
+    global _thread_store_conn, _thread_data_layer
+    if _config.thread_store_enabled:
+        _thread_store_conn = await thread_store.init_db(_config.thread_store_db)
+        _thread_data_layer = ChatThreadDataLayer(_thread_store_conn)
+        # 期限切れスレッドの起動時1回削除＋以降の定期削除（retention_days<=0で無効）。
+        await thread_store.cleanup_old_threads(_thread_store_conn, _config.thread_store_retention_days)
+        if _config.thread_store_retention_days > 0:
+            asyncio.create_task(
+                thread_store.run_cleanup_loop(
+                    _thread_store_conn,
+                    _config.thread_store_retention_days,
+                    _config.thread_store_cleanup_interval_hours,
+                )
+            )
+        # 匿名モードではこのパッチが無いとスレッド再開が発火しない（関数docstring参照）。
+        if not _config.auth_enabled:
+            _patch_chainlit_anonymous_resume()
+
     if not _config.mcp_enabled:
         logging.getLogger(__name__).info("MCP機能は無効化されています（[mcp].enabled=false）")
         return
@@ -808,7 +838,7 @@ async def _setup() -> None:
         None。副作用としてモジュール globals（_system_prompt, _checkpointer）
         を設定する。
     """
-    global _system_prompt, _checkpointer, _thread_store_conn, _thread_data_layer
+    global _system_prompt, _checkpointer
     if _system_prompt is not None:
         return
 
@@ -949,25 +979,6 @@ async def _setup() -> None:
 
     # チェックポインタ（会話状態の永続化）。接続はアプリ寿命で保持する。
     _checkpointer = await _build_checkpointer()
-
-    # 会話スレッド一覧（左サイドバー）・再開機能用の軽量ストア。
-    # data/checkpoints.sqlite（LangGraphの会話状態そのもの）とは別ファイル。
-    if _config.thread_store_enabled:
-        _thread_store_conn = await thread_store.init_db(_config.thread_store_db)
-        _thread_data_layer = ChatThreadDataLayer(_thread_store_conn)
-        # 期限切れスレッドの起動時1回削除＋以降の定期削除（retention_days<=0で無効）。
-        await thread_store.cleanup_old_threads(_thread_store_conn, _config.thread_store_retention_days)
-        if _config.thread_store_retention_days > 0:
-            asyncio.create_task(
-                thread_store.run_cleanup_loop(
-                    _thread_store_conn,
-                    _config.thread_store_retention_days,
-                    _config.thread_store_cleanup_interval_hours,
-                )
-            )
-        # 匿名モードではこのパッチが無いとスレッド再開が発火しない（関数docstring参照）。
-        if not _config.auth_enabled:
-            _patch_chainlit_anonymous_resume()
 
     # on_stop でのグラフ再構築（_rebuild_graph）に使い回すため保持する。
     _system_prompt = system_prompt
