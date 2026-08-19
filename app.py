@@ -995,9 +995,11 @@ def _build_work_dir_notice() -> str:
     if work_dir:
         resolved = work_dir
         status: WorkDirAccessStatus | None = cl.user_session.get("work_dir_access")
+        source_label = "ユーザー変更値（📁アイコン/歯車アイコンで既定値から変更済み）"
     else:
         resolved = str(_config.default_workdir)
         status = None
+        source_label = "既定値（default_workdir・未変更）"
     if status is None or (status.exists and status.readable and status.writable):
         state_label = "読み書き可能"
     elif not status.exists:
@@ -1009,6 +1011,7 @@ def _build_work_dir_notice() -> str:
     return (
         "[作業ディレクトリ]\n"
         f"絶対パス: {resolved}（{state_label}）\n"
+        f"由来: {source_label}\n"
         "Read/Glob/Grep/analyze_image でこの配下を扱う際は上記の絶対パスをそのまま使う。"
         "サブフォルダ名しか分からない場合は Glob の path 引数を省略すれば自動的にこの"
         "配下が検索対象になる（pattern 側にサブフォルダ名を含めてよい。例:"
