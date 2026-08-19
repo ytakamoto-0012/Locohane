@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import { useRecoilValue } from 'recoil';
-import { currentThreadIdState, firstUserInteraction, sessionIdState, useConfig } from '@chainlit/react-client';
+import { currentThreadIdState, firstUserInteraction, sessionIdState, useAuth, useConfig } from '@chainlit/react-client';
 import { BACKEND_URL } from '../chainlitClient';
 import { Icon } from './Icon';
 
@@ -32,6 +32,7 @@ function goToThread(threadId: string | null) {
 
 export function Sidebar() {
   const { config } = useConfig();
+  const { user } = useAuth();
   const currentThreadId = useRecoilValue(currentThreadIdState);
   const firstInteraction = useRecoilValue(firstUserInteraction);
   const sessionId = useRecoilValue(sessionIdState);
@@ -148,6 +149,12 @@ export function Sidebar() {
           </li>
         ))}
       </ul>
+      {user && (
+        <div className="thread-sidebar-user" title={user.identifier}>
+          <Icon name="user" size={14} />
+          <span className="thread-sidebar-user-name">{user.display_name || user.identifier}</span>
+        </div>
+      )}
     </aside>
   );
 }

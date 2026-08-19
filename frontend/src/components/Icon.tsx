@@ -10,7 +10,8 @@ type IconName =
   | 'arrow-down'
   | 'trash'
   | 'pencil'
-  | 'panel-left';
+  | 'panel-left'
+  | 'user';
 
 function IconPath({ name }: { name: IconName }) {
   switch (name) {
@@ -65,6 +66,13 @@ function IconPath({ name }: { name: IconName }) {
         <>
           <rect x="2.5" y="4" width="19" height="16" rx="2" />
           <path d="M9.5 4v16" />
+        </>
+      );
+    case 'user':
+      return (
+        <>
+          <circle cx="12" cy="8" r="4" />
+          <path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" />
         </>
       );
   }
