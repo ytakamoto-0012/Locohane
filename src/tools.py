@@ -1350,7 +1350,8 @@ def _mark_workdir_not_writable() -> str:
 def _resolve_workdir(need_write: bool = False) -> Path:
     """run_script が subprocess.run に渡す cwd を決定する。
 
-    Chainlit の ChatSettings（歯車アイコン）でユーザーがセッションに
+    Chainlit の ChatSettings（独自フロントエンドには表示されないが
+    on_settings_update の経路自体は残っている）でユーザーがセッションに
     作業ディレクトリを設定していればそれを使い（app.py の
     on_settings_update が cl.user_session["work_dir"] に絶対パス文字列を
     保存する）、未設定なら config.ini の [default_workdir].dir
@@ -1398,7 +1399,7 @@ def _resolve_workdir(need_write: bool = False) -> Path:
 def check_work_dir_status() -> str:
     """現在の作業ディレクトリの実際のアクセス状況を確認する。
 
-    work_dir を ChatSettings（歯車アイコン）や作業フォルダアイコンで変更した
+    work_dir を作業フォルダアイコンで変更した
     直後は自動的にこの確認が行われ、結果がサイドパネルに表示されるため、通常は
     明示的に呼び出す必要はない。ただし run_script や execute_python_code が
     ファイルの読み書きで原因不明のエラー（ファイルが見つからない、書き込め
@@ -1714,7 +1715,7 @@ def _track_failure_streak(session_key: str, failed: bool, tool_label: str) -> st
 async def run_script(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> str:
     """スキルの scripts/ 配下のスクリプトを実行し、標準出力/標準エラーを返す。
 
-    作業ディレクトリは、Chainlit の ChatSettings（歯車アイコン）でユーザーが
+    作業ディレクトリは、作業フォルダアイコンでユーザーが
     セッションに設定していればそのディレクトリ、未設定なら既定の作業フォルダを使う。
     タイムアウトは設定値（既定 60 秒）。完了までこのツール呼び出し自体が
     ブロックされるため、タイムアウトに近い長時間の実行が見込まれるスクリプトは

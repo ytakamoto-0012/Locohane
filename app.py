@@ -995,7 +995,7 @@ def _build_work_dir_notice() -> str:
     if work_dir:
         resolved = work_dir
         status: WorkDirAccessStatus | None = cl.user_session.get("work_dir_access")
-        source_label = "ユーザー変更値（📁アイコン/歯車アイコンで既定値から変更済み）"
+        source_label = "ユーザー変更値（📁アイコンで既定値から変更済み）"
     else:
         resolved = str(_config.default_workdir)
         status = None
@@ -1778,33 +1778,23 @@ async def on_toggle_plan_mode(action: cl.Action) -> None:
 async def on_pick_work_dir(action: cl.Action) -> None:
     """独自フロントエンドの「作業フォルダ」アイコンから呼ばれる action_callback。
 
-    tkinter の OS ネイティブなフォルダ選択ダイアログを表示する。バックエンドと
-    ブラウザが同一マシン上で動くローカルデスクトップ用途を前提とした機能
-    （リモート環境でブラウザだけ別マシンという構成では機能しない）。
-    filedialog.askdirectory() はブロッキング呼び出しのため、他セッションの
-    応答性を落とさないよう asyncio.to_thread でイベントループから退避させる。
+    以前は tkinter の OS ネイティブなフォルダ選択ダイアログをここで表示して
+    いたが、それはバックエンドとブラウザが同一マシン上で動く前提の機能で、
+    サーバー駆動でブラウザだけ別PCという構成だとダイアログがサーバー側の
+    誰も見ていない画面に無言で表示され、クライアントは応答をひたすら待つ
+    だけになり「フリーズした」ように見える不具合があった（2026-08-19
+    ユーザー報告）。フロントエンド（WorkDirButton.tsx）側にパス入力欄の
+    ポップオーバーを設け、入力済みのパス文字列を payload で受け取る方式に
+    変更した。
 
     Args:
-        action: フロントエンドから callAction で渡された cl.Action（未使用）。
+        action: フロントエンドから callAction で渡された cl.Action。
+            payload["path"] にユーザーが入力したパス文字列が入る。
 
     Returns:
         None。
     """
-    del action
-
-    def _ask_directory() -> str:
-        import tkinter
-        from tkinter import filedialog
-
-        root = tkinter.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        try:
-            return filedialog.askdirectory()
-        finally:
-            root.destroy()
-
-    raw = await asyncio.to_thread(_ask_directory)
+    raw = str(action.payload.get("path", ""))
     await _apply_work_dir(raw)
 
 

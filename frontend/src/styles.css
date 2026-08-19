@@ -779,6 +779,80 @@
   background: var(--surface-muted);
 }
 
+.work-dir-picker {
+  position: relative;
+  display: inline-flex;
+}
+
+.work-dir-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  width: 320px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md, var(--shadow-sm));
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.work-dir-popover-input {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.work-dir-popover-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.work-dir-popover-actions-right {
+  display: flex;
+  gap: 6px;
+}
+
+.work-dir-popover-reset,
+.work-dir-popover-cancel,
+.work-dir-popover-submit {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.work-dir-popover-reset,
+.work-dir-popover-cancel {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.work-dir-popover-submit {
+  border: none;
+  background: var(--accent, var(--text));
+  color: var(--surface);
+}
+
+.work-dir-popover-reset:disabled,
+.work-dir-popover-submit:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .plan-mode-badge {
   display: inline-flex;
   align-items: center;
