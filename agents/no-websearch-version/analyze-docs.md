@@ -29,6 +29,9 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
    （推測で引数を組み立てない）。
 3. `run_script` で読み込み専用スクリプトを呼び、実際の内容（段落・表・シート
    データ・スライドのテキストや発表者ノート・PDFの抽出テキストなど）を取得する。
+   戻り値は構造化された JSON であることが多く、件数が多い場合は目視で追わず
+   `json_query`（JMESPathクエリ、構文は`jq`と異なる）で条件抽出・集計すると
+   よい。`file_path` の代わりに戻り値をそのまま `json_text` 引数へ渡せる。
 4. テキスト抽出だけではレイアウト・表・図表・強調表現・スキャン内容などが
    分からない場合は、対応する `render_*.py`（`render_docx.py`/`render_excel.py`/
    `render_pptx.py`/`render_pdf_pages.py`）でページ・スライドを画像化し、
