@@ -437,6 +437,16 @@ class Config:
             されるため、同一ターン内で create_plan を複数回呼ぶ場合は
             その都度 planner を呼び直す必要がある。
             （config.ini の [plan].require_planner_dispatch 由来）。
+        plan_reset_approval_on_new_message: 新しいユーザーメッセージを受け取る
+            たびに plan_approved を無条件で False へ戻す（Plan Mode へ戻す）か。
+            True（既定）なら常に戻し、承認済みの計画が途中でも新しいメッセージ
+            ごとに approve_plan による再承認を必須にする（計画承認を
+            「このユーザーメッセージへの応答」に限定するための従来挙動）。
+            False なら承認済み状態をメッセージをまたいで維持する。
+            thinking_loop_guard がリトライ上限に達して打ち切られ、ユーザーが
+            続行を促す新しいメッセージを送った場合も同一タスクの継続として
+            扱われ、承認済みの計画をやり直させられずに済む。
+            （config.ini の [plan].reset_approval_on_new_message 由来）。
         thinking_loop_guard_enabled: LLM応答（thinking/本文）のストリーミング中に
             反復ループを検知したら生成を打ち切って再試行する機能の有効/無効。
         thinking_loop_guard_window_chars: ループ検知の判定対象に使う
@@ -683,6 +693,7 @@ class Config:
     plan_badge_allow_unlock: bool
     plan_reset_approval_on_recreate: bool
     plan_require_planner_dispatch: bool
+    plan_reset_approval_on_new_message: bool
 
     # --- LLM応答の反復ループ検知（src/llm.py の ChatLlamaCpp） ---
     thinking_loop_guard_enabled: bool
@@ -1686,6 +1697,9 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         plan_require_planner_dispatch=_as_bool(
             os.getenv("PLAN_REQUIRE_PLANNER_DISPATCH", plan_section.get("require_planner_dispatch", True))
+        ),
+        plan_reset_approval_on_new_message=_as_bool(
+            os.getenv("PLAN_RESET_APPROVAL_ON_NEW_MESSAGE", plan_section.get("reset_approval_on_new_message", True))
         ),
         thinking_loop_guard_enabled=_as_bool(os.getenv("THINKING_LOOP_GUARD_ENABLED", thinking_loop_guard.get("enabled", True))),
         thinking_loop_guard_window_chars=int(os.getenv("THINKING_LOOP_GUARD_WINDOW_CHARS", thinking_loop_guard.get("window_chars", 600))),

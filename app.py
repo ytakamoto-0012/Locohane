@@ -2434,10 +2434,16 @@ async def _on_message_impl(message: cl.Message) -> None:
         None。副作用として cl.Message / cl.Step の送信・更新を行う。
     """
     thread_id = cl.user_session.get("thread_id")
-    # 計画承認は「このユーザーメッセージへの応答で作られた計画の実行」に
+    # 計画承認は既定では「このユーザーメッセージへの応答で作られた計画の実行」に
     # 限定されたスコープであるべきなので、新しいメッセージを受け取るたびに
     # 前回（放置されて完了しなかった計画など）の承認状態を持ち越さない。
-    cl.user_session.set("plan_approved", False)
+    # ただし [plan].reset_approval_on_new_message=false の場合は、
+    # thinking_loop_guard のリトライ上限到達などで打ち切られたタスクを
+    # ユーザーが新しいメッセージで継続するケースを想定し、承認済み状態を
+    # メッセージをまたいで維持する（無関係な新規依頼でも維持される点は
+    # 設定側のトレードオフとしてドキュメント済み）。
+    if _config.plan_reset_approval_on_new_message:
+        cl.user_session.set("plan_approved", False)
     # main_agent_tool_guard（src/tools.py の _guard_main_agent_tool_limit）の
     # カウンタも同様に、新しいターンでは前回の消費分を持ち越さない。
     cl.user_session.set("main_agent_tool_guard_call_count", None)
