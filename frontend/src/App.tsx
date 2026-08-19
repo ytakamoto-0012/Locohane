@@ -40,6 +40,10 @@ import './styles.css';
 // _generating_thread_ids/on_message、/locohane/threads/{id}/status参照）。
 const REMOTE_GENERATING_POLL_INTERVAL_MS = 3000;
 
+// index.html の <title> にある既定値。public/settings/tab_title.md が
+// 存在しない・読み込めない場合のフォールバックとして使う。
+const DEFAULT_TAB_TITLE = 'Locohane';
+
 function App() {
   const { data: authData, isReady: authReady, isAuthenticated } = useAuth();
   const { connect } = useChatSession();
@@ -64,6 +68,21 @@ function App() {
     if (threadId) setIdToResume(threadId);
     setSeeded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ブラウザのタブタイトルを public/settings/tab_title.md から読み込む
+  // （Header.tsx の header.md 読み込みと同じ仕組み。再ビルド無しで変更可能にする）。
+  useEffect(() => {
+    fetch(`${BACKEND_URL}/public/settings/tab_title.md`)
+      .then((res) => (res.ok ? res.text() : Promise.reject()))
+      .then((text) => {
+        const firstLine = text
+          .split('\n')
+          .map((line) => line.replace(/^#+\s*/, '').trim())
+          .find((line) => line.length > 0);
+        document.title = firstLine || DEFAULT_TAB_TITLE;
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
