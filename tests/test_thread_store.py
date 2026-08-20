@@ -289,3 +289,46 @@ async def test_create_step_before_first_user_message_is_not_persisted(tmp_path) 
         assert session.has_first_interaction is True
     finally:
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_create_step_skips_ephemeral_progress_steps(tmp_path) -> None:
+    """src/tools.py の _push_background_job_progress/_push_dispatch_agent_progress
+    が送る「実行中です（経過N秒・job_id=xxx）。」等の進捗pushは
+    metadata={"ephemeral_progress": True} を持つ。これが実際に永続化を
+    スキップされ、スレッド再開時に古い進捗表示が復元されないことの回帰テスト
+    （2026-08-21 ユーザー報告）。通常のステップ（サブエージェントの実際の発言等）
+    は引き続き永続化されること、既にスレッド行が存在する場合はスキップされても
+    エラーにならないことも確認する。
+    """
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        dl = thread_store.ChatThreadDataLayer(conn)
+        _activate_fake_session(has_first_interaction=True)
+
+        await dl.create_step({"id": "s1", "threadId": "th1", "createdAt": "2024-01-01T00:00:00"})
+        await dl.create_step(
+            {
+                "id": "s2",
+                "threadId": "th1",
+                "createdAt": "2024-01-01T00:00:01",
+                "output": "実行中です（経過 20 秒・job_id=abc）。",
+                "metadata": {"ephemeral_progress": True},
+            }
+        )
+        thread = await dl.get_thread("th1")
+        assert [s["id"] for s in thread["steps"]] == ["s1"]
+
+        # 未作成のスレッドに対して進捗pushだけが最初に来ても、
+        # スレッド行自体を勝手に作らない（FKスタブより先に弾く）。
+        await dl.create_step(
+            {
+                "id": "s3",
+                "threadId": "th2",
+                "createdAt": "2024-01-01T00:00:00",
+                "metadata": {"ephemeral_progress": True},
+            }
+        )
+        assert await dl.get_thread("th2") is None
+    finally:
+        await conn.close()

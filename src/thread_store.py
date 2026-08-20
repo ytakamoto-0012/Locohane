@@ -404,7 +404,19 @@ class ChatThreadDataLayer(BaseDataLayer):
         このため各メソッドへ明示的に再度 `@queue_until_user_message()` を
         付け直し、Chainlit本体が意図する「最初のユーザー発言まで永続化を
         保留する」動作を回復させている。
+
+        metadata.ephemeral_progress が立っている StepDict は永続化しない。
+        src/tools.py の _push_background_job_progress/_push_dispatch_agent_progress
+        がバックグラウンドジョブの実行中に一定間隔で送る「実行中です（経過N秒・
+        job_id=xxx）。」等の進捗pushで、実行時点でしか意味を持たない。以前は
+        他のメッセージ同様に全件永続化しており、スレッド再開（on_chat_resume）の
+        たびに get_thread_detail が返す steps 経由でこの古い進捗表示がそのまま
+        再生されてしまっていた（2026-08-21 ユーザー報告）。ライブ表示は
+        cl.Message.send() 内の emitter.send_step 側で行われるため、ここで
+        永続化をスキップしてもリアルタイム表示には影響しない。
         """
+        if (step_dict.get("metadata") or {}).get("ephemeral_progress"):
+            return
         thread_id = step_dict.get("threadId")
         if thread_id:
             await upsert_thread_stub(self._conn, thread_id, _current_owner())

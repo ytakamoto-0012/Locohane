@@ -2364,6 +2364,12 @@ async def _push_background_job_progress(job: "_BackgroundJob", job_id: str) -> N
 
     _run_background_job の finally で確実にキャンセルされる想定
     （_push_dispatch_agent_progress と同じ理由）。
+
+    metadata={"ephemeral_progress": True} を付ける（_push_dispatch_agent_progress
+    と同じ）。ChatThreadDataLayer.create_step（src/thread_store.py）がこの
+    フラグを見て永続化をスキップするため、スレッド再開時に「経過N秒・
+    job_id=xxx」という実行時点でしか意味を持たない古い進捗表示が復元されない
+    （2026-08-21 ユーザー報告）。ライブ表示（emitter.send_step）には影響しない。
     """
     while job.status == "running":
         await asyncio.sleep(_SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS)
@@ -2372,6 +2378,7 @@ async def _push_background_job_progress(job: "_BackgroundJob", job_id: str) -> N
         await cl.Message(
             content=_format_background_job_progress(job, job_id),
             type="system_message",
+            metadata={"ephemeral_progress": True},
         ).send()
 
 
@@ -3493,6 +3500,15 @@ async def _push_dispatch_agent_progress(job: "_DispatchAgentJob", job_id: str) -
     _run_dispatch_agent_job の finally で確実にキャンセルされる想定
     （ループ条件（job.status=="running"）だけに頼ると、ジョブ完了後も
     次の asyncio.sleep が明けるまでタスクが残留してしまうため）。
+
+    metadata={"ephemeral_progress": True} を付ける（_push_background_job_progress
+    と同じ）。ChatThreadDataLayer.create_step（src/thread_store.py）がこの
+    フラグを見て永続化をスキップするため、スレッド再開時に「経過N秒・
+    反復N/N回・job_id=xxx」という実行時点でしか意味を持たない古い進捗表示が
+    復元されない（2026-08-21 ユーザー報告）。ライブ表示（emitter.send_step）
+    には影響しない。サブエージェントの実際の発言（write_scratch_note等が
+    生む本来のステップ）にはこのフラグを付けないため、それらは通常通り
+    履歴に残る。
     """
     while job.status == "running":
         await asyncio.sleep(_DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS)
@@ -3501,6 +3517,7 @@ async def _push_dispatch_agent_progress(job: "_DispatchAgentJob", job_id: str) -
         await cl.Message(
             content=_format_dispatch_agent_progress(job, job_id),
             author=_SUBAGENT_MESSAGE_AUTHOR,
+            metadata={"ephemeral_progress": True},
         ).send()
 
 
