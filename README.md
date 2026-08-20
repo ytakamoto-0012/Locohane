@@ -704,6 +704,28 @@ YAML frontmatter 付き Markdown ファイルとして保存する。ロジッ�
 保存・削除の判断基準（何を保存すべきで何を保存すべきでないか）は
 `system_prompt/system_prompt.md` の「Memory System」セクションに記載している。
 
+### スレッド共有ノート（thread notes）との違い
+
+上記の永続メモリーはスレッドをまたぐ長期記憶用だが、これとは別に
+**同一スレッド内に閉じた一時的な共有メモ**として `write_thread_note`/
+`list_thread_notes`/`read_thread_note` の3ツールがある（主エージェント・
+サブエージェント（`dispatch_agent`の全 agent_type）の両方が読み書き可能）。
+
+- 保存先は `data/memory/` ではなく、作業ディレクトリ配下の
+  `_tmp_<thread_id>/_thread_notes.md`（`execute_python_code`/`run_script`の
+  中間生成物と同じ一時領域。`write_scratch_note` が使う
+  `_scratch_notes_<run_id>.md` の隣に置かれる）。
+- 用途は「委譲先サブエージェントの調査結果を、最終回答を肥大化させずに
+  他のエージェント（委譲元や以降の別のサブエージェント）へ引き継ぐ」こと。
+  永続メモリーのように次回以降のスレッドへは引き継がれない。
+- スレッド共有ノートは自動索引化されず、システムプロンプトにも差し込まれない
+  （`list_thread_notes`で都度トピック一覧・文字数を確認してから読む設計。
+  詳細は `system_prompt/subagent_common.md`・`system_prompt/system_prompt.md`
+  参照）。
+- ライフサイクルは `_tmp_<thread_id>` 全体と同じで、`[default_workdir]`の
+  `retention_days`/`cleanup_interval_hours`（本ドキュメント「設定リファレンス」
+  参照）による自動削除の対象、または手動削除も可能。
+
 ---
 
 ## プロンプト資産の自動チューニングループ（evals/）
