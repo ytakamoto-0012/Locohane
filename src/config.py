@@ -475,6 +475,10 @@ class Config:
             （total_retries）を共有する。
         context_trim_enabled: 会話履歴中の古い ToolMessage を切り詰めて
             LLMへの入力を抑える機能の有効/無効（src.context_trim 参照）。
+            メインエージェント（src.graph）だけでなくサブエージェント
+            （src.subagent の run_subagent、dispatch_agent のローカル履歴）にも
+            同じ設定値が一律に適用される（Claude Codeがメイン/サブで
+            コンテキスト管理の有無を区別しない方式に倣った設計）。
         context_trim_keep_recent_tool_messages: 全文保持する直近 ToolMessage
             の件数。これより古い ToolMessage のみ切り詰め対象にする。
         context_trim_truncated_max_chars: 切り詰め対象 ToolMessage /
@@ -498,6 +502,12 @@ class Config:
             直近1回のLLM呼び出しのトークン数が閾値を超えたら会話履歴を要約して
             圧縮する機能の有効/無効（src.context_compaction 参照）。context_trim
             と異なり永続履歴（checkpointer上のメッセージ）自体を書き換える。
+            context_trim と同様、サブエージェント（src.subagent の
+            run_subagent）にも同じ設定値が一律に適用される。ただし
+            「累積トークン数」の起点はメインとサブで別物である点に注意
+            （メインはスレッド全体を通じた累積、サブは個々の dispatch_agent
+            呼び出し1回の中だけの累積。圧縮発火のたびに0へリセットされる
+            のは共通）。
         context_compaction_token_threshold: 圧縮を発火させる、メインエージェントの
             累積 total_tokens（token_usage_cumulative_main、圧縮発火のたびに
             リセットされる）の閾値。直近1回のLLM呼び出し分だけで判定すると、

@@ -20,6 +20,8 @@ class _FakeConfig:
     subagent_empty_response_max_retries = 0
     subagent_token_guard_enabled = False
     track_token_usage = False
+    context_trim_enabled = False
+    context_compaction_enabled = False
 
 
 class _FakeModel:

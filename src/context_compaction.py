@@ -19,7 +19,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 
 from .config import Config
 from .context_trim import trim_old_tool_messages
-from .tools import current_plan_status_text
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +243,16 @@ async def maybe_compact(
     # 要約LLMの読み取り精度に依存せず、圧縮のたびに100%正確な最新の計画状態を
     # 機械的に追記する（要約対象の tool_calls 引数は _messages_to_text に含まれず
     # 要約LLMからは元々見えないため、要約結果に計画が反映される保証が無い）。
+    # tools.py からの import はモジュール先頭ではなくここで遅延させる: tools.py は
+    # 起動時に `from .subagent import run_subagent` を行っており、subagent.py が
+    # このモジュール（context_compaction）を（context_trim と同様の位置づけで）
+    # サブエージェントにも使い回すために import すると、
+    # tools.py → subagent.py → context_compaction.py → tools.py という循環
+    # importになり ImportError になる（subagent.py 冒頭のコメント参照）。
+    # 実際に呼ばれるのはアプリ起動が完了しモジュール初期化が済んだ後のため、
+    # 関数内 import なら安全。
+    from .tools import current_plan_status_text
+
     plan_status = current_plan_status_text()
     if plan_status:
         summary_content += "\n\n" + _PLAN_STATUS_HEADER + plan_status

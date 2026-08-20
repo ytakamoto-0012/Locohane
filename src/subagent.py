@@ -42,6 +42,8 @@ def _contains_error(content: str) -> bool:
 
 
 from .config import Config
+from .context_compaction import maybe_compact, should_compact
+from .context_trim import trim_old_ai_messages, trim_old_tool_messages
 from .images import image_followup_message
 from .llm import (
     ThinkingLoopDetected,
@@ -363,6 +365,33 @@ def _build_truncation_message(reason: str, messages: list) -> str:
     return "\n\n".join(parts)
 
 
+def _build_llm_input(messages: list, config: Config) -> list:
+    """会話履歴からLLM入力を組み立てる。[context_trim] が有効なら、graph.py の
+    pre_model_hook / call_model と同じロジックで古い ToolMessage/AIMessage を
+    間引く（Claude Codeがメイン会話・サブエージェントを区別せず同一の
+    コンテキスト管理を適用するのに倣い、メインエージェントと同じ設定・
+    同じ関数をサブエージェントのローカル履歴にも適用する）。
+
+    呼び出し元の messages 本体は書き換えない（トリム結果はこの関数呼び出し
+    1回分のLLM入力としてのみ使う）。
+    """
+    if not config.context_trim_enabled:
+        return messages
+    trimmed = trim_old_tool_messages(
+        messages,
+        keep_recent=config.context_trim_keep_recent_tool_messages,
+        max_chars=config.context_trim_truncated_max_chars,
+        guarded_tool_max_chars=config.context_trim_duplicate_guard_tool_max_chars,
+    )
+    if config.context_trim_ai_messages:
+        trimmed = trim_old_ai_messages(
+            trimmed,
+            keep_recent=config.context_trim_keep_recent_ai_messages,
+            max_chars=config.context_trim_truncated_max_chars,
+        )
+    return trimmed
+
+
 async def run_subagent(
     task: str,
     tools: list[BaseTool],
@@ -422,11 +451,18 @@ async def run_subagent(
 
     token_guard_enabled = config.subagent_token_guard_enabled and config.track_token_usage
     soft_warning_issued = False
+    # [context_compaction] もメインエージェントと同じ設定を使ってサブエージェントの
+    # ローカル履歴にも適用する（Claude Code方式。src/context_compaction.py 参照）。
+    # トークン使用量が取得できない場合（track_token_usage=false）は
+    # should_compact() が常にFalseを返すため実質無効化される。
+    compaction_enabled = config.context_compaction_enabled and config.track_token_usage
+    cumulative_tokens_sub = 0
 
     for iteration in range(1, max_iterations + 1):
+        llm_input = _build_llm_input(messages, config)
         try:
             response, model, empty_retries_exhausted = await _invoke_with_timeout_retry(
-                model, messages, config, tools, llm_timeout_max_retries
+                model, llm_input, config, tools, llm_timeout_max_retries
             )
         except (TimeoutError, httpx.TimeoutException) as exc:
             logger.warning(
@@ -455,7 +491,9 @@ async def run_subagent(
             logger.info("dispatch_agent 正常終了: %d回で完了", iteration)
             return response.content
 
-        total_tokens = _extract_total_tokens(response) if token_guard_enabled else None
+        total_tokens = _extract_total_tokens(response) if config.track_token_usage else None
+        if total_tokens is not None:
+            cumulative_tokens_sub += total_tokens
 
         if token_guard_enabled and soft_warning_issued and total_tokens is not None and total_tokens >= config.subagent_token_guard_hard_threshold:
             logger.warning(
@@ -474,6 +512,33 @@ async def run_subagent(
             messages.append(tool_message)
             if followup is not None:
                 messages.append(followup)
+
+        if compaction_enabled and should_compact(
+            {"total": cumulative_tokens_sub},
+            {"total_tokens": total_tokens},
+            len(messages),
+            config,
+        ):
+            # 圧縮用モデルはツール未bindの素のインスタンスを使う（本編の model は
+            # bind_tools 済みで、要約専用の呼び出しにツール定義を含める必要が
+            # 無いため。src/context_compaction.py の maybe_compact docstring参照）。
+            summary_model = build_model(config, role="sub")
+            # messages[0] は run_subagent 開始時に積んだ SystemMessage。graph.py の
+            # メインエージェントは system_prompt を state["messages"] に含めず
+            # call_model 側で毎回付け足す構造のため要約対象から自然に外れるが、
+            # サブエージェントの messages はローカルリストの先頭に SystemMessage を
+            # 保持する構造が異なる。除外せずに渡すと要約で先頭が切り捨てられた際に
+            # サブエージェントが以後システムプロンプト（役割・ツール方針等）を
+            # 失ってしまうため、常に保持対象として明示的に除外してから渡す。
+            new_tail = await maybe_compact(messages[1:], summary_model, config)
+            if new_tail is not None:
+                logger.info(
+                    "subagent: 会話履歴を圧縮しました (iter=%d) [%s]",
+                    iteration,
+                    describe_current_task(),
+                )
+                messages = [messages[0], *new_tail]
+                cumulative_tokens_sub = 0
 
         if (
             token_guard_enabled
