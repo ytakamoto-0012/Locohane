@@ -1072,6 +1072,37 @@ def _safe_path(relative: str) -> Path:
     return candidates[0]
 
 
+def _missing_skill_prefix_hint(relative_path: str) -> str:
+    """read_skill_file が見つからなかった際、スキル名プレフィックス漏れを疑うヒントを返す。
+
+    read_skill(skill_name) を呼んだ直後のサブエージェントが、以後のパスを
+    「そのスキルフォルダの中にいる」前提で書いてしまい、relative_path の
+    先頭にスキルフォルダ名を付け忘れる（例: "word-counter/references/notes.md"
+    のつもりで "references/notes.md" とだけ渡す）誤りが疑われるため追加した
+    ヒント。relative_path の先頭セグメントがどの skills ルートにも
+    ディレクトリとして存在しない場合にのみヒントを返す。
+
+    Args:
+        relative_path: read_skill_file に渡された相対パス。
+
+    Returns:
+        スキル名プレフィックス漏れが疑われる場合のヒント文字列。
+        該当しない場合は空文字列。
+    """
+    first_segment = relative_path.replace("\\", "/").split("/", 1)[0]
+    if not first_segment:
+        return ""
+    for root in _SKILLS_ROOTS or []:
+        if (root / first_segment).is_dir():
+            return ""
+    return (
+        f"（先頭 '{first_segment}' がスキルフォルダ名になっていない可能性があります。"
+        "read_skill_file の relative_path は常にスキルルートからの相対パスで、"
+        "スキルフォルダ名自体を先頭に含める必要があります。"
+        "例: word-counter/references/notes.md）"
+    )
+
+
 def _resolve_script_filename(skill_name: str, script_filename: str) -> Path:
     """スキルの scripts/ 配下からファイル名でスクリプトを探し、絶対パスを返す。
 
@@ -1144,7 +1175,10 @@ def read_skill_file(relative_path: str) -> str:
     Agent Skills 標準の progressive disclosure における第3段階（Execute）の一部。
 
     Args:
-        relative_path: skills ルートからの相対パス（例: word-counter/references/notes.md）。
+        relative_path: skills ルートからの相対パス。read_skill(skill_name) で
+            そのスキルを読んだ後でも、先頭に必ずスキルフォルダ名を含めること
+            （例: "references/notes.md" ではなく
+            "word-counter/references/notes.md"）。
 
     Returns:
         ファイル内容（UTF-8、デコード不能なバイト列は errors="replace" で置換）。
@@ -1156,6 +1190,9 @@ def read_skill_file(relative_path: str) -> str:
     except ValueError as e:
         return f"エラー: {e}"
     if not path.is_file():
+        hint = _missing_skill_prefix_hint(relative_path)
+        if hint:
+            return f"エラー: ファイルが見つかりません: {relative_path}{hint}"
         return (
             f"エラー: ファイルが見つかりません: {relative_path}"
             "（read_skill_file は skills ディレクトリ配下限定です。作業ディレクトリ配下の"

@@ -293,6 +293,26 @@ class TestReadSkillFileDuplicateGuard:
         assert second.startswith("エラー:")
         assert "上限" in second
 
+    def test_missing_skill_prefix_gets_hint(self, skill_tools_env) -> None:
+        skill_dir = skill_tools_env / "demo-skill"
+        skill_dir.mkdir()
+        (skill_dir / "references").mkdir()
+        (skill_dir / "references" / "notes.md").write_text("notes", encoding="utf-8")
+
+        result = tools.read_skill_file.func(relative_path="references/notes.md")
+
+        assert result.startswith("エラー:")
+        assert "スキルフォルダ名" in result
+
+    def test_valid_skill_prefix_but_missing_file_gets_default_error(self, skill_tools_env) -> None:
+        skill_dir = skill_tools_env / "demo-skill"
+        skill_dir.mkdir()
+
+        result = tools.read_skill_file.func(relative_path="demo-skill/references/missing.md")
+
+        assert result.startswith("エラー:")
+        assert "スキルフォルダ名" not in result
+
 
 class TestGetToolSourceDuplicateGuard:
     def test_duplicate_call_is_blocked(self, skill_tools_env) -> None:
