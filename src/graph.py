@@ -34,6 +34,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import create_react_agent
 
 from .config import Config
+from .context_compaction import maybe_append_precompact_note_nudge
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
 from .llm import ThinkingLoopDetected, build_model, pick_loop_nudge_message
 from .main_token_guard import maybe_append_token_guard
@@ -109,7 +110,14 @@ def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
                 )
         # 切り詰めてもなお1リクエストあたりのトークン量が閾値に達している場合は、
         # 引継ぎプロンプトを出させて安全に終えるよう促す（src/main_token_guard.py）。
+        before_guard = history
         history = maybe_append_token_guard(history, config)
+        if history is before_guard:
+            # 引継ぎプロンプト（会話全体を打ち切る）が発動しなかった場合のみ、
+            # コンテキスト圧縮が近づいている旨とwrite_thread_noteへの書き出しを
+            # 促す（src/context_compaction.py）。両方を同時に差し込むと
+            # 「ツールを呼ぶな」と「write_thread_noteを呼べ」が矛盾するため。
+            history = maybe_append_precompact_note_nudge(history, config)
         messages = [SystemMessage(content=system_prompt), *history]
         response = await model.ainvoke(messages)
         return {"messages": [response]}
@@ -190,16 +198,32 @@ def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer):
             )
         # 切り詰めてもなお1リクエストあたりのトークン量が閾値に達している場合は、
         # 引継ぎプロンプトを出させて安全に終えるよう促す（src/main_token_guard.py）。
+        before_guard = trimmed
         trimmed = maybe_append_token_guard(trimmed, config)
+        if trimmed is before_guard:
+            # 引継ぎプロンプト（会話全体を打ち切る）が発動しなかった場合のみ、
+            # コンテキスト圧縮が近づいている旨とwrite_thread_noteへの書き出しを
+            # 促す（src/context_compaction.py）。両方を同時に差し込むと
+            # 「ツールを呼ぶな」と「write_thread_noteを呼べ」が矛盾するため。
+            trimmed = maybe_append_precompact_note_nudge(trimmed, config)
         return {"llm_input_messages": trimmed}
 
     return create_react_agent(
         model,
         ImageAwareToolNode(get_all_tools()),
         prompt=system_prompt,
-        # トリミングとトークンガードのどちらかが有効ならフックが必要
-        # （片方だけを見て None にすると、もう片方が黙って効かなくなる）。
-        pre_model_hook=(pre_model_hook if (config.context_trim_enabled or config.graph_token_guard_enabled) else None),
+        # トリミング・トークンガード・圧縮予告ナッジのいずれかが有効なら
+        # フックが必要（一部だけを見て None にすると、残りが黙って効かなく
+        # なる）。
+        pre_model_hook=(
+            pre_model_hook
+            if (
+                config.context_trim_enabled
+                or config.graph_token_guard_enabled
+                or (config.context_compaction_enabled and config.context_compaction_pre_note_threshold > 0)
+            )
+            else None
+        ),
         checkpointer=checkpointer,
     )
 

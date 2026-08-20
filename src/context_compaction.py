@@ -18,12 +18,49 @@ import uuid
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from .config import Config
-from .context_trim import trim_old_tool_messages
+from .context_trim import last_ai_total_tokens, trim_old_tool_messages
 
 logger = logging.getLogger(__name__)
 
 _SUMMARY_HEADER = "[自動要約: コンテキスト圧縮のため、以前の会話の一部を要約しました。" "この内容を踏まえて続きの作業を行ってください]\n"
 _PLAN_STATUS_HEADER = "[承認済みの実行計画（最優先タスク）。要約とは無関係にコード側が機械的に付与しています]\n"
+_PRE_NOTE_MARKER = "[コンテキスト圧縮が近づいています]"
+
+
+def maybe_append_precompact_note_nudge(messages: list[BaseMessage], config: Config) -> list[BaseMessage]:
+    """圧縮（要約）が近づいたら、write_thread_noteへの書き出しを促すメッセージを末尾へ足す。
+
+    src/main_token_guard.py の maybe_append_token_guard と同じ考え方
+    （今回のLLM呼び出しへの入力にだけ差し込み、state・checkpointer上の
+    永続履歴は書き換えない）。maybe_compact() による要約は永続履歴を
+    書き換える恒久的な操作であり、要約LLMの精度次第で古い会話中の具体的な
+    事実（値・件数・該当箇所等）が薄まって失われうる。要約対象から外れる
+    前に、そうした事実を write_thread_note（ファイルへの追記であり要約の
+    影響を受けない）へ退避させる機会をモデルに与える狙い。
+
+    Args:
+        messages: 今回のモデル呼び出しへ渡す予定のメッセージ列
+            （context_trim 適用後のものを想定）。書き換えない。
+        config: context_compaction_pre_note_* を含むアプリ設定。
+
+    Returns:
+        閾値に達していれば末尾に HumanMessage を1件足した新しいリスト。
+        達していない場合・無効化されている場合は、引数の messages を
+        そのまま返す。
+    """
+    if not config.context_compaction_enabled or config.context_compaction_pre_note_threshold <= 0:
+        return messages
+    total = last_ai_total_tokens(messages)
+    if total is None or total < config.context_compaction_pre_note_threshold:
+        return messages
+
+    logger.warning(
+        "メインエージェントのトークン使用量がコンテキスト圧縮の予告閾値(%d)に達しました"
+        "(直近の応答: %dトークン)。write_thread_noteへの書き出しを促します",
+        config.context_compaction_pre_note_threshold,
+        total,
+    )
+    return [*messages, HumanMessage(content=f"{_PRE_NOTE_MARKER}\n{config.context_compaction_pre_note_warning_text}")]
 
 
 def should_compact(

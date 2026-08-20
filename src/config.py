@@ -547,6 +547,20 @@ class Config:
             ツール結果の情報がまとめて失われ、要約が内容の薄いものに
             なりうる（大量ファイル処理タスクでファイル名の列挙しか
             残らない等）。
+        context_compaction_pre_note_threshold: 圧縮が発火する前に
+            write_thread_noteへの書き出しを促す注意メッセージを注入する、
+            直近1回のLLM呼び出しの total_tokens の閾値
+            （src.context_compaction.maybe_append_precompact_note_nudge）。
+            context_compaction_single_request_token_threshold より十分
+            小さい値にすること（注意メッセージ注入後、実際に圧縮が発火
+            するまでの「次の1応答」でwrite_thread_noteを呼ぶ余地を残す
+            ため）。0以下を指定するとこの機能を無効化する。
+            src.main_token_guard の引継ぎ促し
+            （graph_token_guard_soft_threshold、会話全体を打ち切って
+            新しいチャットへの引継ぎを促す想定）とは別物で、こちらは
+            会話を止めずに注意喚起するだけの軽いフック。
+        context_compaction_pre_note_warning_text: 上記閾値到達時に注入する
+            注意メッセージの文言。
         auth_enabled: ログイン認証機能のON/OFF（[auth].enabled）。True の場合、
             app.py がモジュール読み込み時に @cl.password_auth_callback を
             登録し、未ログインユーザーはチャット画面にアクセスできなくなる。
@@ -740,6 +754,8 @@ class Config:
     context_compaction_min_messages_to_compact: int
     context_compaction_prompt_path: Path
     context_compaction_summary_source_max_chars: int
+    context_compaction_pre_note_threshold: int
+    context_compaction_pre_note_warning_text: str
 
     # --- ログイン認証（[auth]、機密情報は .env 側） ---
     auth_enabled: bool
@@ -1819,6 +1835,22 @@ def load_config(config_path: Path | None = None) -> Config:
                 "CONTEXT_COMPACTION_SUMMARY_SOURCE_MAX_CHARS",
                 context_compaction.get("summary_source_max_chars", 2000),
             )
+        ),
+        context_compaction_pre_note_threshold=int(
+            os.getenv(
+                "CONTEXT_COMPACTION_PRE_NOTE_THRESHOLD",
+                context_compaction.get("pre_note_threshold", 40000),
+            )
+        ),
+        context_compaction_pre_note_warning_text=os.getenv(
+            "CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT",
+            context_compaction.get(
+                "pre_note_warning_text",
+                "[システム通知: まもなくコンテキスト圧縮（古い会話履歴の要約）が"
+                "行われます。要約後は書き出していない事実が失われるおそれがあるため、"
+                "write_thread_noteにまだ記録していない重要な事実（値・件数・該当箇所等）"
+                "があれば、次の応答でツールを呼ぶ前に書き出してください]",
+            ),
         ),
         auth_enabled=_as_bool(os.getenv("AUTH_ENABLED", auth.get("enabled", False))),
         auth_require_password=_as_bool(os.getenv("AUTH_REQUIRE_PASSWORD", auth.get("require_password", True))),
