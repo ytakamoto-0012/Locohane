@@ -32,7 +32,7 @@ function goToThread(threadId: string | null) {
 
 export function Sidebar() {
   const { config } = useConfig();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const currentThreadId = useRecoilValue(currentThreadIdState);
   const firstInteraction = useRecoilValue(firstUserInteraction);
   const sessionId = useRecoilValue(sessionIdState);
@@ -153,6 +153,14 @@ export function Sidebar() {
         <div className="thread-sidebar-user" title={user.identifier}>
           <Icon name="user" size={14} />
           <span className="thread-sidebar-user-name">{user.display_name || user.identifier}</span>
+          <button
+            type="button"
+            className="thread-sidebar-logout"
+            title="ログアウト"
+            onClick={() => logout(true)}
+          >
+            <Icon name="log-out" size={14} />
+          </button>
         </div>
       )}
     </aside>

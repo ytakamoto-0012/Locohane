@@ -1087,6 +1087,23 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+
+.thread-sidebar-logout {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 3px;
+  display: flex;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+}
+
+.thread-sidebar-logout:hover {
+  background: var(--border);
+  color: var(--text);
 }
 
 .side-panel {
