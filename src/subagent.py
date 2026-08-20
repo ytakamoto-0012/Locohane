@@ -26,6 +26,7 @@ import logging
 import traceback
 from collections.abc import Callable
 
+from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
@@ -183,6 +184,23 @@ async def _invoke_with_loop_retry(model, messages: list, config: Config, tools: 
                 exc.snippet,
                 describe_current_task(),
             )
+            # app.py の on_message は astream_events を消費して「思考中」Stepを
+            # 表示するが、このリトライはここで完結し例外を呼び出し元へ伝播
+            # しないため、on_message 側の except ThinkingLoopDetected（自グラフ
+            # 自身のループ検知用）は発火しない。対策しないと、打ち切られた
+            # 直前の試行分の思考Stepが「停止」バッジ無しで残ったまま、リトライ
+            # 後の新しいトークンが同じStepへ継ぎ足されてしまう（2026-08-21
+            # ユーザー報告）。astream_events はcontextvar経由でツール内部の
+            # 呼び出しも同じストリームへ伝播させる（_resolve_parent_id参照）
+            # ため、この adispatch_custom_event もそのストリームに乗り、
+            # on_message 側で該当Stepを明示的にクローズ&リセットできる。
+            # 呼び出し元にRunnableConfigの親run_idが無い経路（単体テスト等）
+            # では失敗しうるが、UI通知はあくまで付加的なものでありリトライ
+            # 自体を止めてはならないため、失敗しても握りつぶす。
+            try:
+                await adispatch_custom_event("subagent_loop_retry", {"snippet": exc.snippet})
+            except Exception:  # noqa: BLE001 - UI通知の失敗でリトライ自体を止めない
+                logger.debug("subagent_loop_retry イベントの送出に失敗しました", exc_info=True)
             current_model = build_model(config, role="sub").bind_tools(tools)
             logger.warning(
                 "subagent: リトライ前にLLMモデルを再構築しました" "（client_broken=%s） [%s]",

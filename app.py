@@ -2885,6 +2885,19 @@ async def _on_message_impl(message: cl.Message) -> None:
                         call_totals = {"input": 0, "output": 0, "total": 0}
                         _accumulate_usage(call_totals, usage)
                         await cl.Message(content=_format_token_usage(call_totals, cumulative_main, cumulative)).send()
+
+                elif kind == "on_custom_event" and event["name"] == "subagent_loop_retry":
+                    # src/subagent.py の _invoke_with_loop_retry がサブエージェント
+                    # 内部のループ検知リトライを例外を外へ出さずに処理するため、
+                    # このターン全体を打ち切る except ThinkingLoopDetected（下）は
+                    # 発火しない。何もしないと、打ち切られた直前の試行分の
+                    # 「思考中」Stepが「停止」バッジ無しで残ったまま、thinkingが
+                    # 非Noneのため次のon_chat_model_streamで新規Stepが作られず、
+                    # リトライ後のトークンが同じStepへ継ぎ足されてしまう
+                    # （2026-08-21ユーザー報告）。ターン自体は継続するため、
+                    # answer/steps/_finalize_orphaned_stepsには触れず、thinkingの
+                    # クローズ&リセットのみ行う。
+                    thinking = await _close_thinking(thinking, stopped_reason="loop_detected")
         except ThinkingLoopDetected as exc:
             # LLM応答（thinking/本文）が反復ループに陥り打ち切られた場合。
             # ここまでの思考/回答があれば確定送信してから、注意メッセージを
