@@ -1373,10 +1373,20 @@ async def _setup() -> None:
         )
 
     # execute_python_code が default_workdir 配下に作る `_tmp_<thread_id>`
-    # （src/tools.py の _resolve_exec_workdir() 参照）は本来 on_chat_end で
-    # セッション終了時に即時削除されるが、異常終了でそのフックが発火しな
-    # かった場合の取りこぼしに備え、起動時に一度だけ日数ベースで掃除する。
+    # （src/tools.py の _resolve_exec_workdir() 参照）は on_chat_end での
+    # 即時削除を廃止したため（生成中に別スレッドへ切り替えると誤って
+    # 消えてしまう問題があった）、他の default_workdir 配下のファイルと
+    # 同じ日数ベースの自動削除（起動時1回 + 定期ループ）に一本化する。
     cleanup_old_dirs(_config.default_workdir, _config.default_workdir_retention_days, pattern="_tmp_*")
+    if _config.default_workdir_retention_days > 0:
+        asyncio.create_task(
+            cleanup_run_cleanup_dirs_loop(
+                _config.default_workdir,
+                _config.default_workdir_retention_days,
+                _config.default_workdir_cleanup_interval_hours,
+                pattern="_tmp_*",
+            )
+        )
 
     # パスメモリー（src/path_memory.py）のレジストリファイルも同様に日数ベースで
     # 自動削除する（「会話終了」を検知する手段が無いための代替措置）。
@@ -1686,25 +1696,23 @@ async def on_chat_end() -> None:
     いる可能性があり、その最中にクライアントを強制closeすると新たな
     エラーを誘発しかねない。辞書キーの掃除のみに留める。
 
-    あわせて、execute_python_code が作業ディレクトリ配下に作る
-    `_tmp_<thread_id>`（src/tools.py の _resolve_exec_workdir() 参照）も
-    ここで削除する。ディレクトリ名にthread_idを含むため、同じ作業
-    ディレクトリを複数セッションが共有していても他セッション分には
-    触れない。ユーザー指定の work_dir はこの日数ベースの自動削除の対象外
-    （config.ini [default_workdir] 参照）のため、セッション終了時の
-    即時削除が唯一の後片付け機会になる。work_dir が書き込み不可と判定され
-    ていた場合、実体は _resolve_exec_workdir() の機械的ガードにより
-    default_workdir 配下に作られているため、両方を削除対象にする
-    （存在しない側は ignore_errors=True で無害）。
+    以前はここで execute_python_code が作る `_tmp_<thread_id>`
+    （src/tools.py の _resolve_exec_workdir() 参照）も即座に rmtree して
+    いたが、廃止した。サイドバーで別スレッドへ切り替えるとソケットが
+    切断されこのフックが発火する（chainlit/socket.py の disconnect
+    ハンドラ）が、バックグラウンド処理自体は current_task がキャンセル
+    されないため続行する。そのため生成中に別スレッドへ切り替えると、
+    execute_python_code が使用中の `_tmp_<thread_id>` が処理の途中で
+    消え、裏で継続中のPython実行がファイル欠落で失敗しうる不具合が
+    あった。`_tmp_<thread_id>` は常に default_workdir 配下に作られる
+    （_resolve_exec_workdir() 参照）ため、後片付けは
+    default_workdir_retention_days による日数ベースの自動削除
+    （起動時cleanup_old_dirs + cleanup_run_cleanup_dirs_loop）に一本化する。
     """
     thread_id = cl.user_session.get("thread_id")
     if thread_id is not None:
         forget_session(thread_id)
         forget_session_tool_semaphores(thread_id)
-        work_dir = cl.user_session.get("work_dir")
-        shutil.rmtree(_config.default_workdir / f"_tmp_{thread_id}", ignore_errors=True)
-        if work_dir:
-            shutil.rmtree(Path(work_dir) / f"_tmp_{thread_id}", ignore_errors=True)
 
 
 async def _apply_work_dir(raw: str) -> None:

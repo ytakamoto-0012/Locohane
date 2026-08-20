@@ -66,7 +66,7 @@ import time
 import traceback
 import uuid
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1359,31 +1359,6 @@ def probe_workdir_access(path: Path) -> WorkDirAccessStatus:
     return WorkDirAccessStatus(str(path), exists=True, readable=True, writable=True)
 
 
-def _mark_workdir_not_writable() -> str:
-    """work_dir への実際の書き込み失敗を検知した際に呼ぶ（事後キャッチの保険）。
-
-    cl.user_session["work_dir_access"] を writable=False で更新し、以後の
-    _resolve_workdir(need_write=True) を自動的に default_workdir へ倒す
-    （work_dir 自体の表示用パスは変更しない）。_track_failure_streak と
-    同型で、LLMへの通知は戻り値の警告文字列を呼び出し元が戻り値に連結する
-    方式に揃える。
-
-    Returns:
-        戻り値に連結する警告文字列（先頭に改行を含む）。
-    """
-    work_dir = cl.user_session.get("work_dir")
-    status: WorkDirAccessStatus | None = cl.user_session.get("work_dir_access")
-    if status is None and work_dir:
-        status = probe_workdir_access(Path(work_dir))
-    if status is not None:
-        cl.user_session.set("work_dir_access", replace(status, writable=False))
-    return (
-        "\n\n【システム警告】指定された作業ディレクトリへの書き込みに失敗したため、"
-        "既定フォルダを使用しました。ユーザーへその旨を伝え、成果物が必要な場合は"
-        "provide_download で提供してください。"
-    )
-
-
 def _resolve_workdir(need_write: bool = False) -> Path:
     """run_script が subprocess.run に渡す cwd を決定する。
 
@@ -1488,40 +1463,40 @@ def check_work_dir_status() -> str:
     return "\n".join(lines)
 
 
-def _resolve_exec_workdir() -> tuple[Path, bool]:
+def _resolve_exec_workdir() -> Path:
     """execute_python_code / run_script が中間生成物を書く実行用ディレクトリ。
 
-    _resolve_workdir() が指す作業ディレクトリ直下に `_tmp_<thread_id>` を
-    自動的に作って返す（無ければ作成する）。LLMがコード内で相対パスで
-    書き出すファイル（ops.json 等の中間生成物）が作業ディレクトリ直下に
-    散らからないようにするため。`_tmp/<thread_id>` のような親子階層では
-    なく `_tmp_<thread_id>` という単一のディレクトリ名にしているのは、
-    セッション終了時に丸ごと rmtree した際、親ディレクトリ（`_tmp`）が
-    空のまま残り続ける問題を避けるため。
+    常に default_workdir 配下に `_tmp_<thread_id>` を作って返す（無ければ
+    作成する）。LLMがコード内で相対パスで書き出すファイル（ops.json 等の
+    中間生成物）が作業ディレクトリ直下に散らからないようにするため。
+    `_tmp/<thread_id>` のような親子階層ではなく `_tmp_<thread_id>` という
+    単一のディレクトリ名にしているのは、日数ベースの自動削除（cleanup_old_dirs、
+    app.py）が丸ごと rmtree した際、親ディレクトリ（`_tmp`）が空のまま
+    残り続ける問題を避けるため。
+
+    以前はユーザー指定の work_dir 直下に作っていたが、生成中に別スレッドへ
+    切り替えるとソケット切断（on_chat_end）で即座に rmtree され、裏で
+    継続中の処理と競合する問題があった。default_workdir 固定にすることで
+    on_chat_end での即時削除自体を廃止し、default_workdir_retention_days
+    による日数ベースの自動削除（app.py）に一本化した（work_dir は元々
+    サーバー/クライアントでファイルシステムが分離しうるため書き込み不可の
+    こともあり得るが、default_workdir はサーバー側の設定のため常に
+    書き込み可能という前提が置ける）。
 
     provide_download / show_image / _resolve_analyze_image_path は
     ユーザーへの成果物提供に使う関数のため、意図的にこの関数を使わず
-    _resolve_workdir() のまま据え置く（最終成果物は _tmp_<thread_id> の
-    外、作業ディレクトリ直下に置かれる想定のため）。
-
-    _resolve_workdir(need_write=True) が事前に default_workdir へ振り分けて
-    いるのが通常経路だが、work_dir_access のキャッシュが古い場合（設定後に
-    共有が切断された等）に備え、実際の mkdir 失敗も捕捉して事後リトライする。
+    _resolve_workdir() のまま据え置く（最終成果物はユーザー指定の work_dir
+    直下に置かれる想定のため。execute_python_code の書き込みガード
+    （_exec_guard_roots）は _tmp_<thread_id> の実体とは独立に、実際の
+    work_dir も allowed_roots へ含めている）。
 
     Returns:
-        `_tmp_<thread_id>` ディレクトリの絶対パスと、事後リトライで
-        default_workdir へフォールバックしたかどうかのタプル。
+        `_tmp_<thread_id>` ディレクトリの絶対パス。
     """
     thread_id = cl.user_session.get("thread_id") or "_no_session"
-    workdir = _resolve_workdir(need_write=True)
-    d = workdir / f"_tmp_{thread_id}"
-    try:
-        d.mkdir(parents=True, exist_ok=True)
-        return d, False
-    except OSError:
-        fallback_d = _DEFAULT_WORKDIR / f"_tmp_{thread_id}"
-        fallback_d.mkdir(parents=True, exist_ok=True)
-        return fallback_d, True
+    d = _DEFAULT_WORKDIR / f"_tmp_{thread_id}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _tmp_dir_parents(primary: Path) -> list[Path]:
@@ -1569,7 +1544,7 @@ def _scratch_notes_path_for_run(run_id: str) -> Path:
     いる前提（_resolve_exec_workdir() は cl.user_session から thread_id を
     読むため、一致していなければ別セッションのディレクトリを指してしまう）。
     """
-    workdir, _ = _resolve_exec_workdir()
+    workdir = _resolve_exec_workdir()
     return workdir / f"_scratch_notes_{run_id}.md"
 
 
@@ -1632,7 +1607,7 @@ def _thread_notes_path() -> Path:
     同一スレッド内の全 dispatch_agent 実行（サブエージェントごとに変わる
     run_id）とメインエージェント自身が同じファイルを共有できる。
     """
-    workdir, _ = _resolve_exec_workdir()
+    workdir = _resolve_exec_workdir()
     return workdir / "_thread_notes.md"
 
 
@@ -2320,7 +2295,6 @@ class _BackgroundJob:
     tmp_path: "Path | None" = None
     workdir: "Path | None" = None
     before_snapshot: "dict[Path, float] | None" = None
-    fell_back: bool = False
     # run_script_background / execute_python_code_background 由来のジョブの
     # 書き込みガード用一時ディレクトリ（_run_script_guard_env が作成）。
     # ジョブ終了後に _run_background_job の finally で削除する。ガード注入に
@@ -2491,8 +2465,6 @@ def _format_job_result(job: "_BackgroundJob") -> str:
         path_memory_note = _register_exec_output_files(job.workdir, job.before_snapshot, job.thread_id)
         if path_memory_note:
             parts.append(path_memory_note)
-    if job.fell_back:
-        parts.append(_mark_workdir_not_writable())
     return "\n".join(parts)
 
 
@@ -2808,16 +2780,25 @@ def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float
     return "[生成/更新ファイル]\n" + "\n".join(lines)
 
 
-def _exec_guard_roots(workdir: Path) -> list[Path]:
+def _exec_guard_roots() -> list[Path]:
     """execute_python_code系（execute_python_code/execute_python_code_background）
     のガードに渡す allowed_roots を組み立てる。
 
-    workdir.parent・default_workdir に加え、path_memory_dir
-    （LLM生成コードが path_memory.register()/resolve() を直接呼ぶ場合に
-    ロックファイル書き込みが必要になるLocohane内部の状態ディレクトリ）を
-    含める。4箇所の呼び出し元での重複を避けるための共通ヘルパー。
+    実際の作業ディレクトリ（_resolve_workdir(need_write=True)。書き込み
+    不可と判定されていれば default_workdir へ自動的に倒れる）・
+    default_workdir に加え、path_memory_dir（LLM生成コードが
+    path_memory.register()/resolve() を直接呼ぶ場合にロックファイル
+    書き込みが必要になるLocohane内部の状態ディレクトリ）を含める。
+    4箇所の呼び出し元での重複を避けるための共通ヘルパー。
+
+    以前は実行用ディレクトリ（_tmp_<thread_id>）の親から作業ディレクトリを
+    逆算していたが、_tmp_<thread_id> が常に default_workdir 配下に固定
+    されたため（_resolve_exec_workdir() 参照）、ここで独立に解決する
+    必要がある（そうしないと実際の work_dir が allowed_roots から漏れ、
+    execute_python_code がユーザー指定の作業ディレクトリへ書き込めなく
+    なってしまう）。
     """
-    roots = [workdir.parent, _DEFAULT_WORKDIR]
+    roots = [_resolve_workdir(need_write=True), _DEFAULT_WORKDIR]
     if _PATH_MEMORY_DIR is not None:
         roots.append(_PATH_MEMORY_DIR)
     return roots
@@ -3123,7 +3104,7 @@ async def execute_python_code(code: str) -> str:
         return "エラー: code が空です。"
     if not _CODE_EXEC_ENABLED:
         return "エラー: LLMが生成したPythonコードの実行はconfig.iniで無効化されています" "（[scripts] code_execution_enabled=false）。"
-    workdir, fell_back = _resolve_exec_workdir()
+    workdir = _resolve_exec_workdir()
 
     if not cl.user_session.get("plan_approved"):
         logger.info("execute_python_code: 計画未承認のためブロック")
@@ -3135,26 +3116,13 @@ async def execute_python_code(code: str) -> str:
         before_snapshot = {}
 
     try:
-        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
+        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
         tmp_path = Path(tmp.name)
-    except OSError:
-        # work_dir_access のキャッシュが古く、_resolve_exec_workdir の事前
-        # フォールバックが効かなかった場合の保険（例: mkdir後に権限が変わった等）。
-        thread_id = cl.user_session.get("thread_id") or "_no_session"
-        workdir = _DEFAULT_WORKDIR / f"_tmp_{thread_id}"
-        workdir.mkdir(parents=True, exist_ok=True)
-        fell_back = True
-        try:
-            _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
-            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
-            tmp.write(_fs_guard + code)
-            tmp.close()
-            tmp_path = Path(tmp.name)
-        except OSError as e2:
-            return f"エラー: 一時ファイルを作成できませんでした（既定フォルダでも失敗）: {e2}"
+    except OSError as e:
+        return f"エラー: 一時ファイルを作成できませんでした: {e}"
 
     logger.info("execute_python_code: cwd=%s", workdir)
     try:
@@ -3190,8 +3158,6 @@ async def execute_python_code(code: str) -> str:
     warning = _track_failure_streak("execute_python_code_failure_streak", proc.returncode != 0, "execute_python_code")
     if warning:
         parts.append(warning)
-    if fell_back:
-        parts.append(_mark_workdir_not_writable())
     return "\n".join(parts)
 
 
@@ -3227,7 +3193,7 @@ async def execute_python_code_readonly(code: str) -> str:
         return "エラー: code が空です。"
     if not _CODE_EXEC_ENABLED:
         return "エラー: LLMが生成したPythonコードの実行はconfig.iniで無効化されています" "（[scripts] code_execution_enabled=false）。"
-    workdir, fell_back = _resolve_exec_workdir()
+    workdir = _resolve_exec_workdir()
 
     try:
         _fs_guard = _python_fs_guard_preamble([], tmp_dir_roots=_tmp_dir_parents(workdir.parent))
@@ -3235,19 +3201,8 @@ async def execute_python_code_readonly(code: str) -> str:
         tmp.write(_fs_guard + code)
         tmp.close()
         tmp_path = Path(tmp.name)
-    except OSError:
-        thread_id = cl.user_session.get("thread_id") or "_no_session"
-        workdir = _DEFAULT_WORKDIR / f"_tmp_{thread_id}"
-        workdir.mkdir(parents=True, exist_ok=True)
-        fell_back = True
-        try:
-            _fs_guard = _python_fs_guard_preamble([], tmp_dir_roots=_tmp_dir_parents(workdir.parent))
-            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
-            tmp.write(_fs_guard + code)
-            tmp.close()
-            tmp_path = Path(tmp.name)
-        except OSError as e2:
-            return f"エラー: 一時ファイルを作成できませんでした（既定フォルダでも失敗）: {e2}"
+    except OSError as e:
+        return f"エラー: 一時ファイルを作成できませんでした: {e}"
 
     logger.info("execute_python_code_readonly: cwd=%s", workdir)
     try:
@@ -3275,8 +3230,6 @@ async def execute_python_code_readonly(code: str) -> str:
         parts.append(f"[標準出力]\n{proc.stdout.rstrip()}")
     if proc.stderr:
         parts.append(f"[標準エラー]\n{proc.stderr.rstrip()}")
-    if fell_back:
-        parts.append(_mark_workdir_not_writable())
     return "\n".join(parts)
 
 
@@ -3359,7 +3312,7 @@ async def execute_python_code_background(code: str) -> str:
         return "エラー: code が空です。"
     if not _CODE_EXEC_ENABLED:
         return "エラー: LLMが生成したPythonコードの実行はconfig.iniで無効化されています" "（[scripts] code_execution_enabled=false）。"
-    workdir, fell_back = _resolve_exec_workdir()
+    workdir = _resolve_exec_workdir()
 
     if not cl.user_session.get("plan_approved"):
         logger.info("execute_python_code_background: 計画未承認のためブロック")
@@ -3371,26 +3324,13 @@ async def execute_python_code_background(code: str) -> str:
         before_snapshot = {}
 
     try:
-        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
+        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
         tmp_path = Path(tmp.name)
-    except OSError:
-        # work_dir_access のキャッシュが古く、_resolve_exec_workdir の事前
-        # フォールバックが効かなかった場合の保険（例: mkdir後に権限が変わった等）。
-        thread_id = cl.user_session.get("thread_id") or "_no_session"
-        workdir = _DEFAULT_WORKDIR / f"_tmp_{thread_id}"
-        workdir.mkdir(parents=True, exist_ok=True)
-        fell_back = True
-        try:
-            _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(workdir), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
-            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
-            tmp.write(_fs_guard + code)
-            tmp.close()
-            tmp_path = Path(tmp.name)
-        except OSError as e2:
-            return f"エラー: 一時ファイルを作成できませんでした（既定フォルダでも失敗）: {e2}"
+    except OSError as e:
+        return f"エラー: 一時ファイルを作成できませんでした: {e}"
 
     _purge_stale_background_jobs()
 
@@ -3423,7 +3363,6 @@ async def execute_python_code_background(code: str) -> str:
         tmp_path=tmp_path,
         workdir=workdir,
         before_snapshot=before_snapshot,
-        fell_back=fell_back,
     )
     job.runner_task = asyncio.create_task(_run_background_job(job, job_id))
     _BACKGROUND_JOBS[job_id] = job
