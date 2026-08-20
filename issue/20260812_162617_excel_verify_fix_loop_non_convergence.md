@@ -24,7 +24,7 @@
 
 2026-08-12 16:45:59,391 WARNING src.subagent: dispatch_agent: 最大反復回数(40)に到達したため打ち切り
 
-2026-08-12 16:46:10,225 DEBUG src.tools: tool_result: name=execute_python_code content='エラー: execute_python_code はメインエージェントとして呼び出しを禁止されています（max_calls=0）。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, explore-docs, verifier, worker）へ委譲してください。'
+2026-08-12 16:46:10,225 DEBUG src.tools: tool_result: name=execute_python_code content='エラー: execute_python_code はメインエージェントとして呼び出しを禁止されています（max_calls=0）。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, analyze-docss, verifier, worker）へ委譲してください。'
 
 2026-08-12 16:59:05,845 DEBUG src.llm: LLM応答: content='' reasoning_content='opsファイルが作成できました。次に、このファイルを使ってexcel-editを実行します。\n' tool_calls=[{'name': 'run_script', 'args': {'skill_name': 'excel-edit', 'script_filename': 'edit_excel.py', 'script_args': ['E:\\yukinori\\テスト\\annual_schedule.xlsx', '--new', '--overwrite', '--ops-file', 'E:\\yukinori\\テスト\\_ops_monthly.json']}, ...}]
 2026-08-12 16:59:06,169 INFO src.subagent: subagent tool=run_script args={...} -> [終了コード] 0

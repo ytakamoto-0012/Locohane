@@ -3287,7 +3287,7 @@ threshold=64000は変更しない）はここで達成とみなし、監視cron�
   `execute_python_code`を17回中複数回使い、曜日・週計算を手計算せず
   ツールに委ねる挙動を確認。`create_plan`→`approve_plan`→`worker`委譲→
   `verifier`委譲の正規フローも遵守。**主目的（ループ解消）は達成**。
-- ただし新たな不具合を発見: 最初の`dispatch_agent(agent_type="explore-docs")`
+- ただし新たな不具合を発見: 最初の`dispatch_agent(agent_type="analyze-docss")`
   による事前調査が、実際には存在しないはずの「計画が未承認のため実行
   できません」というエラーを報告（`read_excel.py`は
   `plan_approval_exempt_scripts`登録済みでmain/sub問わず常に免除される
@@ -3391,13 +3391,13 @@ run3の006で、`worker`が「本来はB列（週）だけが誤っている」�
 
 **前提**: 本セッション開始時点で、36dfafc（別セッション）にてThinkingLoop
 状態リーク修正・excel-edit書式消失修正・create_plan前のplanner委譲必須化
-（コード側ガード）・explore-docs/verifier/workerへの「全件監査」「矛盾指示の
+（コード側ガード）・analyze-docss/verifier/workerへの「全件監査」「矛盾指示の
 検知」ルール追加が既に反映済みだった。この状態で006を単体実行（run1）し、
 残課題として記録されていたjudge項目5違反が再発するか確認した。
 
 **run1結果**: `rules_pass`未定義（judgeケース）、ThinkingLoop 0件・
 turn_cutoffs 0件（主目的は引き続き達成）。ただし**judge項目5に明確に違反**:
-transcriptを確認したところ、`dispatch_agent(agent_type="explore-docs")`の
+transcriptを確認したところ、`dispatch_agent(agent_type="analyze-docss")`の
 調査結果自体が、B列（週）の値が実際は「単純な4行区切りの誤った規則」で
 生成されているだけなのに、「各月グループの先頭1〜2行に前月の週が混入
 している」「週番号が重複している」という誤った診断をし、それをそのまま
@@ -3414,12 +3414,12 @@ A列結合セルを再構成。verifierも「worker委譲時に指示された�
 いずれも「調査後の情報の伝達・実行段階」の規律であり、**調査そのものの
 診断ロジックの誤り**（グループ化列＝A列は正しい前提なのに、ラベル列＝B列の
 食い違いを見て「行自体が誤配置/重複」と早合点した）は対象外だった。
-`explore-docs`が最初の調査時点でこの誤診断をし、その誤った前提が
+`analyze-docss`が最初の調査時点でこの誤診断をし、その誤った前提が
 `create_plan`→`planner`→`worker`→`verifier`の全段階に伝播しても、
 各段階は「前段階の報告を正として整合性を取る」規律しか持たないため、
 誤りが伝播したまま最後まで検出されなかった。
 
-**変更内容**: `agents/explore-docs.md`に「グループ化列とラベル列の食い違いは
+**変更内容**: `agents/analyze-docss.md`に「グループ化列とラベル列の食い違いは
 『誤配置行』と決めつけない」節を追加（Web検索節の直前）。グループ化列
 （結合セル等）とラベル列が食い違う場合、グループ化列自体の誤りを示す
 具体的根拠が無い限り行削除・グループ再構成を提案せず、ラベル列のみを
@@ -3428,27 +3428,27 @@ A列結合セルを再構成。verifierも「worker委譲時に指示された�
 
 安全策の対象ファイル注記: tune-promptスキルの対象ファイル対応表は
 target=system_promptを`system_prompt/system_prompt.md`としているが、
-36dfafc（別セッション）で同一目的のため`agents/explore-docs.md`等の
+36dfafc（別セッション）で同一目的のため`agents/analyze-docss.md`等の
 サブエージェント定義ファイルも既に編集対象に含めている前例があり、
-本iterationもそれに倣った（006は`explore-docs`/`worker`/`verifier`という
+本iterationもそれに倣った（006は`analyze-docss`/`worker`/`verifier`という
 サブエージェントの振る舞いが直接評価対象になっているため、
 `system_prompt.md`だけでは修正が届かない）。
 
 次: この状態で006を再実行し、A列結合セル範囲が保持されたままB列のみ
 修正されるか（judge項目5合格）を確認する。
 
-**run2結果（explore-docs.md修正後）: 合格（judge項目1・2・5すべてクリア）**。
+**run2結果（analyze-docss.md修正後）: 合格（judge項目1・2・5すべてクリア）**。
 transcriptを確認:
-- 1回目の`explore-docs`調査は今回も月/週不一致に言及したが、以前のような
+- 1回目の`analyze-docss`調査は今回も月/週不一致に言及したが、以前のような
   「←4月而非3月！」等の誤配置断定の注釈は無くなり、事実（値・結合セル範囲）の
   報告に留まった。
 - `planner`への1回目の委譲では、plannerが依然として「重複行を削除して
   52行に圧縮」という誤った草案を返したが、**メインエージェント自身が
   その草案を採用せず**「ユーザーは行の削除を依頼していない」「行数が
   不自然なのは元々そう設計されている可能性がある」と明確に指摘し、
-  `explore-docs`に再調査を委譲した上で「行の追加・削除は行わず、B列の
+  `analyze-docss`に再調査を委譲した上で「行の追加・削除は行わず、B列の
   値だけを修正する」方針へ自律的に修正した。
-- 2回目の`explore-docs`再調査中、テキスト生成が同一内容を繰り返す
+- 2回目の`analyze-docss`再調査中、テキスト生成が同一内容を繰り返す
   ThinkingLoopDetectedが1回発生（c80221fの状態リーク修正により、
   リトライで正常回復・`turn_cutoffs`には計上されず＝ターン打ち切りなし。
   合計0件）。
@@ -3468,10 +3468,10 @@ transcriptを確認:
 
 ## iter47 完了サマリ（2026-08-15）
 
-**イテレーション数**: 1（run1で判明したjudge項目5違反を`agents/explore-docs.md`
+**イテレーション数**: 1（run1で判明したjudge項目5違反を`agents/analyze-docss.md`
 の1箇所修正で解消、run2で合格確認）。
 
-**確定した変更**: `agents/explore-docs.md`に「グループ化列とラベル列の
+**確定した変更**: `agents/analyze-docss.md`に「グループ化列とラベル列の
 食い違いは『誤配置行』と決めつけない」節を追加（本文節＋必須ルール6番）。
 グループ化列（結合セル等）自体の誤りを示す具体的根拠が無い限り、行削除・
 グループ再構成を提案せず、ラベル列のみをグループ内通し番号として
@@ -3485,12 +3485,12 @@ transcriptを確認:
 **事象**: `run_all.py system_prompt`（全6件）を実行したところ、001〜005は
 judge待ちで正常終了（既存合格傾向を維持、デグレなし）したが、**006が
 1800秒でタイムアウト**した。iter47のrun2で合格したばかりだったため、
-`data/logs/evals.log`でこの回のtranscriptに相当するログ（`explore-docs`委譲後、
+`data/logs/evals.log`でこの回のtranscriptに相当するログ（`analyze-docss`委譲後、
 01:37:33〜タイムアウトまで約29分間）を確認した。
 
 **根本原因**: iter47で修正した「グループ化列とラベル列の食い違いを誤配置行と
 決めつけない」問題とは別の経路で、**本番同一のThinkingLoop失敗パターンが
-再現した**。今回は`explore-docs`サブエージェントが、委譲元から「月と週の
+再現した**。今回は`analyze-docss`サブエージェントが、委譲元から「月と週の
 組み合わせを確認してください」と頼まれた際、単に観測事実を報告するのでは
 なく、**実際のISO週番号・カレンダー週境界を1週間ずつ手計算でreasoning内に
 書き出し続け**（「6/29(月)〜7/5(日)は7月1日を含む週なので7月の第1週」等を
@@ -3501,22 +3501,22 @@ judge待ちで正常終了（既存合格傾向を維持、デグレなし）し
 下回り続けた）ため、本番同様の「打ち切りが繰り返される」形ではなく
 「1回の応答が異常に長時間化し続ける」形で発現した。
 
-原因は`explore-docs`のツール一覧に`execute_python_code`が無いこと
-（`agents/explore-docs.md`のtools定義、`worker`のみ保有）。委譲元のtask文が
-「組み合わせがどうなっているか確認」のように曖昧だと、explore-docsは
+原因は`analyze-docss`のツール一覧に`execute_python_code`が無いこと
+（`agents/analyze-docss.md`のtools定義、`worker`のみ保有）。委譲元のtask文が
+「組み合わせがどうなっているか確認」のように曖昧だと、analyze-docssは
 「本来あるべき正しい週」を自分で判断しようとし、日付計算ツールが無いため
 reasoningの中で手計算するしかない状態に陥っていた。system_prompt.mdの
 既存ルール（日付・週番号の決定的計算はexecute_python_codeに委ねる）は
-メインエージェント向けであり、explore-docs自身がこの制約下に置かれている
+メインエージェント向けであり、analyze-docss自身がこの制約下に置かれている
 ことは明記されていなかった。
 
 なお、iter47のrun2で合格したのは、たまたまメインエージェント側が
 plannerの誤った草案を自ら差し戻し「行削除はせず番号を振り直すだけ」という
 実カレンダー計算を要さない方針へ自律的に切り替えたためであり、
-explore-docs自身が手計算に踏み込むかどうかは実行のたびに変動する
+analyze-docss自身が手計算に踏み込むかどうかは実行のたびに変動する
 （非決定的な）挙動だった。
 
-**変更内容**: `agents/explore-docs.md`に「日付・曜日・週番号の『正しい値』を
+**変更内容**: `agents/analyze-docss.md`に「日付・曜日・週番号の『正しい値』を
 手計算で導き出そうとしない」節を追加（既存の「グループ化列と...」節の
 直前）。`execute_python_code`を持たないことを明記し、観測事実の報告に
 留め、日付計算による正誤判定が必要な場合はその旨を最終回答に明記して
@@ -3526,8 +3526,8 @@ explore-docs自身が手計算に踏み込むかどうかは実行のたびに�
 次: この修正後、006を複数回（非決定性を考慮し最低2〜3回）単体実行して
 安定して合格するか確認し、その後system_prompt全件で最終回帰確認を行う。
 
-**run3結果（explore-docs.md 手計算禁止ルール追加後）: 合格、かつ高速・安定**。
-`explore-docs`の調査結果はB列パターンを事実として報告するのみで手計算の
+**run3結果（analyze-docss.md 手計算禁止ルール追加後）: 合格、かつ高速・安定**。
+`analyze-docss`の調査結果はB列パターンを事実として報告するのみで手計算の
 兆候なし。メインエージェントは（run2のような自己訂正を経ることなく）
 最初から「各月グループ内でB列を1から通し番号に再生成、5月・6月は変更
 不要」という正しい方針を`planner`委譲で導出し、`worker`が`set_cell`で
@@ -3626,13 +3626,13 @@ A列結合範囲が`A2:A5,A6:A9,...,A46:A49`（12ヶ月×4行=49行の均等区�
 すら「タスク名1〜4」に書き換わっており、シートを事実上作り直していた。
 
 **根本原因（transcriptから特定、iter47/48の修正とは別経路）**: メイン
-エージェントが最初の調査を`dispatch_agent(agent_type="explore-docs")`では
+エージェントが最初の調査を`dispatch_agent(agent_type="analyze-docss")`では
 なく`dispatch_agent(agent_type="explore")`へ委譲していた。`explore`は
 `agents/explore.md`のプロンプト文面上「run_scriptはweb-searchスキルの
 search_web.pyに限り使用可能」と明記されているが、これは**プロンプト上の
 指示のみでコード側の強制が無かった**。今回`explore`はこの制限を無視して
 `excel-read`の`read_excel.py`を実行してxlsxを直接読み取り、iter47で
-`explore-docs`にのみ適用した「グループ化列とラベル列の食い違いを誤配置行と
+`analyze-docss`にのみ適用した「グループ化列とラベル列の食い違いを誤配置行と
 決めつけない」ルールが適用されないまま、元の失敗パターン（週ラベルの不一致
 ＝行の誤配置・重複と誤診断）で調査・計画・実行が進んでしまった。
 
@@ -3644,21 +3644,21 @@ agent_typeがこの許可リストに登録されている場合、リスト外�
 `run_script`呼び出しを明確なエラーメッセージ（対応するサブエージェントへの
 再委譲を促す）で拒否するようにした。`_run_dispatch_agent_job`で
 `_IN_SUBAGENT`と同様に`_SUBAGENT_AGENT_TYPE`を設定・リセットする。
-`explore-docs`/`worker`/`verifier`等（許可リスト未登録）は従来どおり無制限。
+`analyze-docss`/`worker`/`verifier`等（許可リスト未登録）は従来どおり無制限。
 回帰テスト`tests/test_tools_run_script_agent_type_skill_allowlist.py`
 （4件、全pass）を追加。これにより、プロンプト文面上の制約とコード側の
 実際の許可が一致し、`explore`が誤ってxlsx等の読み込み専用スクリプトを
-実行してしまう経路自体を塞いだ（iter47/48のexplore-docs向け修正が確実に
+実行してしまう経路自体を塞いだ（iter47/48のanalyze-docss向け修正が確実に
 適用される調査経路に強制的に絞られる）。
 
 次: このコード修正後、再度永続化workdirで006を実行し、直接検証で
-（a）`explore-docs`が最初の調査に使われているか、（b）A列結合セル範囲が
+（a）`analyze-docss`が最初の調査に使われているか、（b）A列結合セル範囲が
 実際の範囲（4,4,4,6,6,8,6,6,7,7,7,9）で保持されているか、（c）B列全74行が
 正しいかを確認する。
 
-**コード修正後の直接検証: `explore-docs`は正しく使われたが、新たな
+**コード修正後の直接検証: `analyze-docss`は正しく使われたが、新たな
 misdiagnosisパターンでB列66箇所が不合格**。今回は`explore`誤用は解消
-されたが（`explore-docs`が最初から使われた）、A列結合セル範囲・C〜F列・
+されたが（`analyze-docss`が最初から使われた）、A列結合セル範囲・C〜F列・
 書式はすべて正しい一方、**B列は74行中わずか16セルしか修正されず、残り
 58セルが元の壊れた値のまま**だった（実際にopenpyxlで確認したB列不一致は
 66件、うち一部は16セル修正の中身自体も誤っていた）。
@@ -3706,7 +3706,7 @@ ThinkingLoop発生とシングルターン検証手法の組み合わせによ�
 未完了。次の実行でクリーンな結果を確認する。
 
 **run7（クリーン実行）: 「4件ごとに1へ巻き戻す」パターンが今度は別経路で
-再発（B列27箇所不合格）**。今回はThinkingLoopもなく、`explore-docs`調査も
+再発（B列27箇所不合格）**。今回はThinkingLoopもなく、`analyze-docss`調査も
 正常、`worker`への手写し（iter49で修正した経路）でもなかった。transcriptを
 確認すると、**`create_plan`のsteps自体（メインエージェントの計画作成
 段階）で最初から**「週番号はグループ内で1,2,3,4（4月のみ4行目に第3-4週）の
@@ -3769,10 +3769,10 @@ ThinkingLoop発生とシングルターン検証手法の組み合わせによ�
 
 **見つけて直した実際の不具合（すべて`git log`で追跡可能、テスト付きの
 ものはテストも追加）**:
-1. `agents/explore-docs.md`: グループ化列（A列結合セル）とラベル列（B列）
+1. `agents/analyze-docss.md`: グループ化列（A列結合セル）とラベル列（B列）
    の食い違いを「誤配置行」と決めつけ、実際は正しいA列の結合セル範囲を
    独自の均等区切りで作り直し大量の行を削除する誤診断（iter47）。
-2. `agents/explore-docs.md`: `execute_python_code`を持たないサブエージェント
+2. `agents/analyze-docss.md`: `execute_python_code`を持たないサブエージェント
    が日付・週番号の「正しい値」を手計算しようとし続け、1回の応答が
    異常に長時間化する（本番ThinkingLoopと同種の症状の別経路）（iter48）。
 3. `system_prompt.md`: メインエージェントは`execute_python_code`を呼べない
@@ -3785,7 +3785,7 @@ ThinkingLoop発生とシングルターン検証手法の組み合わせによ�
 5. `src/tools.py`（コード側）: `explore`はプロンプト上「run_scriptは
    web-search限定」と規定されていたが、コード側の強制が無く、低パラ
    メータモデルがこの制限を無視してexcel-readを直接呼び出し、
-   `explore-docs`向けの誤診断防止ルールが適用されない経路が生まれて
+   `analyze-docss`向けの誤診断防止ルールが適用されない経路が生まれて
    いた。`_SUBAGENT_AGENT_TYPE`コンテキスト変数と
    `_AGENT_TYPE_RUN_SCRIPT_SKILL_ALLOWLIST`をコード側に追加し
    `_prepare_script_execution`で強制するよう修正。回帰テスト
@@ -3822,7 +3822,7 @@ run1〜9通算で2/8（thinking_loop除く）に留まる。
 **対象**: `evals/cases/system_prompt/006_annual_schedule_week_fix_ambiguous_calendar.yaml`
 
 **確定した変更（コミット対象）**:
-- `agents/explore-docs.md`: グループ化列/ラベル列の食い違いを誤配置行と
+- `agents/analyze-docss.md`: グループ化列/ラベル列の食い違いを誤配置行と
   決めつけない節、日付計算を手計算しない節（必須ルール6・7番として追加）。
 - `system_prompt/system_prompt.md`: メインエージェント自身が
   `execute_python_code`を呼べないことを踏まえた手写しミス対策、

@@ -1,4 +1,4 @@
-# explore-docsサブエージェントで空応答（tool_calls無し・本文無し）による自動リトライが短時間に2回発生
+# analyze-docssサブエージェントで空応答（tool_calls無し・本文無し）による自動リトライが短時間に2回発生
 
 - **区分**: 問題点
 - **検知日時**: 2026-08-12 11:57:51〜11:59:12
@@ -6,7 +6,7 @@
 
 ## 経緯
 
-[issue/20260812_115000_explore_docs_batch_oversize_hard_token_cutoff.md](20260812_115000_explore_docs_batch_oversize_hard_token_cutoff.md)・[issue/20260809_002501_glob_wrong_path_inference_error.md](20260809_002501_glob_wrong_path_inference_error.md)の追記と同じ一連のタスク（子供会活動記録からの年間行事予定表作成）で、残り2年分（2024・2025）を`explore-docs`へ再委譲した際、Globパス誤りからの自己回復（11:57:09）後、`[subagent].empty_response_max_retries`(2)による「空の応答検知→再試行」が2回発生した。いずれも`(1/2回目)`表記で、カウンタが使い切られる前に自動リトライで継続できている（この時点ではまだタスク自体は完了しておらず、最終的に打ち切りに至ったかは未確認）。
+[issue/20260812_115000_explore_docs_batch_oversize_hard_token_cutoff.md](20260812_115000_explore_docs_batch_oversize_hard_token_cutoff.md)・[issue/20260809_002501_glob_wrong_path_inference_error.md](20260809_002501_glob_wrong_path_inference_error.md)の追記と同じ一連のタスク（子供会活動記録からの年間行事予定表作成）で、残り2年分（2024・2025）を`analyze-docss`へ再委譲した際、Globパス誤りからの自己回復（11:57:09）後、`[subagent].empty_response_max_retries`(2)による「空の応答検知→再試行」が2回発生した。いずれも`(1/2回目)`表記で、カウンタが使い切られる前に自動リトライで継続できている（この時点ではまだタスク自体は完了しておらず、最終的に打ち切りに至ったかは未確認）。
 
 ## ログ引用
 

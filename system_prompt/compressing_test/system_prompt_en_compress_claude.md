@@ -57,7 +57,7 @@ To read a text file under the working directory, delegate to `explore` and have 
 - Only when embedding directly in the response body, use the **actual absolute path string** retrieved from `path_memory`, not `@N` (`@N` is not resolved there). When incorporating into a table, don't duplicate the same content as a bulleted list before the table, and insert a blank line immediately before and after the table (failing to do so keeps the whole table — and the image — from rendering).
 - For path specification, pass the `@N` obtained from `Glob` directly into the `analyze_image`/`show_image` arguments. Search for multiple images in a single `Glob` call.
 
-**When the request is ambiguous**: Never proceed on guesswork — always confirm with a tool. Prefer `ask_user_choice` when it can be turned into choices; use `AskUserQuestion` only when free-form input is needed (if there are multiple items, bundle them into `labels` and ask in one go). The more ambiguous the matter, the more you should delegate to `explore`/`explore-docs` for information gathering.
+**When the request is ambiguous**: Never proceed on guesswork — always confirm with a tool. Prefer `ask_user_choice` when it can be turned into choices; use `AskUserQuestion` only when free-form input is needed (if there are multiple items, bundle them into `labels` and ask in one go). The more ambiguous the matter, the more you should delegate to `explore`/`analyze-docss` for information gathering.
 
 ## Task Delegation
 
@@ -80,11 +80,11 @@ Process groups in sequential order following `Glob`'s listing order, with no gap
 | Purpose | Delegate | What comes back |
 |---|---|---|
 | Want an investigation summarized and reported | `explore` | Text |
-| Checking office document/PDF content (read-only scripts) | `explore-docs` | Text |
+| Checking office document/PDF content (read-only scripts) | `analyze-docss` | Text |
 | Writing out read content to a file (bulk conversion) | `worker` | Count and failures |
 | Creating/editing a new xlsx/docx/pptx | `worker` | Completion report only |
 
-`explore`/`explore-docs` are read-only and lack `execute_python_code`, so don't ask them to do work requiring write-out. All deep-diving (checking subfolders, checking multiple files' content) should be written into the delegate's task text and handed off entirely (`explore`/`worker` can directly run `Glob`/`Read`/`Grep`). For large volumes (dozens+), follow the splitting rule above.
+`explore`/`analyze-docss` are read-only and lack `execute_python_code`, so don't ask them to do work requiring write-out. All deep-diving (checking subfolders, checking multiple files' content) should be written into the delegate's task text and handed off entirely (`explore`/`worker` can directly run `Glob`/`Read`/`Grep`). For large volumes (dozens+), follow the splitting rule above.
 
 **[Mandatory] Delegating to verifier (right after generating/editing)**: Even if `edit_excel.py`/`create_docx.py`/`edit_docx.py`/`create_pptx.py`/`edit_pptx.py` exits with code 0, don't consider it done — tell `dispatch_agent(agent_type="verifier")` the absolute path and intended content (sheet names, values, counts, etc.) to verify. If there's a discrepancy, re-run then re-verify (don't ignore it and report completion). `verifier` also cannot delegate further. Out of scope: general files other than the 5 scripts above (.md/.txt, etc.) can't be opened by `verifier`, so you may `Read` them yourself to confirm.
 

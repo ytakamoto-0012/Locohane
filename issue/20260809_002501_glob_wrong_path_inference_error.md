@@ -27,10 +27,10 @@ LLMが会話履歴やpath_memoryから正しいパスを抽出できず、ユー
 
 ## 追記（2026-08-12 12:00）
 
-同種の「パスを推測で構築してGlobエラー」が別セッションで再発。今回はメインエージェントが`explore-docs`サブエージェントへの委譲タスク文中で`E:\yukinori\テスト\2024\ocr_md`・`E:\yukinori\テスト\2025\ocr_md`という、実際には途中に`Datas`フォルダが必要なパス（正: `E:\yukinori\テスト\Datas\2024\ocr_md`）を誤って指示した。
+同種の「パスを推測で構築してGlobエラー」が別セッションで再発。今回はメインエージェントが`analyze-docss`サブエージェントへの委譲タスク文中で`E:\yukinori\テスト\2024\ocr_md`・`E:\yukinori\テスト\2025\ocr_md`という、実際には途中に`Datas`フォルダが必要なパス（正: `E:\yukinori\テスト\Datas\2024\ocr_md`）を誤って指示した。
 
 ```
-2026-08-12 11:56:41,327 DEBUG src.tools: tool_call: name=dispatch_agent args={'task': 'E:\\yukinori\\テスト\\2024\\ocr_md\\ と E:\\yukinori\\テスト\\2025\\ocr_md\\ の markdown ファイルを読み込み...', 'agent_type': 'explore-docs'}
+2026-08-12 11:56:41,327 DEBUG src.tools: tool_call: name=dispatch_agent args={'task': 'E:\\yukinori\\テスト\\2024\\ocr_md\\ と E:\\yukinori\\テスト\\2025\\ocr_md\\ の markdown ファイルを読み込み...', 'agent_type': 'analyze-docss'}
 2026-08-12 11:56:48,126 WARNING src.subagent: subagent tool=Glob args={'pattern': '**/*.md', 'path': 'E:\\yukinori\\テスト\\2024\\ocr_md'} -> エラー: 検索起点ディレクトリが見つかりません: E:\yukinori\テスト\2024\ocr_md
 2026-08-12 11:56:48,126 WARNING src.subagent: subagent tool=Glob args={'pattern': '**/*.md', 'path': 'E:\\yukinori\\テスト\\2025\\ocr_md'} -> エラー: 検索起点ディレクトリが見つかりません: E:\yukinori\テスト\2025\ocr_md
 ```

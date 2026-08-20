@@ -1,4 +1,4 @@
-# excel-tools調査タスクでのLLM暴走・応答停止（2件: explore-docsのReadツール欠落／空応答nudgeの検知漏れ）
+# excel-tools調査タスクでのLLM暴走・応答停止（2件: analyze-docssのReadツール欠落／空応答nudgeの検知漏れ）
 
 - **区分**: バグ
 - **検知日時**: 2026-08-10 10:20〜10:33
@@ -6,14 +6,14 @@
 
 ## 経緯
 
-ユーザーから「`E:\yukinori\test1\sample_macro.xlsm`（VBA付きExcel）の内容を確認・見た目を改善したい」という依頼があり、`explore-docs`サブエージェントに調査が委譲された。このとき2件、別々の原因でLLMの挙動が異常になった。
+ユーザーから「`E:\yukinori\test1\sample_macro.xlsm`（VBA付きExcel）の内容を確認・見た目を改善したい」という依頼があり、`analyze-docss`サブエージェントに調査が委譲された。このとき2件、別々の原因でLLMの挙動が異常になった。
 
-1. **1件目（暴走・ループ）**: `explore-docs`に一時ファイルを読む手段が無く、堂々巡りの推論を繰り返してループ検知が4回発動してもなお回復しなかった。
+1. **1件目（暴走・ループ）**: `analyze-docss`に一時ファイルを読む手段が無く、堂々巡りの推論を繰り返してループ検知が4回発動してもなお回復しなかった。
 2. **2件目（無言に近い応答での停止）**: 1件目を修正して再実行したところ途中まで正常に進んだが、`run_script(read_vba.py)`成功直後にLLMが`content='…'`（三点リーダー1文字のみ）・`tool_calls=[]`という実質空の応答を返し、そのままターンが終了してユーザーには「…」しか表示されなかった。
 
 ## ログ引用
 
-### 1件目: explore-docsにReadツールが無く堂々巡り
+### 1件目: analyze-docssにReadツールが無く堂々巡り
 
 ```
 2026-08-10 10:09:49,455 WARNING src.subagent: subagent tool=read_memory args={'name': 'E:\\yukinori\\test1\\_tmp_0b660c99-425b-4478-ac84-7275bbd7834c\\excel_vba_read\\c6983424_20260810_100942_938672.json'} -> エラー: name は英数字・ハイフン・アンダースコアのみ、64文字以内で指定してください: ...
@@ -34,12 +34,12 @@
 
 ## 推定原因
 
-### 1件目: `explore-docs`のツール一覧に`Read`が無い
+### 1件目: `analyze-docss`のツール一覧に`Read`が無い
 
 - `excel-tools`/`docx-tools`等のSKILL.mdは、読み込み専用スクリプト（`read_excel.py`/`read_vba.py`/`read_docx.py`等）が本文を標準出力に出さず一時JSONへ書き出し、`result_path`（`path_memory`の`@N`）を`Read`ツールで読む設計になっている（`skills/excel-tools/SKILL.md`）。
-- しかし調査専用サブエージェント`explore-docs`（[agents/explore-docs.md](agents/explore-docs.md)）の`tools:`一覧には`Read`（および`Grep`/`json_query`/`list_path_memory`）が含まれておらず、`read_skill_file`（skillsルート限定）・`read_memory`（永続メモリー専用、名前は英数字/64文字以内）のいずれも一時ファイルの読み取りに使えない。
-- そのため、excel-tools/docx-tools等の「読み込み専用スクリプト＋result_path」パターンを使うタスクを`explore-docs`に委譲すると、**実際に手段が存在しない**問題にLLMがぶつかり、堂々巡りの推論を続ける。アプリのループ検知（`src/llm.py`）が打ち切ってリトライしても、根本のツール欠落は解消されないため同じ結論に戻り続ける。
-- 同種の問題は`explore`/`worker`/`verifier`エージェントには無い（いずれも`Read`を保持）。`explore-docs`のみの設定漏れ。
+- しかし調査専用サブエージェント`analyze-docss`（[agents/analyze-docss.md](agents/analyze-docss.md)）の`tools:`一覧には`Read`（および`Grep`/`json_query`/`list_path_memory`）が含まれておらず、`read_skill_file`（skillsルート限定）・`read_memory`（永続メモリー専用、名前は英数字/64文字以内）のいずれも一時ファイルの読み取りに使えない。
+- そのため、excel-tools/docx-tools等の「読み込み専用スクリプト＋result_path」パターンを使うタスクを`analyze-docss`に委譲すると、**実際に手段が存在しない**問題にLLMがぶつかり、堂々巡りの推論を続ける。アプリのループ検知（`src/llm.py`）が打ち切ってリトライしても、根本のツール欠落は解消されないため同じ結論に戻り続ける。
+- 同種の問題は`explore`/`worker`/`verifier`エージェントには無い（いずれも`Read`を保持）。`analyze-docss`のみの設定漏れ。
 
 ### 2件目: `is_empty_final_message`が近似空応答を検知できない
 
@@ -57,7 +57,7 @@
 
 ### 1件目: 修正済み（2026-08-10）
 
-[agents/explore-docs.md](agents/explore-docs.md)と[agents/no-websearch-version/explore-docs.md](agents/no-websearch-version/explore-docs.md)の`tools:`に`Read`・`Grep`・`json_query`・`list_path_memory`を追加し、`explore`/`worker`と同等のfile-tools一式を持たせた。
+[agents/analyze-docss.md](agents/analyze-docss.md)と[agents/no-websearch-version/analyze-docss.md](agents/no-websearch-version/analyze-docss.md)の`tools:`に`Read`・`Grep`・`json_query`・`list_path_memory`を追加し、`explore`/`worker`と同等のfile-tools一式を持たせた。
 
 修正後の同一セッション再実行（10:33:46）で、`Read`ツールにより`result_path`のJSON（VBAコード全文）を正常に取得できたことを確認済み。
 

@@ -300,7 +300,7 @@ the target file actually exists, which column to aggregate, the output filename/
 format, etc.) are not yet settled, don't proceed to execution or script lookup —
 confirm again.
 **The more ambiguous something is, the more information gathering you're likely to
-need, so delegate that information gathering to the `explore`/`explore-docs`
+need, so delegate that information gathering to the `explore`/`analyze-docss`
 subagents.**
 
 Don't answer from guesswork — if a matching skill exists, always read its body
@@ -445,12 +445,12 @@ you may handle yourself is the single "sole exception" below.**
 | Purpose | Delegate | What comes back |
 |---|---|---|
 | Want to find out what's where / want a summary report of the content | `explore` | Investigation results as text |
-| Want to examine the content of office documents/PDFs such as docx/xlsx/pptx/pdf (via read-only scripts) | `explore-docs` | Investigation results as text |
+| Want to examine the content of office documents/PDFs such as docx/xlsx/pptx/pdf (via read-only scripts) | `analyze-docss` | Investigation results as text |
 | Want to write out read content to a file (bulk conversion / large-scale processing) | `worker` | Only the count and any failures |
 | Want to create/edit xlsx/docx/pptx (multiple rounds of read → generate expected) | `worker` | Only a completion report (success/failure, generated filenames) |
 
-**Don't ask `explore`/`explore-docs` to write out read content to a file.**
-Both `explore` and `explore-docs` are read-only, lack `execute_python_code`, and
+**Don't ask `explore`/`analyze-docss` to write out read content to a file.**
+Both `explore` and `analyze-docss` are read-only, lack `execute_python_code`, and
 can only return content as text. If you receive that body text and transcribe it
 yourself, as noted above, you'll hit the token limit and processing will no longer
 be able to continue. `worker` completes the write-out within the delegate itself.
@@ -996,7 +996,7 @@ provided. Prioritize honestly stating that it's not implemented.
    their contents — must always be delegated to `dispatch_agent`. The only
    exception you may handle yourself is a single `Glob` looking only at the target
    root. Choose the delegate based on purpose (`explore` to investigate and
-   report; `explore-docs` to examine office documents like docx/xlsx/pptx/pdf;
+   report; `analyze-docss` to examine office documents like docx/xlsx/pptx/pdf;
    `worker` to write read content out to a file).
    **Don't receive the body text read by a delegate yourself and transcribe it**
    (this hits the token limit and processing can no longer continue).

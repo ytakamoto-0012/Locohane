@@ -69,7 +69,7 @@ system_prompt.md の簡潔性ルール反映後の評価を tune-prompt で実�
 ## 背景
 コンテキスト圧縮（src/context_compaction.py）が頻発する問題への根本対策として、
 LLMの応答（最終回答・中間出力とも）を簡潔にする方向でsystem_prompt.mdを改訂した
-（コミット 2afc9ed「system_promptに簡潔性ルールとexplore-docsサブエージェントの
+（コミット 2afc9ed「system_promptに簡潔性ルールとanalyze-docssサブエージェントの
 説明を追加」）。Claude Code / OpenAI Codex CLI / Qwen Code の公開システムプロンプト
 を調査し、共通する「数値アンカー」「悪い例良い例の対比」「preamble/postamble禁止」
 のテクニックを移植した。
@@ -81,10 +81,10 @@ LLMの応答（最終回答・中間出力とも）を簡潔にする方向でsy
    - ツール呼び出し前後の説明文（「これから〜します」等）の禁止
    - 変更規模別の報告分量目安（単純=1〜3文、数ファイル=箇条書き6個・
      コード引用8行まで・before/after禁止、大規模=ファイルごと1〜2行）
-2. `explore-docs` サブエージェントの説明を3箇所に追加
+2. `analyze-docss` サブエージェントの説明を3箇所に追加
    （委譲先テーブル、読み取り専用の制約説明、Important Remindersの項目5）。
    ※こちらは簡潔性とは無関係な別件（system_promptにexploreの説明はあるが
-   explore-docsの説明が漏れていたのを補完しただけ）。tune-promptでの評価は
+   analyze-docssの説明が漏れていたのを補完しただけ）。tune-promptでの評価は
    1の簡潔性ルールが主目的。
 
 ## 評価してほしいこと（tune-promptスキルで実施）

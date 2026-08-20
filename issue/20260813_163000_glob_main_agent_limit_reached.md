@@ -11,9 +11,9 @@
 ## ログ引用
 
 ```
-2026-08-12 20:31:47,702 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの 調査・処理は dispatch_agent（agent_type: explore, explore-docs, verifier, worker）へ委譲してください。'
-2026-08-12 20:35:42,030 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの 調査・処理は dispatch_agent（agent_type: explore, explore-docs, verifier, worker）へ委譲してください。'
-2026-08-12 20:55:07,023 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの 調査・処理は dispatch_agent（agent_type: explore, explore-docs, verifier, worker）へ委譲してください。'
+2026-08-12 20:31:47,702 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの 調査・処理は dispatch_agent（agent_type: explore, analyze-docss, verifier, worker）へ委譲してください。'
+2026-08-12 20:35:42,030 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの 調査・処理は dispatch_agent（agent_type: explore, analyze-docss, verifier, worker）へ委譲してください。'
+2026-08-12 20:55:07,023 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの 調査・処理は dispatch_agent（agent_type: explore, analyze-docss, verifier, worker）へ委譲してください。'
 ```
 
 ## 推定原因

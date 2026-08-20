@@ -13,10 +13,10 @@
 ## ログ引用
 
 ```
-2026-08-12 15:42:04,340 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, explore-docs, verifier, worker）へ委譲してください。'
-2026-08-12 15:42:04,340 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, explore-docs, verifier, worker）へ委譲してください。'
-2026-08-12 15:42:04,340 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, explore-docs, verifier, worker）へ委譲してください。'
-2026-08-12 15:42:04,340 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, explore-docs, verifier, worker）へ委譲してください。'
+2026-08-12 15:42:04,340 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, analyze-docss, verifier, worker）へ委譲してください。'
+2026-08-12 15:42:04,340 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, analyze-docss, verifier, worker）へ委譲してください。'
+2026-08-12 15:42:04,340 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, analyze-docss, verifier, worker）へ委譲してください。'
+2026-08-12 15:42:04,340 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, analyze-docss, verifier, worker）へ委譲してください。'
 ```
 
 ## 推定原因
@@ -31,7 +31,7 @@
 
 ```
 2026-08-12 18:25:27,368 WARNING src.tools: tool_result: name=Glob content='エラー: 検索起点ディレクトリが見つかりません: E:\\yukinori\\テスト（読み書き可能）'
-2026-08-12 18:25:32,117 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, explore-docs, verifier, worker）へ委譲してください。'
+2026-08-12 18:25:32,117 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: explore, analyze-docss, verifier, worker）へ委譲してください。'
 ```
 
 1つ目の「検索起点ディレクトリが見つかりません」は、LLMが`テスト（読み書き可能）`という存在しないパスを推測したケース。2つ目が今回のGlob呼び出し上限到達。

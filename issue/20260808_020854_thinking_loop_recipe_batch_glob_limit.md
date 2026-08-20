@@ -11,7 +11,7 @@
 ## ログ引用
 
 ```
-2026-08-08 02:08:56,877 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています（対象ルート直下の確認用の例外のみ）。これ以上フォルダを深掘りせず、残りの調査は dispatch_agent（explore/explore-docs/worker）へ委譲してください。'
+2026-08-08 02:08:56,877 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています（対象ルート直下の確認用の例外のみ）。これ以上フォルダを深掘りせず、残りの調査は dispatch_agent（explore/analyze-docss/worker）へ委譲してください。'
 2026-08-08 02:09:36,374 WARNING src.llm: LLM応答のループを検知したため生成を打ち切ります（直近テキスト: '像ファイル（JPG/PNG/HEIC等）がどのくらいあるかを確認する必要がある。\n\n計画を作成する前に、まずはimagesフォルダの画像ファイルの数を正確に把握し...' ）
 2026-08-08 02:09:36,377 WARNING app.py: LLM応答のループを検知（1回目の再試行）: 直近テキスト='像ファイル（JPG/PNG/HEIC等）がどのくらいあるかを確認する必要がある。\n\n計画を作成する前に...'
 2026-08-08 02:09:36,853 WARNING app.py: ThinkingLoopDetected: リトライ前にLLMグラフを再構築しました
