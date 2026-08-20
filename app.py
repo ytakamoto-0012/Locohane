@@ -229,6 +229,71 @@ def _unmark_thread_generating(thread_id: str, owner: str | None = None) -> None:
         _generating_owner_threads.pop(owner, None)
 
 
+# thread_id -> 承認待ち（approve_plan の AskActionMessage）の引き継ぎ用状態。
+# Sidebar.goToThread()（frontend/src/components/Sidebar.tsx）はスレッド切り替え時に
+# フルページリロードするため、sessionIdState は毎回 uuid4() で新規発行され直す
+# （@chainlit/react-client の SessionId atom）。生成中スレッドから離れて
+# 承認待ちの状態のまま戻ってきたセッションは、Chainlit的には元のセッションとは
+# 完全な別物であり、二度と元のWebSocket/emitterには紐づかない。approve_plan の
+# cl.AskActionMessage.send() は元セッションのemitterへ送信済みのまま応答不能
+# （相手のWebSocketが既に切断済み）になり、承認ボタンが戻ってきたセッションに
+# 一切表示されない（2026-08-21 ユーザー報告）。
+# ここに登録した内容を on_chat_resume が検知し、今まさに繋がっているセッション
+# 側で同じ承認ボタンを出し直し、回答をこの Future 経由で元セッション側の
+# 待機（approve_plan）へ引き継ぐ。
+# 値: {"content": str, "action_specs": list[(name, label, payload)],
+#      "timeout": int, "future": asyncio.Future}
+_pending_plan_asks: dict[str, dict] = {}
+
+
+def _register_pending_plan_ask(thread_id: str, content: str, actions: list, timeout: int):
+    """approve_plan がAskActionMessage送信前に呼ぶ。他セッションから引き継げる
+    よう質問内容を登録し、引き継ぎ側が回答を書き込むための Future を返す。
+    """
+    fut = asyncio.get_event_loop().create_future()
+    _pending_plan_asks[thread_id] = {
+        "content": content,
+        "action_specs": [(action.name, action.label, dict(action.payload)) for action in actions],
+        "timeout": timeout,
+        "future": fut,
+    }
+    return fut
+
+
+def _clear_pending_plan_ask(thread_id: str, fut) -> None:
+    """approve_plan の finally節から呼ぶ。同じ thread_id へ後続の
+    create_plan/approve_plan が既に新しい承認待ちを登録している場合は
+    誤って消さないよう、渡された Future が現在の登録と一致する場合のみ消す。
+    """
+    entry = _pending_plan_asks.get(thread_id)
+    if entry is not None and entry["future"] is fut:
+        _pending_plan_asks.pop(thread_id, None)
+
+
+async def _relay_pending_plan_ask(thread_id: str) -> None:
+    """on_chat_resume から起動する。指定スレッドに未解決の承認待ちがあれば、
+    今このセッション（＝実際にブラウザと繋がっている生きたWebSocket）で
+    同じ承認ボタンを出し直し、回答を _pending_plan_asks の Future 経由で
+    元セッション（approve_plan を呼んだ側）へ引き継ぐ。
+
+    元セッション側の cl.AskActionMessage.send() はフルページリロードで
+    切断済みの相手（sid）へ送られたままのため、自然には応答が返らず
+    [scripts].approval_timeout_seconds 経過でタイムアウトするだけになる
+    （この関数を経由しない限り、戻ってきたセッションにボタンは一切出ない）。
+    """
+    entry = _pending_plan_asks.get(thread_id)
+    if entry is None or entry["future"].done():
+        return
+    actions = [cl.Action(name=name, payload=payload, label=label) for name, label, payload in entry["action_specs"]]
+    try:
+        res = await cl.AskActionMessage(content=entry["content"], actions=actions, timeout=entry["timeout"]).send()
+    except Exception:  # noqa: BLE001 - 引き継ぎ表示自体の失敗で元セッション側の待機を巻き込まない
+        logging.getLogger(__name__).warning("承認待ちの引き継ぎ表示に失敗しました [thread_id=%s]", thread_id, exc_info=True)
+        return
+    if not entry["future"].done():
+        entry["future"].set_result(res)
+
+
 def _make_relayed_emit(session, thread_id: str, original_emit):
     """session.emit を、同じ thread_id を今まさに開いている他セッションにも
     中継するようラップして返す（生成中のスレッドを別セッションで開いたときに、
@@ -1672,6 +1737,12 @@ if _config.thread_store_enabled:
                 )
             ]
         ).send()
+
+        if thread_id in _pending_plan_asks:
+            # 承認待ちのまま離れて戻ってきたスレッド。今このセッションで
+            # 承認ボタンを出し直す（_relay_pending_plan_ask のdocstring参照）。
+            # on_chat_resume 自体をブロックしないよう非同期に起動する。
+            asyncio.create_task(_relay_pending_plan_ask(thread_id))
 
         logging.getLogger(__name__).info("スレッドを再開しました thread_id=%s", thread_id)
 

@@ -4093,6 +4093,49 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     return result
 
 
+async def _ask_action_with_cross_session_relay(thread_id: str, content: str, actions: list, timeout: int):
+    """cl.AskActionMessage(...).send() を、スレッド切り替え（フルページリロード）
+    後に戻ってきた別セッションからでも回答できるようにして呼び出す。
+
+    左サイドバーでの会話切り替え（frontend/src/components/Sidebar.tsx の
+    goToThread）はフルページリロードのため、生成中スレッドから離れて
+    approve_plan の承認待ちのまま戻ってくると、Chainlit的には元セッションとは
+    別物の新セッションになる（sessionIdState が毎回新規発行されるため）。
+    素の cl.AskActionMessage.send() だけだと、その回答は誰にも届かなくなり
+    ボタンも二度と表示されない（2026-08-21 ユーザー報告）。
+
+    app.py の on_chat_resume は、ここで登録した内容を検知すると今まさに
+    繋がっているセッション側で同じ承認ボタンを出し直す
+    （app.py の _relay_pending_plan_ask 参照）。元セッション（このコルーチンが
+    実行されているセッション）側の cl.AskActionMessage.send() 自体はブラウザが
+    まだそこに残っていればそのまま機能するので、両方を
+    asyncio.wait(FIRST_COMPLETED) で競わせ、先に応答が来た方を採用する。
+
+    app.py はこのモジュール（src/tools.py）をトップレベルでimportするため、
+    ここでは循環import回避のため関数内で遅延importする
+    （context_compaction.py が同じ理由で tools.py を遅延importしているのと同じ方針）。
+    """
+    from app import _clear_pending_plan_ask, _register_pending_plan_ask
+
+    relay_future = _register_pending_plan_ask(thread_id, content, actions, timeout)
+    local_ask_task = asyncio.create_task(cl.AskActionMessage(content=content, actions=actions, timeout=timeout).send())
+    try:
+        done, _pending = await asyncio.wait({local_ask_task, relay_future}, return_when=asyncio.FIRST_COMPLETED)
+        if relay_future in done:
+            if not local_ask_task.done():
+                local_ask_task.cancel()
+                try:
+                    await local_ask_task
+                except BaseException:  # noqa: BLE001 - 取消済みタスクの後片付けのみ、例外は握りつぶしてよい
+                    pass
+            return relay_future.result()
+        if not relay_future.done():
+            relay_future.cancel()
+        return local_ask_task.result()
+    finally:
+        _clear_pending_plan_ask(thread_id, relay_future)
+
+
 @tool
 async def approve_plan() -> str:
     """作成済みの実行計画についてユーザーの承認を得る。
@@ -4119,7 +4162,8 @@ async def approve_plan() -> str:
         cl.Action(name="approve", payload={"value": "approve"}, label="✅ 計画を承認"),
         cl.Action(name="deny", payload={"value": "deny"}, label="🚫 却下"),
     ]
-    res = await cl.AskActionMessage(content=content, actions=actions, timeout=_resolve_ask_timeout(_APPROVAL_TIMEOUT_SECONDS)).send()
+    thread_id = cl.user_session.get("thread_id") or "_no_session"
+    res = await _ask_action_with_cross_session_relay(thread_id, content, actions, _resolve_ask_timeout(_APPROVAL_TIMEOUT_SECONDS))
     approved = res is not None and res["payload"].get("value") == "approve"
     cl.user_session.set("plan_approved", approved)
     # 前回却下時に立てたフラグが誤って残らないよう、承認・タイムアウト時は
