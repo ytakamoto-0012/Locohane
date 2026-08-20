@@ -24,6 +24,7 @@ class _FakeConfig:
     context_trim_duplicate_guard_tool_max_chars = 20
     context_trim_ai_messages = False
     context_trim_keep_recent_ai_messages = 1
+    context_trim_trigger_total_tokens = 0
     context_compaction_enabled = False
 
 

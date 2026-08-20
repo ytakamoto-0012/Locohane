@@ -22,35 +22,15 @@ from __future__ import annotations
 
 import logging
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 from .config import Config
+from .context_trim import last_ai_total_tokens as _last_ai_total_tokens
 
 logger = logging.getLogger(__name__)
 
 # 差し込むメッセージの先頭に付ける目印。ログ・テストからの識別用。
 GUARD_MARKER = "[コンテキスト上限が近づいています]"
-
-
-def _last_ai_total_tokens(messages: list[BaseMessage]) -> int | None:
-    """直近の AIMessage の usage_metadata から total_tokens を取り出す。
-
-    Args:
-        messages: 会話履歴。末尾から最初に見つかった AIMessage を見る。
-
-    Returns:
-        total_tokens。AIMessage が無い、または usage_metadata を取得できない
-        （config.ini [llm].track_token_usage=false 等）場合は None。
-    """
-    for message in reversed(messages):
-        if not isinstance(message, AIMessage):
-            continue
-        usage = getattr(message, "usage_metadata", None)
-        if not isinstance(usage, dict):
-            return None
-        total = usage.get("total_tokens")
-        return int(total) if total else None
-    return None
 
 
 def maybe_append_token_guard(

@@ -43,7 +43,7 @@ def _contains_error(content: str) -> bool:
 
 from .config import Config
 from .context_compaction import maybe_compact, should_compact
-from .context_trim import trim_old_ai_messages, trim_old_tool_messages
+from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
 from .images import image_followup_message
 from .llm import (
     ThinkingLoopDetected,
@@ -366,16 +366,19 @@ def _build_truncation_message(reason: str, messages: list) -> str:
 
 
 def _build_llm_input(messages: list, config: Config) -> list:
-    """会話履歴からLLM入力を組み立てる。[context_trim] が有効なら、graph.py の
-    pre_model_hook / call_model と同じロジックで古い ToolMessage/AIMessage を
-    間引く（Claude Codeがメイン会話・サブエージェントを区別せず同一の
+    """会話履歴からLLM入力を組み立てる。[context_trim] が有効かつ
+    trigger_total_tokens の閾値に達していれば、graph.py の pre_model_hook /
+    call_model と同じロジックで古い ToolMessage/AIMessage を間引く
+    （Claude Codeがメイン会話・サブエージェントを区別せず同一の
     コンテキスト管理を適用するのに倣い、メインエージェントと同じ設定・
     同じ関数をサブエージェントのローカル履歴にも適用する）。
 
     呼び出し元の messages 本体は書き換えない（トリム結果はこの関数呼び出し
     1回分のLLM入力としてのみ使う）。
     """
-    if not config.context_trim_enabled:
+    if not config.context_trim_enabled or not is_trigger_reached(
+        messages, config.context_trim_trigger_total_tokens
+    ):
         return messages
     trimmed = trim_old_tool_messages(
         messages,

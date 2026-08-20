@@ -34,7 +34,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import create_react_agent
 
 from .config import Config
-from .context_trim import trim_old_ai_messages, trim_old_tool_messages
+from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
 from .llm import ThinkingLoopDetected, build_model, pick_loop_nudge_message
 from .main_token_guard import maybe_append_token_guard
 from .tools import ImageAwareToolNode, get_all_tools
@@ -83,11 +83,15 @@ def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
             response は tool_calls を含みうる AIMessage。
         """
         history = state["messages"]
-        if config.context_trim_enabled:
+        if config.context_trim_enabled and is_trigger_reached(
+            history, config.context_trim_trigger_total_tokens
+        ):
             # 古い ToolMessage（サイズ上限のないツール実行結果）が会話履歴に
             # 蓄積し続けるとプロンプトプリフィルが極端に遅くなるため、モデル
             # への入力だけを間引く（state 自体・checkpointer上の永続履歴は
-            # 書き換えない。src/context_trim.py 参照）。
+            # 書き換えない。src/context_trim.py 参照）。トリム自体の発動は
+            # context_trim_trigger_total_tokens（Claude API の context editing
+            # 相当）の閾値到達が条件（is_trigger_reached）。
             history = trim_old_tool_messages(
                 history,
                 keep_recent=config.context_trim_keep_recent_tool_messages,
@@ -165,14 +169,17 @@ def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer):
         checkpointer上の永続履歴はそのまま残る（src/context_trim.py 参照）。
         """
         trimmed = list(state["messages"])
-        if config.context_trim_enabled:
+        should_trim = config.context_trim_enabled and is_trigger_reached(
+            trimmed, config.context_trim_trigger_total_tokens
+        )
+        if should_trim:
             trimmed = trim_old_tool_messages(
                 trimmed,
                 keep_recent=config.context_trim_keep_recent_tool_messages,
                 max_chars=config.context_trim_truncated_max_chars,
                 guarded_tool_max_chars=config.context_trim_duplicate_guard_tool_max_chars,
             )
-        if config.context_trim_enabled and config.context_trim_ai_messages:
+        if should_trim and config.context_trim_ai_messages:
             # モデル自身が tool_calls の引数へファイル本文を書き写した場合、
             # ToolMessage 側だけを絞っても入力は膨らみ続けるため AIMessage も
             # 対象にする（src/context_trim.py 参照）。

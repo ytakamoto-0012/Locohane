@@ -498,6 +498,13 @@ class Config:
             （モデル自身の思考本文と tool_calls の引数）も切り詰めるか。
         context_trim_keep_recent_ai_messages: 全文保持する直近 AIMessage
             の件数。これより古い AIMessage のみ切り詰め対象にする。
+        context_trim_trigger_total_tokens: トリムを発動させる閾値
+            （Claude API の context editing、clear_tool_uses_20250919 の
+            trigger.value 相当）。直近1回のLLM呼び出しの total_tokens
+            （src.context_trim.last_ai_total_tokens）がこの値未満のうちは
+            トリムを発動しない。0以下を指定すると常に発動する（この閾値機能が
+            無かった旧来の挙動と同じ）。track_token_usage=false 等で
+            total_tokens を取得できない場合は、閾値未到達とみなし発動しない。
         context_compaction_enabled: メインエージェントの累積トークン数、または
             直近1回のLLM呼び出しのトークン数が閾値を超えたら会話履歴を要約して
             圧縮する機能の有効/無効（src.context_compaction 参照）。context_trim
@@ -723,6 +730,7 @@ class Config:
     context_trim_duplicate_guard_tool_max_chars: int
     context_trim_ai_messages: bool
     context_trim_keep_recent_ai_messages: int
+    context_trim_trigger_total_tokens: int
 
     # --- 会話履歴の自動要約・圧縮（src/context_compaction.py） ---
     context_compaction_enabled: bool
@@ -1766,6 +1774,12 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "CONTEXT_TRIM_KEEP_RECENT_AI_MESSAGES",
                 context_trim.get("keep_recent_ai_messages", 3),
+            )
+        ),
+        context_trim_trigger_total_tokens=int(
+            os.getenv(
+                "CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS",
+                context_trim.get("trigger_total_tokens", 100_000),
             )
         ),
         context_compaction_enabled=_as_bool(os.getenv("CONTEXT_COMPACTION_ENABLED", context_compaction.get("enabled", True))),

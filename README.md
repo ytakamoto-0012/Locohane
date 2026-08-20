@@ -846,6 +846,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[thinking_loop_guard]` | `max_retries` | ループ検知後、注意メッセージを注入して再試行する最大回数 | `THINKING_LOOP_GUARD_MAX_RETRIES` |
 | `[thinking_loop_guard]` | `nudge_messages` | ループ検知後に注入する注意メッセージ（複数指定可） | `THINKING_LOOP_GUARD_NUDGE_MESSAGES` |
 | `[context_trim]` | `enabled` | 古い `ToolMessage` を切り詰めてプリフィル遅延を抑える機能の有効/無効 | `CONTEXT_TRIM_ENABLED` |
+| `[context_trim]` | `trigger_total_tokens` | トリムを発動させる閾値（Claude APIのcontext editing、`clear_tool_uses_20250919`のtrigger.value相当）。直近1回のLLM呼び出しのtotal_tokensがこの値未満のうちは発動しない。0以下なら常に発動 | `CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS` |
 | `[context_trim]` | `keep_recent_tool_messages` | 全文保持する直近 `ToolMessage` の件数 | `CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES` |
 | `[context_trim]` | `truncated_max_chars` | 切り詰め対象 `ToolMessage` の残す最大文字数 | `CONTEXT_TRIM_TRUNCATED_MAX_CHARS` |
 | `[context_trim]` | `duplicate_guard_tool_max_chars` | Read/Glob/Grep/json_query/analyze_image（`[file_tools_duplicate_guard]`の対象ツール）の `ToolMessage` にだけ適用する切り詰め文字数（`truncated_max_chars`の代わりに使う） | `CONTEXT_TRIM_DUPLICATE_GUARD_TOOL_MAX_CHARS` |

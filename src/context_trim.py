@@ -169,3 +169,51 @@ def trim_old_ai_messages(messages: list[BaseMessage], *, keep_recent: int, max_c
                 update["tool_calls"] = new_calls
         result.append(m.model_copy(update=update) if update else m)
     return result
+
+
+def last_ai_total_tokens(messages: list[BaseMessage]) -> int | None:
+    """直近の AIMessage の usage_metadata から total_tokens を取り出す。
+
+    src/main_token_guard.py の閾値判定と同一の取得元（末尾から最初に見つかった
+    AIMessage の usage_metadata）を、is_trigger_reached() と共有するために
+    ここへ置く。
+
+    Args:
+        messages: 会話履歴。末尾から最初に見つかった AIMessage を見る。
+
+    Returns:
+        total_tokens。AIMessage が無い、または usage_metadata を取得できない
+        （config.ini [llm].track_token_usage=false 等）場合は None。
+    """
+    for message in reversed(messages):
+        if not isinstance(message, AIMessage):
+            continue
+        usage = getattr(message, "usage_metadata", None)
+        if not isinstance(usage, dict):
+            return None
+        total = usage.get("total_tokens")
+        return int(total) if total else None
+    return None
+
+
+def is_trigger_reached(messages: list[BaseMessage], trigger_total_tokens: int) -> bool:
+    """トリムを発動すべきか判定する（Claude API の context editing
+    （clear_tool_uses_20250919）の trigger.value 相当）。
+
+    Args:
+        messages: 判定対象の会話履歴（トリム前）。
+        trigger_total_tokens: 直近 AIMessage の total_tokens がこの値以上に
+            なって初めてトリムを発動する閾値。0以下を指定すると、常に発動する
+            （この閾値機能が無かった旧来の挙動と同じ）。
+
+    Returns:
+        トリムを発動すべきなら True。track_token_usage=false 等で
+        total_tokens を取得できない場合は、閾値未到達とみなし False を返す
+        （src/main_token_guard.py の maybe_append_token_guard と同じ安全側判断）。
+    """
+    if trigger_total_tokens <= 0:
+        return True
+    total = last_ai_total_tokens(messages)
+    if total is None:
+        return False
+    return total >= trigger_total_tokens
