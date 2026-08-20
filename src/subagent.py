@@ -26,7 +26,6 @@ import logging
 import traceback
 from collections.abc import Callable
 
-import httpx
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
@@ -46,6 +45,7 @@ from .context_compaction import maybe_compact, should_compact
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
 from .images import image_followup_message
 from .llm import (
+    LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
     build_model,
     describe_current_task,
@@ -258,7 +258,7 @@ async def _invoke_with_timeout_retry(
 ):
     """_invoke_with_empty_response_retry を呼び、LLM呼び出しタイムアウトを検知したら再試行する。
 
-    run_subagent は元々、1回でも TimeoutError/httpx.TimeoutException が起きると
+    run_subagent は元々、1回でも TimeoutError/LLM_CONNECTION_ERRORS が起きると
     その反復までの内容を要約して即座に打ち切っていた。しかし dispatch_agent の
     ように長時間動くジョブがバックグラウンドタスクとして裏側で動き続ける実行では、
     数百件中のたった1回の一時的なタイムアウト（llama-serverの瞬間的な混雑等）
@@ -284,14 +284,21 @@ async def _invoke_with_timeout_retry(
         達したかどうかの bool) のタプル。
 
     Raises:
-        TimeoutError, httpx.TimeoutException: max_retries 回再試行してもなお
-            タイムアウトが解消しなかった場合。
+        TimeoutError, LLM_CONNECTION_ERRORS: max_retries 回再試行してもなお
+            タイムアウト/接続エラーが解消しなかった場合。openai SDK が
+            httpx のread timeoutを openai.APITimeoutError（openai.APIConnectionError
+            のサブクラス）へラップして再送出するケースがあり、単純な
+            (TimeoutError, httpx.TimeoutException) では取りこぼすため
+            LLM_CONNECTION_ERRORS（src/llm.py）を合わせて捕捉する
+            （本番incident・2026-08-21: このラップにより本リトライが
+            一度も発動せず、dispatch_agent が生のトレースバックで
+            即失敗した）。
     """
     current_model = model
     for attempt in range(max_retries + 1):
         try:
             return await _invoke_with_empty_response_retry(current_model, messages, config, tools)
-        except (TimeoutError, httpx.TimeoutException) as exc:
+        except (TimeoutError, *LLM_CONNECTION_ERRORS) as exc:
             if attempt >= max_retries:
                 raise
             logger.warning(
@@ -467,7 +474,7 @@ async def run_subagent(
             response, model, empty_retries_exhausted = await _invoke_with_timeout_retry(
                 model, llm_input, config, tools, llm_timeout_max_retries
             )
-        except (TimeoutError, httpx.TimeoutException) as exc:
+        except (TimeoutError, *LLM_CONNECTION_ERRORS) as exc:
             logger.warning(
                 "dispatch_agent: LLM呼び出しがタイムアウトしたため打ち切り(iter=%d): %s",
                 iteration,
