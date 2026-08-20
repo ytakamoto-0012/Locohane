@@ -24,9 +24,17 @@ interface ComposerProps {
   // （新規チャット・他スレッドからの並列送信を防ぐ。停止操作は提供しない —
   // 対象スレッドを開いてそちら側の停止ボタンを使ってもらう）。
   blockedByOtherThread?: boolean;
+  // 作業ディレクトリの変更を許可するか（新規チャットで未送信の間のみtrue）。
+  workDirEditable?: boolean;
 }
 
-export function Composer({ plan, remoteGenerating, onStopRemote, blockedByOtherThread }: ComposerProps) {
+export function Composer({
+  plan,
+  remoteGenerating,
+  onStopRemote,
+  blockedByOtherThread,
+  workDirEditable
+}: ComposerProps) {
   const { askUser, disabled, loading } = useChatData();
   const { sendMessage, replyMessage, uploadFile, stopTask } = useChatInteract();
   const [value, setValue] = useState('');
@@ -176,7 +184,7 @@ export function Composer({ plan, remoteGenerating, onStopRemote, blockedByOtherT
               hidden
               onChange={(e) => handleAttach(e.target.files)}
             />
-            <WorkDirButton />
+            <WorkDirButton disabled={!workDirEditable} />
           </div>
           <div className="composer-toolbar-right">
             <PlanModeBadge step={plan} />

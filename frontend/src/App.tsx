@@ -184,6 +184,10 @@ function App() {
   }, [currentThreadId, config?.dataPersistence]);
 
   const mainMessages = selectMainThread(messages);
+  // 作業ディレクトリの変更UIは新規チャットの最初の送信前のみ有効にする。
+  // 1通でもuser_messageが存在すれば（＝新規チャットで送信済み、または
+  // 既存スレッドを再開）ロックする。
+  const hasSentMessage = mainMessages.some((m) => m.type === 'user_message');
   const sideSteps = selectSideSteps(messages);
   const tokenUsage = selectLatestTokenUsage(messages);
   const workDir = selectLatestWorkDir(messages);
@@ -224,14 +228,13 @@ function App() {
         <AskChoiceFormBar />
         <AskTextBar />
         <AskFileDropzone />
-        {!mainMessages.some((m) => m.type === 'user_message') && (
-          <StarterPrompts prompts={starterPrompts} />
-        )}
+        {!hasSentMessage && <StarterPrompts prompts={starterPrompts} />}
         <Composer
           plan={plan}
           remoteGenerating={remoteGenerating}
           onStopRemote={stopRemoteGenerating}
           blockedByOtherThread={blockingThreadId !== null}
+          workDirEditable={!hasSentMessage}
         />
       </div>
       <SidePanel sideSteps={displaySideSteps} tokenUsage={tokenUsage} workDir={workDir} plan={plan} />

@@ -11,7 +11,13 @@ import { Icon } from './Icon';
  * 固まって見える問題があったため、パス文字列をこのポップオーバーで直接
  * 入力させる方式にしている（2026-08-19 ユーザー報告）。
  */
-export function WorkDirButton() {
+interface WorkDirButtonProps {
+  // true: このチャットは既に1回以上送信済み（または再開したスレッド）。
+  // 作業ディレクトリの変更はUI上ブロックし、理由をツールチップで説明する。
+  disabled?: boolean;
+}
+
+export function WorkDirButton({ disabled = false }: WorkDirButtonProps) {
   const client = useContext(ChainlitContext);
   const sessionId = useRecoilValue(sessionIdState);
   const [pending, setPending] = useState(false);
@@ -68,12 +74,17 @@ export function WorkDirButton() {
       <button
         type="button"
         className="work-dir-button"
-        title="作業フォルダを設定"
+        title={
+          disabled
+            ? '作業フォルダは新規チャットの最初の送信前のみ設定できます'
+            : '作業フォルダを設定'
+        }
+        disabled={disabled}
         onClick={() => setOpen((v) => !v)}
       >
         <Icon name="folder" />
       </button>
-      {open && (
+      {!disabled && open && (
         <div className="work-dir-popover">
           <input
             ref={inputRef}

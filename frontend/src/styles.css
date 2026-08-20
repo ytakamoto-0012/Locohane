@@ -779,6 +779,15 @@
   background: var(--surface-muted);
 }
 
+.work-dir-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.work-dir-button:disabled:hover {
+  background: transparent;
+}
+
 .work-dir-picker {
   position: relative;
   display: inline-flex;
