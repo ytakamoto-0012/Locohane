@@ -995,12 +995,19 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
     として書き出し、PYTHONPATH の先頭に追加することで対象スクリプトのソースを
     一切変更せずに書き込み・削除系呼び出しへガードを差し込む。
 
-    許可されるのは workdir（run_script の cwd = 作業ディレクトリ）・
-    default_workdir・path_memory_dir（register_output_path() がロックファイルを
-    書き込むLocohane内部の状態ディレクトリ。ユーザー成果物の保存先では
-    ないためexecute_python_code側のallowed_rootsとは異なりここにのみ追加）
-    配下のみ。それ以外の場所（他ドライブ・Locohaneプロジェクト本体を含む）への
-    書き込み・削除は PermissionError でブロックされる。読み取りは対象外だが、
+    許可されるのは workdir（run_script の cwd = 作業ディレクトリ。呼び出し元の
+    _prepare_script_execution が _restrict_default_workdir() 済みのため、
+    work_dir未設定等でdefault_workdirへフォールバックした場合はここで
+    既に `_tmp_<thread_id>` になっている）・`_tmp_<thread_id>`（念のため
+    ここでも明示的に加える。default_workdirはサーバー側の共有ディレクトリの
+    ため、直下やその他のサブディレクトリへの書き込みは許可せず、常に
+    自セッション専用の`_tmp_<thread_id>`のみに限定する。他セッションが
+    生成物を誤参照する事故の防止）・path_memory_dir（register_output_path() が
+    ロックファイルを書き込むLocohane内部の状態ディレクトリ。ユーザー成果物の
+    保存先ではないためexecute_python_code側のallowed_rootsとは異なりここにのみ追加）
+    配下のみ。それ以外の場所（他ドライブ・Locohaneプロジェクト本体・
+    default_workdir直下の他ディレクトリを含む）への書き込み・削除は
+    PermissionError でブロックされる。読み取りは対象外だが、
     `_tmp_<thread_id>`（`workdir`直下に全セッション共通で並ぶ一時フォルダ）に
     限っては、自セッション以外への読み取り・書き込み・削除を allowed_roots の
     内外を問わず追加でブロックする（`_python_fs_guard_preamble` の
@@ -1020,7 +1027,7 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
     env = _subprocess_env()
     allowed_roots = [workdir]
     if _DEFAULT_WORKDIR is not None:
-        allowed_roots.append(_DEFAULT_WORKDIR)
+        allowed_roots.append(_resolve_exec_workdir())
     if _PATH_MEMORY_DIR is not None:
         allowed_roots.append(_PATH_MEMORY_DIR)
     try:
@@ -1500,6 +1507,35 @@ def _resolve_exec_workdir() -> Path:
     return d
 
 
+def _restrict_default_workdir(path: Path) -> Path:
+    """書き込み先/cwd候補が default_workdir そのものなら `_tmp_<thread_id>` へ縮小する。
+
+    default_workdir はサーバー側の共有ディレクトリで全セッションから同じ
+    パスが見えるため、直下やその他のサブディレクトリへ書き込みを許すと、
+    別セッションがそのファイルを参照して誤動作する事故につながる
+    （work_dir 未設定時は run_script/execute_python_code の書き込み先が
+    素朴には default_workdir 直下になっていたため発生しえた）。
+    自セッション専用の `_tmp_<thread_id>`（_resolve_exec_workdir() と同じ
+    ディレクトリ）だけに縮小することで、成果物は常にセッション専用領域へ
+    閉じ込め、ユーザーへの提示は provide_download/show_image 経由に統一する。
+
+    work_dir がユーザー指定で default_workdir と無関係な場所を指している
+    場合はそのまま通す（制限対象は default_workdir そのものが渡された
+    ケースのみ）。
+
+    Args:
+        path: 書き込み許可ルート、または cwd の候補（_resolve_workdir() の
+            戻り値など）。
+
+    Returns:
+        path が default_workdir と同一なら `_tmp_<thread_id>`、それ以外は
+        path をそのまま返す。
+    """
+    if _DEFAULT_WORKDIR is not None and path.resolve() == _DEFAULT_WORKDIR:
+        return _resolve_exec_workdir()
+    return path
+
+
 def _tmp_dir_parents(primary: Path) -> list[Path]:
     """`_tmp_<thread_id>` が実際に作られうる親ディレクトリの一覧を返す。
 
@@ -1908,7 +1944,13 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
     """スキルの scripts/ 配下のスクリプトを実行し、標準出力/標準エラーを返す。
 
     作業ディレクトリは、作業フォルダアイコンでユーザーが
-    セッションに設定していればそのディレクトリ、未設定なら既定の作業フォルダを使う。
+    セッションに設定していればそのディレクトリを使う。未設定・アクセス不可・
+    書き込み不可の場合は既定の作業フォルダ（default_workdir）配下の
+    自セッション専用一時フォルダ（`_tmp_<thread_id>`）を使う
+    （default_workdirはサーバー側の共有フォルダのため、直下に成果物を
+    書くと他セッションから見えてしまう事故を避けるため。この場合の
+    成果物はユーザーへ直接見えないため、provide_download/show_image で
+    改めて提示すること）。
     タイムアウトは設定値（既定 60 秒）。完了までこのツール呼び出し自体が
     ブロックされるため、タイムアウトに近い長時間の実行が見込まれるスクリプトは
     このツールではなく run_script_background を使うこと。
@@ -1922,9 +1964,11 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
     **重要: 書き込みは作業ディレクトリ配下限定（サンドボックス）**
     起動するサブプロセスへ書き込みガードを注入しており、open()の書き込み
     モードや os.remove/os.rename/shutil.move 等の呼び出し先が作業
-    ディレクトリと default_workdir 配下以外（他ドライブ・Locohaneプロジェクト
-    本体を含む）の場合は PermissionError で失敗する。出力先パス
-    （output_path/--output 等）は必ず作業ディレクトリ配下を指定すること。
+    ディレクトリ・`_tmp_<thread_id>` 配下以外（他ドライブ・Locohaneプロジェクト
+    本体、default_workdir直下の他ディレクトリを含む）の場合は
+    PermissionError で失敗する。出力先パス（output_path/--output 等）は
+    必ず作業ディレクトリ配下を指定すること。default_workdirへ絶対パスで
+    直接書き込もうとしても（`_tmp_<thread_id>`以外は）ブロックされる。
     既存ファイルの読み取りはこのガードの対象外で制限されない。
 
     Args:
@@ -2204,7 +2248,12 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
         script_path = _resolve_script_filename(skill_name, script_filename)
     except ValueError as e:
         return f"エラー: {e}"
-    workdir = _resolve_workdir(need_write=True)
+    # work_dir未設定・書き込み不可等でdefault_workdirへフォールバックする
+    # 場合、cwdをdefault_workdir直下ではなく`_tmp_<thread_id>`にする
+    # （_restrict_default_workdir参照。サーバー側共有ディレクトリである
+    # default_workdir直下に、相対パス書き込みの既定の置き場として
+    # 全セッション共通で成果物が積まれるのを防ぐ）。
+    workdir = _restrict_default_workdir(_resolve_workdir(need_write=True))
 
     is_plan_exempt = (skill_name, script_filename) in _PLAN_APPROVAL_EXEMPT_SCRIPTS
     if not is_plan_exempt and not cl.user_session.get("plan_approved"):
@@ -2793,10 +2842,17 @@ def _exec_guard_roots() -> list[Path]:
     のガードに渡す allowed_roots を組み立てる。
 
     実際の作業ディレクトリ（_resolve_workdir(need_write=True)。書き込み
-    不可と判定されていれば default_workdir へ自動的に倒れる）・
-    default_workdir に加え、path_memory_dir（LLM生成コードが
-    path_memory.register()/resolve() を直接呼ぶ場合にロックファイル
-    書き込みが必要になるLocohane内部の状態ディレクトリ）を含める。
+    不可と判定されていれば default_workdir へ自動的に倒れる。倒れた場合は
+    _restrict_default_workdir() により `_tmp_<thread_id>` へさらに縮小
+    される）・`_tmp_<thread_id>`（_resolve_exec_workdir()。work_dir が
+    default_workdir以外を指している場合でも常に念のため加える）に加え、
+    path_memory_dir（LLM生成コードが path_memory.register()/resolve() を
+    直接呼ぶ場合にロックファイル書き込みが必要になるLocohane内部の
+    状態ディレクトリ）を含める。default_workdir自体（`_tmp_<thread_id>`
+    以外のサブディレクトリや直下）は意図的に含めない
+    （default_workdirはサーバー側の共有ディレクトリのため、他セッションが
+    誤参照する事故を避けるため常に自セッション専用の`_tmp_<thread_id>`
+    だけに書き込みを限定する。_restrict_default_workdir参照）。
     4箇所の呼び出し元での重複を避けるための共通ヘルパー。
 
     以前は実行用ディレクトリ（_tmp_<thread_id>）の親から作業ディレクトリを
@@ -2806,7 +2862,7 @@ def _exec_guard_roots() -> list[Path]:
     execute_python_code がユーザー指定の作業ディレクトリへ書き込めなく
     なってしまう）。
     """
-    roots = [_resolve_workdir(need_write=True), _DEFAULT_WORKDIR]
+    roots = [_restrict_default_workdir(_resolve_workdir(need_write=True)), _resolve_exec_workdir()]
     if _PATH_MEMORY_DIR is not None:
         roots.append(_PATH_MEMORY_DIR)
     return roots
@@ -2857,7 +2913,10 @@ def _python_fs_guard_preamble(allowed_roots: Sequence[Path], tmp_dir_roots: Sequ
 
     Args:
         allowed_roots: 書き込み・削除を許可するディレクトリの一覧
-            （実行用ディレクトリと default_workdir）。
+            （実行用ディレクトリと `_tmp_<thread_id>`。呼び出し元
+            （_exec_guard_roots/_run_script_guard_env）が
+            _restrict_default_workdir() によって default_workdir自体を
+            渡さないよう既に縮小済み）。
         tmp_dir_roots: `_tmp_<thread_id>` が実際に作られうる親ディレクトリの
             一覧（`_tmp_dir_parents()` の戻り値）。他セッション判定にのみ
             使い、allowed_roots とは独立（execute_python_code_readonly は
@@ -2916,7 +2975,9 @@ def _guard_check(_path, _op):
             return
     raise PermissionError(
         f"[書き込みサンドボックスガード] 作業ディレクトリ配下以外は{{_op}}できません: {{_path}}\\n"
-        "作業ディレクトリ（またはdefault_workdir）配下のみ書き込み・削除可能です。"
+        "作業ディレクトリ（またはセッション専用の一時フォルダ _tmp_<thread_id>）配下のみ"
+        "書き込み・削除可能です。default_workdir直下など共有フォルダへは"
+        "直接書き込めません。"
     )
 
 
@@ -3087,12 +3148,15 @@ async def execute_python_code(code: str) -> str:
 
     **重要: 書き込みは作業ディレクトリ配下限定（サンドボックス）**
     このコードは実行前ガードにより、書き込み・削除・改名の類が作業
-    ディレクトリと default_workdir 配下以外では自動的にブロックされる
+    ディレクトリ・自セッション専用の一時フォルダ（`_tmp_<thread_id>`。
+    このコードのcwdそのもの）以外では自動的にブロックされる
     （PermissionErrorで失敗する。Locohaneのプロジェクトフォルダ
-    〔src/・app.py・config.ini・skills/ 等〕はもちろん、それ以外の
-    任意のドライブ・フォルダも含めて、作業ディレクトリの外への書き込みは
-    一切できない）。プロジェクト自体の設定やソースコードを変更する必要が
-    ある場合はこのツールを使わず、ユーザーへ直接の編集を依頼すること。
+    〔src/・app.py・config.ini・skills/ 等〕、それ以外の任意のドライブ・
+    フォルダに加え、default_workdir直下の`_tmp_<thread_id>`以外の場所
+    （サーバー側の共有フォルダのため他セッションから見えてしまう）も
+    含めて、書き込みは一切できない）。プロジェクト自体の設定やソース
+    コードを変更する必要がある場合はこのツールを使わず、ユーザーへ
+    直接の編集を依頼すること。
     読み取りはこのガードの対象外で従来通り制限されない。
 
     Args:
@@ -3298,12 +3362,15 @@ async def execute_python_code_background(code: str) -> str:
 
     **重要: 書き込みは作業ディレクトリ配下限定（サンドボックス）**
     このコードは実行前ガードにより、書き込み・削除・改名の類が作業
-    ディレクトリと default_workdir 配下以外では自動的にブロックされる
+    ディレクトリ・自セッション専用の一時フォルダ（`_tmp_<thread_id>`。
+    このコードのcwdそのもの）以外では自動的にブロックされる
     （PermissionErrorで失敗する。Locohaneのプロジェクトフォルダ
-    〔src/・app.py・config.ini・skills/ 等〕はもちろん、それ以外の
-    任意のドライブ・フォルダも含めて、作業ディレクトリの外への書き込みは
-    一切できない）。プロジェクト自体の設定やソースコードを変更する必要が
-    ある場合はこのツールを使わず、ユーザーへ直接の編集を依頼すること。
+    〔src/・app.py・config.ini・skills/ 等〕、それ以外の任意のドライブ・
+    フォルダに加え、default_workdir直下の`_tmp_<thread_id>`以外の場所
+    （サーバー側の共有フォルダのため他セッションから見えてしまう）も
+    含めて、書き込みは一切できない）。プロジェクト自体の設定やソース
+    コードを変更する必要がある場合はこのツールを使わず、ユーザーへ
+    直接の編集を依頼すること。
     読み取りはこのガードの対象外で従来通り制限されない。
 
     Args:

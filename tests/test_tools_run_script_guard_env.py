@@ -99,11 +99,32 @@ def test_subprocess_write_inside_workdir_succeeds(tmp_path):
     assert target.read_text(encoding="utf-8") == "ok"
 
 
-def test_subprocess_write_inside_default_workdir_succeeds(tmp_path):
+def test_subprocess_write_directly_inside_default_workdir_is_blocked(tmp_path):
+    """default_workdirはサーバー側の共有ディレクトリのため、直下への書き込みは
+    他セッションが誤参照する事故を防ぐため許可しない（_restrict_default_workdir
+    により allowed_roots には `_tmp_<thread_id>` のみが渡る）。
+    """
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     env, guard_dir = tools._run_script_guard_env(workdir)
     target = tools._DEFAULT_WORKDIR / "out.txt"
+
+    try:
+        result = _run_script(workdir, f'open(r"{target}", "w", encoding="utf-8").write("ok")\n', env)
+    finally:
+        if guard_dir is not None:
+            shutil.rmtree(guard_dir, ignore_errors=True)
+
+    assert result.returncode != 0
+    assert "書き込みサンドボックスガード" in result.stderr
+    assert not target.exists()
+
+
+def test_subprocess_write_inside_default_workdir_own_tmp_dir_succeeds(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    env, guard_dir = tools._run_script_guard_env(workdir)
+    target = tools._DEFAULT_WORKDIR / "_tmp_thread-1" / "out.txt"
 
     try:
         result = _run_script(workdir, f'open(r"{target}", "w", encoding="utf-8").write("ok")\n', env)
