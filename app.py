@@ -1116,6 +1116,16 @@ def _patch_chainlit_connection_successful_task_end() -> None:
     on_chat_start 起動等）はそのまま呼び出し、その直後に
     session.current_task がまだ終わっていなければ task_start() を送り直して
     フロントの表示（停止ボタン）を実態に合わせて復元する。
+
+    重要: _resync_live_steps() は task_start() の if ブロックの外で、
+    task の完了有無に関わらず必ず呼ぶ。切断中にターンが完了してから
+    再接続した場合（実例確認済み: 06:42:34切断→dispatch_agent完了→
+    06:42:55再接続）、再接続時点で task.done() が True になっており、
+    if ブロックの中に置くと _resync_live_steps() 自体が呼ばれず、切断
+    ウィンドウ中に発行されたStep完了更新が永久にフロントへ届かない
+    （StepItem.tsx側が「実行中」のまま固まる）。_resync_live_steps() は
+    冪等（既に届いている場合は同じ状態で上書きするだけ）なので、
+    task完了後に呼んでも害はない。
     """
     from chainlit.socket import connection_successful as _original_connection_successful
     from chainlit.socket import init_ws_context as _init_ws_context
@@ -1128,7 +1138,7 @@ def _patch_chainlit_connection_successful_task_end() -> None:
         task = getattr(context.session, "current_task", None)
         if task is not None and not task.done():
             await context.emitter.task_start()
-            await _resync_live_steps()
+        await _resync_live_steps()
 
     logging.getLogger(__name__).info(
         "Chainlit connection_successful の task_end 誤発火を防ぐパッチを適用しました。"
@@ -1141,16 +1151,13 @@ def _register_socket_lifecycle_logging() -> None:
     StepItem.tsx（フロント）の「完了」バッジは、そのStepに対する update_step
     イベント（step.end 付き）を受信して初めて表示が切り替わる。ところが
     chainlit/socket.py の emit_fn は `sio.emit(event, data, to=sid)` という
-    特定sid宛のfire-and-forgetで、確認応答も再送も無い。さらに
-    connection_successful（_patch_chainlit_connection_successful_task_end参照）は
-    進行中ターンの送信ボタン状態（task_start/task_end）は復元するが、
-    Stepツリーの再送は行わない。そのため、進行中ターンの最中に切断が起きると、
-    その切断中に発行されたStep完了更新（on_tool_end等）は再接続後も届かず、
-    フロント上でそのStepが「実行中」のまま固まる — という不具合が疑われている
-    （issue参照）。しかし従来、WebSocketの接続/切断/再接続はapp.log上に一切
-    記録が無く、実際に事象発生時刻と切断が相関しているか確認できなかった。
-    ここではまず相関を確認するため、接続イベント自体をログするに留める
-    （Stepツリーの再送などの恒久対策は別途）。
+    特定sid宛のfire-and-forgetで、確認応答も再送も無い。そのため、進行中
+    ターンの最中に切断が起きると、その切断中に発行されたStep完了更新
+    （on_tool_end等）は再接続まで届かない。この再送は現在
+    connection_successful（_patch_chainlit_connection_successful_task_end参照）
+    側で _resync_live_steps() により対応済み（taskの完了有無に関わらず
+    再接続のたびに呼ぶ）。ここではその相関確認・診断のため、接続イベント
+    自体をログするに留める（動作への影響は無い）。
     """
     from chainlit.session import WebsocketSession as _WebsocketSession
     from chainlit.socket import connect as _original_connect
