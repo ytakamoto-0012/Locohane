@@ -101,7 +101,7 @@
                  └───┬───────────────────────────┬──────────────┘
                      │ モデル呼び出し             │ ツール実行
        ┌─────────────▼───────────┐   ┌───────────▼──────────────────────┐
-       │ ChatOpenAI              │   │ src/tools.py (34ツール)             │
+       │ ChatOpenAI              │   │ src/tools.py (37ツール)             │
        │  → llama-server /v1     │   │  read_skill / read_skill_file /    │
        │  (OpenAI 互換)          │   │  run_script / execute_python_code /│
        └─────────────────────────┘   │  get_tool_source / check_work_dir_status /│
@@ -189,7 +189,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 スキルの frontmatter（name/description）だけはこれとは別に、`src/skills.py` が
 起動時にシステムプロンプトへテキスト注入する（Discovery 段階、こちらはプロンプトベース）。
 
-上記3段階に加えて、スキルの読み込みとは独立したツールが以下の34個ある（いずれも `src/tools.py`）。
+上記3段階に加えて、スキルの読み込みとは独立したツールが以下の37個ある（いずれも `src/tools.py`）。
 
 | ツール | 役割 |
 |--------|------|
@@ -198,8 +198,9 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `run_script` | スキルの scripts/ 配下のスクリプトを実行する（要承認。`config.ini` で承認不要に切替可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `run_script_background` を使う |
 | `run_script_background` | `run_script` と同じスクリプトを起動する（要承認は同様）。完了までの間、進捗（経過秒数・途中出力）をチャットへ直接通知しながら待つため、LLM自身がポーリングする必要は無い。設定した安全上限（`[scripts].background_inline_wait_max_seconds`）を超えてもなお完了しない場合のみ `job_id` を返してターンを終える |
 | `check_script_job` / `stop_script_job` | 上記の安全上限超過フォールバック時のみ使う、ジョブの状況確認・強制終了。実行中ジョブへの連続 `check_script_job` 呼び出しは `[scripts].background_min_poll_interval_seconds` 未満の間隔だとサーバー側で拒否される |
-| `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `execute_python_code_background` を使う。code内で `@N`（パスメモリ）を参照する場合は `AGENT_SRC_DIR` 環境変数経由で `path_memory.resolve()` を呼んで実パスへ展開する必要がある。実行前ガードにより `src/`・`app.py`・`config.ini`・`skills/` 等プロジェクトフォルダ配下への書き込み・削除・改名は `default_workdir` 配下を除き自動的にブロックされる |
+| `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `execute_python_code_background` を使う。code内で `@N`（パスメモリ）を参照する場合は `AGENT_SRC_DIR` 環境変数経由で `path_memory.resolve()` を呼んで実パスへ展開する必要がある。実行前ガードにより `src/`・`app.py`・`config.ini`・`skills/` 等プロジェクトフォルダ配下への書き込み・削除・改名はブロックされる。書き込み先は、ユーザーが作業フォルダ（後述「作業ディレクトリの切り替え」参照）を指定していればそのフォルダ、未指定なら `default_workdir` 配下でも自セッション専用の一時領域 `_tmp_<thread_id>` に限られる（`default_workdir` 直下への書き込みは、別セッションの誤動作を防ぐため許可しない） |
 | `execute_python_code_background` | `execute_python_code` と同じコードを起動する（要承認・`config.ini` での無効化・パスメモリ展開・プロジェクトフォルダ保護ガードは同様）。`run_script_background` と同じく完了まで進捗通知しながら待ち、状況確認・停止（安全上限超過時のみ）は共通の `check_script_job`/`stop_script_job` を使う |
+| `execute_python_code_readonly` | `execute_python_code` の読み取り専用版（ファイル書き込み不可、承認不要）。`explore`/`planner`/`analyze-docs` 等の読み取り専用サブエージェント種別（`agents/*.md` の `tools:`）にのみ付与され、メインエージェントは持たない |
 | `write_scratch_note` | 調査中に分かった内容をスクラッチファイルへ追記する。計画未承認でも常に呼べ、書き込み先はツール自身が決めるため任意パスには書けない。トークン上限打ち切り時の引き継ぎ用途 |
 | `get_tool_source` | `run_script` がエラーになった際、原因調査用にスクリプトの絶対パスを返す（中身は返さない） |
 | `check_work_dir_status` | 現在の作業ディレクトリの実際のアクセス状況を確認する |
@@ -211,7 +212,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `analyze_image` | 画像ファイルをLLMへ視覚情報として見せ、LLM自身が内容を解析・説明・判断する（Vision対応モデル向け） |
 | `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される。完了までの間、進捗（経過時間・反復回数）をチャットへ直接通知しながら待つため、LLM自身がポーリングする必要は無い。設定した安全上限（`[subagent].background_inline_wait_max_seconds`）を超えてもなお完了しない場合のみ `job_id` を返してターンを終える |
 | `check_dispatch_agent_job` / `stop_dispatch_agent_job` | 上記の安全上限超過フォールバック時のみ使う、ジョブの状況確認・強制終了 |
-| `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ |
+| `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ。既定（`config.ini` の `[plan] require_planner_dispatch`）では、同一ターンで `dispatch_agent(agent_type="planner")` が完了していないと `create_plan` はエラーを返してブロックする（記憶・推測だけで steps を作らせず、専用サブエージェントに草案を作らせるため） |
 | `get_plan_status` / `lock_plan_mode` | 現在 Plan Mode（書き込み系ツールがブロックされたロック状態）か Edit Automatically（承認済み計画を実行できる状態）かを確認し、後者から前者へユーザー承認なしに手動で戻す |
 | `AskUserQuestion` / `ask_user_choice` | 会話継続に必要な追加情報をユーザーへ質問（`AskUserQuestion` は自由記述。`labels` 省略時は単一入力、指定時は複数項目をまとめて提示。`ask_user_choice` は選択肢形式で、表示される選択肢には常に「✏️ その他（自由入力）」「❌ キャンセル」が自動で追加される） |
 | `create_memory` / `update_memory` / `delete_memory` / `read_memory` / `search_memory` / `list_memories` | スレッドをまたぐ永続メモリー（`src/memory.py`）の保存・更新・削除・全文読込・検索・一覧。主エージェントは全6ツールを持つ。`dispatch_agent` のサブエージェントには種別ごとに絞って委譲し、`explore`/`analyze-docs` は読み込み系（`read_memory`/`search_memory`/`list_memories`）のみ、`worker` は全6ツール（フルアクセス）を持つ（`agents/*.md` の `tools:` 参照） |
@@ -325,11 +326,13 @@ Locohane/
 │   ├── log_rotation.py      # app.log の日時ローテーション
 │   └── uploads.py           # アップロードファイル管理
 ├── agents/
-│   ├── AGENTS_README.md     # エージェント種別定義（frontmatter）の書き方ガイド
+│   ├── README/AGENTS_README.md # エージェント種別定義（frontmatter）の書き方ガイド（*.mdスキャン時の警告を避けるためREADME/配下に退避）
 │   ├── explore.md           # 読み取り専用エージェント種別
 │   ├── analyze-docs.md      # docx/xlsx/pptx/pdf等の文書調査に特化した読み取り専用エージェント種別
+│   ├── planner.md           # create_planの前段で計画草案（steps候補＋detail_markdown）を作る設計専用の読み取り専用エージェント種別
 │   ├── worker.md            # 承認済み計画に沿って読取り→書込みを内部完結させる書き込み可能エージェント種別
-│   └── verifier.md          # 成果物検証用エージェント種別
+│   ├── verifier.md          # 成果物検証用エージェント種別
+│   └── no-websearch-version/ # web-searchスキル許可前の旧エージェント定義の退避コピー（アプリでは未使用、参考用）
 ├── skills/
 │   ├── SKILLS_README.md    # スキル開発者向けガイド
 │   ├── skill-creator/       # 新しいスキルの作成・既存スキルの改善・eval検証を行うメタスキル
@@ -407,6 +410,7 @@ Locohane/
 | `data/logs/app.log` | アプリの動作ログ | いつでも | ファイルを削除 |
 | `data/memory/` | 永続メモリー（`user`/`feedback`/`project`/`reference` サブフォルダ＋`MEMORY.md`索引） | 蓄積した記憶が不要になったとき | フォルダ内を削除（`MEMORY.md`は次回保存時に再生成される） |
 | `data/plans/` | `create_plan` が `detail_markdown` 引数を渡した場合の詳細計画Markdown（`[paths] plans_dir`） | 古い計画が不要になったとき | フォルダ内を削除 |
+| `data/temp/_tmp_<thread_id>/` | `execute_python_code`/`run_script` の中間生成物・`write_scratch_note`/`write_thread_note` の書き出し先。自セッション専用（`[default_workdir]` 参照） | セッション終了後、不要になったとき | フォルダ内を削除（`[default_workdir] retention_days`/`cleanup_interval_hours` により自動削除もされる） |
 | `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（`show_image`・回答本文への画像埋め込みが使う。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
 
 `data/uploads/` は `config.ini` の `[uploads] retention_days`（既定7日）を過ぎたファイルを
@@ -584,12 +588,12 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 |--------|----------|------|------|
 | `skill-creator` | `skills/` | スクリプト実行を伴う | 新しいスキルの作成・既存スキルの改善・description のトリガー精度最適化・evalハーネスによる検証を行うメタスキル。 |
 | `pdf-tools` | `skills/` | スクリプト実行を伴う | PDFのテキスト抽出・ページ画像化（レイアウト/図表/スキャン内容の視覚把握）・PDF生成（日本語対応）。 |
-| `docx-read` | `skills/` | スクリプト実行を伴う | docxの読込専用（段落・表・文書プロパティ・Track Changes有無の取得）。 |
+| `docx-read` | `skills/` | スクリプト実行を伴う | docxの読込専用（段落・表・文書プロパティ・Track Changes有無・画像有無の取得）。 |
 | `docx-create` | `skills/` | スクリプト実行を伴う | docxの新規生成（見出し/段落/箇条書き/表/画像/ページ設定/ヘッダーフッター等）。 |
-| `docx-edit` | `skills/` | スクリプト実行を伴う | 既存docxの編集（検索置換、Track Changes/変更履歴の付与・確定・却下を含む）。 |
+| `docx-edit` | `skills/` | スクリプト実行を伴う | 既存docxの編集（検索置換、画像挿入・サイズ変更、Track Changes/変更履歴の付与・確定・却下を含む。画像トリミングは非対応）。 |
 | `docx-render` | `skills/` | スクリプト実行を伴う | Word文書ページの画像化（レイアウト・表・画像配置・強調表現の視覚把握）。 |
-| `excel-read` | `skills/` | スクリプト実行を伴う | xlsx/xls/xlsmの読込専用（シート一覧・セルデータ）。 |
-| `excel-edit` | `skills/` | スクリプト実行を伴う | xlsx/xlsmの新規作成・編集（セル/書式/行列/グラフ・条件付き書式・データ検証を含む）。 |
+| `excel-read` | `skills/` | スクリプト実行を伴う | xlsx/xls/xlsmの読込専用（シート一覧・セルデータ・画像有無）。 |
+| `excel-edit` | `skills/` | スクリプト実行を伴う | xlsx/xlsmの新規作成・編集（セル/書式/行列/グラフ・画像追加と位置調整・条件付き書式・データ検証を含む。画像トリミングは非対応）。 |
 | `excel-recalc` | `skills/` | スクリプト実行を伴う | xlsx/xlsm/xlsの数式再計算・エラーセル検出。 |
 | `excel-vba-read` | `skills/` | スクリプト実行を伴う | xlsm/xlsのVBAマクロコードの読み込み専用。 |
 | `excel-vba-edit` | `skills/` | スクリプト実行を伴う | xlsmのVBAマクロコードの追加/上書き/削除・実行。 |
@@ -597,7 +601,7 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 | `pptx-read` | `skills/` | スクリプト実行を伴う | pptxの読込専用（スライドのタイトル・本文・表・発表者ノートの抽出）。 |
 | `pptx-create` | `skills/` | スクリプト実行を伴う | pptxの新規生成（16:9テンプレート方式）。 |
 | `pptx-inspect` | `skills/` | スクリプト実行を伴う | 既存pptxテンプレートの構造読取専用（`pptx-edit`前の`shape_index`把握）。 |
-| `pptx-edit` | `skills/` | スクリプト実行を伴う | 既存pptxテンプレートの部分編集（デザインを保った差し替え・複製・削除・並び替え）。 |
+| `pptx-edit` | `skills/` | スクリプト実行を伴う | 既存pptxテンプレートの部分編集（デザインを保った差し替え・複製・削除・並び替え・画像/グラフの新規追加・画像トリミング）。 |
 | `pptx-render` | `skills/` | スクリプト実行を伴う | PowerPointスライドの画像化（レイアウト・図表・画像配置・強調表現の視覚把握）。 |
 | `web-search` | `skills/` | スクリプト実行を伴う | Tavily APIによるWeb検索。スキル専用の`scripts/.env`にTAVILY_API_KEY設定時のみ動作（既定では通信なし）。 |
 
@@ -826,9 +830,10 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[user_response_timeouts]` | `ask_user_question_seconds` | `AskUserQuestion`（自由記述質問。`labels`省略時は単一入力、指定時は複数項目フォーム）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_QUESTION_TIMEOUT_SECONDS` |
 | `[user_response_timeouts]` | `ask_user_choice_seconds` | `ask_user_choice`（選択肢質問）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_CHOICE_TIMEOUT_SECONDS` |
 | `[plan]` | `allow_badge_unlock` | Plan Mode バッジの双方向切り替えを許可するか | `PLAN_ALLOW_BADGE_UNLOCK` |
+| `[plan]` | `require_planner_dispatch` | `create_plan` を呼ぶ前に、同一ターンで `dispatch_agent(agent_type="planner")` が完了していることを必須にするか（`true`が既定。`planner`サブエージェントに計画草案を作らせてから`create_plan`を呼ぶ運用を強制する） | `PLAN_REQUIRE_PLANNER_DISPATCH` |
 | `[plan]` | `reset_approval_on_recreate` | 承認済み（Edit Automatically）状態で`create_plan`を再度呼んだ際、`plan_approved`を無条件でリセットしてPlan Modeへ戻すか。`false`なら承認状態を維持したままstepsだけ差し替える | `PLAN_RESET_APPROVAL_ON_RECREATE` |
 | `[plan]` | `reset_approval_on_new_message` | 新しいユーザーメッセージを受け取るたびに`plan_approved`を無条件でリセットしてPlan Modeへ戻すか。`false`なら承認状態をメッセージをまたいで維持する（`thinking_loop_guard`のリトライ上限到達後、ユーザーが続行メッセージを送っても再承認が不要になる） | `PLAN_RESET_APPROVAL_ON_NEW_MESSAGE` |
-| `[default_workdir]` | `dir` | エージェントの既定の作業ディレクトリ（`run_script` の cwd 等） | `DEFAULT_WORKDIR` |
+| `[default_workdir]` | `dir` | エージェントの既定の作業ディレクトリのベース。実際の書き込み・`run_script`のcwdはこの配下の自セッション専用サブディレクトリ`_tmp_<thread_id>`に限定される（`dir`直下への書き込みは許可されない） | `DEFAULT_WORKDIR` |
 | `[default_workdir]` | `retention_days` | 上記 `dir` 配下のファイル保持日数（0以下で自動削除無効） | `DEFAULT_WORKDIR_RETENTION_DAYS` |
 | `[default_workdir]` | `cleanup_interval_hours` | default_workdir 自動削除チェック間隔（時間） | `DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS` |
 | `[log]` | `dir` | ログ出力先 | `LOG_DIR` |
@@ -956,6 +961,34 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 - **v1のスコープ外**: 添付ファイル（`show_image`/`analyze_image`/
   `provide_download` 等）は再開したスレッドの過去メッセージ内では表示が
   欠落する（本文・ツール呼び出し履歴は問題なく再現される）。
+
+---
+
+## 作業ディレクトリの切り替え（ツールバー）
+
+`run_script`/`execute_python_code` が読み書きする作業ディレクトリは、既定では
+サンドボックス化された `[default_workdir]` 配下の `_tmp_<thread_id>`
+（前述「データの保存場所」参照）だが、チャット入力欄ツールバーの
+フォルダアイコン（`frontend/src/components/WorkDirButton.tsx`）から、
+会話（スレッド）単位でユーザー自身の実プロジェクトフォルダ等へ絶対パスで
+切り替えられる。
+
+- **入力方式**: OSネイティブのフォルダ選択ダイアログではなく、絶対パス文字列を
+  直接入力するポップオーバー方式（サーバーとブラウザが別マシンの構成だと
+  ネイティブダイアログがサーバー側にしか表示されずクライアントが固まって
+  見える問題があったため）。「既定値に戻す」で `config.ini` の
+  `[default_workdir].dir` ベースの設定へ戻せる。
+- **変更可能なタイミング**: 新規チャットで一度もメッセージを送信していない間、
+  または未送信のまま再開したスレッドに限る。送信済みのチャットではアイコンが
+  無効化される（送信後に作業フォルダを変えると挙動が分かりにくくなるため）。
+- **検証とフォールバック**: 設定時にサーバー側で実際にディレクトリ一覧
+  取得・一時ファイルの作成/書き込み/削除を試みて読み書き可否を判定する
+  （`src/tools.py` の `probe_workdir_access`）。存在しない・読み取り不可・
+  （書き込みが必要な場面では）書き込み不可と判定された場合は、LLMが確認を
+  怠っても安全側に倒れるよう自動的に `default_workdir` へフォールバックする。
+  判定結果は `check_work_dir_status` ツールでも確認できる。
+- **スコープ**: `cl.user_session`（会話単位）に保存されるだけで、
+  `config.ini` 自体は変更されない。他の会話・他ユーザーには影響しない。
 
 ---
 
