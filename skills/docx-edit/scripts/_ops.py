@@ -10,6 +10,8 @@ run_script からは直接実行されない。edit_docx.py から import して
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from _blocks import (
     BLOCK_HANDLERS,
     HEADING_FONT,
@@ -249,6 +251,78 @@ def op_set_table_style(ctx: DocEditContext, op: dict) -> dict:
     return {"op": "set_table_style", "table_index": idx}
 
 
+def op_insert_image(ctx: DocEditContext, op: dict) -> dict:
+    """既存段落の前後に新しい段落を作り、画像を挿入する（append_blockのimageは
+    常に文末追加のため、任意の段落位置に挿入したい場合はこちらを使う）。
+    """
+    from docx.shared import Cm
+
+    image_path = op.get("image_path")
+    if not image_path:
+        raise ValueError("'image_path' が必要です")
+    image_file = Path(str(image_path))
+    if not image_file.is_file():
+        raise ValueError(f"画像ファイルが見つかりません: {image_path}")
+
+    before_index, after_index = op.get("before_index"), op.get("after_index")
+    if (before_index is None) == (after_index is None):
+        raise ValueError("before_index または after_index のどちらか一方のみを指定してください")
+
+    if before_index is not None:
+        anchor_para = ctx.get_paragraph(before_index)
+        new_para = anchor_para.insert_paragraph_before()
+    else:
+        anchor_para = ctx.get_paragraph(after_index)
+        live_paragraphs = ctx.doc.paragraphs
+        # Paragraphはdoc.paragraphsアクセスの度に新規ラッパーが生成されるため、
+        # オブジェクト同一性ではなく内部XML要素(_p)で比較する
+        # （DocEditContext.get_paragraphと同じ理由）。
+        live_idx = [p._p for p in live_paragraphs].index(anchor_para._p)
+        if live_idx + 1 < len(live_paragraphs):
+            new_para = live_paragraphs[live_idx + 1].insert_paragraph_before()
+        else:
+            new_para = ctx.doc.add_paragraph()
+
+    run = new_para.add_run()
+    kwargs = {}
+    if op.get("width_cm"):
+        kwargs["width"] = Cm(float(op["width_cm"]))
+    if op.get("height_cm"):
+        kwargs["height"] = Cm(float(op["height_cm"]))
+    run.add_picture(str(image_file), **kwargs)
+    return {"op": "insert_image", "position": "before" if before_index is not None else "after"}
+
+
+def op_set_image_size(ctx: DocEditContext, op: dict) -> dict:
+    from docx.shared import Cm, Emu
+
+    image_index = op.get("image_index")
+    if image_index is None:
+        raise ValueError("'image_index' が必要です")
+    idx = int(image_index)
+    inline_shapes = ctx.doc.inline_shapes
+    if not (0 <= idx < len(inline_shapes)):
+        raise ValueError(f"存在しないimage_indexです: {image_index}（総画像数: {len(inline_shapes)}）")
+    shape = inline_shapes[idx]
+
+    width_cm, height_cm = op.get("width_cm"), op.get("height_cm")
+    if width_cm is None and height_cm is None:
+        raise ValueError("width_cm/height_cm のいずれか1つ以上の指定が必要です")
+
+    current_width, current_height = shape.width, shape.height
+    if width_cm is not None and height_cm is not None:
+        shape.width, shape.height = Cm(float(width_cm)), Cm(float(height_cm))
+    elif width_cm is not None:
+        new_width = Cm(float(width_cm))
+        shape.height = Emu(int(current_height * (new_width / current_width)))
+        shape.width = new_width
+    else:
+        new_height = Cm(float(height_cm))
+        shape.width = Emu(int(current_width * (new_height / current_height)))
+        shape.height = new_height
+    return {"op": "set_image_size", "image_index": idx}
+
+
 def op_delete_paragraph(ctx: DocEditContext, op: dict) -> dict:
     index = op["index"]
     if op.get("track_changes"):
@@ -276,6 +350,8 @@ def op_reject_all_changes(ctx: DocEditContext, op: dict) -> dict:
 OP_HANDLERS = {
     "find_replace": op_find_replace,
     "append_block": op_append_block,
+    "insert_image": op_insert_image,
+    "set_image_size": op_set_image_size,
     "set_paragraph_style": op_set_paragraph_style,
     "set_table_style": op_set_table_style,
     "delete_paragraph": op_delete_paragraph,

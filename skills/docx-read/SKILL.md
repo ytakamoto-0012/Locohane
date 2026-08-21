@@ -66,7 +66,9 @@ Word文書（`.docx`）を読み込み、段落・表・文書プロパティ・
   `{"page_width_cm", "page_height_cm", "left_margin_cm", "right_margin_cm", "top_margin_cm", "bottom_margin_cm"}`。
 - `table_column_widths`: 各表について、列幅の配列（`[[12.3, null, 8.5], [15.2, 10.0]]`）。
   自動レイアウトで未設定の列は`null`。テーブル内の表のみ（テキストボックス内の表は含まない）。
-- `inline_image_widths_cm`: 本文に直接挿入された画像の幅配列（`[10.5, 20.0]`）。
+- `inline_images`: 本文に直接挿入された画像の一覧（`[{"image_index": 0, "width_cm": 10.5, "height_cm": 5.2}, ...]`）。
+  `image_index`は`doc.inline_shapes`の0始まり通し番号で、`docx-edit`スキルの
+  `set_image_size`が受け取る`image_index`と完全に一致する。
 - `warnings`: 構造的な不備の警告配列（該当なしならキー省略）。
   表の列幅合計がページ幅を超える、または挿入画像がページ幅を超えている場合に指摘。
   Wordは表セル内のテキスト折り返しが既定のため「文字が切れる」より

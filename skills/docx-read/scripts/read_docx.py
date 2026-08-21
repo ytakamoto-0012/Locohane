@@ -131,11 +131,17 @@ def main() -> int:
             col_widths.append(width_cm)
         table_column_widths_list.append(col_widths)
 
-    # 挿入画像の幅を取得
-    inline_image_widths_cm = []
-    for inline_shape in doc.inline_shapes:
-        width_cm = _length_cm(inline_shape.width) if inline_shape.width is not None else None
-        inline_image_widths_cm.append(width_cm)
+    # 挿入画像の幅・高さを取得（image_indexはdoc.inline_shapesの0始まり通し番号で、
+    # docx-editのset_image_sizeが受け取るimage_indexと完全に一致する）
+    inline_images = []
+    for idx, inline_shape in enumerate(doc.inline_shapes):
+        inline_images.append(
+            {
+                "image_index": idx,
+                "width_cm": _length_cm(inline_shape.width) if inline_shape.width is not None else None,
+                "height_cm": _length_cm(inline_shape.height) if inline_shape.height is not None else None,
+            }
+        )
 
     # 警告を生成
     warnings = []
@@ -157,9 +163,13 @@ def main() -> int:
                         warnings.append(msg)
 
             # 挿入画像のサイズチェック
-            for img_idx, width_cm in enumerate(inline_image_widths_cm, 1):
+            for img in inline_images:
+                width_cm = img["width_cm"]
                 if width_cm is not None and width_cm > usable_width_cm:
-                    msg = f"挿入画像({img_idx}番目)の幅({width_cm:.2f}cm)が" f"ページ幅({usable_width_cm:.2f}cm)を超えています"
+                    msg = (
+                        f"挿入画像(image_index={img['image_index']})の幅({width_cm:.2f}cm)が"
+                        f"ページ幅({usable_width_cm:.2f}cm)を超えています"
+                    )
                     warnings.append(msg)
 
     result = {
@@ -175,7 +185,7 @@ def main() -> int:
         "track_changes": track_changes,
         "sections": sections_info,
         "table_column_widths": table_column_widths_list,
-        "inline_image_widths_cm": inline_image_widths_cm,
+        "inline_images": inline_images,
     }
     if warnings:
         result["warnings"] = warnings

@@ -48,6 +48,8 @@ from excel_common import (  # noqa: E402
     summarize_result,
     write_json_result,
 )
+from openpyxl.drawing.spreadsheet_drawing import AbsoluteAnchor
+from openpyxl.utils.units import EMU_to_cm
 
 
 def _query_group_by(ws, query: dict, max_row: int) -> dict:
@@ -60,8 +62,38 @@ def _query_group_by(ws, query: dict, max_row: int) -> dict:
     }
 
 
+def _query_list_images(ws, query: dict, max_row: int) -> dict:
+    items = []
+    for idx, img in enumerate(ws._images):
+        anchor = img.anchor
+        if isinstance(anchor, AbsoluteAnchor):
+            items.append(
+                {
+                    "image_index": idx,
+                    "anchor_type": "absolute",
+                    "left_cm": round(EMU_to_cm(anchor.pos.x), 2),
+                    "top_cm": round(EMU_to_cm(anchor.pos.y), 2),
+                    "width_cm": round(EMU_to_cm(anchor.ext.cx), 2),
+                    "height_cm": round(EMU_to_cm(anchor.ext.cy), 2),
+                }
+            )
+        else:
+            items.append(
+                {
+                    "image_index": idx,
+                    "anchor_type": type(anchor).__name__ if anchor is not None else None,
+                    "left_cm": None,
+                    "top_cm": None,
+                    "width_cm": None,
+                    "height_cm": None,
+                }
+            )
+    return {"op": "list_images", "items": items}
+
+
 _QUERY_HANDLERS = {
     "group_by": _query_group_by,
+    "list_images": _query_list_images,
 }
 
 

@@ -96,6 +96,26 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 - `--sheet`必須（省略時・`.xls`拡張子ではエラー）。未対応のop名もエラー＋終了コード1（対応opの一覧をメッセージに含む）。
 - excel-editスキルで`insert_row_group`を使う際の`anchor`（どの値の前/後に挿入するか）の確認にもそのまま使える。
 
+### `list_images`（画像一覧）
+
+```json
+{"skill_name": "excel-read", "script_filename": "read_excel.py",
+ "script_args": ["C:\\Users\\me\\book.xlsx", "--sheet", "Sheet1", "--query-json", "[{\"op\": \"list_images\"}]"]}
+```
+出力（`result_path`内、`query_results`キー）:
+```json
+"query_results": [
+  {"op": "list_images",
+   "items": [{"image_index": 0, "anchor_type": "absolute",
+              "left_cm": 1.0, "top_cm": 1.0, "width_cm": 5.0, "height_cm": 3.0}]}
+]
+```
+`image_index`はそのシート内での画像の0始まり通し番号（追加順）で、excel-editの
+`set_image_position`の`image_index`と完全に一致する。`anchor_type`が`"absolute"`
+以外（テンプレートに元から入っていた、セルに追従する配置の画像）の場合は
+`left_cm`等が`null`になる（`set_image_position`で一度動かすと絶対座標に
+置き換わり、以降は座標が取得できるようになる）。
+
 ## エッジケース
 
 ファイル不在／拡張子がxlsx・xlsm・xls以外／シート未検出／破損ファイルはエラー＋終了コード1。`.xls`はstyle情報・`--query-json`非対応（`--query-json`指定時のみエラー、style情報はそもそも`.xlsx`/`.xlsm`限定で自動的に付かない）。

@@ -26,6 +26,13 @@ THEMES = {
     "berry": {"primary": "6D2E46", "secondary": "A26769", "accent": "ECE2D0", "text_on_primary": "FFFFFF"},
 }
 
+# グラフの系列（4系列以上）用の固定順カテゴリカルパレット。dataviz skill
+# （references/palette.md）が色覚多様性(CVD)シミュレーションで検証済みの
+# 8色パレット（light面、隣接ΔE 9.1/正常視19.6）をそのまま採用する。
+# THEMESのprimary/secondary/accentは3色循環だと4系列目以降で重複するため、
+# グラフの系列色にはTHEMESではなく常にこちらを使う（テーマ名によらず固定）。
+CHART_PALETTE = ["2A78D6", "EB6834", "1BAF7A", "EDA100", "E87BA4", "008300", "4A3AA7", "E34948"]
+
 
 def resolve_theme(name: str | None) -> dict:
     """テーマ名から配色辞書を返す。

@@ -17,8 +17,12 @@ if str(_OFFICE_SHARED) not in sys.path:
     sys.path.append(str(_OFFICE_SHARED))
 from excel_common import _display_width, column_index, group_column_values, resolve_sheet_name  # noqa: E402
 from _style import apply_style, extract_style, resolve_theme
+from office_theme import CHART_PALETTE  # noqa: E402
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference, ScatterChart
 from openpyxl.chart.label import DataLabelList
+from openpyxl.drawing.image import Image
+from openpyxl.drawing.spreadsheet_drawing import AbsoluteAnchor
+from openpyxl.drawing.xdr import XDRPoint2D, XDRPositiveSize2D
 from openpyxl.formatting.rule import (
     CellIsRule,
     ColorScaleRule,
@@ -27,6 +31,7 @@ from openpyxl.formatting.rule import (
     IconSetRule,
 )
 from openpyxl.utils.cell import range_boundaries
+from openpyxl.utils.units import EMU_to_pixels, cm_to_EMU, pixels_to_EMU
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
@@ -474,13 +479,130 @@ def op_add_chart(wb, op: dict) -> None:
         else:
             chart.dataLabels.showVal = True
 
-    theme = resolve_theme(op["theme"]) if op.get("theme") else None
+    theme = op.get("theme")
     if theme is not None and op["type"] != "pie":
-        palette = [theme["primary"], theme["secondary"], theme["accent"]]
+        resolve_theme(theme)  # themeの存在検証のみ（系列色は常にCHART_PALETTE）
         for i, series in enumerate(chart.series):
-            series.graphicalProperties.solidFill = palette[i % len(palette)]
+            series.graphicalProperties.solidFill = CHART_PALETTE[i % len(CHART_PALETTE)]
 
     ws.add_chart(chart, op["anchor"])
+
+
+def op_add_image(wb, op: dict) -> None:
+    ws = _sheet(wb, op["sheet"])
+    image_path = op.get("image_path")
+    if not image_path:
+        raise ValueError("'image_path' が必要です")
+    image_file = Path(str(image_path))
+    if not image_file.is_file():
+        raise ValueError(f"image_path が見つかりません: {image_path}")
+    left_cm, top_cm = op.get("left_cm"), op.get("top_cm")
+    if left_cm is None or top_cm is None:
+        raise ValueError("'left_cm'/'top_cm' が必要です")
+
+    img = Image(str(image_file))
+    native_w_px, native_h_px = img.width, img.height
+    width_cm, height_cm = op.get("width_cm"), op.get("height_cm")
+    if width_cm is None and height_cm is None:
+        width_emu, height_emu = pixels_to_EMU(native_w_px), pixels_to_EMU(native_h_px)
+    elif width_cm is not None and height_cm is not None:
+        width_emu, height_emu = cm_to_EMU(float(width_cm)), cm_to_EMU(float(height_cm))
+    elif width_cm is not None:
+        width_emu = cm_to_EMU(float(width_cm))
+        height_emu = int(width_emu * native_h_px / native_w_px)
+    else:
+        height_emu = cm_to_EMU(float(height_cm))
+        width_emu = int(height_emu * native_w_px / native_h_px)
+
+    img.width, img.height = EMU_to_pixels(width_emu), EMU_to_pixels(height_emu)
+    img.anchor = AbsoluteAnchor(
+        pos=XDRPoint2D(cm_to_EMU(float(left_cm)), cm_to_EMU(float(top_cm))),
+        ext=XDRPositiveSize2D(width_emu, height_emu),
+    )
+    ws.add_image(img)
+
+
+def _get_image(ws, image_index):
+    images = ws._images
+    idx = int(image_index)
+    if idx < 0 or idx >= len(images):
+        raise ValueError(f"存在しないimage_indexです: {image_index}（このシートの画像数: {len(images)}）")
+    return images[idx]
+
+
+def op_set_image_position(wb, op: dict) -> None:
+    ws = _sheet(wb, op["sheet"])
+    image_index = op.get("image_index")
+    if image_index is None:
+        raise ValueError("'image_index' が必要です")
+    img = _get_image(ws, image_index)
+
+    left_cm, top_cm = op.get("left_cm"), op.get("top_cm")
+    width_cm, height_cm = op.get("width_cm"), op.get("height_cm")
+    if left_cm is None and top_cm is None and width_cm is None and height_cm is None:
+        raise ValueError("left_cm/top_cm/width_cm/height_cm のいずれか1つ以上の指定が必要です")
+
+    anchor = img.anchor
+    if not isinstance(anchor, AbsoluteAnchor):
+        # セル追従アンカー(One/TwoCellAnchor)は絶対座標へ正確に逆算できないため、
+        # 初回操作時は絶対座標アンカーへ置き換える（位置未指定の軸は0cm起点）。
+        anchor = AbsoluteAnchor(
+            pos=XDRPoint2D(0, 0),
+            ext=XDRPositiveSize2D(pixels_to_EMU(img.width), pixels_to_EMU(img.height)),
+        )
+        img.anchor = anchor
+    if left_cm is not None:
+        anchor.pos.x = cm_to_EMU(float(left_cm))
+    if top_cm is not None:
+        anchor.pos.y = cm_to_EMU(float(top_cm))
+    if width_cm is not None:
+        anchor.ext.cx = cm_to_EMU(float(width_cm))
+        img.width = EMU_to_pixels(anchor.ext.cx)
+    if height_cm is not None:
+        anchor.ext.cy = cm_to_EMU(float(height_cm))
+        img.height = EMU_to_pixels(anchor.ext.cy)
+
+
+def _get_chart(ws, chart_index):
+    charts = ws._charts
+    idx = int(chart_index)
+    if idx < 0 or idx >= len(charts):
+        raise ValueError(f"存在しないchart_indexです: {chart_index}（このシートのグラフ数: {len(charts)}）")
+    return charts[idx]
+
+
+def op_update_chart(wb, op: dict) -> None:
+    ws = _sheet(wb, op["sheet"])
+    chart_index = op.get("chart_index")
+    if chart_index is None:
+        raise ValueError("'chart_index' が必要です")
+    chart = _get_chart(ws, chart_index)
+
+    anchor = op.get("anchor")
+    width_cm, height_cm = op.get("width_cm"), op.get("height_cm")
+    data_range, categories_range = op.get("data_range"), op.get("categories_range")
+    title, theme = op.get("title"), op.get("theme")
+    if not any([anchor, width_cm is not None, height_cm is not None, data_range, title, theme]):
+        raise ValueError("anchor/width_cm/height_cm/data_range/title/theme のいずれか1つ以上の指定が必要です")
+
+    if anchor:
+        chart.anchor = anchor
+    if width_cm is not None:
+        chart.width = float(width_cm)
+    if height_cm is not None:
+        chart.height = float(height_cm)
+    if data_range:
+        chart.series = []
+        chart.add_data(_reference(ws, data_range), titles_from_data=op.get("titles_from_data", True))
+        if categories_range:
+            chart.set_categories(_reference(ws, categories_range))
+    if title:
+        chart.title = str(title)
+    if theme:
+        resolve_theme(theme)  # themeの存在検証のみ（系列色は常にCHART_PALETTE）
+        if not isinstance(chart, PieChart):
+            for i, series in enumerate(chart.series):
+                series.graphicalProperties.solidFill = CHART_PALETTE[i % len(CHART_PALETTE)]
 
 
 _CF_BUILDERS = {
@@ -546,6 +668,9 @@ OP_HANDLERS = {
     "remove_table": op_remove_table,
     "freeze_panes": op_freeze_panes,
     "add_chart": op_add_chart,
+    "add_image": op_add_image,
+    "set_image_position": op_set_image_position,
+    "update_chart": op_update_chart,
     "add_conditional_format": op_add_conditional_format,
     "add_data_validation": op_add_data_validation,
 }

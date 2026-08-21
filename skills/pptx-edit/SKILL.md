@@ -56,6 +56,8 @@ metadata:
 | `set_table` | `slide`, `shape_index` | `headers`、`rows` | 既存表を丸ごと差し替え。**既存表と行数・列数が完全一致する場合のみ**可能（python-pptxは既存表の行列数の増減に非対応。行列数を変えたい場合は`pptx-create`で新規スライドとして作る）。`headers`省略時は必要列数を`rows[0]`の要素数から推定する（`headers`と`rows`が両方省略／空だと0行0列扱いになり、既存表と一致しない限りエラー） |
 | `set_notes` | `slide` | `text`（省略時`""`＝空文字にする） | 発表者ノートを差し替え |
 | `replace_picture` | `slide`, `shape_index`, `image_path` | なし | 既存画像shapeの位置・サイズを保ったまま画像だけ差し替え（差し替え後、z順序は最前面に移動する点に注意） |
+| `add_picture` | `slide`, `image_path`, `left_cm`, `top_cm` | `width_cm`/`height_cm`（省略時は原寸、片方のみ指定でアスペクト比維持） | 新規画像をスライドへ追加（下記参照） |
+| `add_chart` | `slide`, `type`, `left_cm`, `top_cm`, `width_cm`, `height_cm`, `categories`, `series` | `title`、`theme`、`show_data_labels`(既定true) | 新規グラフをスライドへ追加（下記参照） |
 | `set_shape_style` | `slide`, `shape_index` | `role`(`heading`/`table_header`)+`theme`、または`text_color`/`bold`/`italic`/`underline`/`font_size_pt`/`font_name`/`fill_color`/`border_color`/`align`(`left`/`center`/`right`/`justify`)、表shapeは`row`/`all_rows` | 既存shapeを明示的に再配色・再装飾・文字配置変更（下記参照） |
 | `set_shape_position` | `slide`, `shape_index` | `left_cm`/`top_cm`/`width_cm`/`height_cm`（cm単位、いずれか1つ以上） | 既存shapeの位置・サイズを変更（下記参照） |
 | `duplicate_slide` | `slide` | `insert_after`(省略時は複製元スライドの現在のライブ位置と同じ), `count`(省略時1) | 指定スライドを同じレイアウトのまま複製し、`insert_after`の直後に`count`枚挿入。プレースホルダ・表・テキストボックス・画像を含めて複製できる |
@@ -126,12 +128,46 @@ metadata:
 - 表shapeでは対象行を `role: "table_header"`（1行目のみ）／`row`（0始まり行番号
   を1つ指定）／`all_rows: true`（全行）のいずれかで決める。
 - `set_shape_position` は `left_cm`/`top_cm`/`width_cm`/`height_cm` のうち指定した
-  ものだけを変更し、省略したものは元の値のまま。
+  ものだけを変更し、省略したものは元の値のまま。`add_picture`/`add_chart`で
+  追加した画像・グラフ（`shape_type`が`PICTURE`/`CHART`）にもそのまま使える
+  （追加後に`pptx-inspect`で新しい`shape_index`を確認してから呼び出す）。
 - `theme`のみ・スタイルキーが何も無い呼び出しはエラーになります。
 
 **非対応（現状のop群でできないこと）**: 表shapeのセル罫線色、影・グラデーション・
-反射等の図形効果、スライド背景色、行間・段落インデント、新規図形/画像の追加
-（画像差し替えは`replace_picture`）、チャートの再配色。
+反射等の図形効果、スライド背景色、行間・段落インデント、新規図形（テキスト
+ボックス・オートシェイプ等）の追加、既存テンプレート内チャートの再配色
+（新規追加は`add_chart`の`theme`指定で対応、既存チャートの色変更は非対応）。
+
+## add_picture / add_chart（新規画像・グラフの追加）
+
+```json
+{"op": "add_picture", "slide": 2, "image_path": "C:\\img\\photo.png",
+ "left_cm": 2.0, "top_cm": 3.0, "width_cm": 10.0, "height_cm": 6.0}
+{"op": "add_chart", "slide": 3, "type": "bar",
+ "left_cm": 2, "top_cm": 3, "width_cm": 20, "height_cm": 10,
+ "categories": ["4月","5月","6月"],
+ "series": [{"name": "売上", "values": [120, 135, 150]}],
+ "title": "月次実績", "theme": "navy", "show_data_labels": true}
+```
+
+- `add_picture`: `left_cm`/`top_cm`は必須。`width_cm`/`height_cm`は両方省略で
+  画像の原寸、片方のみ指定でアスペクト比を保ったまま他方を自動計算。
+- `add_chart`: `type`は`bar`/`line`/`pie`のみ対応（**散布図は非対応**）。
+  `categories`（カテゴリ名の配列）と`series`（`{"name","values"}`の配列、
+  1件以上、各`values`の要素数は`categories`と一致必須）でデータを直接JSONに
+  書く（pptxにはExcelのようなセル参照が無いため）。`show_data_labels`は
+  既定`true`（`pie`は%、それ以外は値を表示）。
+- `theme`を指定すると系列色が付く（`pie`は対象外）。**この系列色は`theme`の
+  `primary`/`secondary`/`accent`ではなく、色覚多様性(CVD)に配慮した固定8色
+  パレットを使う**（`primary`等3色循環だと4系列目以降で色が重複するため）。
+  `theme`は主にheading等の他opとの記法統一のために受け付けているだけで、
+  どのテーマ名を指定しても系列色そのものは変わらない。
+- 追加した画像・グラフは`slide.shapes`に入るだけなので、`shape_index`の
+  確認は既存どおり`pptx-inspect`を再実行すればよい（`add_picture`/`add_chart`
+  専用の確認手順は無い）。
+- `add_chart`で追加したチャートを含むスライドは`duplicate_slide`で複製
+  できない（`UNSUPPORTED_DUPLICATE_TYPES`が`CHART`を含むため、他のチャート
+  同様にエラーになる）。
 
 ## エッジケース
 
@@ -143,8 +179,10 @@ metadata:
   `replace_picture` の `image_path` 不在、未対応の `theme`/`role`/`align`、
   `set_shape_style` でスタイルキーが1つも無い、表shapeへの`set_shape_style`で
   対象行未指定、表shapeへの`set_shape_style`で`border_color`指定、
-  `set_shape_position` で位置/サイズキーが1つも無い、は、いずれもその操作番号を
-  添えてエラー終了します。
+  `set_shape_position` で位置/サイズキーが1つも無い、`add_picture` の
+  `image_path` 不在、`add_chart` の未対応`type`（bar/line/pie以外）や
+  `series`の`values`要素数と`categories`要素数の不一致、は、いずれもその
+  操作番号を添えてエラー終了します。
 - `delete_slide`で歯抜けができた後に`duplicate_slide`を実行しても、内部でスライドの
   パート名衝突（python-pptx側の既知の制限）を自動回避するため、安全に組み合わせられます。
 - 操作の途中でエラーになった場合、`output_path` へのファイル保存は行われません

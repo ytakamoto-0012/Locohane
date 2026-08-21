@@ -1,6 +1,6 @@
 ---
 name: excel-edit
-description: xlsx/xlsmファイルの新規作成・既存編集を行うスキル。セル値・書式（フォント/背景色/罫線/列幅/行高/結合）の設定、行列の挿入削除、グラフ追加（既定でデータラベル表示・テーマ配色対応）、条件付き書式、データ検証、構造化テーブルに対応。Excel本体は不要（openpyxlで直接書き込む）。数式文字列は書き込めるが計算はしない（計算結果の確認・エラーセル検出はexcel-recalcスキルを使う）。ユーザーが表データを新規作成/編集したいとき、書式付きのレポートやグラフ入りのExcelを出力したいとき、既存のxlsx/xlsmにデータや装飾を追記・修正したいときに使う。読み込み専用ならexcel-read、VBAマクロの読み書きはexcel-vba-read/excel-vba-edit、見た目の画像確認はexcel-renderを使う。
+description: xlsx/xlsmファイルの新規作成・既存編集を行うスキル。セル値・書式（フォント/背景色/罫線/列幅/行高/結合）の設定、行列の挿入削除、グラフ追加・調整（既定でデータラベル表示・テーマ配色対応）、画像の追加・位置調整、条件付き書式、データ検証、構造化テーブルに対応。Excel本体は不要（openpyxlで直接書き込む）。数式文字列は書き込めるが計算はしない（計算結果の確認・エラーセル検出はexcel-recalcスキルを使う）。ユーザーが表データを新規作成/編集したいとき、書式付きのレポートやグラフ・画像入りのExcelを出力したいとき、既存のxlsx/xlsmにデータや装飾を追記・修正したいときに使う。読み込み専用ならexcel-read、VBAマクロの読み書きはexcel-vba-read/excel-vba-edit、見た目の画像確認はexcel-renderを使う。
 license: MIT
 metadata:
   author: ytakamoto
@@ -54,7 +54,10 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 | `update_table` | `sheet`,`name` | `range`,`style`,`banded` | 既存テーブルの範囲拡張・スタイル変更 |
 | `remove_table` | `sheet`,`name` | - | テーブル定義のみ削除（値・書式は残る） |
 | `freeze_panes` | `sheet`,`cell` | - | ウィンドウ枠固定（`"A2"`で1行目固定） |
-| `add_chart` | `sheet`,`type`,`data_range`,`anchor` | `title`,`categories_range`,`titles_from_data`(既定true),`theme`(下記参照),`show_data_labels`(既定true) | グラフ追加。`type`は`bar`/`line`/`pie`/`scatter`。既定でデータラベル（値。`pie`は%）を表示し、`theme`指定時は系列色をテーマ配色にする（`pie`は対象外、Excel既定の配色のまま） |
+| `add_chart` | `sheet`,`type`,`data_range`,`anchor` | `title`,`categories_range`,`titles_from_data`(既定true),`theme`(下記参照),`show_data_labels`(既定true) | グラフ追加。`type`は`bar`/`line`/`pie`/`scatter`。既定でデータラベル（値。`pie`は%）を表示し、`theme`指定時は系列色を付ける（`pie`は対象外、Excel既定の配色のまま） |
+| `update_chart` | `sheet`,`chart_index` | `anchor`,`width_cm`,`height_cm`,`data_range`,`categories_range`,`titles_from_data`,`title`,`theme`（1つ以上必須） | 既存グラフの位置・サイズ・データ範囲・タイトル・配色を変更（下記「画像・グラフの追加と調整」参照） |
+| `add_image` | `sheet`,`image_path`,`left_cm`,`top_cm` | `width_cm`/`height_cm`（省略時は原寸、片方のみ指定でアスペクト比維持） | 新規画像をシートへ追加（下記参照） |
+| `set_image_position` | `sheet`,`image_index` | `left_cm`/`top_cm`/`width_cm`/`height_cm`（1つ以上必須） | 既存画像の位置・サイズを変更（下記参照） |
 | `add_conditional_format` | `sheet`,`range`,`rule_type`,`params` | - | 条件付き書式（下記表参照） |
 | `add_data_validation` | `sheet`,`range`,`type` | `formula1`,`formula2`,`prompt`,`prompt_title`,`error_message`,`error_title`,`allow_blank`(既定true) | データ検証（下記参照） |
 
@@ -82,10 +85,16 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 
 ## テーマ配色（theme）
 
-`header_style`（`set_range`経由）・`format_table`・`add_chart`の`theme`キーに以下から選ぶと、
-見出し配色や系列色を一括で指定できる（`pptx-create`スキルと同じ配色・同じ名前なので、
+`header_style`（`set_range`経由）・`format_table`の`theme`キーに以下から選ぶと、
+見出し配色を一括で指定できる（`pptx-create`スキルと同じ配色・同じ名前なので、
 xlsxとpptxを同じ資料セットとして作るときに見た目を揃えやすい）。個別に`header_fill`等を
 指定すればそちらが優先される。
+
+`add_chart`/`update_chart`の`theme`は「グラフに色を付けるかどうか」のスイッチとして
+同じテーマ名を受け付けるが、**実際の系列色はテーマの`primary`/`secondary`/`accent`
+ではなく、色覚多様性(CVD)に配慮した固定8色パレットを使う**（3色循環だと4系列目
+以降で色が重複するため）。そのためテーマ名を`navy`から`forest`に変えても
+グラフの系列色は変わらない（見出し配色等、テーマ依存の他要素とはここだけ挙動が違う）。
 
 | theme | 主な色調 |
 |---|---|
@@ -161,6 +170,35 @@ xlsxとpptxを同じ資料セットとして作るときに見た目を揃えや
 同じopsバッチ内で`insert_row_group`を複数回連続実行しても、各opは常に直前のopsまで適用済みの最新のシート状態からアンカーを解決するため、行ズレによる上書き事故は起きない（「6月に2つの行事を追加」のように複数グループを7月の前へ挿入したい場合は、この形で`insert_row_group`を必要な回数だけ並べればよい）。
 
 現在のグループ構成を確認したいとき（`insert_row_group`の`anchor`に使う値の確認、挿入結果の検証など）は、`excel-read`スキルの`--query-json '[{"op": "group_by", "column": "A"}]'`を使う（生の`rows`を目で数えて行範囲を手計算しない）。
+
+## 画像・グラフの追加と調整（`add_image`/`set_image_position`/`update_chart`）
+
+```json
+[{"op": "add_image", "sheet": "Sheet1", "image_path": "C:\\img\\logo.png",
+  "left_cm": 1.0, "top_cm": 1.0, "width_cm": 5.0, "height_cm": 3.0},
+ {"op": "set_image_position", "sheet": "Sheet1", "image_index": 0, "left_cm": 12.0, "width_cm": 6.0},
+ {"op": "update_chart", "sheet": "Sheet1", "chart_index": 0,
+  "anchor": "F1", "width_cm": 18, "height_cm": 9, "title": "更新後タイトル", "theme": "navy"}]
+```
+
+- `add_image`: `left_cm`/`top_cm`は必須（シート左上原点からのcm座標）。
+  `width_cm`/`height_cm`は両方省略で画像の原寸、片方のみ指定でアスペクト比を
+  保ったまま他方を自動計算。
+- `set_image_position`: `image_index`はそのシート内での画像の0始まり通し番号
+  （追加順。`excel-read`の`--query-json '[{"op": "list_images"}]'`で現在の
+  `image_index`と位置・サイズを確認できる）。`left_cm`/`top_cm`/`width_cm`/
+  `height_cm`のうち指定したものだけを変更し、省略したものは元の値のまま。
+  **テンプレートに元から入っていた画像**（セルに追従する配置）を初めて動かす
+  ときは、内部的に絶対座標へ置き換わり、`left_cm`/`top_cm`を指定しなかった
+  軸は0cm起点になる。位置がずれて見える場合は`left_cm`/`top_cm`を両方
+  明示することを推奨。
+- `update_chart`: `chart_index`はそのシート内でのグラフの0始まり通し番号
+  （追加順）。`anchor`/`width_cm`/`height_cm`/`data_range`(+`categories_range`/
+  `titles_from_data`)/`title`/`theme`のいずれか1つ以上が必須。`data_range`を
+  指定すると既存の系列は全てクリアしてから作り直される。**テンプレートに
+  元から入っていたグラフ**はopenpyxlがサイズをファイルから正しく復元しない
+  既知の制約があるため、サイズ変更したい場合は`width_cm`/`height_cm`を
+  明示指定することを推奨する。
 
 ## 条件付き書式（`add_conditional_format`）
 

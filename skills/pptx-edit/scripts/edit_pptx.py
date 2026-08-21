@@ -29,9 +29,11 @@ _OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
 if str(_OFFICE_SHARED) not in sys.path:
     sys.path.append(str(_OFFICE_SHARED))
 from pptx_common import backup_before_overwrite, register_output_path, setup_utf8_stdio  # noqa: E402
-from office_theme import THEMES, resolve_theme  # noqa: E402
+from office_theme import CHART_PALETTE, THEMES, resolve_theme  # noqa: E402
 from pptx import Presentation
+from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
+from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.enum.text import PP_ALIGN
 from pptx.exc import PackageNotFoundError
@@ -206,6 +208,78 @@ def op_replace_picture(ctx: EditContext, op: dict) -> None:
     left, top, width, height = shape.left, shape.top, shape.width, shape.height
     shape._element.getparent().remove(shape._element)
     slide.shapes.add_picture(str(image_file), left, top, width=width, height=height)
+
+
+def op_add_picture(ctx: EditContext, op: dict) -> None:
+    """新規画像をスライドへ追加する。追加後のshape_indexはpptx-inspectで確認する。"""
+    slide = ctx.get_slide(_require(op, "slide"))
+    image_path = _require(op, "image_path")
+    image_file = Path(str(image_path))
+    if not image_file.is_file():
+        raise ValueError(f"image_path が見つかりません: {image_path}")
+    left = Cm(float(_require(op, "left_cm")))
+    top = Cm(float(_require(op, "top_cm")))
+    width = Cm(float(op["width_cm"])) if op.get("width_cm") else None
+    height = Cm(float(op["height_cm"])) if op.get("height_cm") else None
+    slide.shapes.add_picture(str(image_file), left, top, width=width, height=height)
+
+
+_CHART_TYPE_MAP = {
+    "bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
+    "line": XL_CHART_TYPE.LINE,
+    "pie": XL_CHART_TYPE.PIE,
+}
+
+
+def op_add_chart(ctx: EditContext, op: dict) -> None:
+    """新規グラフをスライドへ追加する。categories/seriesをJSONで直書きする
+    （pptxにはExcelのようなセル参照が無いため、set_tableのheaders/rowsと同じ発想）。
+    """
+    slide = ctx.get_slide(_require(op, "slide"))
+    type_key = _require(op, "type")
+    chart_type = _CHART_TYPE_MAP.get(type_key)
+    if chart_type is None:
+        raise ValueError(f"未対応のグラフ種別です（bar/line/pieのみ対応）: {type_key}")
+    categories = _require(op, "categories")
+    series = _require(op, "series")
+    if not isinstance(series, list) or not series:
+        raise ValueError("series には1件以上のオブジェクト（name, values）が必要です")
+
+    chart_data = CategoryChartData()
+    chart_data.categories = categories
+    for s in series:
+        values = s.get("values") or []
+        if len(values) != len(categories):
+            raise ValueError(
+                f"series {s.get('name')!r} の values 要素数({len(values)})が"
+                f" categories 要素数({len(categories)})と一致しません"
+            )
+        chart_data.add_series(str(s.get("name", "")), values)
+
+    left = Cm(float(_require(op, "left_cm")))
+    top = Cm(float(_require(op, "top_cm")))
+    width = Cm(float(_require(op, "width_cm")))
+    height = Cm(float(_require(op, "height_cm")))
+    graphic_frame = slide.shapes.add_chart(chart_type, left, top, width, height, chart_data)
+    chart = graphic_frame.chart
+
+    if op.get("title"):
+        chart.has_title = True
+        chart.chart_title.text_frame.text = str(op["title"])
+
+    if op.get("show_data_labels", True):
+        plot = chart.plots[0]
+        plot.has_data_labels = True
+        plot.data_labels.show_value = type_key != "pie"
+        plot.data_labels.show_percentage = type_key == "pie"
+
+    if op.get("theme"):
+        resolve_theme(op["theme"])  # themeの存在検証のみ（系列色は常にCHART_PALETTE）
+        if type_key != "pie":
+            for i, chart_series in enumerate(chart.series):
+                fill = chart_series.format.fill
+                fill.solid()
+                fill.fore_color.rgb = RGBColor.from_string(CHART_PALETTE[i % len(CHART_PALETTE)])
 
 
 _ALIGN_MAP = {
@@ -487,6 +561,8 @@ OP_HANDLERS = {
     "set_table": op_set_table,
     "set_notes": op_set_notes,
     "replace_picture": op_replace_picture,
+    "add_picture": op_add_picture,
+    "add_chart": op_add_chart,
     "set_shape_style": op_set_shape_style,
     "set_shape_position": op_set_shape_position,
     "duplicate_slide": op_duplicate_slide,

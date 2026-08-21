@@ -1,6 +1,6 @@
 ---
 name: docx-edit
-description: 既存のWord文書（.docx）を編集するスキル。文字列の検索置換、段落の末尾追加・削除、Track Changes（変更履歴）つきの検索置換、変更履歴の一括確定・却下ができる。ユーザーが見た目の変更を明示的に頼んできた場合のみ、既存段落・表の再配色・文字装飾・配置（左右中央揃え等）・インデント・行間を変えるset_paragraph_style/set_table_styleも使える。既存のWordファイルの文言を修正・追記したいとき、変更履歴（校閲）付きで修正を提案したいときに使う。新規作成は`docx-create`、編集前の内容確認は`docx-read`を使う。
+description: 既存のWord文書（.docx）を編集するスキル。文字列の検索置換、段落の末尾追加・削除、任意の段落位置への画像挿入・既存画像のサイズ変更、Track Changes（変更履歴）つきの検索置換、変更履歴の一括確定・却下ができる。ユーザーが見た目の変更を明示的に頼んできた場合のみ、既存段落・表の再配色・文字装飾・配置（左右中央揃え等）・インデント・行間を変えるset_paragraph_style/set_table_styleも使える。既存のWordファイルの文言を修正・追記したいとき、変更履歴（校閲）付きで修正を提案したいとき、既存文書に画像を挿入したいときに使う。新規作成は`docx-create`、編集前の内容確認は`docx-read`を使う。
 license: MIT
 metadata:
   author: ytakamoto
@@ -61,6 +61,8 @@ JSONが長くなる場合は `--ops-json` の代わりに `["<編集対象.docx�
 |---|---|---|---|
 | `find_replace` | `old_text` | `new_text`（既定`""`）、`track_changes`（既定`false`）、`paragraph_index`（既定=全段落を対象）、`occurrence`（`"all"`既定/`"first"`）、`author`、`date` | 段落内テキストの検索置換 |
 | `append_block` | `block`（`docx-create` の `blocks` 要素と同一形式） | `theme`（`callout`のみ使用。既定`charcoal`） | 文書末尾にブロックを追加（常に非トラッキング） |
+| `insert_image` | `image_path`、`before_index`/`after_index`のどちらか一方 | `width_cm`/`height_cm`（省略時は原寸、片方のみ指定でアスペクト比維持） | 指定段落の直前/直後に新しい段落を作り画像を挿入（下記参照） |
+| `set_image_size` | `image_index` | `width_cm`/`height_cm`（1つ以上必須、片方のみ指定でアスペクト比維持） | 既存画像のサイズを変更（下記参照） |
 | `set_paragraph_style` | `index` | `role`(`heading`/`callout`)+`theme`、または`color`/`bold`/`italic`/`underline`/`font`/`size_pt`/`fill_color`/`border_color`/`align`(`left`/`center`/`right`/`justify`)/`indent_left_cm`/`line_spacing` | 既存段落を明示的に再配色・再配置（下記参照） |
 | `set_table_style` | `table_index` | `theme`、または`header_fill`/`header_font_color`、`row`/`all_rows` | 既存の表の行（既定は見出し行=1行目）を明示的に再配色（下記参照） |
 | `delete_paragraph` | `index` | なし | 指定indexの段落を削除（非トラッキングのみ） |
@@ -118,8 +120,34 @@ JSONが長くなる場合は `--ops-json` の代わりに `["<編集対象.docx�
 - どちらも `theme`/スタイルキーが何も無い呼び出しはエラーになります。
 
 **非対応（現状のop群でできないこと）**: 列幅・行高、ページ余白・用紙サイズ・
-向き、表本体の罫線（見出しセルの網掛けのみ対応）、ヘッダー/フッター、画像の
-挿入位置調整、複数段落への一括スタイル適用（1opにつき1段落）。
+向き、表本体の罫線（見出しセルの網掛けのみ対応）、ヘッダー/フッター、
+複数段落への一括スタイル適用（1opにつき1段落）。画像はWordのinlineオブジェクト
+のためx/y座標での自由配置は非対応（`insert_image`はどの段落に挿入するかのみ
+指定可能。下記参照）。
+
+## insert_image / set_image_size（画像の挿入・サイズ変更）
+
+```json
+[
+  {"op": "insert_image", "image_path": "C:\\img\\photo.png", "before_index": 10, "width_cm": 12.0},
+  {"op": "set_image_size", "image_index": 0, "width_cm": 8.0}
+]
+```
+
+- `insert_image`: `before_index`（指定段落の直前に挿入）または`after_index`
+  （指定段落の直後。文書末尾の段落を指定した場合は文末に追記）の**どちらか
+  一方のみ**を指定する。`width_cm`/`height_cm`は両方省略で画像の原寸、片方
+  のみ指定でアスペクト比を保ったまま他方を自動計算。文書末尾に画像を追加
+  したいだけなら`append_block`の`image`ブロックの方が簡潔（挿入位置を
+  指定できない代わりに1opで済む）。
+- `insert_image`が作る新しい段落は、このバッチの`before_index`/`after_index`
+  解決の元になった段落番号（`docx-read`が見せていた番号）には含まれないため、
+  同一バッチ内の後続opから新しい段落を直接参照することはできない（続けて
+  参照したい場合は一度`docx-read`を呼び直す）。
+- `set_image_size`: `image_index`は`doc.inline_shapes`の0始まり通し番号
+  （文書全体で画像が現れる順）。`docx-read`が返す`inline_images`の
+  `image_index`と完全に一致する。`width_cm`/`height_cm`のうち片方のみ
+  指定した場合はアスペクト比を保ったまま他方を自動計算する。
 
 ## find_replace の制約（重要）
 
@@ -201,6 +229,9 @@ docx-readが見せていた状態）の段落番号」を指します。複数�
   未対応の `op`/`block.type`/`theme`/`role`/`align`、
   `set_paragraph_style`/`set_table_style`でスタイルキーが1つも無い、
   `delete_paragraph` に `track_changes: true` を指定、
+  `insert_image` の `image_path` 不在、`before_index`/`after_index` の両方指定
+  または両方省略、`set_image_size` の存在しない `image_index` や
+  `width_cm`/`height_cm` 両方省略、
   のいずれもエラー
   メッセージ＋終了コード1。どのop（何番目・どの種別）が失敗したかが
   メッセージに含まれるので、そのまま報告するかopを修正して再実行すること。
