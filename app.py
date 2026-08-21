@@ -1713,7 +1713,10 @@ if _config.thread_store_enabled:
                 TextInput(
                     id="work_dir",
                     label="作業ディレクトリ",
-                    initial="",
+                    # 復元した実体値をそのまま初期表示する（以前は常に空文字固定
+                    # だったため、歯車パネルを開いても実際の値が見えず、表示との
+                    # 不一致に気づく手段が無かった）。
+                    initial=meta.get("work_dir") or "",
                     placeholder=rf"例: C:\Users\me\project（未入力なら既定値 {_config.default_workdir} を使用）",
                 )
             ]
@@ -1783,17 +1786,32 @@ async def _apply_work_dir(raw: str) -> None:
     ChatSettings（歯車アイコン）と、独自フロントエンドの「作業フォルダ」
     アイコン（pick_work_dir action_callback）の両方から共通で呼ばれる。
 
+    以前は cl.user_session を更新するのみで、thread_store への永続化は
+    ターン完了時のベストエフォート・スナップショット（_on_message_impl末尾、
+    3248行目付近）任せだった。そのため、設定直後のターンが停止ボタン・
+    通信エラー・思考ループ上限・recursion_limit等で異常終了しスナップ
+    ショットに到達しないと、work_dir の変更がDBへ一度も保存されないまま
+    残った。この状態でスレッドを再開すると、サイドパネルの表示（過去の
+    確認メッセージをsteps再生で表示しているだけなので常に最新に見える）
+    と、cl.user_session（on_chat_resume がDBのmetadataから復元する実体）
+    が食い違い、表示上はカスタムディレクトリなのに実際のツール実行は
+    既定値へ静かにフォールバックする不具合につながっていた（2026-08-21
+    ユーザー報告）。ここで即座に保存することで、ターンの成否に関わらず
+    表示と実体を一致させる。
+
     Args:
         raw: ユーザーが指定したパス文字列（未加工）。
 
     Returns:
-        None。副作用として cl.user_session の更新と状態メッセージの送信を行う。
+        None。副作用として cl.user_session の更新・thread_store への
+        即時永続化・状態メッセージの送信を行う。
     """
     raw = raw.strip()
     if not raw:
         cl.user_session.set("work_dir", None)
         cl.user_session.set("work_dir_access", None)
         cl.user_session.set("work_dir_notice_pending", True)
+        await _persist_work_dir(None)
         await cl.Message(content=_format_work_dir_status(None)).send()
         return
 
@@ -1802,7 +1820,39 @@ async def _apply_work_dir(raw: str) -> None:
     cl.user_session.set("work_dir", resolved)
     cl.user_session.set("work_dir_access", status)
     cl.user_session.set("work_dir_notice_pending", True)
+    await _persist_work_dir(resolved)
     await cl.Message(content=_format_work_dir_status(resolved, status)).send()
+
+
+async def _persist_work_dir(resolved: str | None) -> None:
+    """work_dir の変更を、ターン完了を待たずに即座に thread_store へ保存する。
+
+    thread_store.save_thread の metadata は dict.update() で既存値へ統合
+    される（丸ごと置き換えではない）ため、plan/token_usage_cumulative等の
+    他フィールドを巻き込まずに work_dir だけを更新できる（src/thread_store.py
+    save_thread docstring参照）。_apply_work_dir docstring も参照。
+
+    session.has_first_interaction が False（＝まだ一度もチャット発言していない
+    新規セッションで、歯車アイコン/作業フォルダアイコンだけ操作した状態）の
+    間は保存しない。save_thread は無条件で threads 行をINSERT OR IGNOREする
+    ため、ここでガード無しに呼ぶと「1文字も発言していないのに左サイドバーへ
+    空の会話が現れる」不具合（_patch_chainlit_ignore_ui_action_first_interaction
+    docstring参照、2026-08-19ユーザー報告）をthread_store経路で再発させて
+    しまう。最初のチャット発言後（has_first_interaction=True）に変更した
+    場合のみ、その場で保存する。
+    """
+    if not (_config.thread_store_enabled and _thread_store_conn is not None):
+        return
+    if not cl.context.session.has_first_interaction:
+        return
+    thread_id = cl.user_session.get("thread_id")
+    if thread_id is None:
+        return
+    await thread_store.save_thread(
+        _thread_store_conn,
+        thread_id,
+        metadata={"work_dir": resolved},
+    )
 
 
 @cl.on_settings_update
