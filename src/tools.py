@@ -961,6 +961,12 @@ def _subprocess_env() -> dict[str, str]:
     自分が出力するパスをレジストリへ登録できる。
     AGENT_SRC_DIR は execute_python_code のサブプロセスが
     `src/path_memory.py` をインポートするために使う。
+    AGENT_DEFAULT_WORKDIR は `_resolve_exec_workdir()`/`path_memory.exec_tmp_dir()`
+    が中間生成物置き場 `_tmp_<thread_id>/` の基準ディレクトリを決めるために使う
+    （run_script の cwd が指すユーザー指定 work_dir は保持日数ベースの自動削除
+    対象外のため、cwd 基準にすると中間生成物が消えずに溜まり続ける。常に
+    default_workdir 基準に固定することで自動削除の対象に含める。
+    `_restrict_default_workdir` 参照）。
 
     config.ini `[paths].bin_path`（既定は空）に列挙されたディレクトリを PATH の
     先頭へ追加する。コマンド名を素の状態で叩く外部バイナリのスキルは、事前に
@@ -974,6 +980,8 @@ def _subprocess_env() -> dict[str, str]:
         env["AGENT_PATH_MEMORY_DIR"] = str(_PATH_MEMORY_DIR)
     env["AGENT_PATH_MEMORY_MAX_ENTRIES"] = str(_PATH_MEMORY_MAX_ENTRIES)
     env["AGENT_SRC_DIR"] = str(_SRC_DIR)
+    if _DEFAULT_WORKDIR is not None:
+        env["AGENT_DEFAULT_WORKDIR"] = str(_DEFAULT_WORKDIR)
     cfg = _LLM_CONFIG
     if cfg is not None:
         bin_dirs = [d for d in cfg.bin_path if d.is_dir()]

@@ -210,12 +210,16 @@ def list_entries(thread_id: str, path_memory_dir: Path) -> list[dict]:
 def exec_tmp_dir(category: str | None = None) -> Path:
     """execute_python_code の中間生成物と同じ `_tmp_<thread_id>/` を返す（無ければ作成する）。
 
-    run_script 経由でサブプロセス起動される他スキルのスクリプトが、cwd
-    （= run_script の cwd、_resolve_workdir() の結果である作業ディレクトリ）
-    直下に自分専用の中間生成物置き場を作りたい場合に使う。cwd を基準にする
-    ため、run_script 経由の実行を前提とする（cwd が異なる文脈で呼ぶと
-    別の場所を指す）。thread_id は env_params() と同じ AGENT_THREAD_ID を
-    読むため、未設定時は "_no_session" にフォールバックする。
+    run_script 経由でサブプロセス起動される他スキルのスクリプトが、自分専用の
+    中間生成物置き場を作りたい場合に使う。基準は run_script の cwd
+    （_resolve_workdir() の結果である作業ディレクトリ）ではなく、常に
+    default_workdir（AGENT_DEFAULT_WORKDIR）にする。cwd はユーザーが
+    ChatSettings で指定した work_dir になりうるが、work_dir は保持日数ベースの
+    自動削除（default_workdir の retention_days）の対象外のため、cwd を基準に
+    すると中間生成物が消えずに溜まり続ける事故につながる（過去に実際に
+    発生。cwd基準はバグであり仕様ではない）。thread_id は env_params() と
+    同じ AGENT_THREAD_ID を読むため、未設定時は "_no_session" にフォール
+    バックする。
 
     Args:
         category: `_tmp_<thread_id>` 直下にさらに切るサブディレクトリ名
@@ -225,7 +229,8 @@ def exec_tmp_dir(category: str | None = None) -> Path:
         作成済みの絶対パス。
     """
     thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
-    out_dir = Path.cwd() / f"_tmp_{thread_id}"
+    base = Path(os.environ.get("AGENT_DEFAULT_WORKDIR") or "./data/temp")
+    out_dir = base / f"_tmp_{thread_id}"
     if category:
         out_dir = out_dir / category
     out_dir.mkdir(parents=True, exist_ok=True)

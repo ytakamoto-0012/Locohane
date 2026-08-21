@@ -70,8 +70,11 @@ def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
 
         # 中間生成物のPDFは元ファイルのフォルダを汚さないよう、他の一時出力
         # （_render_pdf_to_images の画像など）と同じ `_tmp_<thread_id>/` 配下に
-        # 保存する。会話終了時に自動削除される。
-        out_dir = Path.cwd() / f"_tmp_{thread_id}" / "pdf_export"
+        # 保存する。基準は run_script の cwd（ユーザー指定 work_dir になりうり
+        # 自動削除対象外）ではなく、常に default_workdir（AGENT_DEFAULT_WORKDIR）。
+        # default_workdir の保持日数ベースの自動削除で確実に消える。
+        base_dir = Path(os.environ.get("AGENT_DEFAULT_WORKDIR") or "./data/temp")
+        out_dir = base_dir / f"_tmp_{thread_id}" / "pdf_export"
         out_dir.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha1(abs_path.encode("utf-8")).hexdigest()[:8]
         pdf_path = str(out_dir / f"{tool}_{digest}_export.pdf")
@@ -123,7 +126,8 @@ def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
 
 def _render_pdf_to_images(pdf_path: Path, dpi: int, thread_id: str) -> list[dict]:
     """PDFファイルの全ページを pypdfium2 で画像化し、リストとして返す。"""
-    rendered_dir = Path.cwd() / f"_tmp_{thread_id}" / "rendered"
+    base_dir = Path(os.environ.get("AGENT_DEFAULT_WORKDIR") or "./data/temp")
+    rendered_dir = base_dir / f"_tmp_{thread_id}" / "rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
 
     try:

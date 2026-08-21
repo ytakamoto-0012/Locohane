@@ -9,8 +9,10 @@ run_script ツールから
   1. OLE（COM）で PowerPoint をヘッドレス起動し、ファイルをPDFへエクスポート。
   2. pypdfium2 で PDF ページを画像化（既定300DPI）。
 
-生成したPNGは、作業ディレクトリ配下のセッション専用一時フォルダ
-`_tmp_<thread_id>/rendered/` に保存する。
+生成したPNGは、default_workdir配下のセッション専用一時フォルダ
+`_tmp_<thread_id>/rendered/` に保存する（run_script の cwd＝ユーザー指定
+work_dir ではなく、常に default_workdir 基準。work_dir は保持日数ベースの
+自動削除の対象外のため）。
 analyze_image は絶対パスをそのまま読めるため、出力JSONの image_path
 （絶対パス）を analyze_image に渡せばLLMへ画像として見せられる。
 """

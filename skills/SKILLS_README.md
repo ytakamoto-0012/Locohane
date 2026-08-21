@@ -190,10 +190,19 @@ Chainlit UI上に `cl.File`（または画像なら `cl.Image`）付きメッセ
 
 ### 4-6. 中間生成物の一時保存先: `_tmp_<thread_id>/` と `exec_tmp_dir()`
 
-`run_script` の cwd（4-2参照）直下には、会話終了時に自動削除されるセッション専用の
-一時フォルダ `_tmp_<thread_id>/` を作れる。中間生成物（変換途中のPDF、レンダリング
-画像など、最終成果物ではないファイル）はここに書き、作業ディレクトリ本体を
-汚さないこと。
+会話終了時に自動削除されるセッション専用の一時フォルダ `_tmp_<thread_id>/` を
+作れる。中間生成物（変換途中のPDF、レンダリング画像など、最終成果物ではない
+ファイル）はここに書き、作業ディレクトリ本体を汚さないこと。
+
+**基準ディレクトリは常に default_workdir（環境変数 `AGENT_DEFAULT_WORKDIR`）**
+であり、`run_script` の cwd（4-2参照。ユーザーが ChatSettings で指定した
+work_dir になりうる）**ではない**。work_dir はユーザー指定の場所のため
+config.ini `[default_workdir].retention_days` の保持日数ベース自動削除の対象外
+であり、`Path.cwd()` を基準にすると `_tmp_<thread_id>/` が work_dir 配下に
+作られたまま消えずに溜まり続ける（過去に実際に発生した回帰。cwd基準は
+バグであり仕様ではない）。`AGENT_DEFAULT_WORKDIR` は `run_script`/
+`execute_python_code` のサブプロセス起動時に常に注入される
+（`src/tools.py` の `_subprocess_env()`）。
 
 `src/path_memory.py` に、このフォルダを作成して返すヘルパー `exec_tmp_dir()` がある
 （`execute_python_code` が内部で使う `_resolve_exec_workdir()` と同じ命名規約）。
@@ -229,16 +238,18 @@ from pathlib import Path
 
 def _exec_tmp_dir(category: str | None = None) -> Path:
     thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
-    out_dir = Path.cwd() / f"_tmp_{thread_id}"
+    base_dir = Path(os.environ.get("AGENT_DEFAULT_WORKDIR") or "./data/temp")
+    out_dir = base_dir / f"_tmp_{thread_id}"
     if category:
         out_dir = out_dir / category
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
 ```
 
+**`Path.cwd()` を基準にしないこと。** `AGENT_DEFAULT_WORKDIR` を必ず基準にする
 （`skills/pdf-tools/scripts/_common.py` の `write_json_result` などは実際にこの
 インライン実装のまま運用されている。`path_memory.exec_tmp_dir()` と処理内容は
-同一だが、依存を持たせない意図で意図的に重複させている。）
+同一だが、依存を持たせない意図で意図的に重複させている）。
 
 ## 5. 新しいスキルを追加する手順
 

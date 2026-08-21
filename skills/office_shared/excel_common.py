@@ -98,10 +98,14 @@ def write_json_result(result: dict, category: str, source_path) -> dict:
     """result全体をJSONファイルへ書き出し、要約に足す {"result_path", "path_memory"} を返す。
 
     保存先は execute_python_code の中間生成物と同じ `_tmp_<thread_id>/<category>/`
-    規約（pdf-tools の render_pdf_pages.py 参照）。会話終了時に自動削除される。
+    規約（pdf-tools の render_pdf_pages.py 参照）。基準は run_script の cwd
+    ではなく常に default_workdir（AGENT_DEFAULT_WORKDIR）。cwd はユーザー指定
+    work_dir になりうり、その場合は自動削除対象外のため、cwd基準だと消えずに
+    溜まり続ける。
     """
     thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
-    out_dir = Path.cwd() / f"_tmp_{thread_id}" / category
+    base_dir = Path(os.environ.get("AGENT_DEFAULT_WORKDIR") or "./data/temp")
+    out_dir = base_dir / f"_tmp_{thread_id}" / category
     out_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha1(str(Path(source_path).resolve()).encode("utf-8")).hexdigest()[:8]
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")

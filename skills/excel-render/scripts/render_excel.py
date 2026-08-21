@@ -12,8 +12,10 @@ run_script ツールから
   3. 白黒境界判定で余白を除去（既定）。
   4. シートの縮尺に応じてキャプチャDPIを動的にブースト。
 
-生成したPNGは、作業ディレクトリ配下のセッション専用一時フォルダ
-`_tmp_<thread_id>/rendered/` に保存する。
+生成したPNGは、default_workdir配下のセッション専用一時フォルダ
+`_tmp_<thread_id>/rendered/` に保存する（run_script の cwd＝ユーザー指定
+work_dir ではなく、常に default_workdir 基準。work_dir は保持日数ベースの
+自動削除の対象外のため）。
 analyze_image は絶対パスをそのまま読めるため、出力JSONの image_path
 （絶対パス）を analyze_image に渡せばLLMへ画像として見せられる。
 """

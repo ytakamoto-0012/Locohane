@@ -5,10 +5,12 @@ run_script ツールから
     python render_pdf_pages.py <pdf_path>
 の形で呼ばれる。全ページを画像化する。
 
-生成したPNGは、作業ディレクトリ（run_script の cwd）配下のセッション専用一時フォルダ
+生成したPNGは、default_workdir（run_script が注入する環境変数 AGENT_DEFAULT_WORKDIR。
+run_script の cwd＝ユーザー指定 work_dir ではない）配下のセッション専用一時フォルダ
 `_tmp_<thread_id>/pdf_rendered/` に保存する（thread_idは run_script が注入する環境変数
 AGENT_THREAD_ID から取得）。execute_python_code の中間生成物と同じ `_tmp_<thread_id>`
-規約に揃えることで、会話終了時に自動削除される（app.py の on_chat_end 参照）。
+規約に揃えることで、default_workdir の保持日数ベースの自動削除の対象になる
+（work_dir はユーザー指定のため自動削除対象外で、基準にすると消えずに溜まり続ける）。
 analyze_image は絶対パスをそのまま読めるため、出力JSONの image_path（絶対パス）を
 そのまま analyze_image に渡せばLLMへ画像として見せられる。
 """
@@ -54,7 +56,8 @@ def main() -> int:
     scale = dpi / 72
 
     thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
-    rendered_dir = Path.cwd() / f"_tmp_{thread_id}" / "pdf_rendered"
+    base_dir = Path(os.environ.get("AGENT_DEFAULT_WORKDIR") or "./data/temp")
+    rendered_dir = base_dir / f"_tmp_{thread_id}" / "pdf_rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
 
