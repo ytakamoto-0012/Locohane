@@ -224,6 +224,38 @@ def op_add_picture(ctx: EditContext, op: dict) -> None:
     slide.shapes.add_picture(str(image_file), left, top, width=width, height=height)
 
 
+_CROP_KEYS = ("crop_left", "crop_top", "crop_right", "crop_bottom")
+
+
+def op_crop_picture(ctx: EditContext, op: dict) -> None:
+    """既存画像shapeをトリミングする（`add_picture`/`replace_picture`で追加した
+    画像、元テンプレートの画像のどちらにも使える）。python-pptxのcrop_*は
+    画像の各辺から切り取る割合（0.0=切り取らない、1.0=その辺を完全に切り取る）
+    で、元画像データ自体は保持したまま表示範囲だけを変える（Office側で
+    トリミングを解除・再調整できる）。
+    """
+    slide = ctx.get_slide(_require(op, "slide"))
+    shape = _get_shape(slide, _require(op, "shape_index"))
+    if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+        raise ValueError(f"shape_index {op['shape_index']} は画像ではありません")
+
+    values = {key: op.get(key) for key in _CROP_KEYS}
+    if all(v is None for v in values.values()):
+        raise ValueError("crop_left/crop_top/crop_right/crop_bottom のいずれか1つ以上の指定が必要です")
+    for key, value in values.items():
+        if value is not None and not (0.0 <= float(value) <= 1.0):
+            raise ValueError(f"{key} は0.0〜1.0の範囲で指定してください: {value}")
+
+    if values["crop_left"] is not None:
+        shape.crop_left = float(values["crop_left"])
+    if values["crop_top"] is not None:
+        shape.crop_top = float(values["crop_top"])
+    if values["crop_right"] is not None:
+        shape.crop_right = float(values["crop_right"])
+    if values["crop_bottom"] is not None:
+        shape.crop_bottom = float(values["crop_bottom"])
+
+
 _CHART_TYPE_MAP = {
     "bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
     "line": XL_CHART_TYPE.LINE,
@@ -562,6 +594,7 @@ OP_HANDLERS = {
     "set_notes": op_set_notes,
     "replace_picture": op_replace_picture,
     "add_picture": op_add_picture,
+    "crop_picture": op_crop_picture,
     "add_chart": op_add_chart,
     "set_shape_style": op_set_shape_style,
     "set_shape_position": op_set_shape_position,

@@ -1,6 +1,6 @@
 ---
 name: pptx-edit
-description: 既存のPowerPointテンプレート（.pptx）のテーマ・マスター・レイアウトのデザインを保ったまま部分編集するスキル。テキスト・表・発表者ノートの差し替え、スライドの複製・削除・並び替え、画像の差し替えができる。ユーザーが見た目の変更を明示的に頼んできた場合のみ、既存shapeの再配色・文字装飾・配置（左右中央揃え等）を変えるset_shape_style、図形の位置・サイズを変えるset_shape_positionも使える。既存のPowerPointテンプレート（社内フォーマット等）を流用して一部だけ差し替えたいとき、スライドを複製・削除・並び替えしたいときに使う。実行前に必ず`pptx-inspect`でshape_indexを把握すること。デザインを保たない単純な新規生成は`pptx-create`を使う。
+description: 既存のPowerPointテンプレート（.pptx）のテーマ・マスター・レイアウトのデザインを保ったまま部分編集するスキル。テキスト・表・発表者ノートの差し替え、スライドの複製・削除・並び替え、画像・グラフの新規追加、画像の差し替え・トリミングができる。ユーザーが見た目の変更を明示的に頼んできた場合のみ、既存shapeの再配色・文字装飾・配置（左右中央揃え等）を変えるset_shape_style、図形の位置・サイズを変えるset_shape_positionも使える。既存のPowerPointテンプレート（社内フォーマット等）を流用して一部だけ差し替えたいとき、スライドを複製・削除・並び替えしたいときに使う。実行前に必ず`pptx-inspect`でshape_indexを把握すること。デザインを保たない単純な新規生成は`pptx-create`を使う。
 license: MIT
 metadata:
   author: ytakamoto
@@ -57,6 +57,7 @@ metadata:
 | `set_notes` | `slide` | `text`（省略時`""`＝空文字にする） | 発表者ノートを差し替え |
 | `replace_picture` | `slide`, `shape_index`, `image_path` | なし | 既存画像shapeの位置・サイズを保ったまま画像だけ差し替え（差し替え後、z順序は最前面に移動する点に注意） |
 | `add_picture` | `slide`, `image_path`, `left_cm`, `top_cm` | `width_cm`/`height_cm`（省略時は原寸、片方のみ指定でアスペクト比維持） | 新規画像をスライドへ追加（下記参照） |
+| `crop_picture` | `slide`, `shape_index` | `crop_left`/`crop_top`/`crop_right`/`crop_bottom`（0.0〜1.0、いずれか1つ以上） | 既存画像shapeをトリミング（下記参照） |
 | `add_chart` | `slide`, `type`, `left_cm`, `top_cm`, `width_cm`, `height_cm`, `categories`, `series` | `title`、`theme`、`show_data_labels`(既定true) | 新規グラフをスライドへ追加（下記参照） |
 | `set_shape_style` | `slide`, `shape_index` | `role`(`heading`/`table_header`)+`theme`、または`text_color`/`bold`/`italic`/`underline`/`font_size_pt`/`font_name`/`fill_color`/`border_color`/`align`(`left`/`center`/`right`/`justify`)、表shapeは`row`/`all_rows` | 既存shapeを明示的に再配色・再装飾・文字配置変更（下記参照） |
 | `set_shape_position` | `slide`, `shape_index` | `left_cm`/`top_cm`/`width_cm`/`height_cm`（cm単位、いずれか1つ以上） | 既存shapeの位置・サイズを変更（下記参照） |
@@ -169,6 +170,20 @@ metadata:
   できない（`UNSUPPORTED_DUPLICATE_TYPES`が`CHART`を含むため、他のチャート
   同様にエラーになる）。
 
+`crop_picture`は既存の画像shape（`add_picture`で追加したもの・テンプレートに
+元から入っていたもの・`replace_picture`で差し替えたもの、いずれも可）を
+トリミングする:
+```json
+{"op": "crop_picture", "slide": 2, "shape_index": 3,
+ "crop_left": 0.1, "crop_top": 0.0, "crop_right": 0.1, "crop_bottom": 0.2}
+```
+`crop_left`/`crop_top`/`crop_right`/`crop_bottom`は画像の各辺から切り取る
+割合（`0.0`=切り取らない、`1.0`=その辺を完全に切り取る。PowerPointの
+「トリミング」機能と同じ考え方）で、0.0〜1.0の範囲外はエラー。元画像データ
+自体は保持したまま表示範囲だけを変えるため、Office側で後からトリミングを
+解除・再調整できる。shapeの外枠サイズ（配置・大きさ）は変わらないので、
+トリミング後に配置を整えたい場合は`set_shape_position`を併用する。
+
 ## エッジケース
 
 - `template_path` と `output_path` が同じで `--overwrite` 未指定の場合はエラー終了します。
@@ -181,8 +196,9 @@ metadata:
   対象行未指定、表shapeへの`set_shape_style`で`border_color`指定、
   `set_shape_position` で位置/サイズキーが1つも無い、`add_picture` の
   `image_path` 不在、`add_chart` の未対応`type`（bar/line/pie以外）や
-  `series`の`values`要素数と`categories`要素数の不一致、は、いずれもその
-  操作番号を添えてエラー終了します。
+  `series`の`values`要素数と`categories`要素数の不一致、`crop_picture` で
+  画像以外のshapeを指定・crop系キーが1つも無い・値が0.0〜1.0の範囲外、は、
+  いずれもその操作番号を添えてエラー終了します。
 - `delete_slide`で歯抜けができた後に`duplicate_slide`を実行しても、内部でスライドの
   パート名衝突（python-pptx側の既知の制限）を自動回避するため、安全に組み合わせられます。
 - 操作の途中でエラーになった場合、`output_path` へのファイル保存は行われません
