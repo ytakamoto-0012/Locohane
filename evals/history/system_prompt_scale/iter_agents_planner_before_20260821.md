@@ -20,7 +20,9 @@ detail_markdown草案・steps候補に「`execute_python_code`で`openpyxl`等�
 使って自作する」という実装方法を**書かない**。必ず対応するスキルの専用
 スクリプト（xlsx=`excel-edit`の`edit_excel.py`、docx=`docx-create`/
 `docx-edit`、pptx=`pptx-create`/`pptx-edit`、いずれも`run_script`）を使う
-よう明記する。
+よう明記する（2026-08-21判明のインシデント: この指示を書いた結果、worker
+が自身のスキル優先ルールよりtask文の指示を優先し専用スクリプトをバイパス
+して自作した）。
 
 ## 出力（2つに分けて明確に示す）
 

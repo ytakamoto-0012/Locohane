@@ -4224,3 +4224,75 @@ worker側が`read_skill`とエラーメッセージから自力修正して最�
 
 最終`system_prompt/system_prompt.md`のスナップショット:
 `evals/history/system_prompt_scale/iter03_final.md`。
+
+## system_prompt_scale: 001（annual_schedule xlsx end-to-end large）ユーザー指示によるチューニング開始（2026-08-21）
+
+**ユーザー指示**: ケース001（`001_annual_schedule_xlsx_end_to_end_large`）が正常終了するまでプロンプト改善・バグ修正のループを回すこと。さらに「5回連続で成功するまでテストする」よう追加指示あり（1回のPASSでは終了しない）。改善が確認できた修正は都度コミット＋プッシュする。
+
+### run1（20260821_061415開始、rules_pass: true）
+
+judge 7項目すべて確認しPASS:
+1. `create_plan`→`approve_plan`を初回・修正時とも経由。excel-edit run_scriptが計画未承認でブロックされたことはなし（`execute_python_code`が1回だけブロックされたが、これは月間データのJSON読み込みを試みただけの無害な誤ルートで、excel-edit側には影響なし）。
+2. 書き込みは`excel-edit`の`edit_excel.py`（run_script経由）のみ。`execute_python_code`は日付計算・検証にのみ使用し、xlsxの自作（openpyxl直接操作）はしていない。
+3. `edit_excel.py`は途中4回、ops-fileの絶対パス指定ミス（存在しないパス・型エラー）で終了コード1になったが、いずれも`@N`のpath_memory参照に切り替えて次の呼び出しで終了コード0に成功（過去のPDFケース iter03と同種の自己修正、致命的失敗ではない）。
+4. explore→plannerの過程で過去5年分の実データ（OCR由来の具体的な行事名・日付・参加者数の表）を実際に参照し、それを基に2026年分を設計していることをtranscriptで確認。
+5. `turn_cutoffs: None`。ThinkingLoopDetected/GraphRecursionErrorの発生なし（evals.log内の「重複」ヒットはplanner instructionの定型句「重複値をそのまま書いてよい」であり実際の重複検知ではない）。
+6. 最終回答で`annual_schedule.xlsx`のダウンロードボタン経由の受け取り方法を明記。
+7. 1回目のverifierが不備3点（Sheet1の2月枠データ欠落・Sheet1/Sheet2のシート名がSheet1/Sheet2のまま・列幅不足）を検出→plannerへ修正計画委譲→`create_plan`→`approve_plan`→workerが実際に`set_cell`/`rename_sheet`/`set_column_width`のops-jsonを`edit_excel.py`で適用（終了コード0）→2回目のverifierが「検証OK」（全項目✓）と再確認してから完了報告。指摘だけ受けて未修正のまま完了扱いにする回帰は発生せず。
+
+**判定: PASS（1/5）**。プロンプト・コードとも修正不要だった。続けてrun2を実行する。
+
+### run2（20260821_064956開始、中断・不合格）
+
+**不合格・根本原因確定のため途中で打ち切り**: judge項目2に明確に違反する
+実際のツール呼び出しをevals.log内で直接確認できたため、run_case.pyの
+完了（タイムアウトまで最大1時間）を待たずに中断した。
+
+**原因**: `planner`が「月間予定表シート作成」のworker委譲task文の末尾に
+以下の【注意点】を自ら書き込んでいた:
+```
+## 注意点
+- execute_python_code で openpyxl を使って作成する
+- path_memory.resolve() を使って作業ディレクトリパスを取得する
+```
+`worker`は自身の必須ルール9（「xlsx/docx/pptxを書き出す場合はopenpyxl等で
+自作せず対応するスキルの専用スクリプトを使う」）を持っているにもかかわらず、
+「作業ディレクトリは確認済み。openpyxlを使って3シートのExcelファイルを
+作成する。」と発言し、`execute_python_code`で`openpyxl`を直接使って
+annual_schedule.xlsxを新規作成した（07:07:46、`excel-edit`の
+`edit_excel.py`は一度も呼ばれなかった）。以降の月間予定表への行追加修正
+（1〜6月分の追加）も同様に`execute_python_code`＋`openpyxl`の`insert_rows`
+で行っており、一貫して`excel-edit`をバイパスしていた。
+
+このtask文は`planner`（`agents/planner.md`）が起草した草案をメインエージェント
+がほぼそのまま採用したもので、`agents/planner.md`・`agents/worker.md`の
+いずれにも「委譲task文の指示が専用スクリプト優先ルールと矛盾する場合の
+扱い」が明記されていなかったことが根本原因（`planner`はそもそも専用
+スクリプト優先ルールを知らず、`worker`は自身のルールよりtask文の具体的な
+指示を優先してしまった）。
+
+**注**: run1と異なりこのrunの「来年」の解釈は2027年（run1は2026年）と
+揺れていたが、judgeの明文基準には年の正確性の要求が無いため、これ自体は
+不合格の直接理由にしていない（別途要観察）。
+
+**判定: FAIL（openpyxl自作、judge項目2違反）**。連続成功カウンタを0に
+リセットする。
+
+### iter1修正: planner/workerの両方に専用スクリプト優先の明記を追加
+
+1. `agents/planner.md`: worker委譲task文にopenpyxl等の自作実装方法を書か
+   ない旨と、xlsx/docx/pptx別の専用スクリプト対応表を追記（インシデントの
+   経緯を1文添えて再発時に理由がわかるようにした）。
+2. `agents/worker.md`: 「xlsx/docx/pptxを書き出す場合」節に、このルールが
+   委譲task文の指示より優先することを明記（矛盾があっても専用スクリプトを
+   使う）。
+
+`system_prompt_scale`の対象ファイルは本来`system_prompt/system_prompt.md`
+のみだが、今回の根本原因はplanner/worker各自のプロンプト（`agents/*.md`）
+にあり、system_prompt.md側に同種の記述を追加してもplanner/workerには
+伝播しない（各サブエージェントは`agents/<type>.md`単体からプロンプトが
+構築され、system_prompt.mdを継承しない設計）ため、ユーザーの「バグも直せ」
+指示に基づき対象を`agents/planner.md`・`agents/worker.md`に広げて修正した。
+
+修正後、run3として再実行し、この修正で実際にopenpyxl自作が再発しないか
+確認する。
