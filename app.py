@@ -87,6 +87,7 @@ from src.llm import (
 from src.log_rotation import LineCountRotatingFileHandler
 from src.mcp_client import init_mcp_tools, shutdown_mcp_tools
 from src.memory import render_memory_block
+from src.plan_relay import pending_plan_asks as _pending_plan_asks
 from src.project_instructions import render_project_instructions_block
 from src.skills import build_system_prompt, render_skills_block, scan_skills
 from src.subagent import is_truncated_result
@@ -241,33 +242,13 @@ def _unmark_thread_generating(thread_id: str, owner: str | None = None) -> None:
 # ここに登録した内容を on_chat_resume が検知し、今まさに繋がっているセッション
 # 側で同じ承認ボタンを出し直し、回答をこの Future 経由で元セッション側の
 # 待機（approve_plan）へ引き継ぐ。
-# 値: {"content": str, "action_specs": list[(name, label, payload)],
-#      "timeout": int, "future": asyncio.Future}
-_pending_plan_asks: dict[str, dict] = {}
-
-
-def _register_pending_plan_ask(thread_id: str, content: str, actions: list, timeout: int):
-    """approve_plan がAskActionMessage送信前に呼ぶ。他セッションから引き継げる
-    よう質問内容を登録し、引き継ぎ側が回答を書き込むための Future を返す。
-    """
-    fut = asyncio.get_event_loop().create_future()
-    _pending_plan_asks[thread_id] = {
-        "content": content,
-        "action_specs": [(action.name, action.label, dict(action.payload)) for action in actions],
-        "timeout": timeout,
-        "future": fut,
-    }
-    return fut
-
-
-def _clear_pending_plan_ask(thread_id: str, fut) -> None:
-    """approve_plan の finally節から呼ぶ。同じ thread_id へ後続の
-    create_plan/approve_plan が既に新しい承認待ちを登録している場合は
-    誤って消さないよう、渡された Future が現在の登録と一致する場合のみ消す。
-    """
-    entry = _pending_plan_asks.get(thread_id)
-    if entry is not None and entry["future"] is fut:
-        _pending_plan_asks.pop(thread_id, None)
+# 登録・解除は src/tools.py 側（approve_plan）から行うため、状態そのものは
+# src/plan_relay.py（app.py/src/tools.py どちらにも属さない中立モジュール）に
+# 置く。以前は app.py 側に置いて src/tools.py から `from app import ...` で
+# 遅延importしていたが、chainlit run はapp.pyを "app" という名前で
+# sys.modules に登録しないため、その import がapp.py全体を別モジュールとして
+# 再実行してしまい、@cl.on_message 等のグローバルなハンドラ登録を壊れた状態の
+# ものに上書きしてしまう不具合があった（src/plan_relay.py のdocstring参照）。
 
 
 async def _relay_pending_plan_ask(thread_id: str) -> None:

@@ -85,6 +85,7 @@ from .config import (
 )
 from .images import image_followup_message, is_image_file, to_data_url
 from .llm import get_current_session
+from .plan_relay import clear_pending_plan_ask, register_pending_plan_ask
 from .subagent import is_truncated_result, run_subagent
 
 logger = logging.getLogger(__name__)
@@ -4111,13 +4112,15 @@ async def _ask_action_with_cross_session_relay(thread_id: str, content: str, act
     まだそこに残っていればそのまま機能するので、両方を
     asyncio.wait(FIRST_COMPLETED) で競わせ、先に応答が来た方を採用する。
 
-    app.py はこのモジュール（src/tools.py）をトップレベルでimportするため、
-    ここでは循環import回避のため関数内で遅延importする
-    （context_compaction.py が同じ理由で tools.py を遅延importしているのと同じ方針）。
+    登録・解除の状態は app.py 側ではなく src/plan_relay.py（app.py/このモジュール
+    どちらにも属さない中立モジュール）に置いてある。以前は app.py 側の状態を
+    `from app import ...` で遅延importして参照していたが、chainlit run は
+    app.pyを "app" という名前では sys.modules に登録しないため、その import が
+    app.py全体を未初期化の別モジュールとして再実行し、稼働中の
+    @cl.on_message 等のハンドラを壊してしまう不具合があった
+    （src/plan_relay.py のdocstring参照）。
     """
-    from app import _clear_pending_plan_ask, _register_pending_plan_ask
-
-    relay_future = _register_pending_plan_ask(thread_id, content, actions, timeout)
+    relay_future = register_pending_plan_ask(thread_id, content, actions, timeout)
     local_ask_task = asyncio.create_task(cl.AskActionMessage(content=content, actions=actions, timeout=timeout).send())
     try:
         done, _pending = await asyncio.wait({local_ask_task, relay_future}, return_when=asyncio.FIRST_COMPLETED)
@@ -4133,7 +4136,7 @@ async def _ask_action_with_cross_session_relay(thread_id: str, content: str, act
             relay_future.cancel()
         return local_ask_task.result()
     finally:
-        _clear_pending_plan_ask(thread_id, relay_future)
+        clear_pending_plan_ask(thread_id, relay_future)
 
 
 @tool

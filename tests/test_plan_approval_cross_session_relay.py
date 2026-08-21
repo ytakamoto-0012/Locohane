@@ -8,9 +8,9 @@
 承認ボタンがどこにも表示されなくなる。
 
 src.tools._ask_action_with_cross_session_relay（元セッション側）と
-app._register_pending_plan_ask/_relay_pending_plan_ask（app.on_chat_resume
-から起動される、戻ってきた新セッション側）が asyncio.Future を介して
-連携することで、先に応答が来た方を採用する。
+app._relay_pending_plan_ask（app.on_chat_resume から起動される、戻ってきた
+新セッション側）が、src.plan_relay の asyncio.Future を介して連携することで、
+先に応答が来た方を採用する。
 """
 
 import asyncio
