@@ -17,10 +17,10 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 
 | 調べたいファイル | 使うスキル・スクリプト |
 |---|---|
-| docx（Word） | `docx-read` の `read_docx.py`（テキストだけでは読み取れないレイアウト・表・画像配置・強調表現を見たい場合は `docx-render` の `render_docx.py` + `analyze_image`） |
-| xlsx/xls/xlsm（Excel） | `excel-read` の `read_excel.py`（VBAマクロのコードを見たい場合は `excel-vba-read` の `read_vba.py`。罫線・書式・グラフ・レイアウトを見たい場合は `excel-render` の `render_excel.py` + `analyze_image`） |
-| pptx（PowerPoint） | `pptx-read` の `read_pptx.py`（構造単位で見たい場合は `pptx-inspect` の `inspect_pptx.py`。レイアウト・図表・画像配置・強調表現を見たい場合は `pptx-render` の `render_pptx.py` + `analyze_image`） |
-| pdf | `pdf-tools` の `read_pdf.py`（テキスト抽出できないスキャンPDFやレイアウト・図表を見たい場合は `render_pdf_pages.py` + `analyze_image`） |
+| docx（Word） | `docx-render` の `render_docx.py` + `analyze_image`（レイアウト・表・画像配置・強調表現を含めた内容把握が基本）。文字の見切れ等でテキストまで読み取れない箇所は `docx-read` の `read_docx.py` で補完 |
+| xlsx/xls/xlsm（Excel） | `excel-render` の `render_excel.py` + `analyze_image`（罫線・書式・グラフ・レイアウトを含めた内容把握が基本）。文字の見切れ等でテキストまで読み取れない箇所は `excel-read` の `read_excel.py` で補完（VBAマクロのコードを見たい場合は `excel-vba-read` の `read_vba.py`） |
+| pptx（PowerPoint） | `pptx-render` の `render_pptx.py` + `analyze_image`（レイアウト・図表・画像配置・強調表現を含めた内容把握が基本）。文字の見切れ等でテキストまで読み取れない箇所は `pptx-read` の `read_pptx.py`（構造単位で見たい場合は `pptx-inspect` の `inspect_pptx.py`）で補完 |
+| pdf | `pdf-tools` の `render_pdf_pages.py` + `analyze_image`（スキャンPDFも含めレイアウト・図表を含めた内容把握が基本）。文字の見切れ等でテキストまで読み取れない箇所は `read_pdf.py` で補完 |
 | Web検索（文書内の固有名詞・最新情報の裏取り） | `web-search` の `search_web.py` |
 
 ## 効率的な調査手順（低パラメータモデル向け）
@@ -28,16 +28,19 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 1. 対象ファイルの絶対パスが分からない場合は `Glob` で探す。
 2. `read_skill` で該当スキルの本文を読み、読み込み専用スクリプトの引数を確認する
    （推測で引数を組み立てない）。
-3. `run_script` で読み込み専用スクリプトを呼び、実際の内容（段落・表・シート
-   データ・スライドのテキストや発表者ノート・PDFの抽出テキストなど）を取得する。
-   戻り値は構造化された JSON であることが多く、件数が多い場合は目視で追わず
-   `json_query`（JMESPathクエリ、構文は`jq`と異なる）で条件抽出・集計すると
-   よい。`file_path` の代わりに戻り値をそのまま `json_text` 引数へ渡せる
-   （詳細は下記「表形式データの異常検出」節）。
-4. テキスト抽出だけではレイアウト・表・図表・強調表現・スキャン内容などが
-   分からない場合は、対応する `render_*.py`（`render_docx.py`/`render_excel.py`/
-   `render_pptx.py`/`render_pdf_pages.py`）でページ・スライドを画像化し、
-   返ってきた `image_path` を `analyze_image` にそのまま渡して内容を確認する。
+3. `run_script` で対応する `render_*.py`（`render_docx.py`/`render_excel.py`/
+   `render_pptx.py`/`render_pdf_pages.py`）を呼んでページ・スライドを画像化し、
+   返ってきた `image_path` を `analyze_image` にそのまま渡して、レイアウト・表・
+   図表・強調表現・スキャン内容を含めた内容の全体像を把握する。
+4. 画像だけでは文字が小さい・見切れているなどでテキストまで正確に読み取れない
+   箇所がある場合、`run_script` で読み込み専用のテキスト抽出スクリプト
+   （`read_docx.py`/`read_excel.py`/`read_pptx.py`/`read_pdf.py`など）を呼ぶ。
+   戻り値は件数・文字数だけの要約と、本文全体を書き出したJSONファイルの
+   `result_path`（`path_memory`の`@N`）。`Grep`でキーワード検索して該当箇所の
+   `line`を特定し、`Read`でその周辺（段落・行）を読んで内容を把握する。
+   全件からの条件抽出・集計が必要な場合のみ`json_query`（`file_path="@N"`、
+   JMESPathクエリ、構文は`jq`と異なる）で正確な値を取得する（詳細は下記
+   「表形式データの異常検出」節）。
 5. 委譲元のtask文で求められている情報（要約・特定の値・件数・見出し・図表の内容など）
    を、取得した実データに基づいてまとめる。推測や一般論で埋めない。
 
@@ -96,8 +99,10 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 1. 対象ファイルの絶対パスが分からない場合はまず `Glob` で探す。
 2. 読み込み専用スクリプトを呼ぶ前に必ず `read_skill` で該当スキルの本文を読み、
    引数を確認する（推測で引数を組み立てない）。
-3. テキスト抽出だけではレイアウト・表・図表・強調表現・スキャン内容などが
-   分からない場合は、対応する `render_*.py` + `analyze_image` で内容を確認する。
+3. まず対応する `render_*.py` + `analyze_image` で画像化し、レイアウト・表・
+   図表・強調表現・スキャン内容を含めた内容の全体像を把握する。文字の見切れ等で
+   画像だけではテキストまで読み取れない箇所があれば、読み込み専用スクリプトの
+   テキスト抽出で情報を補完する。
 4. 委譲元のtask文で求められている情報は、取得した実データに基づいてまとめる
    （推測や一般論で埋めない）。
 5. 表・繰り返し構造の異常を探す依頼では、代表例だけで終えず全行・全項目を

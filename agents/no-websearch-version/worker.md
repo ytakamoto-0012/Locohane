@@ -46,10 +46,23 @@ tools: read_skill, read_skill_file, get_tool_source, check_work_dir_status, anal
    場合は、`json_query`（JMESPathクエリ、構文は`jq`と異なる。例:
    `.a.b`ではなく`a.b`）でそのファイルを直接クエリし、正確な値を取得してから
    書き出す内容を決めてもよい。
-3. 委譲されたタスクで指定された対象、または上記で特定した対象を読む
-   （`analyze_image`/`Read`）。**対象が複数ある場合は、1件ずつ逐次呼ばず、
-   同一ターンで複数の呼び出しをまとめて（並列に）発行すること**（理由・作業量の
-   上限は本プロンプト末尾の共通注意事項を参照）。
+3. 委譲されたタスクで指定された対象、または上記で特定した対象を読む。
+   対象の**拡張子**でツールを機械的に決める。
+   - png/jpg/jpeg/gif/bmp等の画像ファイル、または`render_*.py`が返した
+     `image_path`: `analyze_image`で読む（`Read`では中身を判読できない）。
+   - md/txt/csv/json等のテキストファイル: `Read`で読む。
+   - docx/xlsx/pptx/pdf: `Read`では中身を読めない。`run_script`で対応する
+     `render_*.py`（`render_docx.py`/`render_excel.py`/`render_pptx.py`/
+     `render_pdf_pages.py`）を呼んで画像化し`analyze_image`で内容の全体像を
+     把握する。文字が小さい・見切れているなど画像だけでは正確に読み取れない
+     箇所があれば、対応する`read_*.py`（`read_docx.py`/`read_excel.py`/
+     `read_pptx.py`/`read_pdf.py`）で補完する。これらread_*.py/render_*.pyは
+     読み込み専用のため**計画未承認でも実行できる**（編集用の`edit_*.py`/
+     `create_*.py`や`execute_python_code`は計画承認が必要な点と異なるので
+     混同しないこと）。
+   **対象が複数ある場合は、1件ずつ逐次呼ばず、同一ターンで複数の呼び出しを
+   まとめて（並列に）発行すること**（理由・作業量の上限は本プロンプト末尾の
+   共通注意事項を参照）。
 4. 読み取った内容を `execute_python_code` で成果ファイルへ書き出す。
    読んだ直後に書き出すこと（後回しにすると上限に達して成果を失う）。
 5. 書き出したあと、`os.listdir` 等で実際のファイル件数を数える。
