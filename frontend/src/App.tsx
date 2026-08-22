@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { useRecoilValue } from 'recoil';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRecoilValue, useSetRecoilState } from 'recoil';
 import {
   useAuth,
   useChatSession,
@@ -8,9 +8,13 @@ import {
   useChatData,
   useConfig,
   currentThreadIdState,
-  sessionIdState
+  sessionIdState,
+  messagesState,
+  elementState,
+  tasklistState
 } from '@chainlit/react-client';
 import { BACKEND_URL } from './chainlitClient';
+import { fetchThreadSnapshot, threadStepsToMessages, splitThreadElements } from './threadSnapshot';
 import { Header } from './components/Header';
 import { LoginForm } from './components/LoginForm';
 import { MessagePane } from './components/MessagePane';
@@ -96,7 +100,8 @@ function App() {
   // on_chat_end 経由でバックグラウンド継続するがpushする相手がいない）。
   // そのまま何も表示しないと「会話が終了したように見える」ため、開いている
   // スレッドが他セッションで処理中かをポーリングし、入力欄を無効化した上で
-  // 完了を検知したら再読み込みして確定内容を取り込む。
+  // 完了を検知したらこのスレッドの最新スナップショットを取り直して確定内容を
+  // 取り込む。
   //
   // 「他セッションで処理中」の判定は sessionIdState（このセッション自身の
   // Chainlit セッションID）をバックエンドへ渡し、生成中セッションと突き合わせて
@@ -108,8 +113,29 @@ function App() {
   // window.location.reload() が発火して自分自身のターンを見失い、URLに
   // ?thread が無い新規チャットとして再接続され続ける不具合があった
   // （2026-08-19 ユーザー報告: 送信するたびに無題の会話が増殖するバグ）。
+  //
+  // 完了検知時に以前はページ全体を window.location.reload() していたが、
+  // 生成中のライブ中継自体は _make_relayed_emit（app.py）が既に担っているため、
+  // 完了の瞬間にもう一度フルリロードする必要は薄い。ここでは
+  // messagesState/elementState/tasklistState を直接置き換えるだけの軽量な
+  // 再取得（syncThreadSnapshot）に置き換える（2026-08-22）。
   const [remoteGenerating, setRemoteGenerating] = useState(false);
   const wasRemoteGeneratingRef = useRef(false);
+
+  const setMessages = useSetRecoilState(messagesState);
+  const setDisplayElements = useSetRecoilState(elementState);
+  const setTasklistElements = useSetRecoilState(tasklistState);
+
+  const syncThreadSnapshot = useCallback(
+    async (threadId: string) => {
+      const thread = await fetchThreadSnapshot(threadId);
+      setMessages(threadStepsToMessages(thread));
+      const { tasklist, display } = splitThreadElements(thread);
+      setTasklistElements(tasklist);
+      setDisplayElements(display);
+    },
+    [setMessages, setDisplayElements, setTasklistElements]
+  );
 
   useEffect(() => {
     wasRemoteGeneratingRef.current = false;
@@ -129,7 +155,17 @@ function App() {
             return;
           }
           if (wasRemoteGeneratingRef.current) {
-            window.location.reload();
+            // 取得に失敗した場合は wasRemoteGeneratingRef.current を true のまま
+            // 残し、次のポーリングで再試行する（_make_relayed_emit と同じ
+            // ベストエフォート方針）。remoteGenerating=true のままなので
+            // 入力欄は無効化され続け、中途半端な状態で操作させることはない。
+            syncThreadSnapshot(currentThreadId)
+              .then(() => {
+                if (cancelled) return;
+                wasRemoteGeneratingRef.current = false;
+                setRemoteGenerating(false);
+              })
+              .catch(() => {});
             return;
           }
           setRemoteGenerating(false);
@@ -142,7 +178,7 @@ function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [currentThreadId, sessionId, config?.dataPersistence]);
+  }, [currentThreadId, sessionId, config?.dataPersistence, syncThreadSnapshot]);
 
   // このセッションには生成中タスクへの参照（session.current_task）が無いため、
   // Chainlit純正の stopTask は機能しない。代わりにバックエンドへ「このスレッドの
