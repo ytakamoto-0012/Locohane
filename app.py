@@ -670,6 +670,15 @@ if _config.thread_store_enabled:
         呼び出し元自身のセッションである場合は isGenerating=false になる
         （/locohane/threads/{id}/status のdocstring参照。自分自身の生成中
         スレッドにもパルスドットが出てしまう見た目の紛らわしさを防ぐ）。
+
+        isWaitingForUser は _pending_asks（src/ask_relay.py。approve_plan/
+        ask_user_question/ask_user_choice が応答待ちの間だけ thread_id が
+        キーとして存在する）との突き合わせ。「生成中」ではあるがユーザーの
+        入力・選択を待って止まっている状態を区別して示すための項目で、
+        isGenerating と同じ session_id 除外（自分自身が今まさにその
+        Ask*Messageを見ているセッションでは出さない）を適用する
+        （2026-08-22 ユーザー要望: 生成中スレッドが他セッションでask系ツールに
+        よりユーザーアクション待ちになったことをサイドバーで区別したい）。
         """
         if _thread_store_conn is None:
             # _setup() が一度も完了していない（起動直後にブラウザ側のREST呼び出しが
@@ -679,10 +688,15 @@ if _config.thread_store_enabled:
         owner = thread_store.resolve_owner(current_user)
         items, next_cursor = await thread_store.list_threads_summary(_thread_store_conn, owner, limit, before)
         for item in items:
+            is_own_session = session_id is not None and _generating_thread_session_ids.get(item["id"]) == session_id
             is_generating = item["id"] in _generating_thread_ids
-            if is_generating and session_id is not None and _generating_thread_session_ids.get(item["id"]) == session_id:
+            if is_generating and is_own_session:
                 is_generating = False
             item["isGenerating"] = is_generating
+            is_waiting = item["id"] in _pending_asks
+            if is_waiting and is_own_session:
+                is_waiting = False
+            item["isWaitingForUser"] = is_waiting
         return {"threads": items, "nextCursor": next_cursor}
 
     @_chainlit_asgi_app.put("/locohane/threads/{thread_id}")

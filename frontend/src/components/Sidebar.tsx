@@ -9,6 +9,7 @@ interface ThreadSummary {
   name: string | null;
   updatedAt: string;
   isGenerating: boolean;
+  isWaitingForUser: boolean;
 }
 
 // 他のセッション（別スレッドを開いた同じタブ・別タブ）が裏で処理中かどうかを
@@ -134,8 +135,16 @@ export function Sidebar() {
             }
             onClick={() => goToThread(thread.id)}
           >
-            {thread.isGenerating && (
-              <span className="thread-list-item-generating" title="生成中" aria-label="生成中" />
+            {thread.isWaitingForUser ? (
+              <span
+                className="thread-list-item-waiting"
+                title="ユーザーの操作待ち"
+                aria-label="ユーザーの操作待ち"
+              />
+            ) : (
+              thread.isGenerating && (
+                <span className="thread-list-item-generating" title="生成中" aria-label="生成中" />
+              )
             )}
             <span className="thread-list-item-name">{thread.name || '無題の会話'}</span>
             <span className="thread-list-item-actions">

@@ -1055,6 +1055,27 @@
   animation: thread-generating-pulse 1.4s ease-in-out infinite;
 }
 
+.thread-list-item-waiting {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #f0a020;
+  animation: thread-waiting-pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes thread-waiting-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(1.35);
+  }
+}
+
 @keyframes thread-generating-pulse {
   0%,
   100% {
