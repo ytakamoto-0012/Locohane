@@ -20,7 +20,8 @@ xlsx/xlsm の新規作成・既存編集を行うスキル。`edit_excel.py` を
 - 新規作成: `script_args`末尾に`"--new"`（既存ファイルがあれば`"--overwrite"`も必須、無いとエラー）。
 - `--new`なし: 対象パスを読み込んで編集（不在ならエラー）。触れなかった既存セル・書式・シートはそのまま保持。
 - `--output`省略で対象パスへ上書き保存。別ファイル保存時のみ`"--output", "<絶対パス>"`を追加。
-- `.xlsm`はマクロを保持したまま編集可。マクロ自体の読み書きはexcel-vba-read/excel-vba-editスキル。
+- `.xlsm`はマクロを保持したまま編集可（`--new`なし時のみ。既存ファイルを`keep_vba=True`で読み込むため）。マクロ自体の読み書きはexcel-vba-read/excel-vba-editスキル。
+- **`--new`かつ`.xlsm`は「マクロ有効ブック」にならない**（openpyxlの`Workbook()`はvbaProjectを持たないため、拡張子が`.xlsm`でも中身はxlsx相当になり、Excelで開けない/マクロを追加できないファイルができる）。表データ・書式とVBAマクロの両方を持つ新規`.xlsm`を作りたい場合は、**先にexcel-vba-editスキルの`--new`で空のマクロ有効ブックを作成し、その後このスキルを`--new`なしで使って同じパスにシート・データを追記する**（逆順不可）。
 
 ## 入出力の型とopsの渡し方
 
@@ -34,7 +35,7 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 
 | op | 必須 | 任意 | 説明 |
 |---|---|---|---|
-| `add_sheet` | `name` | `index` | シート追加。同名シートが既存ならエラー（自動リネームに頼らず明示エラーにするため。既存シートへ追記したいなら`set_range`等にそのシート名を指定） |
+| `add_sheet` | `name` | `index` | シート追加。同名シートが既存ならエラー（自動リネームに頼らず明示エラーにするため。既存シートへ追記したいなら`set_range`等にそのシート名を指定）。`index`はopenpyxlの`Workbook.create_sheet`にそのまま渡す**0始まり**の挿入位置（`index:0`で先頭、省略時は末尾に追加）。`insert_rows`の`index`（1始まり）とは基準が異なるので混同しないこと |
 | `delete_sheet` | `name` | - | シート削除 |
 | `rename_sheet` | `name`,`new_name` | - | シート名変更 |
 | `set_cell` | `sheet`,`cell` | `value`,`style`,`inherit_style`,`inherit_style_from` | 単一セルへ値・書式設定。`style`省略時、対象セルが元々無書式の新規セル（例: `delete_rows`後に再生成された行）だと書式は付かない。周囲と見た目を揃えたい場合は`inherit_style:true`を指定すると、隣接セル（既定で左隣。`inherit_style_from`で`"left"`/`"right"`/`"above"`/`"below"`を選べる）の書式をコピーする |

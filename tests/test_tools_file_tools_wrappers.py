@@ -213,6 +213,18 @@ class TestForeignTmpDirGuard:
 
         assert result["content"].endswith("mine")
 
+    def test_read_file_named_with_tmp_prefix_is_not_blocked(self, file_tools_env) -> None:
+        """`_tmp_` で始まる名前の「ファイル」はセッション作業フォルダ
+        （常にディレクトリ）ではないため、他セッション扱いされてはならない
+        （2026-08-22 回帰: edit_excel.py が自分で作った `_tmp_ops.json` を
+        読めずクラッシュしていたバグの修正確認）。"""
+        f = file_tools_env / "_tmp_ops.json"
+        f.write_text("[]", encoding="utf-8")
+
+        result = json.loads(tools.read_tool.func(file_path=str(f)))
+
+        assert result["content"].endswith("[]")
+
     def test_glob_over_workdir_excludes_foreign_tmp_but_keeps_siblings(self, file_tools_env) -> None:
         (file_tools_env / "notes.txt").write_text("hello", encoding="utf-8")
         foreign = file_tools_env / "_tmp_thread-2"

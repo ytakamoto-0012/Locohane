@@ -41,8 +41,9 @@ End Sub
 {"skill_name": "excel-vba-edit", "script_filename": "edit_vba.py",
  "script_args": ["C:\\Users\\me\\book.xlsm", "--ops-json", "[{\"op\": \"set_code\", \"name\": \"Module1\", \"code\": \"Sub Foo()\\nEnd Sub\"}]"]}
 ```
-- 新規作成: 末尾に`"--new"`（既存ファイルがあれば`"--overwrite"`も必須）。
+- 新規作成: 末尾に`"--new"`（既存ファイルがあれば`"--overwrite"`も必須）。Excel COM経由で真のマクロ有効ブックを作るため、表データ・書式も入れたい場合は**このスキルの`--new`を先に実行してから**、excel-editスキルを`--new`なしで使ってシート・データを追記する（excel-editの`--new`を先に使うと中身がxlsx相当のマクロ無効ファイルになり、このスキルで開けなくなる）。
 - `--new`なしは対象パスを開いて編集（不在ならエラー）。
+- `--new`直後のシート構成は**「Sheet1」1枚のみ**（Excel COMの`Workbooks.Add()`が作る既定）。「Sheet1〜Sheet3の3枚」を前提にexcel-editスキルの`rename_sheet`等を組むと存在しないシート名でエラーになる。2枚目以降が必要なら先にexcel-editスキルの`add_sheet`で追加してからリネームすること。
 - `--output`省略で対象パスへ上書き保存（出力先拡張子は必ず`.xlsm`）。
 - VBAコードは複数行文字列になりやすいため、`--ops-json`直埋め込みより最初から`--ops-file <絶対パス>`（`execute_python_code`でops配列を組み立て`json.dump`で作業ディレクトリ配下の一時ファイルへ書き出し、そのパスを渡す）を基本とする。
 

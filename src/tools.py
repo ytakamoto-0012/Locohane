@@ -867,6 +867,14 @@ def _foreign_tmp_dir_error(path: Path) -> str | None:
     どこかに `_tmp_` を含む文字列があるかではない）。無関係な場所に
     たまたま `_tmp_` で始まる名前のフォルダがあっても影響しない。
 
+    さらに、この階層が実際にディレクトリである場合のみ拒否する
+    （`_foreign_tmp_dir_names()` と同じ条件）。`_resolve_exec_workdir()`
+    が作るセッション作業フォルダは常にディレクトリであり、ファイルには
+    なりえないため、LLMが作業ディレクトリ直下に `_tmp_ops.json` のような
+    `_tmp_` で始まる名前の**ファイル**を自分で作成した場合まで誤って
+    「他セッションの一時ディレクトリ」として読み取り拒否してしまう回帰が
+    あった（2026-08-22 発見・修正）。
+
     Args:
         path: 解決済みの絶対パス（未解決でも内部で resolve() する）。
 
@@ -888,7 +896,12 @@ def _foreign_tmp_dir_error(path: Path) -> str | None:
             continue
         first = rel.parts[0]
         if first.startswith("_tmp_") and first != own_name:
-            return f"エラー: 他セッションの一時ディレクトリ（{first}）は読み取れません。"
+            try:
+                is_dir = (parent / first).is_dir()
+            except OSError:
+                is_dir = False
+            if is_dir:
+                return f"エラー: 他セッションの一時ディレクトリ（{first}）は読み取れません。"
         return None
     return None
 
