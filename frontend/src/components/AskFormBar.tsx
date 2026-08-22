@@ -40,21 +40,23 @@ export function AskFormBar() {
   return (
     <form className="ask-form-bar" onSubmit={handleSubmit}>
       {props?.question && <div className="ask-form-question">{props.question}</div>}
-      {labels.map((label, i) => (
-        <label key={i} className="ask-form-field">
-          <span className="ask-form-label">{label}</span>
-          <input
-            type="text"
-            className="ask-form-input"
-            value={values[i] ?? ''}
-            onChange={(e) => {
-              const next = [...values];
-              next[i] = e.target.value;
-              setValues(next);
-            }}
-          />
-        </label>
-      ))}
+      <div className="ask-form-fields">
+        {labels.map((label, i) => (
+          <label key={i} className="ask-form-field">
+            <span className="ask-form-label">{label}</span>
+            <input
+              type="text"
+              className="ask-form-input"
+              value={values[i] ?? ''}
+              onChange={(e) => {
+                const next = [...values];
+                next[i] = e.target.value;
+                setValues(next);
+              }}
+            />
+          </label>
+        ))}
+      </div>
       <button type="submit" className="ask-form-submit">
         送信
       </button>

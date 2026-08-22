@@ -20,6 +20,7 @@
   --header-icon-size: 22px;
   --header-title-font-size: 14px;
   --plan-card-max-height: 260px;
+  --ask-form-max-height: 60vh;
 }
 
 :root[data-theme='dark'] {
@@ -548,6 +549,15 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
+  max-height: var(--ask-form-max-height);
+  overflow: hidden;
+}
+
+.ask-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
 }
 
 .ask-form-question {

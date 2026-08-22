@@ -52,29 +52,31 @@ export function AskChoiceFormBar() {
   return (
     <form className="ask-form-bar" onSubmit={handleSubmit}>
       {props?.question && <div className="ask-form-question">{props.question}</div>}
-      {choices.map((choice, i) => (
-        <label key={i} className="ask-choice-field">
+      <div className="ask-form-fields">
+        {choices.map((choice, i) => (
+          <label key={i} className="ask-choice-field">
+            <input
+              type="checkbox"
+              checked={checked[i] ?? false}
+              onChange={(e) => {
+                const next = [...checked];
+                next[i] = e.target.checked;
+                setChecked(next);
+              }}
+            />
+            <span>{choice}</span>
+          </label>
+        ))}
+        <label className="ask-form-field">
+          <span className="ask-form-label">その他（自由記述）</span>
           <input
-            type="checkbox"
-            checked={checked[i] ?? false}
-            onChange={(e) => {
-              const next = [...checked];
-              next[i] = e.target.checked;
-              setChecked(next);
-            }}
+            type="text"
+            className="ask-form-input"
+            value={otherText}
+            onChange={(e) => setOtherText(e.target.value)}
           />
-          <span>{choice}</span>
         </label>
-      ))}
-      <label className="ask-form-field">
-        <span className="ask-form-label">その他（自由記述）</span>
-        <input
-          type="text"
-          className="ask-form-input"
-          value={otherText}
-          onChange={(e) => setOtherText(e.target.value)}
-        />
-      </label>
+      </div>
       <div className="ask-form-actions">
         <button type="button" className="ask-form-cancel" onClick={handleCancel}>
           ❌ キャンセル

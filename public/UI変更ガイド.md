@@ -32,6 +32,7 @@ SPAの `public/build/` とは別経路なので、フロントエンドの再ビ
 | `--header-icon-size` | `22px` | ヘッダー左アイコン（`.app-header-icon`）の幅・高さ |
 | `--header-title-font-size` | `14px` | ヘッダータイトル文字列（`.app-header-title`）のフォントサイズ |
 | `--plan-card-max-height` | `260px` | サイドパネルの実行計画カード（`.plan-card-list`）の最大高さ。項目数がこれを超えるとパネル内スクロールになる |
+| `--ask-form-max-height` | `60vh` | `AskUserQuestion`/`ask_user_choice` の質問フォーム（`.ask-form-bar`）全体の最大高さ。質問・選択肢が多い場合にチャット画面を占有しないよう、入力欄部分（`.ask-form-fields`）がこの高さでスクロールする（質問文・送信ボタンは常に表示） |
 
 編集後はブラウザをリロードするだけで反映される（Chainlitサーバー再起動・`npm run build` は不要）。
 
