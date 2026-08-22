@@ -332,7 +332,7 @@ Locohane/
 │   ├── planner.md           # create_planの前段で計画草案（steps候補＋detail_markdown）を作る設計専用の読み取り専用エージェント種別
 │   ├── worker.md            # 承認済み計画に沿って読取り→書込みを内部完結させる書き込み可能エージェント種別
 │   ├── verifier.md          # 成果物検証用エージェント種別
-│   └── no-websearch-version/ # web-searchスキル許可前の旧エージェント定義の退避コピー（アプリでは未使用、参考用）
+│   └── no-websearch-version/ # web-searchスキルを使わない環境向けの代替エージェント定義一式（explore/analyze-docs/workerからWeb検索関連の記述を除いた版）。*.mdスキャンは非再帰のためagents/直下に置いても自動では読まれず、該当環境ではconfig.iniのagents_dir（またはAGENTS_DIR環境変数）をこのフォルダに向けるか、中身をagents/直下に配置して使う
 ├── skills/
 │   ├── SKILLS_README.md    # スキル開発者向けガイド
 │   ├── skill-creator/       # 新しいスキルの作成・既存スキルの改善・eval検証を行うメタスキル

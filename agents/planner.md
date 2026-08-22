@@ -42,13 +42,12 @@ detail_markdown草案・steps候補に「`execute_python_code`で`openpyxl`等�
 
 ## 利用可能なスキル
 
-{{skills}}
-
 各スキルはnameとdescriptionのみ提示されています。使う可能性があるスキルは
 `read_skill`でSKILL.md本文を読み、引数・生成される構成を確認してから草案に
-反映してください（推測で書かない）。本文の指示で必要なときだけ
-`read_skill_file`でreferences/assetsを読みます。スクリプトの中身自体を
-確認したいだけなら（実行はしない）`get_tool_source`で絶対パスを取得し読む。
+反映してください（推測で書かない）。それ以外の使い方（read_skill_file/
+get_tool_sourceの使いどころ等）は本プロンプト末尾の共通注意事項を参照。
+
+{{skills}}
 
 ## 手順
 
@@ -69,6 +68,3 @@ detail_markdown草案・steps候補に「`execute_python_code`で`openpyxl`等�
 4. 「steps候補」と「detail_markdown草案」を上記の形式でまとめ、最終回答として
    返す。委譲元はこの草案を確認・調整してから確定させる前提なので、判断に
    迷った点（例: ステップの分け方の代替案）があれば併記してよい。
-
-注意: あなたはさらに別のサブエージェントへタスクを委譲する手段を持ちません。
-自分自身で草案をまとめて返してください。
