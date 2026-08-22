@@ -87,7 +87,7 @@ from src.llm import (
 from src.log_rotation import LineCountRotatingFileHandler
 from src.mcp_client import init_mcp_tools, shutdown_mcp_tools
 from src.memory import render_memory_block
-from src.plan_relay import pending_plan_asks as _pending_plan_asks
+from src.ask_relay import pending_asks as _pending_asks, resolve_pending_ask
 from src.project_instructions import render_project_instructions_block
 from src.skills import build_system_prompt, render_skills_block, scan_skills
 from src.subagent import is_truncated_result
@@ -230,49 +230,49 @@ def _unmark_thread_generating(thread_id: str, owner: str | None = None) -> None:
         _generating_owner_threads.pop(owner, None)
 
 
-# thread_id -> 承認待ち（approve_plan の AskActionMessage）の引き継ぎ用状態。
+# thread_id -> 応答待ち（approve_plan/ask_user_question/ask_user_choice の
+# Ask*Message）の引き継ぎ用状態。
 # Sidebar.goToThread()（frontend/src/components/Sidebar.tsx）はスレッド切り替え時に
 # フルページリロードするため、sessionIdState は毎回 uuid4() で新規発行され直す
 # （@chainlit/react-client の SessionId atom）。生成中スレッドから離れて
-# 承認待ちの状態のまま戻ってきたセッションは、Chainlit的には元のセッションとは
-# 完全な別物であり、二度と元のWebSocket/emitterには紐づかない。approve_plan の
-# cl.AskActionMessage.send() は元セッションのemitterへ送信済みのまま応答不能
-# （相手のWebSocketが既に切断済み）になり、承認ボタンが戻ってきたセッションに
-# 一切表示されない（2026-08-21 ユーザー報告）。
+# 応答待ちの状態のまま戻ってきたセッションは、Chainlit的には元のセッションとは
+# 完全な別物であり、二度と元のWebSocket/emitterには紐づかない。素の
+# cl.AskActionMessage/AskUserMessage/AskElementMessage.send() は元セッションの
+# emitterへ送信済みのまま応答不能（相手のWebSocketが既に切断済み）になり、
+# ボタン・入力フォームが戻ってきたセッションに一切表示されない
+# （2026-08-21 ユーザー報告。当初は approve_plan のみで確認されたが、同じ
+# 仕組みの ask_user_question/ask_user_choice にも同一の欠落があったため
+# 2026-08-22 に一般化）。
 # ここに登録した内容を on_chat_resume が検知し、今まさに繋がっているセッション
-# 側で同じ承認ボタンを出し直し、回答をこの Future 経由で元セッション側の
-# 待機（approve_plan）へ引き継ぐ。
-# 登録・解除は src/tools.py 側（approve_plan）から行うため、状態そのものは
-# src/plan_relay.py（app.py/src/tools.py どちらにも属さない中立モジュール）に
+# 側で同じAsk*Messageを出し直し、回答をこの Future 経由で元セッション側の
+# 待機（各ask系ツール）へ引き継ぐ。
+# 登録・解除は src/tools.py 側（各ask系ツール）から行うため、状態そのものは
+# src/ask_relay.py（app.py/src/tools.py どちらにも属さない中立モジュール）に
 # 置く。以前は app.py 側に置いて src/tools.py から `from app import ...` で
 # 遅延importしていたが、chainlit run はapp.pyを "app" という名前で
 # sys.modules に登録しないため、その import がapp.py全体を別モジュールとして
 # 再実行してしまい、@cl.on_message 等のグローバルなハンドラ登録を壊れた状態の
-# ものに上書きしてしまう不具合があった（src/plan_relay.py のdocstring参照）。
+# ものに上書きしてしまう不具合があった（src/ask_relay.py のdocstring参照）。
 
 
-async def _relay_pending_plan_ask(thread_id: str) -> None:
-    """on_chat_resume から起動する。指定スレッドに未解決の承認待ちがあれば、
-    今このセッション（＝実際にブラウザと繋がっている生きたWebSocket）で
-    同じ承認ボタンを出し直し、回答を _pending_plan_asks の Future 経由で
-    元セッション（approve_plan を呼んだ側）へ引き継ぐ。
+async def _relay_pending_ask(thread_id: str) -> None:
+    """on_chat_resume から起動する。指定スレッドに未解決の応答待ちがあれば、
+    今このセッション（＝実際にブラウザと繋がっている生きたWebSocket。
+    Chainlit自体がon_chat_resumeハンドラ実行前にcl.contextをこの新セッション
+    へ束縛済み）で同じAsk*Messageを出し直し、回答を _pending_asks の
+    Future 経由で元セッション（approve_plan/ask_user_question/ask_user_choice
+    を呼んだ側）へ引き継ぐ。
 
-    元セッション側の cl.AskActionMessage.send() はフルページリロードで
-    切断済みの相手（sid）へ送られたままのため、自然には応答が返らず
-    [scripts].approval_timeout_seconds 経過でタイムアウトするだけになる
-    （この関数を経由しない限り、戻ってきたセッションにボタンは一切出ない）。
+    元セッション側の Ask*Message.send() はフルページリロードで切断済みの
+    相手（sid）へ送られたままのため、自然には応答が返らずタイムアウト
+    するだけになる（この関数を経由しない限り、戻ってきたセッションに
+    ボタン・入力フォームは一切出ない）。
+
+    実体は src/ask_relay.py の resolve_pending_ask（既に接続済みのまま
+    留まっているセッションへの中継 dispatch_to_live_viewers とも共有する
+    共通ロジック）に委譲するだけの薄いラッパー。
     """
-    entry = _pending_plan_asks.get(thread_id)
-    if entry is None or entry["future"].done():
-        return
-    actions = [cl.Action(name=name, payload=payload, label=label) for name, label, payload in entry["action_specs"]]
-    try:
-        res = await cl.AskActionMessage(content=entry["content"], actions=actions, timeout=entry["timeout"]).send()
-    except Exception:  # noqa: BLE001 - 引き継ぎ表示自体の失敗で元セッション側の待機を巻き込まない
-        logging.getLogger(__name__).warning("承認待ちの引き継ぎ表示に失敗しました [thread_id=%s]", thread_id, exc_info=True)
-        return
-    if not entry["future"].done():
-        entry["future"].set_result(res)
+    await resolve_pending_ask(thread_id)
 
 
 def _make_relayed_emit(session, thread_id: str, original_emit):
@@ -734,6 +734,25 @@ if _config.thread_store_enabled:
         if is_generating and session_id is not None and _generating_thread_session_ids.get(thread_id) == session_id:
             is_generating = False
         return {"isGenerating": is_generating}
+
+    @_chainlit_asgi_app.get("/locohane/threads/{thread_id}")
+    async def _locohane_get_thread(thread_id: str, current_user=Depends(_cl_get_current_user)):
+        """離脱→復帰後、生成完了を検知した際にフロントが1回だけ叩く軽量スナップショット取得用。
+
+        以前は完了検知後に window.location.reload() でページ全体を作り直して
+        最終状態を取り込んでいたが、既に _make_relayed_emit（on_message参照）で
+        生成中のライブ中継自体は機能しているため、完了時にもう一度フルリロード
+        する必要は薄い。ここでは Chainlit公式の GET /project/thread/{thread_id}
+        （chainlit/server.py）と同じ形（ThreadDict: steps/elements/metadata等）を
+        匿名モード対応で返すだけの薄いラッパー。公式ルートは current_user が
+        必須で匿名モードでは常に401になるため使えない（_assert_owns_thread の
+        docstring参照）。
+        """
+        await _assert_owns_thread(thread_id, current_user)
+        thread = await _thread_data_layer.get_thread(thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        return thread
 
     @_chainlit_asgi_app.post("/locohane/threads/{thread_id}/stop")
     async def _locohane_stop_thread(thread_id: str, current_user=Depends(_cl_get_current_user)):
@@ -1729,11 +1748,11 @@ if _config.thread_store_enabled:
             ]
         ).send()
 
-        if thread_id in _pending_plan_asks:
-            # 承認待ちのまま離れて戻ってきたスレッド。今このセッションで
-            # 承認ボタンを出し直す（_relay_pending_plan_ask のdocstring参照）。
+        if thread_id in _pending_asks:
+            # 応答待ちのまま離れて戻ってきたスレッド。今このセッションで
+            # 同じAsk*Messageを出し直す（_relay_pending_ask のdocstring参照）。
             # on_chat_resume 自体をブロックしないよう非同期に起動する。
-            asyncio.create_task(_relay_pending_plan_ask(thread_id))
+            asyncio.create_task(_relay_pending_ask(thread_id))
 
         logging.getLogger(__name__).info("スレッドを再開しました thread_id=%s", thread_id)
 
