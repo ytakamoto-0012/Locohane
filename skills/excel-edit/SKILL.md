@@ -27,7 +27,9 @@ xlsx/xlsm の新規作成・既存編集を行うスキル。`edit_excel.py` を
 
 成功=終了コード0＋JSON1行を標準出力。失敗=終了コード非0＋エラーメッセージを標準エラー。エラー文はそのままユーザーへ伝える。未導入ライブラリは`ImportError`終了コード1（原因: `openpyxl`）→該当する`pip install <パッケージ名>`をユーザーに促す。
 
-opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`run_script`はシェルを介さず引数をそのまま子プロセスへ渡すため引用符エスケープは不要）。次のいずれかに該当する場合は、最初から（構文エラーを待たず）`execute_python_code`でopsをlist/dictとして組み立て`json.dump`で作業ディレクトリ配下の一時ファイルへ書き出し、`--ops-file <絶対パス>`で渡す：①ops要素数が5個超、②1つの文字列値に日本語10文字超を含む。`--ops-json`で構文エラー（引用符の閉じ忘れ等）が1回でも出たら、直そうとせず即座に`--ops-file`方式へ切り替える。
+opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`run_script`はシェルを介さず引数をそのまま子プロセスへ渡すため引用符エスケープは不要）。次のいずれかに該当する場合は、最初から（構文エラーを待たず）`execute_python_code`でopsをlist/dictとして組み立て`json.dump`で一時ファイルへ書き出し、`--ops-file <絶対パス>`で渡す：①ops要素数が5個超、②1つの文字列値に日本語10文字超を含む。`--ops-json`で構文エラー（引用符の閉じ忘れ等）が1回でも出たら、直そうとせず即座に`--ops-file`方式へ切り替える。
+
+**`execute_python_code`の`cwd`は`run_script`の作業ディレクトリ（＝ユーザーが設定した作業ディレクトリ）とは別物**（`execute_python_code`はセッション専用の一時フォルダ`_tmp_<thread_id>`をcwdとして実行される）。opsファイルはユーザーの作業ディレクトリを狙わず、単純に相対パス（例:`open("ops.json", "w", ...)`）で書けばよい。`run_script`側は自セッションの`_tmp_<thread_id>`配下を読み取れるので、`os.path.abspath("ops.json")`で得た絶対パスをそのまま`--ops-file`に渡せば動く。ユーザーの作業ディレクトリ直下に`_tmp_`で始まる名前のファイルを自分で作ろうとしない（無関係な安全ガードに引っかかる）。
 
 生成・更新したファイルは出力JSONの`path_memory`（例`{"@12": "C:\\foo\\book.xlsx"}`）に自動登録される。以降`run_script`の`script_args`には絶対パスの代わりに`@N`をそのまま渡せる。
 
@@ -55,8 +57,9 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 | `update_table` | `sheet`,`name` | `range`,`style`,`banded` | 既存テーブルの範囲拡張・スタイル変更 |
 | `remove_table` | `sheet`,`name` | - | テーブル定義のみ削除（値・書式は残る） |
 | `freeze_panes` | `sheet`,`cell` | - | ウィンドウ枠固定（`"A2"`で1行目固定） |
-| `add_chart` | `sheet`,`type`,`data_range`,`anchor` | `title`,`categories_range`,`titles_from_data`(既定true),`theme`(下記参照),`show_data_labels`(既定true) | グラフ追加。`type`は`bar`/`line`/`pie`/`scatter`。既定でデータラベル（値。`pie`は%）を表示し、`theme`指定時は系列色を付ける（`pie`は対象外、Excel既定の配色のまま） |
-| `update_chart` | `sheet`,`chart_index` | `anchor`,`width_cm`,`height_cm`,`data_range`,`categories_range`,`titles_from_data`,`title`,`theme`（1つ以上必須） | 既存グラフの位置・サイズ・データ範囲・タイトル・配色を変更（下記「画像・グラフの追加と調整」参照） |
+| `add_chart` | `sheet`,`type`,`data_range`,`anchor` | `title`,`categories_range`,`titles_from_data`(既定true),`theme`(下記参照),`show_data_labels`(既定true),`grouping`(`type:bar`限定。下記参照) | グラフ追加。`type`は`bar`/`line`/`pie`/`scatter`。既定でデータラベル（値。`pie`は%）を表示し、`theme`指定時は系列色を付ける（`pie`は対象外、Excel既定の配色のまま） |
+| `update_chart` | `sheet`,`chart_index` | `anchor`,`width_cm`,`height_cm`,`data_range`,`categories_range`,`titles_from_data`,`title`,`theme`,`grouping`（1つ以上必須） | 既存グラフの位置・サイズ・データ範囲・タイトル・配色・積み上げ設定を変更（下記「画像・グラフの追加と調整」参照） |
+| `delete_chart` | `sheet`+(`chart_index`または`title`) | - | グラフ削除。`title`指定時、一致が0件/複数件ならエラー（`update_chart`と同じ`chart_index`基準で数える） |
 | `add_image` | `sheet`,`image_path`,`left_cm`,`top_cm` | `width_cm`/`height_cm`（省略時は原寸、片方のみ指定でアスペクト比維持） | 新規画像をシートへ追加（下記参照） |
 | `set_image_position` | `sheet`,`image_index` | `left_cm`/`top_cm`/`width_cm`/`height_cm`（1つ以上必須） | 既存画像の位置・サイズを変更（下記参照） |
 | `add_conditional_format` | `sheet`,`range`,`rule_type`,`params` | - | 条件付き書式（下記表参照） |
@@ -205,6 +208,17 @@ xlsxとpptxを同じ資料セットとして作るときに見た目を揃えや
   意図的に対応していない。ユーザーからトリミングを頼まれた場合は、
   「excel-editでは画像のトリミングに対応していません」と伝え、代わりに
   トリミング済みの画像ファイルを別途用意してもらうよう案内する。
+- **積み上げ棒グラフは`grouping`で指定する**（`type:bar`のみ）。値は
+  `clustered`（既定・系列を横に並べる）/`stacked`（積み上げ）/
+  `percentStacked`（100%積み上げ）。`stacked`/`percentStacked`指定時は
+  系列が正しく重なって見えるよう内部で自動的に`overlap:100`相当も設定
+  する（別途指定不要）。`type:bar`以外（`line`/`pie`/`scatter`）へ指定
+  するとエラーになる。`update_chart`でも`grouping`だけを渡して既存の
+  棒グラフを後から積み上げに変更できる。
+  ```json
+  {"op": "add_chart", "sheet": "Sheet1", "type": "bar",
+   "data_range": "B1:D5", "anchor": "F1", "grouping": "stacked"}
+  ```
 
 ## 条件付き書式（`add_conditional_format`）
 

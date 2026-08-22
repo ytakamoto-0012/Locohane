@@ -449,12 +449,34 @@ def op_freeze_panes(wb, op: dict) -> None:
     _sheet(wb, op["sheet"]).freeze_panes = op["cell"]
 
 
+_CHART_GROUPINGS = {"clustered", "stacked", "percentStacked"}
+
+
+def _apply_grouping(chart, grouping) -> None:
+    """barグラフの`grouping`（積み上げ設定）を適用する（add_chart/update_chart共通）。
+
+    openpyxlの`BarChart.grouping`は"clustered"（既定・並列）/"stacked"（積み上げ）/
+    "percentStacked"（100%積み上げ）を受け付ける。stacked系では`overlap=100`も
+    合わせて設定しないと系列同士が視覚的に重ならず積み上げに見えないため、ここで
+    まとめて面倒を見る。
+    """
+    if grouping is None:
+        return
+    if not isinstance(chart, BarChart):
+        raise ValueError("'grouping' はtype=barのグラフにのみ指定できます")
+    if grouping not in _CHART_GROUPINGS:
+        raise ValueError(f"未対応のgroupingです（{sorted(_CHART_GROUPINGS)}のみ対応）: {grouping}")
+    chart.grouping = grouping
+    chart.overlap = 100 if grouping in ("stacked", "percentStacked") else None
+
+
 def op_add_chart(wb, op: dict) -> None:
     ws = _sheet(wb, op["sheet"])
     chart_cls = _CHART_CLASSES.get(op["type"])
     if chart_cls is None:
         raise ValueError(f"未対応のグラフ種別です（bar/line/pie/scatterのみ対応）: {op['type']}")
     chart = chart_cls()
+    _apply_grouping(chart, op.get("grouping"))
     if op.get("title"):
         chart.title = op["title"]
     data_ref = _reference(ws, op["data_range"])
@@ -571,6 +593,39 @@ def _get_chart(ws, chart_index):
     return charts[idx]
 
 
+def _chart_title_text(chart) -> str | None:
+    """chart.titleからプレーンテキストを取り出す（openpyxlの`Title`はリッチテキストの
+    入れ子オブジェクトで、str()しても本文は得られないため個別に辿る必要がある）。
+    タイトル未設定、または解釈できない構造の場合はNoneを返す。
+    """
+    title = chart.title
+    if title is None:
+        return None
+    try:
+        runs = title.tx.rich.p[0].r
+        return "".join(r.t or "" for r in runs) or None
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
+def op_delete_chart(wb, op: dict) -> None:
+    ws = _sheet(wb, op["sheet"])
+    chart_index, title = op.get("chart_index"), op.get("title")
+    if chart_index is None and title is None:
+        raise ValueError("'chart_index' または 'title' のいずれかが必要です")
+    if chart_index is not None:
+        _get_chart(ws, chart_index)  # 範囲チェックのみ（存在しなければValueError）
+        idx = int(chart_index)
+    else:
+        matches = [i for i, c in enumerate(ws._charts) if _chart_title_text(c) == str(title)]
+        if not matches:
+            raise ValueError(f"titleが一致するグラフが見つかりません: {title!r}")
+        if len(matches) > 1:
+            raise ValueError(f"titleが一致するグラフが複数あります（{len(matches)}件）。chart_indexで指定してください: {title!r}")
+        idx = matches[0]
+    del ws._charts[idx]
+
+
 def op_update_chart(wb, op: dict) -> None:
     ws = _sheet(wb, op["sheet"])
     chart_index = op.get("chart_index")
@@ -581,10 +636,11 @@ def op_update_chart(wb, op: dict) -> None:
     anchor = op.get("anchor")
     width_cm, height_cm = op.get("width_cm"), op.get("height_cm")
     data_range, categories_range = op.get("data_range"), op.get("categories_range")
-    title, theme = op.get("title"), op.get("theme")
-    if not any([anchor, width_cm is not None, height_cm is not None, data_range, title, theme]):
-        raise ValueError("anchor/width_cm/height_cm/data_range/title/theme のいずれか1つ以上の指定が必要です")
+    title, theme, grouping = op.get("title"), op.get("theme"), op.get("grouping")
+    if not any([anchor, width_cm is not None, height_cm is not None, data_range, title, theme, grouping]):
+        raise ValueError("anchor/width_cm/height_cm/data_range/title/theme/grouping のいずれか1つ以上の指定が必要です")
 
+    _apply_grouping(chart, grouping)
     if anchor:
         chart.anchor = anchor
     if width_cm is not None:
@@ -668,6 +724,7 @@ OP_HANDLERS = {
     "remove_table": op_remove_table,
     "freeze_panes": op_freeze_panes,
     "add_chart": op_add_chart,
+    "delete_chart": op_delete_chart,
     "add_image": op_add_image,
     "set_image_position": op_set_image_position,
     "update_chart": op_update_chart,

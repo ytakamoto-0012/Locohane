@@ -34,6 +34,12 @@ _NAME_RE = re.compile(r"^[a-z0-9]+([_-][a-z0-9]+)*$")
 _NAME_MAX = 64
 _DESC_MAX = 1024
 
+# SKILL.md を意図的に持たない共用コードディレクトリ（スキルではない）。
+# skills/OFFICE_SKILLS_README.md の「B2. skills/office_shared/ への共用モジュール
+# 配置」参照。ここに載っていないディレクトリでSKILL.mdが無いのは設定ミスの
+# 可能性が高いためWARNINGのままにする。
+_KNOWN_NON_SKILL_DIRS = frozenset({"office_shared"})
+
 
 @dataclass(frozen=True)
 class Skill:
@@ -130,7 +136,10 @@ def _scan_one(root: Path) -> list[Skill]:
             continue
         skill_md = entry / "SKILL.md"
         if not skill_md.is_file():
-            logger.warning("SKILL.md が無いためスキップ: %s", entry.name)
+            if entry.name in _KNOWN_NON_SKILL_DIRS:
+                logger.debug("SKILL.md が無いためスキップ（共用コードディレクトリ、想定通り）: %s", entry.name)
+            else:
+                logger.warning("SKILL.md が無いためスキップ: %s", entry.name)
             continue
 
         text = skill_md.read_text(encoding="utf-8")

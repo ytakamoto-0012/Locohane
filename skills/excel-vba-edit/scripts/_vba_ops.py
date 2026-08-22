@@ -27,6 +27,16 @@ _DANGEROUS_CODE_PATTERNS = [
     (re.compile(r"\.DeleteFolder\b", re.IGNORECASE), "DeleteFolder（フォルダ削除）"),
 ]
 
+# run_macro実行前チェック用: 対話セッションの無い自動化実行下でダイアログを
+# 誰も閉じられずrun_scriptのタイムアウト（既定300秒）までハングし、
+# Excelプロセスがファイルを開いたまま残留する原因になることを2026-08-22に
+# 3件（CreateButtons/ImportCSVs/DeleteCharts、いずれも末尾にMsgBoxを含む）
+# 実機で確認済みのブロッキングUI API。
+_BLOCKING_UI_PATTERNS = [
+    (re.compile(r"\bMsgBox\b", re.IGNORECASE), "MsgBox"),
+    (re.compile(r"\bInputBox\b", re.IGNORECASE), "InputBox"),
+]
+
 
 def _check_dangerous_code(code: str) -> None:
     """既存データの破壊やシステムへの不正アクセスに使われる危険なVBA APIを
@@ -392,9 +402,62 @@ def op_delete_module(workbook, vb_project, op: dict):
     return None
 
 
+def _find_procedure_code(vb_project, name: str) -> str | None:
+    """run_macroの`name`（"Module.Proc" または "Proc"）からプロシージャ本文の
+    ソースコードを取り出す。
+
+    見つからない場合（該当モジュール・プロシージャなし、COM呼び出し失敗等）は
+    Noneを返し、呼び出し側はブロッキングUIチェックを諦めて実行を続行する
+    （フェイルオープン。ここでの目的はMsgBox/InputBoxによる既知のハングを
+    防ぐことであり、lookup自体の失敗で正当な実行までブロックしないため）。
+    """
+    if "." in name:
+        module_name, proc_name = name.split(".", 1)
+        try:
+            components = [_find_component(vb_project, module_name)]
+        except KeyError:
+            return None
+    else:
+        proc_name = name
+        components = list(vb_project.VBComponents)
+
+    for comp in components:
+        code_module = comp.CodeModule
+        for kind in _PROC_KIND_AUTO_ORDER:
+            try:
+                start_line = code_module.ProcStartLine(proc_name, kind)
+                count_lines = code_module.ProcCountLines(proc_name, kind)
+                return code_module.Lines(start_line, count_lines)
+            except Exception:
+                continue
+    return None
+
+
+def _check_blocking_ui(code: str, macro_name: str) -> None:
+    """run_macroで呼ぶプロシージャにMsgBox/InputBoxが含まれていたら実行前に拒否する。
+
+    含まれたまま実行すると、対話セッションの無い自動化実行下では誰もダイアログを
+    閉じられずrun_scriptのタイムアウト（既定300秒）までハングし、その後も
+    Excelプロセスがファイルを開いたまま残留して以後の編集操作を巻き込んで
+    失敗させ続ける（2026-08-22に3件実機で確認、詳細はSKILL.md参照）。
+    """
+    for pattern, label in _BLOCKING_UI_PATTERNS:
+        if pattern.search(code):
+            raise ValueError(
+                f"マクロ'{macro_name}'に{label}が含まれているため実行を中止しました。"
+                "対話セッションの無い自動化実行ではダイアログを誰も閉じられず、"
+                "run_scriptのタイムアウト（既定300秒）までハングしExcelプロセスが"
+                "残留する原因になります。MsgBox/InputBoxを削除するか、"
+                "Debug.Printか戻り値（Functionの場合）に置き換えてから再実行してください。"
+            )
+
+
 def op_run_macro(workbook, vb_project, op: dict):
     name = op["name"]
     call_args = op.get("args", [])
+    proc_code = _find_procedure_code(vb_project, name)
+    if proc_code:
+        _check_blocking_ui(proc_code, name)
     excel = workbook.Application
     try:
         result = excel.Run(f"'{workbook.Name}'!{name}", *call_args)
