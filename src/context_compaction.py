@@ -45,13 +45,19 @@ def maybe_append_precompact_note_nudge(messages: list[BaseMessage], config: Conf
 
     Returns:
         閾値に達していれば末尾に HumanMessage を1件足した新しいリスト。
-        達していない場合・無効化されている場合は、引数の messages を
-        そのまま返す。
+        達していない場合・無効化されている場合、または直近
+        keep_recent_turns ターン以内に write_thread_note が既に呼ばれて
+        いる場合は、引数の messages をそのまま返す。
     """
     if not config.context_compaction_enabled or config.context_compaction_pre_note_threshold <= 0:
         return messages
     total = last_ai_total_tokens(messages)
     if total is None or total < config.context_compaction_pre_note_threshold:
+        return messages
+    if _write_thread_note_called_recently(messages, config.context_compaction_keep_recent_turns):
+        # 直近で既に書き出し済みなら、同じ facts を書かせるためだけの
+        # 再ナッジは無意味かつ有害（ナッジ自体・再書き込み自体がトークンを
+        # 消費し、閾値超過が続く限り毎ターン再発火して無限ループ状態になる）。
         return messages
 
     logger.warning(
@@ -61,6 +67,27 @@ def maybe_append_precompact_note_nudge(messages: list[BaseMessage], config: Conf
         total,
     )
     return [*messages, HumanMessage(content=f"{_PRE_NOTE_MARKER}\n{config.context_compaction_pre_note_warning_text}")]
+
+
+def _write_thread_note_called_recently(messages: list[BaseMessage], keep_recent_turns: int) -> bool:
+    """直近 keep_recent_turns ユーザーターン以内に write_thread_note が
+    呼ばれていれば True を返す。
+
+    「直近何ターンか」の切り出しには _find_cut_index と同じ安全な切断点を
+    使う（境界より後ろが keep_recent_turns 分の直近範囲）。単純に「前回の
+    ナッジ以降」で判定しないのは、ナッジ自体が永続履歴へ書き込まれない
+    一時的な差し込みメッセージであり、状態として覚えておく場所が無いため
+    （src/main_token_guard.py の maybe_append_token_guard と同じ、今回の
+    呼び出し限りの差し込み方針）。keep_recent_turns はどのみち圧縮時に
+    丸ごと残る範囲を決めている値であり、その範囲内に書き出し済みなら
+    再度書かせても得るものが無い。
+    """
+    cut_index = _find_cut_index(messages, keep_recent_turns)
+    recent = messages[cut_index:] if cut_index is not None else messages
+    return any(
+        isinstance(m, AIMessage) and any(tc.get("name") == "write_thread_note" for tc in (m.tool_calls or []))
+        for m in recent
+    )
 
 
 def should_compact(

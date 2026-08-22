@@ -8,7 +8,7 @@
 
 from dataclasses import dataclass
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.context_compaction import _PRE_NOTE_MARKER, maybe_append_precompact_note_nudge
 
@@ -18,6 +18,7 @@ class _FakeConfig:
     context_compaction_enabled: bool = True
     context_compaction_pre_note_threshold: int = 1000
     context_compaction_pre_note_warning_text: str = "write_thread_noteへ書き出してください"
+    context_compaction_keep_recent_turns: int = 3
 
 
 def _ai_with_usage(total_tokens: int) -> AIMessage:
@@ -87,3 +88,46 @@ def test_no_ai_message_never_injects() -> None:
     result = maybe_append_precompact_note_nudge(messages, config)
 
     assert result == messages
+
+
+def _write_thread_note_call(call_id: str) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": "write_thread_note", "args": {"topic": "t", "content": "c"}, "id": call_id}],
+    )
+
+
+def test_no_injection_when_write_thread_note_called_within_recent_turns() -> None:
+    """直近ターン内で write_thread_note 済みなら、閾値超過でも再ナッジしない（無限ループ回避）。"""
+    config = _FakeConfig(context_compaction_pre_note_threshold=1000, context_compaction_keep_recent_turns=3)
+    messages = [
+        HumanMessage(content="turn1"),
+        _write_thread_note_call("call-1"),
+        ToolMessage(content="ok", tool_call_id="call-1"),
+        _ai_with_usage(1500),
+    ]
+
+    result = maybe_append_precompact_note_nudge(messages, config)
+
+    assert result == messages
+
+
+def test_injects_again_once_write_thread_note_call_falls_outside_recent_turns() -> None:
+    """write_thread_note 済みでも、それが keep_recent_turns より前なら再ナッジする。"""
+    config = _FakeConfig(context_compaction_pre_note_threshold=1000, context_compaction_keep_recent_turns=2)
+    messages = [
+        HumanMessage(content="turn1"),
+        _write_thread_note_call("call-1"),
+        ToolMessage(content="ok", tool_call_id="call-1"),
+        HumanMessage(content="turn2"),
+        AIMessage(content="a"),
+        HumanMessage(content="turn3"),
+        AIMessage(content="b"),
+        HumanMessage(content="turn4"),
+        _ai_with_usage(1500),
+    ]
+
+    result = maybe_append_precompact_note_nudge(messages, config)
+
+    assert len(result) == len(messages) + 1
+    assert _PRE_NOTE_MARKER in result[-1].content
