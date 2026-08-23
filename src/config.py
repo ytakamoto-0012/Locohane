@@ -447,6 +447,12 @@ class Config:
             続行を促す新しいメッセージを送った場合も同一タスクの継続として
             扱われ、承認済みの計画をやり直させられずに済む。
             （config.ini の [plan].reset_approval_on_new_message 由来）。
+        plan_auto_approve: True の場合、approve_plan 呼び出し時にユーザーへの
+            確認（承認/却下ボタンの表示・応答待ち）を一切行わず、その場で
+            自動的に承認済み扱いにする。書き込み系ツール（run_script/
+            execute_python_code等）が人の確認を経ずに実行されるようになるため、
+            信頼できる自動化用途以外では False（既定）を推奨する。
+            （config.ini の [plan].auto_approve 由来）。
         thinking_loop_guard_enabled: LLM応答（thinking/本文）のストリーミング中に
             反復ループを検知したら生成を打ち切って再試行する機能の有効/無効。
         thinking_loop_guard_window_chars: ループ検知の判定対象に使う
@@ -725,6 +731,7 @@ class Config:
     plan_reset_approval_on_recreate: bool
     plan_require_planner_dispatch: bool
     plan_reset_approval_on_new_message: bool
+    plan_auto_approve: bool
 
     # --- LLM応答の反復ループ検知（src/llm.py の ChatLlamaCpp） ---
     thinking_loop_guard_enabled: bool
@@ -1735,6 +1742,7 @@ def load_config(config_path: Path | None = None) -> Config:
         plan_reset_approval_on_new_message=_as_bool(
             os.getenv("PLAN_RESET_APPROVAL_ON_NEW_MESSAGE", plan_section.get("reset_approval_on_new_message", True))
         ),
+        plan_auto_approve=_as_bool(os.getenv("PLAN_AUTO_APPROVE", plan_section.get("auto_approve", False))),
         thinking_loop_guard_enabled=_as_bool(os.getenv("THINKING_LOOP_GUARD_ENABLED", thinking_loop_guard.get("enabled", True))),
         thinking_loop_guard_window_chars=int(os.getenv("THINKING_LOOP_GUARD_WINDOW_CHARS", thinking_loop_guard.get("window_chars", 600))),
         thinking_loop_guard_check_interval_chars=int(

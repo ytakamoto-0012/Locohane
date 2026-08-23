@@ -272,6 +272,7 @@ _ASK_USER_CHOICE_TIMEOUT_SECONDS: int = 90
 _PLAN_BADGE_ALLOW_UNLOCK: bool = True
 _PLAN_RESET_APPROVAL_ON_RECREATE: bool = True
 _PLAN_REQUIRE_PLANNER_DISPATCH: bool = True
+_PLAN_AUTO_APPROVE: bool = False
 
 # run_script は本来「書き込み系ツール」として一律に計画承認を要求するが、
 # 副作用のない純粋な読み取り専用スクリプトはここに (skill_name, script_filename)
@@ -331,6 +332,7 @@ def init_tools(
     plans_dir: Path | None = None,
     plan_reset_approval_on_recreate: bool = True,
     plan_require_planner_dispatch: bool = True,
+    plan_auto_approve: bool = False,
 ) -> None:
     """ツールが使う設定を注入する（app 起動時に一度だけ呼ぶ）。
 
@@ -482,6 +484,10 @@ def init_tools(
             するか。True（既定）なら未実施の場合 create_plan はエラーを返す。
             create_plan が成功するたびにフラグは消費される。
             （config.ini の [plan].require_planner_dispatch 由来）。
+        plan_auto_approve: True の場合、approve_plan 呼び出し時にユーザーへの
+            確認（承認/却下ボタンの表示・応答待ち）を一切行わず、その場で
+            自動的に承認済み扱いにする。False（既定）なら従来通りユーザーの
+            明示的な承認を必須にする（config.ini の [plan].auto_approve 由来）。
 
     Returns:
         None。副作用としてモジュール globals を更新するのみ。
@@ -505,6 +511,7 @@ def init_tools(
     global _PLAN_BADGE_ALLOW_UNLOCK
     global _PLAN_RESET_APPROVAL_ON_RECREATE
     global _PLAN_REQUIRE_PLANNER_DISPATCH
+    global _PLAN_AUTO_APPROVE
     global _DISPATCH_AGENT_MAX_PARALLEL
     global _TOOL_CALL_MAX_PARALLEL
     global _PLAN_APPROVAL_EXEMPT_SCRIPTS
@@ -544,6 +551,7 @@ def init_tools(
     _PLAN_BADGE_ALLOW_UNLOCK = plan_badge_allow_unlock
     _PLAN_RESET_APPROVAL_ON_RECREATE = plan_reset_approval_on_recreate
     _PLAN_REQUIRE_PLANNER_DISPATCH = plan_require_planner_dispatch
+    _PLAN_AUTO_APPROVE = plan_auto_approve
     _DISPATCH_AGENT_MAX_PARALLEL = dispatch_agent_max_parallel
     _TOOL_CALL_MAX_PARALLEL = graph_tool_max_parallel
     # 設定値の変更（再初期化）に追従できるよう、以前の値で生成済みの
@@ -4296,6 +4304,9 @@ async def approve_plan() -> str:
     明示的に却下した場合とは返り値のテキストで区別する（無応答は単に手が
     離せないだけの可能性が高く、計画自体を作り直す必要はないため）。
 
+    config.ini の [plan].auto_approve が true の場合、承認/却下ボタンの表示・
+    応答待ちを一切行わず、その場で自動的に承認済み扱いにする（無人自動化用途向け）。
+
     Returns:
         承認・明示的却下・タイムアウトのいずれかを伝えるテキスト。計画が未作成の
         場合は例外を送出せず「エラー: ...」形式の文字列を返す。
@@ -4303,6 +4314,16 @@ async def approve_plan() -> str:
     plan = cl.user_session.get("plan")
     if not plan:
         return "エラー: 計画がありません。先に create_plan を呼んでください。"
+    if _PLAN_AUTO_APPROVE:
+        cl.user_session.set("plan_approved", True)
+        cl.user_session.set("plan_denied_just_now", False)
+        message: cl.Message | None = cl.user_session.get("plan_message")
+        if message is not None:
+            message.content = _render_plan_payload(plan, approved=True)
+            await message.update()
+        await cl.Message(content="⚙️ config.ini の [plan].auto_approve が有効なため、ユーザー確認をスキップして計画を自動承認しました。").send()
+        logger.info("approve_plan: auto_approve=true のため自動承認しました")
+        return "config.ini の [plan].auto_approve が有効なため、ユーザーへの確認をスキップして自動承認しました。書き込み系ツール（run_script/execute_python_code）を実行できます。"
     content = (
         _render_plan(plan) + "\n\nこの計画を承認しますか？承認後は各ステップの書き込み系ツール"
         "（run_script/execute_python_code）が実行できるようになります。"
