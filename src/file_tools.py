@@ -168,6 +168,23 @@ def _file_detail(path: Path) -> dict:
     return {"path": resolved, "binary": False, "total_lines": len(text.splitlines())}
 
 
+_BRACE_GROUP_RE = re.compile(r"\{([^{}]+)\}")
+
+
+def _expand_braces(pattern: str) -> list[str]:
+    """globパターン中の `{a,b,c}` をシェル同様の選択展開として複数パターンへ展開する。
+
+    `pathlib.Path.glob` はブレース展開を解釈せず `{`/`}` を単なるリテラル文字と
+    扱うため、`*.{jpg,jpeg,png}` のようなLLMが書きがちなパターンが常に0件に
+    なってしまう問題への対応（braceが無ければ元のパターンのみを1件で返す）。
+    """
+    match = _BRACE_GROUP_RE.search(pattern)
+    if not match:
+        return [pattern]
+    prefix, options, rest = pattern[: match.start()], match.group(1).split(","), pattern[match.end() :]
+    return [f"{prefix}{opt}{tail}" for opt in options for tail in _expand_braces(rest)]
+
+
 def glob_search(base: Path, pattern: str, head_limit: int = 200, exclude_names: frozenset[str] = frozenset()) -> dict:
     """指定ディレクトリ配下でglobパターンに一致するファイル/ディレクトリを検索する（旧 glob_file.py 相当）。
 
@@ -196,7 +213,13 @@ def glob_search(base: Path, pattern: str, head_limit: int = 200, exclude_names: 
         raise ValueError(f"検索起点パスがディレクトリではありません: {base}")
 
     try:
-        all_matches = list(base.glob(pattern))
+        seen: set[Path] = set()
+        all_matches: list[Path] = []
+        for expanded_pattern in _expand_braces(pattern):
+            for p in base.glob(expanded_pattern):
+                if p not in seen:
+                    seen.add(p)
+                    all_matches.append(p)
     except ValueError as e:
         raise ValueError(f"パターンが不正です: {e}") from e
 

@@ -105,6 +105,18 @@ class TestGlobSearch:
         with pytest.raises(ValueError, match="ディレクトリではありません"):
             file_tools.glob_search(f, "*.py")
 
+    def test_brace_alternation_expands_to_union(self, tmp_path) -> None:
+        (tmp_path / "a.jpg").write_text("a", encoding="utf-8")
+        (tmp_path / "b.png").write_text("b", encoding="utf-8")
+        (tmp_path / "c.txt").write_text("c", encoding="utf-8")
+
+        result = file_tools.glob_search(tmp_path, "*.{jpg,png,gif}")
+
+        assert result["total_matches"] == 2
+        assert str((tmp_path / "a.jpg").resolve()) in result["files"]
+        assert str((tmp_path / "b.png").resolve()) in result["files"]
+        assert not any("c.txt" in p for p in result["files"])
+
     def test_exclude_names_prunes_results_and_counts(self, tmp_path) -> None:
         (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
         excluded = tmp_path / "_tmp_other"

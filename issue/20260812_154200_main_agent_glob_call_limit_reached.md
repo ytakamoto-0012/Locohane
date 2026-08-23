@@ -52,3 +52,13 @@
 [glob_search_directory_not_found.md](20260813_163000_glob_search_directory_not_found.md)
 に記載（括弧のエスケープ問題ではなく、ユーザーの注釈文言をLLMがパスの
 一部として解釈したことが原因と判明）。
+
+## 追記（2026-08-23 20:01）
+
+対象ログファイル: data/logs/app_20260823_195217.log（新スレッド）
+
+```
+2026-08-23 19:59:11,488 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: analyze-docs, explore, planner, verifier, worker）へ委譲してください。'
+```
+
+再発。ガードは意図通り機能しており、実害なし。

@@ -25,6 +25,16 @@
 plannerへの委譲を省略しがち」という傾向によるもので、Locohane側の
 不具合ではない。
 
+## 追記（2026-08-23 20:12）
+
+対象ログファイル: data/logs/app_20260823_195217.log
+
+```
+2026-08-23 20:11:53,782 WARNING src.tools: tool_result: name=create_plan content='エラー: create_planの前にdispatch_agent(agent_type="planner")を呼んでください。調査で得た具体的事実とユーザー要求をplannerへ過不足なく伝え、計画の草案を作らせてからcreate_planを呼び直すこと（自分の記憶・推測だけでsteps/detail_markdownを構成しない）。'
+```
+
+再発。原因・対応は上記から変わらず。
+
 ## ユーザー回答
 
 ここにはユーザーの回答が記述される

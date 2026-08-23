@@ -98,6 +98,39 @@ if logger.isEnabledFor(logging.DEBUG):
 2026-08-23 18:09:49,858 WARNING src.subagent: subagent tool=read_skill args={'skill_name': 'docx-render'} -> ---
 ```
 
+## 追記（2026-08-23 20:15）
+
+`pptx-create`スキルの`read_skill`でも再発（別セッション、対象ログファイル
+data/logs/app_20260823_195217.log）。
+
+```
+2026-08-23 20:12:17,008 WARNING src.subagent: subagent tool=read_skill args={'skill_name': 'pptx-create'} -> ---
+```
+
+SKILL.mdの内容に依存せず、改行を含むSKILL.mdであれば対象スキルを問わず
+再現することが確定的になった。
+
+## 追記（2026-08-23 20:34）
+
+`pptx-create`スキルの`read_skill`で再発（別セッション、対象ログファイル
+data/logs/app_20260823_195217.log）。
+
+```
+2026-08-23 20:33:14,403 WARNING src.subagent: subagent tool=read_skill args={'skill_name': 'pptx-create'} -> ---
+```
+
+なお同一ログファイル内の3535行目（`src.tools`経由・メイングラフからの
+`read_skill`呼び出し）は同じ`pptx-create`のSKILL.mdを返しているが、
+こちらは`%r`整形により正しく1行に収まっており対照的（`src/tools.py`側は
+バグの影響を受けないことの再確認）。
+
+`pptx-render`・`pptx-read`スキルの`read_skill`でも同時刻に再発（同一セッション）:
+
+```
+2026-08-23 20:35:40,313 WARNING src.subagent: subagent tool=read_skill args={'skill_name': 'pptx-render'} -> ---
+2026-08-23 20:35:40,313 WARNING src.subagent: subagent tool=read_skill args={'skill_name': 'pptx-read'} -> ---
+```
+
 `read_skill`で読み込むSKILL.mdが改行を含む限り、対象スキル名を問わず
 必ず発生する（`_contains_error`の誤検知条件＝SKILL.md本文に「エラー」
 「error」の語が含まれるスキルであれば、どのスキルでも再現しうる）。

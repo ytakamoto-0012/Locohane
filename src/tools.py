@@ -2074,6 +2074,10 @@ def glob_tool(pattern: str, path: str = "", head_limit: int = 200) -> str:
 
     Args:
         pattern: globパターン（例: 配下の全Pythonファイルなら "**/*.py"）。
+            `{a,b,c}` によるシェル同様の選択展開も使える
+            （例: 画像ファイル一括なら "**/*.{jpg,jpeg,png,gif,bmp,webp}"）。
+            拡張子の大文字・小文字はどちらか一方を書けば両方一致する
+            （Windows上のパス照合は大文字小文字を区別しないため）。
         path: 検索起点ディレクトリの絶対パス（`@N` 可）。省略時は作業ディレクトリ。
         head_limit: ファイル・ディレクトリそれぞれに独立に適用する上限件数（既定200）。
 

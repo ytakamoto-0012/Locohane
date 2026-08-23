@@ -45,6 +45,37 @@
 
 再発。原因・対応は上記から変わらず。
 
+## 追記（2026-08-23 19:53）
+
+対象ログファイル: data/logs/app_20260823_175334.log（複数タブ/再接続）
+
+```
+2026-08-23 19:51:53,880 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+2026-08-23 19:51:56,131 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+2026-08-23 19:51:59,555 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+2026-08-23 19:52:07,351 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+```
+
+対象ログファイル: data/logs/app_20260823_195217.log（ローテーション後、新規ファイル冒頭）
+
+```
+2026-08-23 19:52:41,549 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+2026-08-23 19:52:45,822 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+```
+
+再発。原因・対応は上記から変わらず。
+
+## 追記（2026-08-23 20:29）
+
+対象ログファイル: data/logs/app_20260823_195217.log（複数タブ/再接続）
+
+```
+2026-08-23 20:27:12,967 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+2026-08-23 20:27:14,317 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+```
+
+再発。原因・対応は上記から変わらず。
+
 ## ユーザー回答
 
 ここにはユーザーの回答が記述される

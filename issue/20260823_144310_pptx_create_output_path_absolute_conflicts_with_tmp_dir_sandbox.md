@@ -1,6 +1,6 @@
 # pptx-create SKILL.mdの「output_pathは絶対パス」指示が、run_scriptの実際のcwd制約（セッション専用一時フォルダ限定）と食い違い書き込みガードでブロックされる
 
-- **区分**: バグ（ドキュメント） → 修正済み（2026-08-23）
+- **区分**: バグ（ドキュメント） → 修正試行済みだが再発（2026-08-23 20:34、根本原因は`check_work_dir_status`の誤解を招く案内文言）
 - **検知日時**: 2026-08-23 14:22:14
 - **対象ログファイル**: data/logs/app_20260823_135730.log
 
@@ -73,6 +73,65 @@ docx-render/pptx-render）に `pptx-create` は含まれておらず、今回新
 として今回は対応していない。
 
 検証: `pytest tests/` 444件全通過（ドキュメントのみの変更のため既存テストへの影響なし）。
+
+## 追記（2026-08-23 20:34）— 修正後も再発（修正が効いていない）
+
+対象ログファイル: data/logs/app_20260823_195217.log
+
+SKILL.md修正（15:10）後の別セッションで、`pptx-create`が全く同じ失敗
+パターンで再発した。今回はworkerが「魚図鑑」PPTXの出力先に
+`C:\DT_Python\Locohane\data\temp\魚図鑑.pptx`（`default_workdir`直下）を
+指定し、同じ書き込みサンドボックスガードで拒否されている。
+
+```
+2026-08-23 20:33:38,195 WARNING src.subagent: subagent tool=run_script args={'script_filename': 'create_pptx.py', 'skill_name': 'pptx-create', 'script_args': ['C:\\DT_Python\\Locohane\\data\\temp\\魚図鑑.pptx', '--data', '...']} -> [終了コード] 1
+[標準エラー]
+ファイルの保存に失敗しました: [書き込みサンドボックスガード] 作業ディレクトリ配下以外は書き込みできません: C:\DT_Python\Locohane\data\temp\魚図鑑.pptx
+作業ディレクトリ（またはセッション専用の一時フォルダ _tmp_<thread_id>）配下のみ書き込み・削除可能です。default_workdir直下など共有フォルダへは直接書き込めません。
+```
+
+失敗後、workerは`check_work_dir_status`を呼び直したが、返ってきた結果は
+「作業ディレクトリ: 未設定（既定フォルダ C:\DT_Python\Locohane\data\temp
+を使用）\n状態: 読み書き可能（既定フォルダはサーバー側の設定のため通常
+アクセス可能）」——**「読み書き可能」と明言しているにもかかわらず実際には
+`_tmp_<thread_id>`配下でなければ拒否される**、という矛盾した案内になって
+おり、workerはこれを見て「ユーザーが明示的に設定していないので既定
+フォルダが使われているが、"ユーザー設定の作業ディレクトリ"として認識
+されていない」のように混乱し、以後thinkingで長時間迷走した。
+
+**この矛盾は本issueの15:10修正時点で「本issueのスコープ外」として明記
+されていた既知の積み残し**（71-73行目の追記参照:
+「`check_work_dir_status`のメッセージ自体の見直し（work_dir未設定時に
+『読み書き可能』とだけ返し、実際は書き込みが`_tmp_<thread_id>`へ縮小
+される点を説明していない）」）がそのまま今回の再発の直接原因になっている。
+SKILL.md側の追記だけでは、LLMが失敗後に頼る`check_work_dir_status`の
+案内自体が誤解を招く内容のままだと再発を防げないことが実証された。
+
+## 追記（2026-08-23 20:35）— 迂回時にthread_id（UUID）を打ち間違えて別ガードにも抵触
+
+上記の混乱の後、workerは`execute_python_code`で`os.getcwd()`を確認し
+セッション専用一時フォルダ（`_tmp_9d5c3480-384b-4ff3-98e9-381b0f9de886`）
+の存在を把握した。しかし、そのパスを`run_script`へ渡す際、UUID部分を
+記憶から書き起こしたためか一部を欠落させて
+`_tmp_9d5c3480-384b-4ff3-981b0f9de886`（`98e9-3`が抜けている）という
+存在しないフォルダ名になり、「他セッションの一時ディレクトリガード」に
+（今回は正しく）拒否された。
+
+```
+2026-08-23 20:34:46,627 WARNING src.subagent: subagent tool=run_script args={'script_filename': 'create_pptx.py', 'skill_name': 'pptx-create', 'script_args': ['C:\\DT_Python\\Locohane\\data\\temp\\_tmp_9d5c3480-384b-4ff3-981b0f9de886\\魚図鑑.pptx', ...]} -> [終了コード] 1
+[標準エラー]
+...
+PermissionError: [一時ディレクトリガード] 他セッションの一時ディレクトリへはアクセスできません: C:\DT_Python\Locohane\data\temp\_tmp_9d5c3480-384b-4ff3-981b0f9de886
+```
+
+これは[glob_search_directory_not_found.md](20260813_163000_glob_search_directory_not_found.md)・
+[glob_wrong_path_inference_error.md](20260809_002501_glob_wrong_path_inference_error.md)
+で繰り返し記録している「パスを記憶や推測で再構築してしまう」問題の一種で、
+今回は長いUUID文字列の一部欠落という形で現れた。`check_work_dir_status`の
+案内文言問題と合わせて、このタスクは20:33〜20:35の3分間で3種類の異なる
+書き込み系ガード（サンドボックスガード→誤解を招く案内→UUID打ち間違いで
+他セッションガード）に立て続けに阻まれており、単一の修正では解決しない
+複合的な問題であることが分かる。
 
 ## ユーザー回答
 

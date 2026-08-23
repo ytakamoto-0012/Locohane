@@ -42,6 +42,16 @@
 
 再発。原因・対応は上記から変わらず。
 
+## 追記（2026-08-23 20:34）
+
+対象ログファイル: data/logs/app_20260823_195217.log
+
+```
+2026-08-23 20:32:58,753 WARNING src.tools: tool_result: name=run_script content='エラー: run_script はメインエージェントとして呼び出しを禁止されています（max_calls=0）。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: analyze-docs, explore, planner, verifier, worker）へ委譲してください。'
+```
+
+再発。原因・対応は上記から変わらず。
+
 ## ユーザー回答
 
 ここにはユーザーの回答が記述される
