@@ -179,18 +179,21 @@ def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> tuple[Path,
                     continue
             doc.ExportAsFixedFormat(0, pdf_path, Quality=0, IncludeDocProperties=True, IgnorePrintAreas=False, OpenAfterPublish=False)
             doc.Close(SaveChanges=False)
+            doc = None
 
         elif tool == "pptx":
             # Presentation → PDF (ppSaveAsPDF = 32)
             doc = app.Presentations.Open(abs_path, ReadOnly=True, Untitled=False, WithWindow=False)
             doc.SaveAs(pdf_path, 32)
             doc.Close()
+            doc = None
 
         elif tool == "docx":
             # Document → PDF (wdFormatPDF = 17)
             doc = app.Documents.Open(abs_path, ReadOnly=False, Revert=True)
             doc.SaveAs2(pdf_path, 17)
             doc.Close(SaveChanges=False)
+            doc = None
 
         else:
             raise ValueError(f"未知のツール: {tool}")

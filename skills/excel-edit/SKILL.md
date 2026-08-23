@@ -65,7 +65,7 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 | `delete_chart` | `sheet`+(`chart_index`または`title`) | - | グラフ削除。`title`指定時、一致が0件/複数件ならエラー（`update_chart`と同じ`chart_index`基準で数える） |
 | `add_image` | `sheet`,`image_path`,`left_cm`,`top_cm` | `width_cm`/`height_cm`（省略時は原寸、片方のみ指定でアスペクト比維持） | 新規画像をシートへ追加（下記参照） |
 | `set_image_position` | `sheet`,`image_index` | `left_cm`/`top_cm`/`width_cm`/`height_cm`（1つ以上必須） | 既存画像の位置・サイズを変更（下記参照） |
-| `add_conditional_format` | `sheet`,`range`,`rule_type`,`params` | - | 条件付き書式（下記表参照） |
+| `add_conditional_format` | `sheet`,`range`,`rule_type` | `params`（`rule_type`によっては実質必須。省略時は空扱いになり、必要な引数が欠けていればエラーになる） | 条件付き書式（下記表参照） |
 | `add_data_validation` | `sheet`,`range`,`type` | `formula1`,`formula2`,`prompt`,`prompt_title`,`error_message`,`error_title`,`allow_blank`(既定true) | データ検証（下記参照） |
 
 補足: `sheet`はシート名または0始まりインデックス。`rows`/`value`は文字列・数値・真偽値・`null`。`=`で始まる文字列は数式として扱われる（このスクリプトは評価しない。計算値確認はexcel-recalcスキルの`recalc_excel.py`）。
@@ -177,6 +177,8 @@ xlsxとpptxを同じ資料セットとして作るときに見た目を揃えや
 同じopsバッチ内で`insert_row_group`を複数回連続実行しても、各opは常に直前のopsまで適用済みの最新のシート状態からアンカーを解決するため、行ズレによる上書き事故は起きない（「6月に2つの行事を追加」のように複数グループを7月の前へ挿入したい場合は、この形で`insert_row_group`を必要な回数だけ並べればよい）。
 
 現在のグループ構成を確認したいとき（`insert_row_group`の`anchor`に使う値の確認、挿入結果の検証など）は、`excel-read`スキルの`--query-json '[{"op": "group_by", "column": "A"}]'`を使う（生の`rows`を目で数えて行範囲を手計算しない）。
+
+**`anchor.equals`は型も含めて厳密一致で照合される。** アンカー列が数値セル（例: `2024`や`7`）の場合、`group_by`が返す`value`はセルの元の型（int/float）のままなので、`"equals": "7"`のように文字列化すると一致せず「anchorに一致する値が見つかりません」エラーになる。`group_by`の出力の`value`をそのままコピーして渡すこと（数値なら`"equals": 7`のように数値のまま指定する）。
 
 ## 画像・グラフの追加と調整（`add_image`/`set_image_position`/`update_chart`）
 

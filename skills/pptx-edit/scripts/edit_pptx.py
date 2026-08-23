@@ -180,6 +180,9 @@ def op_set_table(ctx: EditContext, op: dict) -> None:
             "python-pptxは既存表の行列数の増減に対応していないため、"
             "行列数を変えたい場合はcreate_pptx.pyで新規スライドとして作り直してください。"
         )
+    for i, row_values in enumerate(rows):
+        if len(row_values) != n_cols_needed:
+            raise ValueError(f"table の rows[{i}] の列数が揃っていません（列数: {n_cols_needed}、rows[{i}]: {len(row_values)}列）")
     r = 0
     if headers:
         for c, h in enumerate(headers):
@@ -206,8 +209,16 @@ def op_replace_picture(ctx: EditContext, op: dict) -> None:
     if not image_file.is_file():
         raise ValueError(f"image_path が見つかりません: {image_path}")
     left, top, width, height = shape.left, shape.top, shape.width, shape.height
-    shape._element.getparent().remove(shape._element)
-    slide.shapes.add_picture(str(image_file), left, top, width=width, height=height)
+    old_element = shape._element
+    parent = old_element.getparent()
+    old_index = list(parent).index(old_element)
+    parent.remove(old_element)
+    new_shape = slide.shapes.add_picture(str(image_file), left, top, width=width, height=height)
+    # add_pictureはspTreeの末尾に追加するため、元のz順序・shape_indexを保つよう
+    # 差し替え対象があった位置へ挿し直す（他shapeのshape_indexがずれるのを防ぐ）。
+    new_element = new_shape._element
+    parent.remove(new_element)
+    parent.insert(old_index, new_element)
 
 
 def op_add_picture(ctx: EditContext, op: dict) -> None:

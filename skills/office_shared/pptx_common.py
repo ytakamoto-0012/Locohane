@@ -19,7 +19,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from pptx.enum.dml import MSO_FILL_TYPE
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.enum.text import PP_ALIGN
+
+_ALIGN_NAMES = {
+    PP_ALIGN.LEFT: "left",
+    PP_ALIGN.CENTER: "center",
+    PP_ALIGN.RIGHT: "right",
+    PP_ALIGN.JUSTIFY: "justify",
+}
 
 
 def setup_utf8_stdio() -> None:
@@ -95,6 +104,55 @@ def check_shape_overflow(shape_info: dict, slide_width_cm: float | None, slide_h
     return f"shape_index {shape_idx}('{shape_name}')が{', '.join(issues)}しています"
 
 
+def _solid_fill_color(fill) -> str | None:
+    """shape.fill/cell.fillが単色塗りならRRGGBB文字列を返す（テーマ色・塗りなし等はNone）。"""
+    try:
+        if fill.type != MSO_FILL_TYPE.SOLID:
+            return None
+        return str(fill.fore_color.rgb)
+    except Exception:
+        return None
+
+
+def _line_color(line) -> str | None:
+    """shape.lineがRGB直接指定の枠線色を持つならRRGGBB文字列を返す（テーマ色・枠線なし等はNone）。"""
+    try:
+        return str(line.color.rgb)
+    except Exception:
+        return None
+
+
+def _first_run_text_style(text_frame) -> dict | None:
+    """text_frameの最初の非空段落・最初のrunの文字書式を返す（set_shape_styleが
+    書き込む値の代表的な読み返し用。run単位で書式が混在していても最初の1つ
+    しか見えない点はedit_pptx.pyのop_set_shape_styleが段落全体へ一括適用する
+    運用を前提にした簡易版）。runが無ければNone。
+    """
+    for paragraph in text_frame.paragraphs:
+        if not paragraph.runs:
+            continue
+        run = paragraph.runs[0]
+        font = run.font
+        try:
+            text_color = str(font.color.rgb)
+        except Exception:
+            text_color = None
+        try:
+            font_size_pt = font.size.pt if font.size is not None else None
+        except Exception:
+            font_size_pt = None
+        return {
+            "text_color": text_color,
+            "bold": font.bold,
+            "italic": font.italic,
+            "underline": font.underline,
+            "font_size_pt": font_size_pt,
+            "font_name": font.name,
+            "align": _ALIGN_NAMES.get(paragraph.alignment),
+        }
+    return None
+
+
 def describe_shape(shape, index: int) -> dict:
     """1つのshapeの構造情報をdictにする。
 
@@ -108,6 +166,11 @@ def describe_shape(shape, index: int) -> dict:
     （pptx-inspectで読んだ値をそのままset_shape_positionの引数へ使い回せる
     ようにするため。プレースホルダ等でレイアウト側から位置を継承していて
     実座標が取得できない場合はNoneになる）。
+
+    `fill_color`/`border_color`/`text_style`/`crop` は edit_pptx.py の
+    `set_shape_style`/`crop_picture` が書き込める値のうち、単色塗り・RGB直接
+    指定・最初のrunの書式・トリミング量として読み返せる範囲を返す（テーマ色
+    指定やrunごとに異なる書式などは読み返せず、いずれもNoneになる）。
     """
     info: dict = {
         "shape_index": index,
@@ -125,6 +188,10 @@ def describe_shape(shape, index: int) -> dict:
         "top_cm": _length_cm(shape.top),
         "width_cm": _length_cm(shape.width),
         "height_cm": _length_cm(shape.height),
+        "fill_color": None,
+        "border_color": None,
+        "text_style": None,
+        "crop": None,
     }
     if shape.is_placeholder:
         info["placeholder_idx"] = shape.placeholder_format.idx
@@ -132,9 +199,31 @@ def describe_shape(shape, index: int) -> dict:
     if shape.has_text_frame:
         text = shape.text_frame.text
         info["text_preview"] = text[:50] if text else ""
+        info["text_style"] = _first_run_text_style(shape.text_frame)
     if shape.has_table:
         table = shape.table
         info["table_dims"] = {"rows": len(table.rows), "cols": len(table.columns)}
+    else:
+        try:
+            info["fill_color"] = _solid_fill_color(shape.fill)
+        except Exception:
+            pass
+        try:
+            info["border_color"] = _line_color(shape.line)
+        except Exception:
+            pass
+    if info["has_picture"]:
+        try:
+            crop = {
+                "crop_left": shape.crop_left,
+                "crop_top": shape.crop_top,
+                "crop_right": shape.crop_right,
+                "crop_bottom": shape.crop_bottom,
+            }
+            if any(v not in (0.0, None) for v in crop.values()):
+                info["crop"] = crop
+        except Exception:
+            pass
     return info
 
 

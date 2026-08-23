@@ -157,6 +157,9 @@ def add_table(slide, table_def: dict, left, top, width, height) -> None:
     n_rows = (1 if headers else 0) + len(rows)
     if n_cols == 0 or n_rows == 0:
         raise ValueError("table には headers または rows のいずれかが必要です")
+    for i, row in enumerate(rows):
+        if len(row) != n_cols:
+            raise ValueError(f"table の rows[{i}] の列数が揃っていません（列数: {n_cols}、rows[{i}]: {len(row)}列）")
 
     graphic_frame = slide.shapes.add_table(n_rows, n_cols, left, top, width, height)
     table = graphic_frame.table

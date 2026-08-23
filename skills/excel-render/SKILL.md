@@ -56,4 +56,6 @@ PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フ�
 
 ファイル不在／ディレクトリ指定／拡張子が`.xlsx`・`.xlsm`・`.xls`以外／壊れたファイル／Excel未インストールはエラー終了。シートが1枚も無い等でPDFが0ページになった場合は終了コード0で返るが、通常時とJSONの形が異なる点に注意（`images: []`に加え`start_page`/`end_page`が`null`になり、**`target_dpi`キー自体が無くなる**）。生成PNGは`_tmp_<thread_id>/rendered/`に保存され同一ファイル再実行時は上書き、会話終了時に自動削除。`pywin32`/`pypdfium2`/`pillow`未導入は`ImportError`（該当する`pip install <パッケージ名>`をユーザーに促す）。
 
+内部でEXCEL.EXEを一時起動する。処理完了時は必ず終了させるが、`run_script`のタイムアウト等でスクリプトが強制終了された場合は残留する可能性がある。この場合はタスクマネージャーでの手動終了ではなく、`excel-recalc`スキルの`recalc_excel.py`または`excel-vba-edit`スキルの`edit_vba.py`を`script_args`を`["--recover-locks"]`だけにして実行する（自セッションがexcel-render等で起動して残留したCOMプロセスのうち、まだ生存しているものだけを内部で終了する）。
+
 シートの列幅・行高さの合計が用紙1ページに収めるための下限スケール（10%）を下回ると、複数ページに分割された上で出力JSONに`warnings`配列（stderrにも同内容を出力）が付与される。終了コードは0のまま。`excel-edit`の`set_column_width`（単位は文字幅、目安1〜60）で列幅を見直してください。

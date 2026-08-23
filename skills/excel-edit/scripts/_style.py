@@ -1,7 +1,8 @@
 """style辞書（JSON）と openpyxl のスタイルオブジェクトを相互変換するヘルパー。
 
-excel-tools スキルの edit_excel.py（書き込み: apply_style）と
-read_excel.py（読み込み: extract_style）から import して使う。
+同スキル内の edit_excel.py（書き込み: apply_style）から import して使う。
+excel-read/scripts/_style.py は同名だが独立した別ファイル（extract_style用。
+office_theme.pyに依存しない点がこちらと異なる）。変更してもこちらには反映されない。
 run_script からは直接実行されない。
 
 style辞書の形式（すべて省略可）:

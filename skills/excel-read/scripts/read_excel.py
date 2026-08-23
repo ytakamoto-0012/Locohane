@@ -351,6 +351,9 @@ def _read_xls(path: Path, sheet_arg: str | None, offset: int, limit: int) -> dic
             if cell.ctype == xlrd.XL_CELL_DATE:
                 dt = xlrd.xldate.xldate_as_datetime(cell.value, book.datemode)
                 row_values.append(dt.isoformat())
+            elif cell.ctype == xlrd.XL_CELL_EMPTY:
+                # xlrdは空セルをNoneではなく空文字列で返すため、SKILL.md記載通りnullに揃える
+                row_values.append(None)
             else:
                 row_values.append(cell.value)
         rows.append(row_values)

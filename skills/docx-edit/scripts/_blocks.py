@@ -1,7 +1,9 @@
 """docxの「ブロック」（見出し・段落・箇条書き・表・画像・改ページ）を組み立てる共通ロジック。
 
-create_docx.py（新規作成）と _ops.py（既存ファイル編集の append_block op）の
-両方から import される。ブロックのJSON仕様は SKILL.md を参照。
+同スキル内の _ops.py（既存ファイル編集の append_block op）から import される。
+docx-create/scripts/_blocks.py は同名だが独立した別ファイル（新規作成用。
+heading/tableをthemeで着色する点などこちらと挙動が異なる。変更してもこちらには
+反映されない）。ブロックのJSON仕様は SKILL.md を参照。
 
 run_script からは直接実行されない。
 """

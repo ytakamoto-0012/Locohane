@@ -66,8 +66,12 @@ def main() -> int:
         page_num = i + 1
         filename = f"{digest}_p{page_num}.png"
         out_path = rendered_dir / filename
-        bitmap = pdf[i].render(scale=scale)
-        bitmap.to_pil().save(out_path)
+        try:
+            bitmap = pdf[i].render(scale=scale)
+            bitmap.to_pil().save(out_path)
+        except Exception as e:  # noqa: BLE001 - 1ページの破損で全体を失敗させない
+            images.append({"page": page_num, "error": f"このページの画像化に失敗しました: {e}"})
+            continue
         images.append({"page": page_num, "image_path": str(out_path)})
 
     path_memory: dict[str, str] = {}

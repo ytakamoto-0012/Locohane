@@ -46,9 +46,9 @@ metadata:
 `shapes` の各要素は `{"shape_index", "name", "shape_type", "is_placeholder",
 "placeholder_idx", "placeholder_type", "has_text_frame", "text_preview",
 "has_table", "table_dims", "has_picture", "left_cm", "top_cm", "width_cm",
-"height_cm"}`）は標準出力からは省かれ、`result_path` が指すJSONファイルにのみ
-含まれます。`Read` ツールで読んで `shape_index` を確認してから `pptx-edit` を
-呼んでください。
+"height_cm", "fill_color", "border_color", "text_style", "crop"}`）は標準出力
+からは省かれ、`result_path` が指すJSONファイルにのみ含まれます。`Read` ツールで
+読んで `shape_index` を確認してから `pptx-edit` を呼んでください。
 
 トップレベルに以下のフィールドも追加されます：
 - `slide_width_cm`/`slide_height_cm`: スライドのサイズ（cm単位）
@@ -64,6 +64,15 @@ metadata:
   配置したい」→このshapeの`left_cm + width_cm + 10`を新しい`left_cm`にする）。
   プレースホルダ等でレイアウト側から座標を継承していて実座標が取得できない
   shapeは`null`になる。
+- `fill_color`/`border_color`は`pptx-edit`の`set_shape_style`が書き込む塗り色・枠線色を
+  RRGGBBで読み返す（単色塗り・RGB直接指定のみ対応。テーマ色指定や表shapeは`null`）。
+- `text_style`は同じく`set_shape_style`が書き込む文字装飾を、そのshapeの最初の段落の
+  最初のrunについてのみ`{"text_color","bold","italic","underline","font_size_pt","font_name","align"}`
+  として読み返す（run単位で書式が混在していても代表値として最初の1つだけを返す。
+  テキストを持てないshapeや文字が1つも無いshapeは`null`）。
+- `crop`は`pptx-edit`の`crop_picture`が書き込むトリミング量を
+  `{"crop_left","crop_top","crop_right","crop_bottom"}`（0.0〜1.0）として読み返す
+  （画像shapeでトリミングが1つも適用されていない場合、および画像以外のshapeは`null`）。
 - ページングは `pptx-read` と同じ設計です（`total_slides` が `max_slides` を超える場合は
   `--start-slide` を `end_slide + 1` にして再度呼び出す）。
 

@@ -26,7 +26,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("pdf_path")
     parser.add_argument("--start-page", type=int, default=1)
-    parser.add_argument("--max-pages", type=int, default=3)
+    parser.add_argument("--max-pages", type=int, default=20)
     args = parser.parse_args()
 
     path = Path(args.pdf_path)
@@ -70,8 +70,11 @@ def main() -> int:
 
     pages = []
     for i in range(start_idx, end_idx):
-        text = reader.pages[i].extract_text() or ""
-        page_entry = {"page": i + 1, "text": text}
+        try:
+            text = reader.pages[i].extract_text() or ""
+            page_entry = {"page": i + 1, "text": text}
+        except Exception as e:  # noqa: BLE001 - 1ページの破損で全体を失敗させない
+            page_entry = {"page": i + 1, "text": "", "error": f"このページの抽出に失敗しました: {e}"}
 
         # ページサイズをpt単位で取得
         try:

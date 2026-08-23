@@ -55,7 +55,7 @@ metadata:
 | `set_table_cell` | `slide`, `shape_index`, `row`, `col` | `text`（省略時`""`＝空文字にする） | 既存表の1セルを差し替え（row/colは0始まり、ヘッダー行も含む） |
 | `set_table` | `slide`, `shape_index` | `headers`、`rows` | 既存表を丸ごと差し替え。**既存表と行数・列数が完全一致する場合のみ**可能（python-pptxは既存表の行列数の増減に非対応。行列数を変えたい場合は`pptx-create`で新規スライドとして作る）。`headers`省略時は必要列数を`rows[0]`の要素数から推定する（`headers`と`rows`が両方省略／空だと0行0列扱いになり、既存表と一致しない限りエラー） |
 | `set_notes` | `slide` | `text`（省略時`""`＝空文字にする） | 発表者ノートを差し替え |
-| `replace_picture` | `slide`, `shape_index`, `image_path` | なし | 既存画像shapeの位置・サイズを保ったまま画像だけ差し替え（差し替え後、z順序は最前面に移動する点に注意） |
+| `replace_picture` | `slide`, `shape_index`, `image_path` | なし | 既存画像shapeの位置・サイズ・z順序・shape_indexを保ったまま画像だけ差し替え |
 | `add_picture` | `slide`, `image_path`, `left_cm`, `top_cm` | `width_cm`/`height_cm`（省略時は原寸、片方のみ指定でアスペクト比維持） | 新規画像をスライドへ追加（下記参照） |
 | `crop_picture` | `slide`, `shape_index` | `crop_left`/`crop_top`/`crop_right`/`crop_bottom`（0.0〜1.0、いずれか1つ以上） | 既存画像shapeをトリミング（下記参照） |
 | `add_chart` | `slide`, `type`, `left_cm`, `top_cm`, `width_cm`, `height_cm`, `categories`, `series` | `title`、`theme`、`show_data_labels`(既定true) | 新規グラフをスライドへ追加（下記参照） |
