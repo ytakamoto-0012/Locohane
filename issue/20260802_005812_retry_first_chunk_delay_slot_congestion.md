@@ -69,6 +69,17 @@
 2026-08-02 12:29:34,836 WARNING app.py: リトライ後の初回チャンク受信まで16秒（異常遅延） [name='Task-93' id=2933086050384 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
 ```
 
+## 追記（2026-08-23 12:58）
+
+`ThinkingLoopDetected`によるリトライ直後、初回チャンク受信まで62秒
+（異常遅延）。VBAマクロ修正タスクの継続中、複数エージェントが短時間に
+連続して実行されていたタイミングと重なる。
+
+```
+2026-08-23 12:57:50,022 WARNING app.py: on_message: リトライ2回目開始 [name='Task-65828' id=1853693016848 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-23 12:58:51,886 WARNING app.py: リトライ後の初回チャンク受信まで62秒（異常遅延） [name='Task-65828' id=1853693016848 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+```
+
 ## ユーザー回答
 
 2026-08-02 修正実施済み。`ThinkingLoopDetected` 発生時は常に

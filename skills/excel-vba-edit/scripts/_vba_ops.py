@@ -150,6 +150,9 @@ def _syntax_error_message(detail: str) -> str:
     )
 
 
+_INVALID_CONTINUE_RE = re.compile(r"\bContinue\s+(Do|For|While)\b", re.IGNORECASE)
+
+
 def _lint_vba_syntax(code: str) -> None:
     """Sub/End Sub、If/End If等のブロック構文の対応関係だけを検証する簡易lint。
 
@@ -162,6 +165,12 @@ def _lint_vba_syntax(code: str) -> None:
     for line_no, text in _iter_logical_lines(code):
         if not text:
             continue
+        if _INVALID_CONTINUE_RE.search(text):
+            raise ValueError(
+                f"{line_no}行目: 'Continue Do/For/While'はVBAに存在しない構文です"
+                "（VB.NET等との混同）。ループの残りをスキップするには、Ifで残り処理を"
+                "条件反転して囲むか、GoToとラベルを使ってください。"
+            )
         closer = next((c for c in _BLOCK_CLOSERS if c[0].search(text)), None)
         if closer is not None:
             _, expected_tag, closer_label = closer

@@ -136,6 +136,28 @@ def test_os_system_git_is_still_blocked(tmp_path, guard_dirs):
     assert "execute_python_codeガード" in result.stderr
 
 
+def test_pip_install_blocked_message_hints_library_may_already_be_installed(tmp_path, guard_dirs):
+    """pip installブロック時のエラーメッセージに、既存ライブラリは大抵
+    インストール済みである旨のヒントが含まれることの回帰テスト。
+
+    背景（2026-08-23）: pip installがブロックされた直後、LLM（plannerサブ
+    エージェント）が「pipで入れられない＝インストールされていない」と誤って
+    結論し、実際には既にインストール済みのoletoolsについて「インストール
+    されていないためユーザーにpip installを依頼する必要がある」という誤った
+    blocker報告を計画に含めてしまった。同時刻に別のサブエージェントは同じ
+    ライブラリで正常に動作しており、矛盾に気づいたメインエージェントが
+    無駄な推論ループに陥った（ThinkingLoopDetectedで自動回復）。
+    """
+    allowed_root, _ = guard_dirs
+    body = "import subprocess\nsubprocess.run(['pip', 'install', 'oletools'])\n"
+
+    result = _run_guarded(tmp_path, [allowed_root], body)
+
+    assert result.returncode != 0
+    assert "execute_python_codeガード" in result.stderr
+    assert "インストール済み" in result.stderr
+
+
 def test_read_outside_allowed_root_is_permitted(tmp_path, guard_dirs):
     allowed_root, outside_root = guard_dirs
     existing = outside_root / "README.md"

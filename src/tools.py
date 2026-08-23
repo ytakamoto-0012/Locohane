@@ -3095,6 +3095,11 @@ def _guard_check_cmd(_args):
     if _guard_cmd_basename(_first) in _GUARD_BLOCKED_CMDS:
         raise PermissionError(
             f"[execute_python_codeガード] git/npm/pipコマンドの実行は禁止されています: {{_args}}"
+            "。これはインストール済みかどうかとは無関係の一律禁止です。"
+            "既存ライブラリは大抵インストール済みなので、先にimportやスクリプトの"
+            "実行を試してください。それでも失敗する場合のみ、新規ライブラリが"
+            "必要とユーザーに報告してください（このツールで自分でインストールする"
+            "ことはできません）。"
         )
 
 

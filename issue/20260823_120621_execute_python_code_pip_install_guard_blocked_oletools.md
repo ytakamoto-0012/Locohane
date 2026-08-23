@@ -31,9 +31,33 @@ requirements.txtを更新する」運用（依存追加は開発者側が管理�
 ためLLMが素直に実行を試みたが、oletoolsは`excel-vba-read`スキル用に既に
 導入済みで、実際には不要な手順だった。6秒で自己回復しており実害は無い。
 
-## 追記（YYYY-MM-DD HH:MM）
+## 追記（2026-08-23 12:57）
 
-（再発時にここへ追記）
+同一タスクの継続中、今度はplannerサブエージェントが`pip install oletools`を
+再試行して同様にブロックされ、そこから「pipで入れられない＝インストールされて
+いない」と誤って結論。実際には既にインストール済みで、同時刻に別の
+サブエージェント（analyze-docs）が同じライブラリで正常にVBAコードを読み込めて
+いたにもかかわらず、plannerは「oletoolsが未インストールのためVBAコードを
+読めない」という誤った内容を計画のblockerとして書き、ユーザーに
+`pip install oletools`を依頼するよう提案する草案を作成した。メインエージェントは
+この矛盾（analyze-docsは成功しているのにplannerは失敗と主張）に気づいて
+約70秒間の無駄な内部推論に陥り、最終的にThinkingLoopDetectedで自動回復した。
+
+今回は前回と異なり自己回復せず、誤情報が計画草案という成果物に混入しかけた点で
+実害が大きい。今回は今後の再発防止のため`## 対応`を実装した。
+
+## 対応（実装済み・2026-08-23）
+
+`src/tools.py`の`execute_python_codeガード`（pip/git/npm等ブロック時の
+`PermissionError`メッセージ）に、「これはインストール済みかどうかとは無関係の
+一律禁止であり、既存ライブラリは大抵インストール済みなので、まずimportや
+スクリプトの実行を試すこと。それでも失敗する場合のみ新規ライブラリが必要と
+ユーザーに報告すること」という一文を追加した。「pip installできない」＝
+「ライブラリが無い」という誤った推論を防ぐのが狙い。
+
+テスト: `tests/test_tools_python_fs_guard.py`に
+`test_pip_install_blocked_message_hints_library_may_already_be_installed`を
+追加。`pytest tests/`442件全通過。
 
 ## ユーザー回答
 
