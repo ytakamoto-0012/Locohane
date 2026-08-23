@@ -90,6 +90,10 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
    ### ファイル種別ごとの追加チェック
    - **結合セル（xlsx）**: 範囲が意図と一致しているか、行と列の両方が適切に結合されているか、
      結合の罫線がずれていないか。
+   - **数式の循環参照（xlsx）**: `read_excel.py`を`--data-only`無しで読み、`warnings`に
+     循環参照の指摘が無いか確認する。
+   - **グラフの存在確認（xlsx）**: 画像で判別しづらい場合、`read_excel.py`の
+     `--query-json '[{"op": "list_charts"}]'`でグラフの有無・タイトル・種類を先に確認する。
    - **列幅・セル幅（xlsx）**: テキストが列幅内に収まっているか、文字が省略・重なっていないか、
      行の高さが適切か。
    - **pptx スライド境界**: テキストボックスやオブジェクトがスライドの端から

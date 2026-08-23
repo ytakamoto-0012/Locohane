@@ -53,13 +53,26 @@ def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
     import pythoncom
     import win32com.client as win32
 
+    # office_shared/excel_common.py（呼び出し元のrender_pptx.py等が既にsys.pathへ
+    # 追加済み）から、Office COMプロセスのPID追跡ヘルパーをimportする。
+    # 関数名はExcel由来だが、Hwnd取得の仕組み自体はWord/PowerPointのApplication
+    # オブジェクトでも同様に動く（両方ともHwndプロパティを持つ）。
+    from excel_common import record_excel_pid, release_excel_pid, wait_for_process_exit
+
     prog_id = _PROG_ID[tool]
     pythoncom.CoInitialize()
     app = None
     doc = None
     pdf_path = None
+    recorded_pid = None
     try:
         app = win32.DispatchEx(prog_id)
+        # run_scriptの外部タイムアウト等でPythonプロセスごと強制終了されると
+        # 下のfinally節が実行されずCOMプロセスだけが残留することがあるため、
+        # 起動直後に自セッションのPIDレジストリへ記録しておく（正常終了時は
+        # 実終了を確認した上でfinallyで取り除く。残留した場合は
+        # excel-vba-editスキルのedit_vba.py --recover-locksで後始末できる）。
+        recorded_pid = record_excel_pid(path, app)
         # PowerPointは Presentations.Open 前後を問わず Application.Visible = False の
         # 設定自体がCOMエラーになる（ウィンドウ非表示は Open(WithWindow=False) 側で行う）。
         if tool != "pptx":
@@ -116,6 +129,8 @@ def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> Path:
                 app.Quit()
             except Exception:
                 pass
+        if recorded_pid is not None and wait_for_process_exit(recorded_pid):
+            release_excel_pid(recorded_pid)
         pythoncom.CoUninitialize()
 
 

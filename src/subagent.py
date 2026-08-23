@@ -61,6 +61,20 @@ _EMPTY_RESPONSE_NUDGE_TEXT = (
     "行ってください]"
 )
 
+# 会話履歴圧縮・トークン閾値注意メッセージ注入の直後1手に限り、tool_calls無し
+# の最終応答を無検査で受理しない（2026-08-23 issue: 圧縮直後にモデルが
+# タスクと無関係な内容（例:「1+1=2」等の存在しない質問への回答）を幻覚し、
+# dispatch_agentがそれを正常完了として扱ってそれまでの作業結果（VBAデータ
+# 移行）を丸ごと握りつぶした事象への対処）。このしきい値未満の短い最終応答は
+# 疑わしいとみなし1回だけ再試行する。
+_POST_COMPACTION_SUSPICIOUS_RESPONSE_MIN_LENGTH = 80
+_POST_COMPACTION_SUSPICIOUS_RESPONSE_NUDGE_TEXT = (
+    "[システム通知: 直前の応答は会話履歴の圧縮・トークン使用量の注意喚起の"
+    "直後にもかかわらず極端に短く、本来のタスクと無関係な内容に見えます。"
+    "これまでの作業内容（ツール呼び出しの結果）を踏まえて、本来のタスクへの"
+    "回答をやり直してください]"
+)
+
 
 async def _run_one_tool_call(call: dict, tools_by_name: dict[str, BaseTool]) -> tuple[ToolMessage, HumanMessage | None]:
     """1件の tool_call を実行し、(ToolMessage, followup) を返す。例外は送出しない。"""
@@ -485,8 +499,16 @@ async def run_subagent(
     # should_compact() が常にFalseを返すため実質無効化される。
     compaction_enabled = config.context_compaction_enabled and config.track_token_usage
     cumulative_tokens_sub = 0
+    # 会話圧縮・トークン閾値注意メッセージ注入の直後1手だけ、tool_calls無しの
+    # 最終応答を無検査で受理しない（2026-08-23 issue対応）。前の反復の末尾で
+    # 圧縮/nudgeが起きたら次の反復の頭でTrueになり、その反復の判定を終えたら
+    # 次回に持ち越さないよう毎回リセットする。
+    just_compacted_or_nudged = False
+    hallucination_retry_used = False
 
     for iteration in range(1, max_iterations + 1):
+        check_final_answer_strictly = just_compacted_or_nudged
+        just_compacted_or_nudged = False
         llm_input = _build_llm_input(messages, config)
         try:
             response, model, empty_retries_exhausted = await _invoke_with_timeout_retry(
@@ -516,6 +538,27 @@ async def run_subagent(
                     f"LLMが空の応答を{config.subagent_empty_response_max_retries + 1}" "回連続で返した",
                     messages,
                 )
+            content_text = str(response.content).strip()
+            if (
+                check_final_answer_strictly
+                and not hallucination_retry_used
+                and len(content_text) < _POST_COMPACTION_SUSPICIOUS_RESPONSE_MIN_LENGTH
+            ):
+                # 会話圧縮/トークン閾値注意の直後1手にもかかわらず極端に短い
+                # 最終応答は、タスクと無関係な内容を幻覚している疑いがある
+                # （実例: 圧縮直後に存在しない「1+1=?」への回答を返し、
+                # dispatch_agentがそれを正常完了として扱ってそれまでの作業結果
+                # を握りつぶした。issue/20260823_021924参照）。無限リトライは
+                # せず1回だけやり直しを促す。
+                hallucination_retry_used = True
+                logger.warning(
+                    "dispatch_agent: 会話圧縮/トークン閾値注意の直後に極端に短い最終応答"
+                    "(%d文字)を検知したため再試行します (iter=%d)",
+                    len(content_text),
+                    iteration,
+                )
+                messages.append(HumanMessage(content=_POST_COMPACTION_SUSPICIOUS_RESPONSE_NUDGE_TEXT))
+                continue
             logger.info("dispatch_agent 正常終了: %d回で完了", iteration)
             return response.content
 
@@ -567,6 +610,7 @@ async def run_subagent(
                 )
                 messages = [messages[0], *new_tail]
                 cumulative_tokens_sub = 0
+                just_compacted_or_nudged = True
 
         if (
             token_guard_enabled
@@ -576,6 +620,7 @@ async def run_subagent(
         ):
             messages.append(HumanMessage(content=config.subagent_token_guard_soft_warning_text))
             soft_warning_issued = True
+            just_compacted_or_nudged = True
             logger.warning(
                 "subagent: トークン使用量が閾値(%d)に近づいたため注意メッセージを注入" "(iter=%d, total_tokens=%d)",
                 config.subagent_token_guard_soft_threshold,

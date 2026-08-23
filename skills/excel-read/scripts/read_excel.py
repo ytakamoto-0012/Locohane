@@ -52,6 +52,47 @@ from openpyxl.drawing.spreadsheet_drawing import AbsoluteAnchor
 from openpyxl.utils.units import EMU_to_cm
 
 
+import re
+
+# セル参照（"$"付き列/行を許容、シート修飾された参照は除外して誤検知を防ぐ）。
+# 関数名（SUM等）は数字が直後に続かないためマッチしない。
+_CELL_RANGE_RE = re.compile(
+    r"(?<![!$A-Za-z0-9_])(\$?[A-Za-z]{1,3})(\$?[0-9]+)(?::(\$?[A-Za-z]{1,3})(\$?[0-9]+))?"
+)
+
+
+def _formula_self_references(formula: str, own_col: int, own_row: int) -> bool:
+    """formula中のセル参照（自シート内、シート修飾なしのもののみ）が
+    own_col/own_row自身を範囲に含むかを判定する。
+
+    シート修飾された参照（Sheet2!A1等）は判定対象外にして誤検知を避ける
+    （正規表現の直前が"!"の参照は`_CELL_RANGE_RE`が最初からマッチしない）。
+    """
+    from openpyxl.utils import column_index_from_string
+
+    for match in _CELL_RANGE_RE.finditer(formula):
+        c1_letters, r1_digits, c2_letters, r2_digits = match.groups()
+        try:
+            col1 = column_index_from_string(c1_letters.lstrip("$"))
+            row1 = int(r1_digits.lstrip("$"))
+        except ValueError:
+            continue
+        if c2_letters is not None and r2_digits is not None:
+            try:
+                col2 = column_index_from_string(c2_letters.lstrip("$"))
+                row2 = int(r2_digits.lstrip("$"))
+            except ValueError:
+                continue
+            min_col, max_col = min(col1, col2), max(col1, col2)
+            min_row, max_row = min(row1, row2), max(row1, row2)
+        else:
+            min_col = max_col = col1
+            min_row = max_row = row1
+        if min_col <= own_col <= max_col and min_row <= own_row <= max_row:
+            return True
+    return False
+
+
 def _query_group_by(ws, query: dict, max_row: int) -> dict:
     if "column" not in query:
         raise ValueError("group_byクエリには'column'が必須です")
@@ -91,9 +132,65 @@ def _query_list_images(ws, query: dict, max_row: int) -> dict:
     return {"op": "list_images", "items": items}
 
 
+def _chart_anchor_cell(anchor) -> str | None:
+    """chart.anchorをセル参照文字列（例"D1"）へ変換する。
+
+    メモリ上で`chart.anchor = "D1"`のように文字列で設定された場合はそのまま
+    返す。保存済みファイルを読み込んだ場合は`OneCellAnchor`/`TwoCellAnchor`
+    オブジェクトになるため、`_from`（0始まり行列）から変換する。
+    """
+    from openpyxl.utils import get_column_letter
+
+    if isinstance(anchor, str):
+        return anchor
+    marker = getattr(anchor, "_from", None)
+    if marker is None:
+        return None
+    try:
+        return f"{get_column_letter(marker.col + 1)}{marker.row + 1}"
+    except Exception:
+        return None
+
+
+def _chart_title_text(chart) -> str | None:
+    """chart.titleからプレーンテキストを取り出す（タイトル未設定、または
+    解釈できない構造の場合はNoneを返す）。"""
+    title = chart.title
+    if title is None:
+        return None
+    try:
+        runs = title.tx.rich.p[0].r
+        return "".join(r.t or "" for r in runs) or None
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
+_CHART_TYPE_NAMES = {
+    "LineChart": "line",
+    "BarChart": "bar",
+    "PieChart": "pie",
+    "ScatterChart": "scatter",
+}
+
+
+def _query_list_charts(ws, query: dict, max_row: int) -> dict:
+    items = []
+    for idx, chart in enumerate(ws._charts):
+        items.append(
+            {
+                "chart_index": idx,
+                "type": _CHART_TYPE_NAMES.get(type(chart).__name__, type(chart).__name__),
+                "title": _chart_title_text(chart),
+                "anchor": _chart_anchor_cell(chart.anchor),
+            }
+        )
+    return {"op": "list_charts", "items": items}
+
+
 _QUERY_HANDLERS = {
     "group_by": _query_group_by,
     "list_images": _query_list_images,
+    "list_charts": _query_list_charts,
 }
 
 
@@ -211,6 +308,16 @@ def _read_xlsx(
                                 f"列幅({cell_width:.1f})を超えており、表示が切れる可能性があります"
                             )
                             warnings.append(msg)
+                # 循環参照の警告を生成（数式が自身の座標を範囲に含む場合。
+                # 例: N8セルに=SUM(B8:N8)（N8自身を含む）。--data-only指定時は
+                # 数式文字列ではなくキャッシュ値が入るため自動的にスキップされる。
+                if isinstance(cell_value, str) and cell_value.startswith("="):
+                    if _formula_self_references(cell_value, col_idx + 1, row_num):
+                        cell_ref = f"{resolved}!{col_letter}{row_num}"
+                        warnings.append(
+                            f"'{cell_ref}' の数式（{cell_value}）が自身のセルを範囲に含んでおり、"
+                            "Excelで循環参照エラーになる可能性があります"
+                        )
         if warnings:
             result["warnings"] = warnings
         if queries:
@@ -261,7 +368,7 @@ def _read_xls(path: Path, sheet_arg: str | None, offset: int, limit: int) -> dic
 
 def main() -> int:
     setup_utf8_stdio()
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("file_path")
     parser.add_argument("--sheet", default=None, help="シート名または0始まりインデックス（省略時はシート一覧のみ返す）")
     parser.add_argument("--offset", type=int, default=0, help="読み飛ばす行数（0始まり、既定0）")

@@ -92,6 +92,15 @@ def op_rename_sheet(wb, op: dict) -> None:
     _sheet(wb, op["name"]).title = str(op["new_name"])[:31]
 
 
+def op_set_tab_color(wb, op: dict) -> None:
+    _sheet(wb, op["sheet"]).sheet_properties.tabColor = str(op["color"]).lstrip("#")
+
+
+def op_set_active_sheet(wb, op: dict) -> None:
+    ws = _sheet(wb, op["sheet"])
+    wb.active = wb.sheetnames.index(ws.title)
+
+
 def op_set_cell(wb, op: dict) -> None:
     ws = _sheet(wb, op["sheet"])
     cell = ws[op["cell"]]
@@ -383,8 +392,17 @@ def op_delete_cols(wb, op: dict) -> None:
 
 
 def op_set_column_width(wb, op: dict) -> None:
+    from openpyxl.utils import get_column_letter
+
     width = min(max(float(op["width"]), 1), 60)
-    _sheet(wb, op["sheet"]).column_dimensions[op["column"]].width = width
+    column = op["column"]
+    # LLMが列を1始まりの列番号（int）で渡すことも珍しくないため、
+    # 列文字（"A"等）だけでなくintも受け付ける（従来はopenpyxlの
+    # column_dimensionsへ直接渡していたため、intだと
+    # "index should be <class 'str'> but value is <class 'int'>"
+    # で失敗していた）。
+    letter = get_column_letter(int(column)) if isinstance(column, int) else str(column)
+    _sheet(wb, op["sheet"]).column_dimensions[letter].width = width
 
 
 def op_set_row_height(wb, op: dict) -> None:
@@ -706,6 +724,8 @@ OP_HANDLERS = {
     "add_sheet": op_add_sheet,
     "delete_sheet": op_delete_sheet,
     "rename_sheet": op_rename_sheet,
+    "set_tab_color": op_set_tab_color,
+    "set_active_sheet": op_set_active_sheet,
     "set_cell": op_set_cell,
     "set_range": op_set_range,
     "set_style": op_set_style,

@@ -1,0 +1,28 @@
+# chainlit起動時に「Translated markdown file for ja not found」警告が毎回出る
+
+- **区分**: 改善点
+- **検知日時**: 2026-08-23 12:30:07
+- **対象ログファイル**: data/logs/app_20260823_123006.log
+
+## 経緯
+
+アプリ再起動（ログローテーションで新規ファイルに切り替わったタイミング）
+直後、6回連続で同じchainlit警告が出力された。
+
+## ログ引用
+
+```
+2026-08-23 12:30:07,646 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+```
+
+## 推定原因
+
+`chainlit.md`（既定の起動時ウェルカム画面）はプロジェクトルートに存在するが、
+日本語ロケール向けの`chainlit_ja.md`が存在しないため、chainlitが起動のたびに
+警告を出しつつ既定の`chainlit.md`にフォールバックしている。機能への実害は
+無い（正しくフォールバックしている）が、日本語UIを主に使う運用であれば
+`chainlit_ja.md`を用意すれば警告自体を解消できる。
+
+## ユーザー回答
+
+ここにはユーザーの回答が記述される

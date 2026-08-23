@@ -120,3 +120,32 @@
 366秒は過去2番目の遅延。同一タスク `Task-118` が ThinkingLoopDetected
 のリトライを繰り返す間に llama-server のスロットが長時間占有され、
 次のリクエストの応答が極めて遅くなった。
+
+## 追記（2026-08-23 00:34）
+
+excel-vbaマクロブック作成タスクの再起動直後、`Task-239`でLLM応答の
+ループ検知（CSV読み込み〜Excel作成の手順を長々と自己解説していた）から
+グラフ再構築・リトライ2回目に入り、その後初回チャンク受信まで33秒の
+遅延（過去最短クラスではあるが依然閾値10秒超）を記録した。
+
+```
+2026-08-23 00:33:38,098 WARNING src.llm: LLM応答のループを検知したため生成を打ち切ります（直近テキスト: '0544_01.csv）の内容を読み取り、全20件の明細データを取得\n2. openpyxlでExcelファイル（収支計算表.xlsx）を作...'）
+2026-08-23 00:33:38,513 WARNING app.py: on_message: リトライ2回目開始 [name='Task-239' id=2055320019344 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-23 00:34:11,776 WARNING app.py: リトライ後の初回チャンク受信まで33秒（異常遅延） [name='Task-239' id=2055320019344 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+```
+
+引き続きThinkingLoopDetectedのリトライ発生後に遅延する既存パターンと一致。
+
+## 追記（2026-08-23 10:37）
+
+excel-vbaマクロブック作成タスク（再々開後）で再発。リトライ2回目開始
+から初回チャンク受信まで120秒の遅延（過去最短クラスではあるが依然
+閾値10秒を大幅超過）。
+
+```
+2026-08-23 10:35:08,144 WARNING app.py: on_message: リトライ2回目開始 [name='Task-151' id=2223834966992 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0, cancel_scope_breakage_last_60s=0]
+2026-08-23 10:37:08,324 WARNING app.py: リトライ後の初回チャンク受信まで120秒（異常遅延） [name='Task-151' id=2223834966992 cancelling=0 cancelled=False must_cancel=False elapsed_ms=0] — llama-server スロット詰まりの疑い
+```
+
+引き続き既知パターン（リトライ発生後の遅延）と一致し、新規の原因は
+確認できていない。

@@ -112,3 +112,44 @@ def test_set_range_matching_columns_does_not_warn(capsys: pytest.CaptureFixture[
 
     captured = capsys.readouterr()
     assert captured.err == ""
+
+
+def test_set_column_width_accepts_column_letter():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    apply_op(wb, {"op": "set_column_width", "sheet": "Sheet1", "column": "C", "width": 15})
+
+    assert ws.column_dimensions["C"].width == 15
+
+
+def test_set_column_width_accepts_1indexed_column_number():
+    """LLMが列を1始まりのint（1=A, 3=C…）で渡すこともある（2026-08-23実インシデント:
+    'ColumnDimension.index should be str but value is int' で失敗していた）。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    apply_op(wb, {"op": "set_column_width", "sheet": "Sheet1", "column": 3, "width": 15})
+
+    assert ws.column_dimensions["C"].width == 15
+
+
+def test_set_tab_color_sets_sheet_properties_tab_color():
+    """2026-08-23実インシデント: このopが無かったため、workerがexecute_python_codeで
+    生のopenpyxl.load_workbook()（keep_vba省略）を直接呼んでタブ色を変更しようとし、
+    既存の.xlsmからVBAプロジェクトを無言で消失させた。opを用意して迂回の必要をなくす。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    apply_op(wb, {"op": "set_tab_color", "sheet": "Sheet1", "color": "FF0000"})
+
+    assert ws.sheet_properties.tabColor.rgb == "00FF0000"
+
+
+def test_set_active_sheet_updates_workbook_active_index():
+    wb = openpyxl.Workbook()
+    wb.active.title = "Sheet1"
+    wb.create_sheet("Sheet2")
+    apply_op(wb, {"op": "set_active_sheet", "sheet": "Sheet2"})
+
+    assert wb.active.title == "Sheet2"

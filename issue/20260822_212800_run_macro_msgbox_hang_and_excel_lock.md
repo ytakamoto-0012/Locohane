@@ -215,6 +215,48 @@ COMオブジェクトをモックして以下を検証:
 なお、EXCEL.EXEロック自体（既に残留している分）は今回の修正では
 解消されない。引き続きユーザーによる手動終了が必要。
 
+## 追記（2026-08-22）— PID記録によるLLM自己回復手段を実装
+
+ユーザーから「excel-vbaでデバッグをする際に、LLMがプロセスを落とせるように
+できないか」という要望があった。23:20時点の対応（`run_macro`前の静的チェック）
+はMsgBox/InputBoxによるハングの**発生自体**を防ぐが、それ以外の原因（今回の
+`DeleteCharts`2回目実行のように、前段のハングで残留したEXCEL.EXEのファイル
+ロック競合など）でタイムアウトした場合、Excelプロセスの後始末は依然ユーザーの
+手動終了に依存していた。実機ログ（`data/logs/app_20260822_230818.log`）でも、
+サブエージェントが`execute_python_code`経由の`tasklist`でEXCEL.EXE残留
+（PID: 26092, 29580, 26868）を自ら確認していながら、`taskkill`を打つ許可・
+手順がSKILL.mdに無かったためユーザーへ手動終了を依頼するだけに留まっていた。
+
+ユーザーに実装レベルを確認したところ、「PID記録＋SKILL.md手順」
+（軽量なドキュメントのみ対応と、コード側で自動検知・自動終了する恒久対策の
+中間案）を選択。
+
+### 対応（実装済み）
+
+`skills/office_shared/excel_common.py`に`record_excel_pid`/`release_excel_pid`/
+`excel_pid_file`を追加。`edit_vba.py`の`_edit_vba`が`win32.DispatchEx`で
+Excelを起動した直後に`Application.Hwnd`→`GetWindowThreadProcessId`でPIDを
+取得し、対象ファイルと同じフォルダの`<ファイル名>.vba_pid`（1行1PID）へ追記する。
+正常終了時は`finally`節で自動的に取り除く。`run_macro`ハングでrun_scriptの
+外部タイムアウトによりPythonプロセスが強制終了された場合はこの後始末が
+実行されないため、PIDファイルだけが残る。
+
+`skills/excel-vba-edit/SKILL.md`の`run_macro`説明に、タイムアウト時は
+このPIDファイルを読んで記載PIDに対し`taskkill /PID <pid> /F`をLLM自身が
+実行してよい旨を明記した。対象は`edit_vba.py`が専用に起動した
+`Visible=False`の非表示プロセスのみで、`tasklist`で見える無関係な
+EXCEL.EXEまでは終了しないよう明記した（ユーザーが対話的に使っている
+Excelを誤って巻き込むリスクを避けるため）。
+
+`tests/test_excel_vba_edit_pid_recovery.py`を新規作成し、PID記録・重複排除・
+複数PID蓄積・Hwnd取得失敗時のフェイルオープン・release時の該当PIDのみ除去・
+空になった場合のファイル削除を検証。`pytest tests/` 389件全通過。
+
+なお、コード側での自動検知・自動終了（run_macro呼び出しを内部タイムアウト付き
+監視スレッドで保護し、超過時に自動でTerminateProcessする案）は今回も見送った。
+理由: PID記録の仕組みだけでも「ユーザーの手動終了待ち」という最大のボトル
+ネックは解消でき、まずはこの効果を見てから判断するのが妥当と判断したため。
+
 ## ユーザー回答
 
-ここにはユーザーの回答が記述される
+「PID記録+SKILL.md手順（推奨）」を選択（2026-08-22）。

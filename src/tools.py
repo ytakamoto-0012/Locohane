@@ -2291,7 +2291,9 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
             "エラー: 計画が未承認のため実行できません"
             f"（skill={skill_name}, script={script_filename}）。"
             "create_plan で計画を作成し、approve_plan でユーザーの承認を得てから"
-            "実行してください。"
+            "実行してください。自分のtoolsにcreate_plan/approve_planが無い"
+            "（サブエージェントである）場合は、それ以上試行せずこのエラーを"
+            "そのまま最終回答として委譲元へ報告してください。"
         )
 
     # .py は設定の Python で、それ以外はそのまま実行を試みる。
@@ -3215,7 +3217,13 @@ async def execute_python_code(code: str) -> str:
 
     if not cl.user_session.get("plan_approved"):
         logger.info("execute_python_code: 計画未承認のためブロック")
-        return "エラー: 計画が未承認のため実行できません。" "create_plan で計画を作成し、approve_plan でユーザーの承認を得てから" "実行してください。"
+        return (
+            "エラー: 計画が未承認のため実行できません。"
+            "create_plan で計画を作成し、approve_plan でユーザーの承認を得てから"
+            "実行してください。自分のtoolsにcreate_plan/approve_planが無い"
+            "（サブエージェントである）場合は、それ以上試行せずこのエラーを"
+            "そのまま最終回答として委譲元へ報告してください。"
+        )
 
     try:
         before_snapshot = {p: p.stat().st_mtime for p in workdir.iterdir() if p.is_file()}
@@ -3426,7 +3434,13 @@ async def execute_python_code_background(code: str) -> str:
 
     if not cl.user_session.get("plan_approved"):
         logger.info("execute_python_code_background: 計画未承認のためブロック")
-        return "エラー: 計画が未承認のため実行できません。" "create_plan で計画を作成し、approve_plan でユーザーの承認を得てから" "実行してください。"
+        return (
+            "エラー: 計画が未承認のため実行できません。"
+            "create_plan で計画を作成し、approve_plan でユーザーの承認を得てから"
+            "実行してください。自分のtoolsにcreate_plan/approve_planが無い"
+            "（サブエージェントである）場合は、それ以上試行せずこのエラーを"
+            "そのまま最終回答として委譲元へ報告してください。"
+        )
 
     try:
         before_snapshot = {p: p.stat().st_mtime for p in workdir.iterdir() if p.is_file()}

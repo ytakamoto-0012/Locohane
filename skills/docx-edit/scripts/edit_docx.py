@@ -109,7 +109,10 @@ def main() -> int:
             return 1
         try:
             result = apply_op(ctx, op)
-        except (KeyError, ValueError, TypeError) as e:
+        except KeyError as e:
+            print(f"ops[{idx}]（op={op.get('op')!r}）に必須キー{e}が指定されていません", file=sys.stderr)
+            return 1
+        except (ValueError, TypeError) as e:
             print(f"ops[{idx}]（op={op.get('op')!r}）の適用に失敗しました: {e}", file=sys.stderr)
             return 1
         op_results.append(result or {"op": op.get("op")})

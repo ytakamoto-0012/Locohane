@@ -21,6 +21,7 @@ pure-Pythonの数式評価ライブラリは対応関数が限定的で正確性
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import traceback
@@ -30,7 +31,14 @@ from pathlib import Path
 _OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
 if str(_OFFICE_SHARED) not in sys.path:
     sys.path.append(str(_OFFICE_SHARED))
-from excel_common import register_output_path, setup_utf8_stdio  # noqa: E402
+from excel_common import (  # noqa: E402
+    record_excel_pid,
+    register_output_path,
+    release_excel_pid,
+    setup_utf8_stdio,
+    terminate_tracked_processes,
+    wait_for_process_exit,
+)
 
 _XL_CELL_TYPE_FORMULAS = -4123
 _XL_ERRORS = 16
@@ -63,11 +71,16 @@ def _recalc(path: Path) -> dict:
     pythoncom.CoInitialize()
     excel = None
     workbook = None
+    recorded_pid = None
     try:
         excel = win32.DispatchEx("Excel.Application")
         excel.Visible = False
         excel.DisplayAlerts = False
         excel.AutomationSecurity = 3  # msoAutomationSecurityForceDisable（マクロ確認ダイアログの抑止）
+        # edit_vba.pyと同じ理由でExcel起動直後にPIDを自セッションのサンドボックスへ
+        # 記録しておく（正常終了時は実終了を確認した上でfinallyで取り除く。
+        # 万一残留した場合は edit_vba.py --recover-locks で後始末できる）。
+        recorded_pid = record_excel_pid(path, excel)
         workbook = excel.Workbooks.Open(str(path), UpdateLinks=0, IgnoreReadOnlyRecommended=True)
         excel.CalculateFullRebuild()
         errors = _collect_errors(workbook)
@@ -88,18 +101,37 @@ def _recalc(path: Path) -> dict:
                 excel.Quit()
             except Exception:
                 pass
+        if recorded_pid is not None and wait_for_process_exit(recorded_pid):
+            release_excel_pid(recorded_pid)
         pythoncom.CoUninitialize()
 
 
 def main() -> int:
     setup_utf8_stdio()
-    if len(sys.argv) < 2:
-        print("usage: recalc_excel.py <path>", file=sys.stderr)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("path", nargs="?", default=None, help="再計算対象のxlsx/xlsm/xlsパス（--recover-locks指定時は不要）")
+    parser.add_argument(
+        "--recover-locks",
+        action="store_true",
+        help=(
+            "path指定を無視し、自セッションが起動して残留したExcelプロセスのうち"
+            "まだ生存しているものだけを終了する。PID番号は受け取らない。"
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.recover_locks:
+        recovered = terminate_tracked_processes()
+        print(json.dumps({"recovered": recovered}, ensure_ascii=False))
+        return 0
+
+    if not args.path:
+        print("usage: recalc_excel.py <path> (または --recover-locks)", file=sys.stderr)
         return 1
 
-    path = Path(sys.argv[1])
+    path = Path(args.path)
     if not path.is_file():
-        print(f"ファイルが見つかりません: {sys.argv[1]}", file=sys.stderr)
+        print(f"ファイルが見つかりません: {args.path}", file=sys.stderr)
         return 1
     if path.suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
         print(f"対応拡張子は .xlsx/.xlsm/.xls のみです: {path.suffix}", file=sys.stderr)

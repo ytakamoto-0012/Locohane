@@ -42,7 +42,7 @@ Tavily APIを使ってWeb検索を行うスキルです。`run_script` ツール
 - `query`（必須、位置引数）: 検索クエリ。
 - `--max-results`: 取得する結果件数（既定5、0〜20にクランプ）。
 - `--topic`: `general`（既定）/ `news` / `finance`。話題の種類に応じて指定すると精度が上がる。
-- `--include-answer`: 指定するとTavily側が生成した要約回答（`answer`キー）も取得する。
+- `--include-answer`（値なしフラグ）: `script_args` に `"--include-answer"` とだけ追加する（`"true"`等の値を続けて渡すと`unrecognized arguments`エラーになる）。指定するとTavily側が生成した要約回答（`answer`キー）も取得する。
 - `--time-range`: `day` / `week` / `month` / `year`。直近の情報に絞りたいときに指定する。
 - `--exclude-domains` / `--include-domains`: 上記「危険サイト対策」参照。
 

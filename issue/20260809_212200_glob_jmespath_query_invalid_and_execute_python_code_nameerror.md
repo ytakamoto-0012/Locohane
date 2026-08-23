@@ -35,6 +35,19 @@
 
 初回検知。execute_python_codeのスクリプト生成時に import 文の記載漏れがLLMによって発生している可能性が高い。
 
+## 追記（2026-08-23 12:14）
+
+別セッション（verifierサブエージェント）で、`json_query`に対し
+JMESPath未対応の変数束縛構文（`rows[1:3][] as $row, $row[3:5] as $de`、
+Python/SQL風の`let`のつもりと思われる）を渡してエラーになる変種を確認。
+2秒後、変数束縛を使わない単純なクエリ（`rows[1:3]`）に切り替えて成功。
+実害なし。
+
+```
+2026-08-23 12:14:05,520 WARNING src.subagent: subagent tool=json_query args={'query': 'rows[1:3][] as $row, $row[3:5] as $de', 'file_path': '@56'} -> エラー: JMESPathクエリが不正です: Bad jmespath expression: Unknown token $:
+2026-08-23 12:14:07,541 INFO src.subagent: subagent tool=json_query args={'query': 'rows[1:3]', 'file_path': '@56'} -> {"result": [[{"value": "2025/04/01", ...
+```
+
 ## ユーザー回答
 
 ここにはユーザーの回答が記述される

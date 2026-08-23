@@ -223,6 +223,20 @@ def _find_component(vb_project, name: str):
     raise KeyError(f"モジュールが見つかりません: {name!r}（存在するモジュール: {names}）")
 
 
+_LEADING_ATTRIBUTE_RE = re.compile(r"^(?:Attribute\s+\S+\s*=.*\r?\n)+")
+
+
+def _strip_leading_attribute_lines(code: str) -> str:
+    """モジュール冒頭の`Attribute VB_Name = "..."`等の宣言行を取り除く。
+
+    read_vba.py（oletools）はこの行を`code`に含めて返すが、AddFromStringは
+    Attribute行を特別扱いせず生テキストとして挿入するため、そのまま書き戻すと
+    VBEが自動生成するAttribute（comp.Name由来）と重複してしまう
+    （例: `Attribute VB_Name = "X"`が2行になる）。
+    """
+    return _LEADING_ATTRIBUTE_RE.sub("", code, count=1)
+
+
 def _replace_code(code_module, new_code: str) -> None:
     """CodeModuleの中身を新しいコードで全文置換する。
 
@@ -233,7 +247,7 @@ def _replace_code(code_module, new_code: str) -> None:
     if line_count > 0:
         code_module.DeleteLines(1, line_count)
     if new_code:
-        code_module.AddFromString(new_code)
+        code_module.AddFromString(_strip_leading_attribute_lines(new_code))
 
 
 def _to_json_safe(value: object) -> object:

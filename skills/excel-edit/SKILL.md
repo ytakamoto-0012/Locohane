@@ -22,6 +22,7 @@ xlsx/xlsm の新規作成・既存編集を行うスキル。`edit_excel.py` を
 - `--output`省略で対象パスへ上書き保存。別ファイル保存時のみ`"--output", "<絶対パス>"`を追加。
 - `.xlsm`はマクロを保持したまま編集可（`--new`なし時のみ。既存ファイルを`keep_vba=True`で読み込むため）。マクロ自体の読み書きはexcel-vba-read/excel-vba-editスキル。
 - **`--new`かつ`.xlsm`は「マクロ有効ブック」にならない**（openpyxlの`Workbook()`はvbaProjectを持たないため、拡張子が`.xlsm`でも中身はxlsx相当になり、Excelで開けない/マクロを追加できないファイルができる）。表データ・書式とVBAマクロの両方を持つ新規`.xlsm`を作りたい場合は、**先にexcel-vba-editスキルの`--new`で空のマクロ有効ブックを作成し、その後このスキルを`--new`なしで使って同じパスにシート・データを追記する**（逆順不可）。
+- **既存の`.xlsm`を`execute_python_code`の生openpyxlで直接編集しない**（`keep_vba=True`を忘れるとVBAマクロが消える）。タブ色は`set_tab_color`、表示シートは`set_active_sheet`、グラフ調整は`update_chart`を使う。該当opが無ければユーザーに相談する。
 
 ## 入出力の型とopsの渡し方
 
@@ -40,6 +41,8 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 | `add_sheet` | `name` | `index` | シート追加。同名シートが既存ならエラー（自動リネームに頼らず明示エラーにするため。既存シートへ追記したいなら`set_range`等にそのシート名を指定）。`index`はopenpyxlの`Workbook.create_sheet`にそのまま渡す**0始まり**の挿入位置（`index:0`で先頭、省略時は末尾に追加）。`insert_rows`の`index`（1始まり）とは基準が異なるので混同しないこと |
 | `delete_sheet` | `name` | - | シート削除 |
 | `rename_sheet` | `name`,`new_name` | - | シート名変更 |
+| `set_tab_color` | `sheet`,`color` | - | シート見出しタブの色を変更（`color`はRRGGBBの16進文字列） |
+| `set_active_sheet` | `sheet` | - | ブックを開いたときに最初に表示されるシートを指定 |
 | `set_cell` | `sheet`,`cell` | `value`,`style`,`inherit_style`,`inherit_style_from` | 単一セルへ値・書式設定。`style`省略時、対象セルが元々無書式の新規セル（例: `delete_rows`後に再生成された行）だと書式は付かない。周囲と見た目を揃えたい場合は`inherit_style:true`を指定すると、隣接セル（既定で左隣。`inherit_style_from`で`"left"`/`"right"`/`"above"`/`"below"`を選べる）の書式をコピーする |
 | `set_range` | `sheet`,`start_cell`,`rows` | `style`,`header_style`,`row_styles`,`format_table` | 起点セルから複数行を一括書込。`header_style`は1行目のみ適用。列幅は自動調整（全角=2文字換算、既存幅より縮まない）。**`header_style`を渡すと自動的に`format_table`相当（見出し配色・罫線・縞模様・見出し行固定・列幅調整）が既定で適用される**（`format_table:false`で無効化可。逆に`header_style`省略でも`format_table:true`で強制適用可） |
 | `set_style` | `sheet`,`range` | `style` | 値は変えず既存セルへ書式のみ適用 |
@@ -49,7 +52,7 @@ opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`
 | `delete_rows` | `sheet`,`index` | `count`(既定1) | 行削除 |
 | `insert_cols` | `sheet`,`index` | `count`(既定1) | 列挿入（1始まり） |
 | `delete_cols` | `sheet`,`index` | `count`(既定1) | 列削除 |
-| `set_column_width` | `sheet`,`column`,`width` | - | 列幅を手動指定。単位はExcelの文字幅（既定約8.43）。1〜60にクランプされる |
+| `set_column_width` | `sheet`,`column`,`width` | - | 列幅を手動指定。単位はExcelの文字幅（既定約8.43）。1〜60にクランプされる。`column`は列文字（`"A"`等）と1始まり列番号（`1`等）のどちらでも指定可 |
 | `set_row_height` | `sheet`,`row`,`height` | - | 行の高さを手動指定（`row`は1始まり行番号、`height`はポイント単位。1〜409にクランプされる） |
 | `merge_cells` | `sheet`,`range` | - | セル結合（例`"A1:C1"`） |
 | `unmerge_cells` | `sheet`,`range` | - | 結合解除。未結合範囲指定はエラー |
@@ -218,6 +221,24 @@ xlsxとpptxを同じ資料セットとして作るときに見た目を揃えや
   ```json
   {"op": "add_chart", "sheet": "Sheet1", "type": "bar",
    "data_range": "B1:D5", "anchor": "F1", "grouping": "stacked"}
+  ```
+- **`data_range`/`categories_range`は単一シート内の矩形範囲しか指定できない。**
+  「1月〜12月シートそれぞれのB11セル」のように複数シートに散らばった値を
+  1つのグラフの系列にまとめたい場合、`add_chart`に直接そのような範囲は渡せない
+  （openpyxl・Excelとも1系列は連続範囲が前提のため）。生のopenpyxlコードを
+  `execute_python_code`で書いて`Series`/`Reference`を手組みしようとすると、
+  内部APIの誤用でハマりやすい（非推奨）。代わりに、まず`add_sheet`で集計用の
+  1シートを作り、`set_range`の各セルに他シートを参照する数式文字列
+  （例:`"='1月'!B11"`）を書き込んで12ヶ月分を1シートに集約してから、その集計
+  シートを`data_range`にして`add_chart`する。
+  ```json
+  [{"op": "add_sheet", "name": "月別集計"},
+   {"op": "set_range", "sheet": "月別集計", "start_cell": "A1",
+    "rows": [["月","支出合計","収入合計"],
+             ["1月","='1月'!B11","='1月'!B16"],
+             ["2月","='2月'!B11","='2月'!B16"]], "header_style": {}},
+   {"op": "add_chart", "sheet": "月別集計", "type": "bar",
+    "data_range": "B1:C3", "categories_range": "A2:A3", "anchor": "E1"}]
   ```
 
 ## 条件付き書式（`add_conditional_format`）

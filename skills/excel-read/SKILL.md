@@ -70,7 +70,7 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 - `.xlsx`/`.xlsm`の追加フィールド:
   - `column_widths`: 返却範囲に含まれる各列の幅（`{"A": 12.3, "B": null, ...}`）。未設定列は`null`。
   - `row_heights`: 返却範囲（`start_row`〜`end_row`）の各行の高さ（`{"3": 15.0, ...}`）。未設定行は省略。
-  - `warnings`: 構造的な不備の警告配列（該当なしならキー省略）。`wrap_text`が有効でないセルで、推定表示幅が列幅を超えている場合に文字切れの可能性を指摘。
+  - `warnings`: 構造的な不備の警告配列（該当なしならキー省略）。`wrap_text`が有効でないセルで、推定表示幅が列幅を超えている場合に文字切れの可能性を指摘。加えて、数式セル（`--data-only`未指定時のみ判定可能）の参照範囲が自身のセルを含む場合（例: `N8`セルの`=SUM(B8:N8)`）はExcelの循環参照エラーの可能性を指摘する（シート修飾された参照`Sheet2!A1:B2`は判定対象外）。
 - `--query-json`ありのとき: 上記`rows`一式に加え、トップレベルに`query_results`が付く。**`query_results`は`--offset`/`--limit`の範囲に関わらずシート全体が対象**（詳細・例は次の「構造化クエリ」節）。`query_results`にはstyle情報は含まれない。
 
 ## 構造化クエリ（`--query-json`、必須ルール）
@@ -115,6 +115,27 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 以外（テンプレートに元から入っていた、セルに追従する配置の画像）の場合は
 `left_cm`等が`null`になる（`set_image_position`で一度動かすと絶対座標に
 置き換わり、以降は座標が取得できるようになる）。
+
+### `list_charts`（グラフ一覧）
+
+グラフの存在・タイトル・種類・位置を、画像化せず一覧確認できる。
+
+```json
+{"skill_name": "excel-read", "script_filename": "read_excel.py",
+ "script_args": ["C:\\Users\\me\\book.xlsx", "--sheet", "Sheet1", "--query-json", "[{\"op\": \"list_charts\"}]"]}
+```
+出力（`result_path`内、`query_results`キー）:
+```json
+"query_results": [
+  {"op": "list_charts",
+   "items": [{"chart_index": 0, "type": "line", "title": "月別収支推移", "anchor": "F1"}]}
+]
+```
+`chart_index`はそのシート内でのグラフの0始まり通し番号で、excel-editの
+`update_chart`/`delete_chart`の`chart_index`と完全に一致する。`type`は
+`line`/`bar`/`pie`/`scatter`のいずれか（対応外の種類はopenpyxlのクラス名を
+そのまま返す）。`title`は未設定なら`null`。グラフが実在するか・タイトルが
+意図通りかを確認したいだけなら、excel-renderで画像化するよりこちらが速い。
 
 ## エッジケース
 
