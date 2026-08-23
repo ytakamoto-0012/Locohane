@@ -32,6 +32,16 @@
 「後始末的な作業も含めdispatch_agentへ委譲する」ことをより明確に示せば
 このガード発火自体（＝1往復分のトークン浪費）を減らせる可能性がある。
 
+## 追記（2026-08-23 18:08）
+
+対象ログファイル: data/logs/app_20260823_175334.log
+
+```
+2026-08-23 18:07:22,977 WARNING src.tools: tool_result: name=run_script content='エラー: run_script はメインエージェントとして呼び出しを禁止されています（max_calls=0）。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: analyze-docs, explore, planner, verifier, worker）へ委譲してください。'
+```
+
+再発。原因・対応は上記から変わらず。
+
 ## ユーザー回答
 
 ここにはユーザーの回答が記述される

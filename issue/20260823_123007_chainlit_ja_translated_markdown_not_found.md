@@ -34,6 +34,17 @@
 
 再発。原因・対応は上記から変わらず。
 
+## 追記（2026-08-23 17:59）
+
+対象ログファイル: data/logs/app_20260823_175334.log（アプリ再起動）
+
+```
+2026-08-23 17:53:35,617 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+2026-08-23 17:54:55,119 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+```
+
+再発。原因・対応は上記から変わらず。
+
 ## ユーザー回答
 
 ここにはユーザーの回答が記述される

@@ -37,3 +37,18 @@
 1つ目の「検索起点ディレクトリが見つかりません」は、LLMが`テスト（読み書き可能）`という存在しないパスを推測したケース。2つ目が今回のGlob呼び出し上限到達。
 
 いずれもエージェントは制限後に適切にexploreエージェントへ委譲して処理を続行している。
+
+## 追記（2026-08-23 17:59）
+
+対象ログファイル: data/logs/app_20260823_175334.log
+
+```
+2026-08-23 17:56:14,003 WARNING src.tools: tool_result: name=Glob content='エラー: 検索起点ディレクトリが見つかりません: E:\\yukinori\\テスト（読み書き可能）\\Datas'
+2026-08-23 17:56:16,187 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: analyze-docs, explore, planner, verifier, worker）へ委譲してください。'
+```
+
+再発。同じ「存在しないパス推測→呼び出し上限到達→explore委譲」の流れ。
+「テスト（読み書き可能）」パス推測側の詳しい原因調査結果は
+[glob_search_directory_not_found.md](20260813_163000_glob_search_directory_not_found.md)
+に記載（括弧のエスケープ問題ではなく、ユーザーの注釈文言をLLMがパスの
+一部として解釈したことが原因と判明）。

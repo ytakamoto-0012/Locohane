@@ -32,4 +32,26 @@ LLMが子供会の行事予定をthinking内で列挙する際、同じ月と行
   直近テキスト: "eation. The lock file is created by `path_memory.register()`. If I could modify `path_memory.py` to not use lock files, that would fix the issue. But I don't have permission to edit files.\n\nLet me try one more thing..."
   リトライにより回復。
 
+## 追記（2026-08-23 18:12）
+
+対象ログファイル: data/logs/app_20260823_175334.log
+
+3件目検知。explore サブエージェントが、`provide_download` の失敗を受けて
+存在確認を依頼された際、`list_path_memory`・`Read`・`Glob`の3ツールを
+「これから呼ぶ」という同じ英語の宣言を約40回近く繰り返し、ループ検知で
+打ち切られた（その後モデル再構築でリトライし復旧）。
+
+```
+2026-08-23 18:12:37,299 WARNING src.llm: LLM応答のループを検知したため生成を打ち切ります（直近テキスト: '...I'll call them now.\n`list_path_memory`\n`Read(file_path="E:\\yukinori\\テスト\\藤興園子ども会_過去実績報告書.docx")`\n`Glob(pattern="*", path="E:\\yukinori\\テスト")`\n\nWait, I'm repeating myself. I'll just call them...'）
+2026-08-23 18:12:37,309 WARNING src.subagent: subagent: LLM応答のループを検知（1回目の再試行）: ...
+2026-08-23 18:12:37,819 WARNING src.subagent: subagent: リトライ前にLLMモデルを再構築しました（client_broken=False）
+```
+
+このケースの直接の引き金は、[glob_search_directory_not_found.md](20260813_163000_glob_search_directory_not_found.md)
+に記載した「`E:\yukinori\テスト（読み書き可能）`という実在しないパスへの
+固執」。今回はツール呼び出し自体は正しいパス（`E:\yukinori\テスト`）に
+修正できていたが、"call them now" → "I'm repeating myself" という自己言及を
+何十回も繰り返すだけでツール呼び出しの生成に踏み切れず、ループ検知に
+救われる形になった。リトライにより最終的には回復している。
+
 ## ユーザー回答
