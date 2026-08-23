@@ -3040,15 +3040,12 @@ for _guard_name in ("remove", "unlink", "rename", "replace", "rmdir", "removedir
     if _guard_orig is not None:
         setattr(_guard_os, _guard_name, _guard_make_os(_guard_orig, _guard_name))
 
-for _guard_name in ("rmtree", "move", "copy", "copy2", "copyfile", "copytree"):
+for _guard_name in ("rmtree", "move"):
     def _guard_make_shutil(_orig, _name):
         def _fn(_src, *_args, **_kwargs):
-            if _name == "rmtree":
-                _guard_check(_src, _name)
-            else:
-                _guard_check(_src, _name)
-                if _args:
-                    _guard_check(_args[0], _name)
+            _guard_check(_src, _name)
+            if _args:
+                _guard_check(_args[0], _name)
             return _orig(_src, *_args, **_kwargs)
 
         return _fn
@@ -3056,6 +3053,22 @@ for _guard_name in ("rmtree", "move", "copy", "copy2", "copyfile", "copytree"):
     _guard_orig = getattr(_guard_shutil, _guard_name, None)
     if _guard_orig is not None:
         setattr(_guard_shutil, _guard_name, _guard_make_shutil(_guard_orig, _guard_name))
+
+for _guard_name in ("copy", "copy2", "copyfile", "copytree"):
+    def _guard_make_shutil_copy(_orig, _name):
+        def _fn(_src, *_args, **_kwargs):
+            # コピー元は読み取りのみ（open()の読み取りモードと同じ扱い）。
+            # 他セッションの一時ディレクトリからの読み取りだけは引き続きブロックする。
+            _guard_check_foreign_tmp(_src)
+            if _args:
+                _guard_check(_args[0], _name)
+            return _orig(_src, *_args, **_kwargs)
+
+        return _fn
+
+    _guard_orig = getattr(_guard_shutil, _guard_name, None)
+    if _guard_orig is not None:
+        setattr(_guard_shutil, _guard_name, _guard_make_shutil_copy(_guard_orig, _guard_name))
 
 del _guard_name, _guard_orig
 

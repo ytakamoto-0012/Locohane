@@ -24,4 +24,14 @@
 
 - 初回検知
 
+## 追記（2026-08-23 13:58）
+
+対象ログファイル: data/logs/app_20260823_135730.log
+
+```
+2026-08-23 13:58:11,740 WARNING src.tools: tool_result: name=Glob content='エラー: Glob はメインエージェントとして既に呼び出し上限（1回）に達しています。これ以上自分で実行せず、残りの調査・処理は dispatch_agent（agent_type: analyze-docs, explore, planner, verifier, worker）へ委譲してください。'
+```
+
+前回（8/13時点）はエージェント種別が `explore, analyze-docss, verifier, worker`（`analyze-docss` はtypo）だったが、今回は `analyze-docs, explore, planner, verifier, worker` に変化している（`analyze-docss`のtypo修正・`planner`追加）。再発は引き続き「LLMが1ターンで複数回Globを呼ぼうとする」という同一パターン。
+
 ## ユーザー回答

@@ -105,6 +105,43 @@ def test_shutil_move_into_outside_root_is_blocked(tmp_path, guard_dirs):
     assert src.exists()
 
 
+def test_shutil_copy2_from_outside_allowed_root_succeeds(tmp_path, guard_dirs):
+    """shutil.copy2のコピー元は読み取り専用として扱い、allowed_roots外でも
+    許可されることの回帰テスト。
+
+    背景（2026-08-23）: コピー元・コピー先の両方に書き込みガードを適用して
+    いたため、ユーザーの写真フォルダ（allowed_roots外）から作業ディレクトリへ
+    画像をコピーするだけの正当な操作までPermissionErrorで拒否されていた
+    （issue/20260823_144300）。open()の読み取りモードや analyze_image は
+    allowed_roots外を無制限に読めるのに、shutil.copy系だけコピー元まで
+    ブロックされるのは非対称な誤り。
+    """
+    allowed_root, outside_root = guard_dirs
+    src = outside_root / "photo.jpg"
+    src.write_text("payload", encoding="utf-8")
+    dst = allowed_root / "photo.jpg"
+    body = f'import shutil\nshutil.copy2(r"{src}", r"{dst}")\n'
+
+    result = _run_guarded(tmp_path, [allowed_root], body)
+
+    assert result.returncode == 0, result.stderr
+    assert dst.read_text(encoding="utf-8") == "payload"
+
+
+def test_shutil_copy2_to_outside_allowed_root_is_still_blocked(tmp_path, guard_dirs):
+    allowed_root, outside_root = guard_dirs
+    src = allowed_root / "src.txt"
+    src.write_text("payload", encoding="utf-8")
+    dst = outside_root / "leaked.txt"
+    body = f'import shutil\nshutil.copy2(r"{src}", r"{dst}")\n'
+
+    result = _run_guarded(tmp_path, [allowed_root], body)
+
+    assert result.returncode != 0
+    assert "書き込みサンドボックスガード" in result.stderr
+    assert not dst.exists()
+
+
 def test_os_system_copy_outside_allowed_root_is_blocked(tmp_path, guard_dirs):
     """os.system 経由のシェルコマンドで書き込みガードを回避できないことの回帰テスト。
 

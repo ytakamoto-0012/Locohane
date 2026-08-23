@@ -23,6 +23,17 @@
 無い（正しくフォールバックしている）が、日本語UIを主に使う運用であれば
 `chainlit_ja.md`を用意すれば警告自体を解消できる。
 
+## 追記（2026-08-23 13:58）
+
+対象ログファイル: data/logs/app_20260823_135730.log（アプリ再起動）
+
+```
+2026-08-23 13:57:34,165 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+2026-08-23 13:57:45,733 WARNING chainlit: Translated markdown file for ja not found. Defaulting to chainlit.md.
+```
+
+再発。原因・対応は上記から変わらず。
+
 ## ユーザー回答
 
 ここにはユーザーの回答が記述される

@@ -154,3 +154,44 @@ LLM呼び出し中に、出力テキストが徐々に反復し始め（match_ra
 失敗する可能性が高い（要約対象がさらに肥大化しているため）。ユーザーの
 既存回答「様子見」を踏襲し、今回もコード修正は行わない。
 
+## 追記（2026-08-23 14:03〜14:41）
+
+`app_20260823_135730.log` で17回にわたり再発（pptx-createで図鑑を作成する
+タスク中）。今回は膨張の起点が明確に特定できた。
+
+```
+2026-08-23 14:03:30,749 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:09:56,929 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:12:38,341 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:18:55,720 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:19:42,906 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:20:15,688 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:28:27,357 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:30:48,642 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:31:01,930 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:31:22,043 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:31:31,822 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:38:22,354 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:38:45,561 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:39:39,269 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:39:55,181 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:40:32,785 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+2026-08-23 14:41:38,858 ERROR src.context_compaction: 会話履歴の自動要約に失敗しました。今回は圧縮をスキップします
+```
+
+トリガーとなった具体的な操作: `create_pptx.py` の `output_path` に
+`default_workdir`直下の絶対パスを渡して`run_script`が書き込みガードで
+拒否され（[issue/20260823_144310_pptx_create_output_path_absolute_conflicts_with_tmp_dir_sandbox.md](20260823_144310_pptx_create_output_path_absolute_conflicts_with_tmp_dir_sandbox.md)）、
+その代替として試みた`shutil.copy2`によるユーザー写真フォルダからの
+画像取り込みも別バグで失敗し続けた
+（[issue/20260823_144300_shutil_copy_guard_blocks_readonly_source_outside_workdir.md](20260823_144300_shutil_copy_guard_blocks_readonly_source_outside_workdir.md)）。
+「execute_python_code が直近4回連続で失敗しています」というシステム警告が
+出るほど同じ対症療法的な書き直しが繰り返され、14:32:40には
+`src.llm`のループ検知（LLM応答の反復）も1回発生した。これらの失敗の
+やり取り自体がコンテキストを肥大化させ続け、要約対象がさらに長大化する
+悪循環になっていたと考えられる。既存の推定「ループ検知・肥大化した
+会話ほど要約自体も失敗しやすい」を裏付ける実例だが、今回は珍しく
+膨張の一次要因（2つの書き込みガード関連バグ）まで特定できた。
+根本対応は上記2issueのガード側修正であり、`context_compaction`自体への
+対処は引き続き不要（ユーザー回答「様子見」を踏襲）。
+
