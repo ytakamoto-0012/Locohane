@@ -29,7 +29,7 @@ async def test_build_model_registers_client_under_current_session() -> None:
     config = load_config()
     session_id = _unique_session_id("register")
     llm.set_current_session(session_id)
-    model = llm.build_model(config)
+    model = await llm.build_model(config)
     try:
         clients = llm._active_async_clients.get(session_id)
         assert clients is not None
@@ -46,9 +46,9 @@ async def test_aclose_active_llm_clients_only_closes_target_session() -> None:
     session_b = _unique_session_id("b")
 
     llm.set_current_session(session_a)
-    model_a = llm.build_model(config)
+    model_a = await llm.build_model(config)
     llm.set_current_session(session_b)
-    model_b = llm.build_model(config)
+    model_b = await llm.build_model(config)
 
     try:
         await llm.aclose_active_llm_clients(session_a)
@@ -66,7 +66,7 @@ async def test_forget_session_removes_dict_key_without_closing() -> None:
     config = load_config()
     session_id = _unique_session_id("forget")
     llm.set_current_session(session_id)
-    model = llm.build_model(config)
+    model = await llm.build_model(config)
 
     try:
         llm.forget_session(session_id)

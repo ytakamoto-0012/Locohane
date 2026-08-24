@@ -394,7 +394,7 @@ async def _run(case: EvalCase) -> dict:
         async with aiosqlite.connect(":memory:") as conn:
             checkpointer = AsyncSqliteSaver(conn)
             await checkpointer.setup()
-            graph = build_graph(config, system_prompt, checkpointer)
+            graph = await build_graph(config, system_prompt, checkpointer)
 
             try:
                 for turn_index, turn in enumerate(case.turns):

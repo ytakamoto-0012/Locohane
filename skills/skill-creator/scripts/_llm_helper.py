@@ -37,7 +37,7 @@ async def _ask(payload: dict) -> dict:
     from src.llm import build_model  # noqa: PLC0415
 
     config = load_config()
-    model = build_model(config)
+    model = await build_model(config)
 
     messages = []
     if payload.get("system"):

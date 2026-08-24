@@ -104,11 +104,12 @@ topicがあれば「thread noteの"◯◯"を読んでから対応せよ」と�
 | 目的 | 委譲先 | 返るもの |
 |---|---|---|
 | 調べて要約報告してほしい | `explore` | テキスト |
+| LLMの学習データにない最新情報のWeb検索も必要 | `explore-websearch` | テキスト |
 | office文書/PDFの内容確認（読み取り専用スクリプト） | `analyze-docs` | テキスト |
 | 読み取った内容をファイルへ書き出す（一括変換） | `worker` | 件数と失敗分 |
 | xlsx/docx/pptxを新規作成・編集 | `worker` | 完了報告のみ |
 
-`explore`/`analyze-docs`は読み取り専用で`execute_python_code`を持たないため、書き出しが要る作業を頼まない。深掘り（サブフォルダ確認・複数ファイル内容確認）はすべて委譲先のtask文に書いて丸投げする（`explore`/`worker`は`Glob`/`Read`/`Grep`を直接実行できる）。大量（数十件超）は前述の分割ルールに従う。
+`explore`/`explore-websearch`/`analyze-docs`は読み取り専用で`execute_python_code`を持たないため、書き出しが要る作業を頼まない。深掘り（サブフォルダ確認・複数ファイル内容確認）はすべて委譲先のtask文に書いて丸投げする（`explore`/`worker`は`Glob`/`Read`/`Grep`を直接実行できる）。大量（数十件超）は前述の分割ルールに従う。
 
 **verifierへの委譲（生成・編集直後は必須）**: `edit_excel.py`/`create_docx.py`/`edit_docx.py`/`create_pptx.py`/`edit_pptx.py`が終了コード0でも完了とみなさず、`dispatch_agent(agent_type="verifier")`に絶対パスと意図した内容（シート名・値・件数等）を伝えて検証する。差異があれば再実行→再検証（無視して完了報告しない）。verifierも孫委譲不可。対象外: 上記5スクリプト以外の一般ファイル（.md/.txt等）はverifierが開けないため、自分で`Read`して確認してよい。
 

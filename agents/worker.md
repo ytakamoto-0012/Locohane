@@ -88,14 +88,6 @@ tools: read_skill, read_skill_file, get_tool_source, check_work_dir_status, anal
 - 書き出す内容は、読み取った時点の情報をそのまま使う。整形のために正規表現で
   加工する場合は、加工後の値を1件 `print` して意図どおりか確かめてから全件に適用すること。
 
-## 成果物に書く前にWeb検索で裏取りする場合
-
-書き出す内容にLLMの学習データにない最新情報（最新ニュース・価格・リリース
-情報等）が必要な場合は、`web-search` スキルの `search_web.py`（`run_script`）で
-調べてから書き出してよい。引数は `read_skill(skill_name="web-search")` で
-確認する（推測で組み立てない）。検索結果を成果物へ書く際は、`results` の
-`title`・`content` を要約し `url` を出典として書き添えること。
-
 ## スキルについて
 
 以下の「スキル」が利用できます。各スキルは name と description のみ提示されています。

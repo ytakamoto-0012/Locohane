@@ -200,7 +200,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `check_script_job` / `stop_script_job` | 上記の安全上限超過フォールバック時のみ使う、ジョブの状況確認・強制終了。実行中ジョブへの連続 `check_script_job` 呼び出しは `[scripts].background_min_poll_interval_seconds` 未満の間隔だとサーバー側で拒否される |
 | `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `execute_python_code_background` を使う。code内で `@N`（パスメモリ）を参照する場合は `AGENT_SRC_DIR` 環境変数経由で `path_memory.resolve()` を呼んで実パスへ展開する必要がある。実行前ガードにより `src/`・`app.py`・`config.ini`・`skills/` 等プロジェクトフォルダ配下への書き込み・削除・改名はブロックされる。書き込み先は、ユーザーが作業フォルダ（後述「作業ディレクトリの切り替え」参照）を指定していればそのフォルダ、未指定なら `default_workdir` 配下でも自セッション専用の一時領域 `_tmp_<thread_id>` に限られる（`default_workdir` 直下への書き込みは、別セッションの誤動作を防ぐため許可しない） |
 | `execute_python_code_background` | `execute_python_code` と同じコードを起動する（要承認・`config.ini` での無効化・パスメモリ展開・プロジェクトフォルダ保護ガードは同様）。`run_script_background` と同じく完了まで進捗通知しながら待ち、状況確認・停止（安全上限超過時のみ）は共通の `check_script_job`/`stop_script_job` を使う |
-| `execute_python_code_readonly` | `execute_python_code` の読み取り専用版（ファイル書き込み不可、承認不要）。`explore`/`planner`/`analyze-docs` 等の読み取り専用サブエージェント種別（`agents/*.md` の `tools:`）にのみ付与され、メインエージェントは持たない |
+| `execute_python_code_readonly` | `execute_python_code` の読み取り専用版（ファイル書き込み不可、承認不要）。`explore`/`explore-websearch`/`planner`/`analyze-docs` 等の読み取り専用サブエージェント種別（`agents/*.md` の `tools:`）にのみ付与され、メインエージェントは持たない |
 | `write_scratch_note` | 調査中に分かった内容をスクラッチファイルへ追記する。計画未承認でも常に呼べ、書き込み先はツール自身が決めるため任意パスには書けない。トークン上限打ち切り時の引き継ぎ用途 |
 | `get_tool_source` | `run_script` がエラーになった際、原因調査用にスクリプトの絶対パスを返す（中身は返さない） |
 | `check_work_dir_status` | 現在の作業ディレクトリの実際のアクセス状況を確認する |
@@ -215,7 +215,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ。既定（`config.ini` の `[plan] require_planner_dispatch`）では、同一ターンで `dispatch_agent(agent_type="planner")` が完了していないと `create_plan` はエラーを返してブロックする（記憶・推測だけで steps を作らせず、専用サブエージェントに草案を作らせるため） |
 | `get_plan_status` / `lock_plan_mode` | 現在 Plan Mode（書き込み系ツールがブロックされたロック状態）か Edit Automatically（承認済み計画を実行できる状態）かを確認し、後者から前者へユーザー承認なしに手動で戻す |
 | `AskUserQuestion` / `ask_user_choice` | 会話継続に必要な追加情報をユーザーへ質問（`AskUserQuestion` は自由記述。`labels` 省略時は単一入力、指定時は複数項目をまとめて提示。`ask_user_choice` は選択肢形式で、表示される選択肢には常に「✏️ その他（自由入力）」「❌ キャンセル」が自動で追加される） |
-| `create_memory` / `update_memory` / `delete_memory` / `read_memory` / `search_memory` / `list_memories` | スレッドをまたぐ永続メモリー（`src/memory.py`）の保存・更新・削除・全文読込・検索・一覧。主エージェントは全6ツールを持つ。`dispatch_agent` のサブエージェントには種別ごとに絞って委譲し、`explore`/`analyze-docs` は読み込み系（`read_memory`/`search_memory`/`list_memories`）のみ、`worker` は全6ツール（フルアクセス）を持つ（`agents/*.md` の `tools:` 参照） |
+| `create_memory` / `update_memory` / `delete_memory` / `read_memory` / `search_memory` / `list_memories` | スレッドをまたぐ永続メモリー（`src/memory.py`）の保存・更新・削除・全文読込・検索・一覧。主エージェントは全6ツールを持つ。`dispatch_agent` のサブエージェントには種別ごとに絞って委譲し、`explore`/`explore-websearch`/`analyze-docs` は読み込み系（`read_memory`/`search_memory`/`list_memories`）のみ、`worker` は全6ツール（フルアクセス）を持つ（`agents/*.md` の `tools:` 参照） |
 | `help` | ユーザー向けヘルプ本文（`system_prompt/help.md`）をそのまま返す |
 
 `run_script`（`run_script_background` 含む）と `execute_python_code`（`execute_python_code_background`
@@ -328,11 +328,11 @@ Locohane/
 ├── agents/
 │   ├── README/AGENTS_README.md # エージェント種別定義（frontmatter）の書き方ガイド（*.mdスキャン時の警告を避けるためREADME/配下に退避）
 │   ├── explore.md           # 読み取り専用エージェント種別
+│   ├── explore-websearch.md # explore + Web検索（web-searchスキルのsearch_web.py限定）が使える読み取り専用エージェント種別
 │   ├── analyze-docs.md      # docx/xlsx/pptx/pdf等の文書調査に特化した読み取り専用エージェント種別
 │   ├── planner.md           # create_planの前段で計画草案（steps候補＋detail_markdown）を作る設計専用の読み取り専用エージェント種別
 │   ├── worker.md            # 承認済み計画に沿って読取り→書込みを内部完結させる書き込み可能エージェント種別
-│   ├── verifier.md          # 成果物検証用エージェント種別
-│   └── no-websearch-version/ # web-searchスキルを使わない環境向けの代替エージェント定義一式（explore/analyze-docs/workerからWeb検索関連の記述を除いた版）。*.mdスキャンは非再帰のためagents/直下に置いても自動では読まれず、該当環境ではconfig.iniのagents_dir（またはAGENTS_DIR環境変数）をこのフォルダに向けるか、中身をagents/直下に配置して使う
+│   └── verifier.md          # 成果物検証用エージェント種別
 ├── skills/
 │   ├── SKILLS_README.md    # スキル開発者向けガイド
 │   ├── skill-creator/       # 新しいスキルの作成・既存スキルの改善・eval検証を行うメタスキル
@@ -765,7 +765,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 
 | セクション | キー | 意味 | 対応する環境変数 |
 |-----------|------|------|------------------|
-| `[llm]` | `main_url` | メインエージェント用のLLM接続先リスト（`[{"base_url":...,"api_key":...,"model":...}]` のJSON/Python風リスト形式、複数指定可。各要素に任意で `start`/`end`（使用可能時間帯、単位は時間、分は小数、必ずセットで指定）を追加でき、リスト全体で最低1件は両方省略した常時使用可能な接続先が必要） | `LLM_MAIN_URL` |
+| `[llm]` | `main_url` | メインエージェント用のLLM接続先リスト（`[{"base_url":...,"api_key":...,"model":...}]` のJSON/Python風リスト形式、複数指定可。各要素に任意で `start`/`end`（使用可能時間帯、単位は時間、分は小数、必ずセットで指定）、`provider`（`openai_compatible`既定/`llama_cpp`。sticky戦略の能動解放対象を指定する）を追加でき、リスト全体で最低1件は`start`/`end`両方省略した常時使用可能な接続先が必要） | `LLM_MAIN_URL` |
 | `[llm]` | `main_routing_strategy` | `main_url` が複数件のときの選び方（`round_robin`/`random`/`priority_failover`/`sticky`） | `LLM_MAIN_ROUTING_STRATEGY` |
 | `[llm]` | `sub_url` | サブエージェント（`dispatch_agent`）用のLLM接続先リスト。形式は `main_url` と同じ | `LLM_SUB_URL` |
 | `[llm]` | `sub_routing_strategy` | `sub_url` が複数件のときの選び方。形式は `main_routing_strategy` と同じ | `LLM_SUB_ROUTING_STRATEGY` |
@@ -786,6 +786,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `request_timeout_seconds` | LLMサーバーへの応答待ちタイムアウト秒数（read/write/pool） | `LLM_REQUEST_TIMEOUT_SECONDS` |
 | `[llm]` | `stream_chunk_timeout_seconds` | ストリーミング中にチャンクが届かない場合のタイムアウト秒数 | `LLM_STREAM_CHUNK_TIMEOUT_SECONDS` |
 | `[llm]` | `max_concurrent_requests` | llama-serverへの同時リクエスト数上限。1以上でSemaphore(N)ガード（既定1＝完全直列化）、0以下で無制限 | `LLM_MAX_CONCURRENT_REQUESTS` |
+| `[llm]` | `sticky_active_release_min_idle_seconds` | sticky戦略でprovider="llama_cpp"の接続先が占有中・空きが無い場合、占有者全員がこの秒数以上無通信でなければGET /slotsによる能動解放の確認自体を行わない（既定300＝5分） | `LLM_STICKY_ACTIVE_RELEASE_MIN_IDLE_SECONDS` |
+| `[llm]` | `sticky_active_release_probe_timeout_seconds` | 上記GET /slots問い合わせ自体のタイムアウト秒数（既定3） | `LLM_STICKY_ACTIVE_RELEASE_PROBE_TIMEOUT_SECONDS` |
 | `[paths]` | `common_data_dir` | 各種データ保存先パスの共通ベースディレクトリ（既定 `./data`）。本セクションの`checkpoint_db`/`memory_dir`/`plans_dir`、および`[uploads]`/`[log]`/`[default_workdir]`/`[path_memory]`/`[chat_log]`の`dir`系キーの値に`${common_data_dir}`と書くとここで指定した値に置換される（configparser標準の補間ではなくconfig.py側の独自置換） | `COMMON_DATA_DIR` |
 | `[paths]` | `skills_dir` | スキルフォルダ | `SKILLS_DIR` |
 | `[paths]` | `agents_dir` | エージェント種別定義フォルダ（`dispatch_agent` の `agent_type`） | `AGENTS_DIR` |

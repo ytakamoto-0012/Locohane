@@ -51,7 +51,7 @@ EMPTY_RESPONSE_NUDGE = (
 )
 
 
-def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
+async def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
     """手書きの ReAct グラフをコンパイルして返す。
 
     agent ノード（call_model）と tools ノード（ImageAwareToolNode(get_all_tools())）を
@@ -69,7 +69,7 @@ def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
         コンパイル済みの LangGraph（CompiledStateGraph）。
         astream_events / ainvoke などで実行できる。
     """
-    model = build_model(config, role="main").bind_tools(get_all_tools())
+    model = (await build_model(config, role="main")).bind_tools(get_all_tools())
 
     async def call_model(state: MessagesState) -> dict:
         """agent ノード: システムプロンプトを先頭に付けてモデルを呼ぶ。
@@ -150,7 +150,7 @@ def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
     return graph.compile(checkpointer=checkpointer)
 
 
-def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer):
+async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer):
     """LangGraph 標準の create_react_agent にそのまま委譲してグラフを作る。
 
     ノード配線・tool_calls の分岐はすべて create_react_agent 内部に隠蔽される。
@@ -167,7 +167,7 @@ def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer):
         コンパイル済みの LangGraph（CompiledStateGraph）。
         astream_events / ainvoke などで実行できる。
     """
-    model = build_model(config, role="main")
+    model = await build_model(config, role="main")
 
     def pre_model_hook(state: MessagesState) -> dict:
         """モデル呼び出し直前に、入力を絞り、必要なら引継ぎ促しを差し込む。
@@ -228,7 +228,7 @@ def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer):
     )
 
 
-def build_graph(config: Config, system_prompt: str, checkpointer):
+async def build_graph(config: Config, system_prompt: str, checkpointer):
     """config.graph_impl に応じて手書き／prebuilt のグラフを構築する。
 
     Args:
@@ -246,9 +246,9 @@ def build_graph(config: Config, system_prompt: str, checkpointer):
         ValueError: config.graph_impl が "handwritten" / "prebuilt" 以外の場合。
     """
     if config.graph_impl == "handwritten":
-        return _build_handwritten_graph(config, system_prompt, checkpointer)
+        return await _build_handwritten_graph(config, system_prompt, checkpointer)
     if config.graph_impl == "prebuilt":
-        return _build_prebuilt_graph(config, system_prompt, checkpointer)
+        return await _build_prebuilt_graph(config, system_prompt, checkpointer)
     raise ValueError(f"unknown graph_impl: {config.graph_impl!r}")
 
 

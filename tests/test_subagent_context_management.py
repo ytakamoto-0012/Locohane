@@ -97,7 +97,11 @@ async def test_compaction_excludes_leading_system_message(monkeypatch) -> None:
     config.track_token_usage = True
 
     fake_model = _ToolCallThenFinalModel()
-    monkeypatch.setattr(subagent, "build_model", lambda config, role: fake_model)
+
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
 
     # should_compact は初回のツール実行直後にだけ True を返す（無限圧縮ループ回避）。
     call_state = {"should_compact_calls": 0}

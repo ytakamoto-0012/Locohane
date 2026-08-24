@@ -368,7 +368,7 @@ async def maybe_compact(
             # 場合のみ次点の接続先へ切り替わる（他戦略では実質無視される。
             # app.py の except LLM_CONNECTION_ERRORS と同じフック）。
             mark_last_endpoint_failed(role)
-            current_model = build_model(config, role=role)
+            current_model = await build_model(config, role=role)
         except ThinkingLoopDetected as exc:
             # このモデルインスタンス専用のクライアントだけを、リトライするか
             # 諦めるかに関わらず無条件で強制クローズする（client_broken の
@@ -395,7 +395,7 @@ async def maybe_compact(
                 exc.client_broken,
                 exc.snippet,
             )
-            current_model = build_model(config, role=role)
+            current_model = await build_model(config, role=role)
             local_input = [HumanMessage(content=summary_prompt), HumanMessage(content=_LOOP_NUDGE_TEXT)]
         except Exception:
             # 要約自体の失敗で本編の会話を壊さないよう、失敗時は元の履歴のまま続行する。

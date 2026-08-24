@@ -70,7 +70,10 @@ async def test_short_response_immediately_after_compaction_triggers_one_retry(mo
     ]
     fake_model = _ScriptedModel(responses)
     config = _make_compaction_config()
-    monkeypatch.setattr(subagent, "build_model", lambda config, role: fake_model)
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
 
     call_state = {"n": 0}
 
@@ -102,7 +105,10 @@ async def test_second_short_response_is_accepted_without_infinite_retry(monkeypa
     ]
     fake_model = _ScriptedModel(responses)
     config = _make_compaction_config()
-    monkeypatch.setattr(subagent, "build_model", lambda config, role: fake_model)
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
 
     call_state = {"n": 0}
 
@@ -131,7 +137,10 @@ async def test_short_response_without_prior_compaction_is_accepted_immediately(m
     responses = [AIMessage(content="はい、完了です。")]
     fake_model = _ScriptedModel(responses)
     config = _FakeConfig()  # context_compaction_enabled=False（既定）
-    monkeypatch.setattr(subagent, "build_model", lambda config, role: fake_model)
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
 
     result = await subagent.run_subagent(
         task="t", tools=[dummy_tool], system_prompt="sp", config=config, max_iterations=5
@@ -151,7 +160,10 @@ async def test_long_response_immediately_after_compaction_is_accepted_without_re
     ]
     fake_model = _ScriptedModel(responses)
     config = _make_compaction_config()
-    monkeypatch.setattr(subagent, "build_model", lambda config, role: fake_model)
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
 
     call_state = {"n": 0}
 

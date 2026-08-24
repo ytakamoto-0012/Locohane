@@ -70,7 +70,7 @@ def _make_fake_build_model(fail_times: int, final_message: AIMessage, make_exc=_
     """
     state = {"calls": 0}
 
-    def _fake_build_model(config, role):
+    async def _fake_build_model(config, role):
         return _FakeModel(state, fail_times, final_message, make_exc)
 
     return _fake_build_model, state

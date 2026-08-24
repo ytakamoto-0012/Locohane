@@ -29,6 +29,11 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.ini"
 # src/llm.py の _select_endpoint() がこの文字列で分岐する。
 LLM_ROUTING_STRATEGIES = frozenset({"round_robin", "random", "priority_failover", "sticky"})
 
+# LLMEndpoint.provider が取りうる値。"llama_cpp" のみ、sticky戦略で占有中の
+# 接続先が実際にはもう使われていない場合に GET /slots で能動的に確認・解放する
+# 対象になる（src/llm.py の _probe_llama_cpp_slots_idle() 参照）。
+LLM_PROVIDERS = frozenset({"openai_compatible", "llama_cpp"})
+
 # reasoning_format が取りうる値（llama-server の --reasoning-format と同じ）。
 LLM_REASONING_FORMATS = frozenset({"none", "deepseek", "deepseek-legacy"})
 
@@ -46,6 +51,13 @@ class LLMEndpoint:
             指定は不可。両方 None の場合は常時使用可能。start > end の場合は
             日をまたぐ範囲（例: start=22, end=6 なら22:00〜翌6:00）として扱う。
         end: この接続先が使用可能でなくなる時刻（start参照）。
+        provider: "openai_compatible"（既定）または "llama_cpp"。
+            "llama_cpp" の場合のみ、sticky戦略で占有中と記録された接続先が
+            実際には誰にも使われていないケース（forget_session()が呼ばれずに
+            残ったタブ切断等）を GET /slots で能動的に確認し、本当に空いて
+            いれば占有記録を強制解放する（src/llm.py の
+            _probe_llama_cpp_slots_idle() 参照）。llama.cpp server 固有の
+            管理APIのため、それ以外のOpenAI互換サーバーでは使えない。
     """
 
     base_url: str
@@ -53,6 +65,7 @@ class LLMEndpoint:
     model: str
     start: float | None = None
     end: float | None = None
+    provider: str = "openai_compatible"
 
 
 @dataclass(frozen=True)
@@ -151,6 +164,13 @@ class Config:
             間隔」の上限）。build_model（src/llm.py）がChatLlamaCppの
             コンストラクタに渡す。大きなコンテキストのプロンプト処理(prefill)
             に時間がかかる環境ほどこの秒数に到達しやすい。
+        sticky_active_release_min_idle_seconds: sticky戦略で占有中の接続先
+            （provider="llama_cpp"のみ対象）について、GET /slots で実際の
+            空き状況を確認しにいくまでに最低限求める無通信時間（秒）。
+            会話が単に返信を読んでいるだけの間に横取りされるのを防ぐガード
+            （src/llm.py の _STICKY_LAST_ACTIVITY_AT / _select_endpoint参照）。
+        sticky_active_release_probe_timeout_seconds: 上記 GET /slots
+            問い合わせ自体のタイムアウト秒数（短く、fail-safe側に倒す）。
         skills_dir: スキル群を格納するディレクトリの絶対パス。
         agents_dir: エージェント種別定義（dispatch_agent の agent_type、
             ClaudeCode の .claude/agents/*.md 相当）を格納するディレクトリの
@@ -617,6 +637,8 @@ class Config:
     request_timeout_seconds: float
     stream_chunk_timeout_seconds: float
     llm_max_concurrent_requests: int
+    sticky_active_release_min_idle_seconds: float
+    sticky_active_release_probe_timeout_seconds: float
 
     # --- 保存先パス（すべて絶対パス） ---
     skills_dir: Path
@@ -1094,6 +1116,10 @@ def _as_llm_endpoints(value: str | None, key_name: str) -> tuple[LLMEndpoint, ..
     必要（すべて時間帯限定だと、どの時間帯にも当てはまらない瞬間に接続先が
     無くなってしまうため）。
 
+    各要素には任意で provider（"openai_compatible" 既定 / "llama_cpp"）も
+    指定できる（LLMEndpoint.provider docstring参照）。未指定時は
+    "openai_compatible"（既存config.iniとの後方互換のため）。
+
     Args:
         value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
         key_name: エラーメッセージに使う設定キー名（例: "main_url"）。
@@ -1104,8 +1130,9 @@ def _as_llm_endpoints(value: str | None, key_name: str) -> tuple[LLMEndpoint, ..
     Raises:
         ValueError: リスト（配列）として解釈できない、空リスト、要素が
             dict でない、必須キー（base_url/model）が欠けている、start/end が
-            片方のみ指定されている、start/end が範囲外、または start/end を
-            両方省略した接続先が1件も無い場合。
+            片方のみ指定されている、start/end が範囲外、provider が
+            LLM_PROVIDERS に無い値、または start/end を両方省略した接続先が
+            1件も無い場合。
     """
     text = str(value or "").strip()
     if not text:
@@ -1128,6 +1155,10 @@ def _as_llm_endpoints(value: str | None, key_name: str) -> tuple[LLMEndpoint, ..
             raise ValueError(f"[llm].{key_name} の各要素は start と end をどちらも指定するか、どちらも省略してください: {item!r}")
         if start is not None and end is not None and start == end:
             raise ValueError(f"[llm].{key_name} の start と end が同じ値です（使用可能な時間帯が無くなります）: {item!r}")
+        provider = str(item.get("provider") or "openai_compatible").strip()
+        if provider not in LLM_PROVIDERS:
+            choices = "/".join(sorted(LLM_PROVIDERS))
+            raise ValueError(f"[llm].{key_name} の provider は {choices} のいずれかにしてください: {item!r}")
         endpoints.append(
             LLMEndpoint(
                 base_url=str(item["base_url"]),
@@ -1135,6 +1166,7 @@ def _as_llm_endpoints(value: str | None, key_name: str) -> tuple[LLMEndpoint, ..
                 model=str(item["model"]),
                 start=start,
                 end=end,
+                provider=provider,
             )
         )
     if not any(e.start is None and e.end is None for e in endpoints):
@@ -1503,6 +1535,18 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "LLM_MAX_CONCURRENT_REQUESTS",
                 llm.get("max_concurrent_requests", 1),
+            )
+        ),
+        sticky_active_release_min_idle_seconds=float(
+            os.getenv(
+                "LLM_STICKY_ACTIVE_RELEASE_MIN_IDLE_SECONDS",
+                llm.get("sticky_active_release_min_idle_seconds", 300),
+            )
+        ),
+        sticky_active_release_probe_timeout_seconds=float(
+            os.getenv(
+                "LLM_STICKY_ACTIVE_RELEASE_PROBE_TIMEOUT_SECONDS",
+                llm.get("sticky_active_release_probe_timeout_seconds", 3),
             )
         ),
         skills_dir=_resolve(PROJECT_ROOT, os.getenv("SKILLS_DIR", paths.get("skills_dir", "./skills"))),

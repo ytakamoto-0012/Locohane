@@ -18,6 +18,7 @@ import weakref
 import zlib
 from difflib import SequenceMatcher
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 import openai
@@ -172,11 +173,7 @@ def forget_session(session_id: str) -> None:
     """
     _active_async_clients.pop(session_id, None)
     for role in ("main", "sub"):
-        index = _STICKY_ASSIGNED_INDEX.pop((role, session_id), None)
-        if index is not None:
-            occupants = _STICKY_ENDPOINT_OCCUPANTS.get((role, index))
-            if occupants is not None:
-                occupants.discard(session_id)
+        _discard_sticky_occupant(role, session_id)
 
 
 async def aclose_active_llm_clients(session_id: str) -> None:
@@ -484,6 +481,35 @@ class _DebugResponseLogger(BaseCallbackHandler):
                     reasoning,
                     tool_calls,
                 )
+
+
+class _StickyActivityTouchCallback(BaseCallbackHandler):
+    """sticky戦略の能動解放（GET /slots）が参照する「直近アクティビティ時刻」
+    （_STICKY_LAST_ACTIVITY_AT）を、実際にLLM応答が返るたびに更新する。
+
+    _select_endpoint()（延いては_STICKY_LAST_ACTIVITY_ATへの書き込み）は
+    build_model()呼び出し時、つまりグラフ構築時にしか実行されない。
+    graph.py の call_model ノードは一度構築したモデルインスタンスを
+    以降のターンでも使い回す（毎ターン build_model() を呼び直さない）ため、
+    このコールバックを挟まないとタイムスタンプがグラフ構築時点のまま
+    固定され、「占有者が直近min_idle_seconds秒以上無通信でなければ確認
+    しない」というidle-ageガードが「会話開始からmin_idle_seconds秒経過
+    したら、生成の合間（＝返信を読んでいる最中）でも横取りされうる」
+    という意図しない挙動になってしまう。on_llm_end はチャットモデルでも
+    呼ばれる（_DebugResponseLogger参照）ため、build_model()経由で作った
+    モデルインスタンスに常時アタッチしておけば、graph.py（handwritten/
+    prebuilt いずれの実装でも）・subagent.py（dispatch_agent内部のReAct
+    ループ）どちらの実際のLLM呼び出しも網羅できる。
+    """
+
+    def __init__(self, role: str, session_id: str) -> None:
+        self._role = role
+        self._session_id = session_id
+
+    def on_llm_end(self, response, **kwargs: Any) -> None:  # noqa: ANN001
+        if not self._session_id:
+            return
+        _STICKY_LAST_ACTIVITY_AT[(self._role, self._session_id)] = time.time()
 
 
 def describe_current_task(now: float | None = None) -> str:
@@ -816,6 +842,134 @@ _STICKY_ASSIGNED_INDEX: dict[tuple[str, str], int] = {}
 # 新規会話がsticky接続先を初めて選ぶ際、他会話が誰も固定していない接続先
 # （＝この集合が空）を優先するために使う（_select_endpoint参照）。
 _STICKY_ENDPOINT_OCCUPANTS: dict[tuple[str, int], set[str]] = {}
+# (role, セッションID) -> このセッションが直近sticky接続先を実際に使った
+# time.time()。provider="llama_cpp"の接続先で空きが無い場合に、能動解放
+# （GET /slots で確認）を試みる前の「最低放置時間」ガードに使う
+# （_try_active_release_sticky_endpoint参照）。forget_session()/
+# _discard_sticky_occupant() で該当エントリも一緒に消す。
+_STICKY_LAST_ACTIVITY_AT: dict[tuple[str, str], float] = {}
+
+# sticky戦略で「空き接続先が無い場合の判定→（能動解放の確認）→占有確定」を
+# 単一コルーチンずつ直列化するロック。_try_active_release_sticky_endpoint は
+# GET /slots を await するため、ここでロックしないと、空き待ちの複数の
+# 新規会話が同時に同じ占有先を「空いている」と判定し、二重に占有して
+# しまう（sticky本来の排他性＝1接続先=1会話が崩れる）。空き接続先がある
+# 通常経路（awaitを挟まない）ではロック区間が一瞬で終わるため実害はない。
+_STICKY_ASSIGNMENT_LOCK = asyncio.Lock()
+
+
+def _discard_sticky_occupant(role: str, session_id: str) -> None:
+    """sticky戦略の占有記録（_STICKY_ASSIGNED_INDEX/_STICKY_ENDPOINT_OCCUPANTS/
+    _STICKY_LAST_ACTIVITY_AT）から、指定セッションの1roleぶんのエントリを取り除く。
+
+    forget_session()（会話終了時の解放）と _try_active_release_sticky_endpoint()
+    （GET /slots で確認できた能動解放）の両方から呼ばれる共通処理。
+
+    Args:
+        role: "main" または "sub"。
+        session_id: 対象セッションの thread_id。
+    """
+    _STICKY_LAST_ACTIVITY_AT.pop((role, session_id), None)
+    index = _STICKY_ASSIGNED_INDEX.pop((role, session_id), None)
+    if index is not None:
+        occupants = _STICKY_ENDPOINT_OCCUPANTS.get((role, index))
+        if occupants is not None:
+            occupants.discard(session_id)
+
+
+async def _probe_llama_cpp_slots_idle(base_url: str, timeout_seconds: float) -> bool | None:
+    """llama.cpp server の管理API GET /slots を叩き、全スロットが待機中か確認する。
+
+    provider="llama_cpp" の接続先のみが対象（llama-server起動時に --slots が
+    有効な場合のみ機能する）。base_url は "http://host:port/v1" のように
+    OpenAI互換パス（/v1）付きの形式を想定しているが、/slots はそのパス配下
+    ではなくサーバールート直下にあるため、scheme+netlocだけを取り出して
+    組み立て直す。
+
+    通信エラー・タイムアウト・想定外のレスポンス形式など、確実な判定が
+    できない場合は必ず None を返す（例外は外へ伝播させない）。呼び出し元
+    （_try_active_release_sticky_endpoint）は None を「わからない＝解放
+    しない」のフェイルセーフとして扱う。
+
+    Args:
+        base_url: 接続先の base_url（LLMEndpoint.base_url）。
+        timeout_seconds: リクエスト全体のタイムアウト秒数（[llm].
+            sticky_active_release_probe_timeout_seconds）。
+
+    Returns:
+        True: 全スロットが待機中（誰も生成していない、＝実質空き）。
+        False: 少なくとも1スロットが生成中（占有は正当）。
+        None: 確認できなかった（通信エラー・想定外のレスポンス形式等）。
+    """
+    parsed = urlsplit(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    slots_url = f"{parsed.scheme}://{parsed.netloc}/slots"
+    timeout = httpx.Timeout(timeout_seconds, connect=min(2.0, timeout_seconds))
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(slots_url)
+            response.raise_for_status()
+            slots = response.json()
+    except (httpx.TransportError, httpx.HTTPStatusError, ValueError) as exc:
+        logger.debug("GET %s の確認に失敗しました（sticky能動解放をスキップします）", slots_url, exc_info=exc)
+        return None
+    if not isinstance(slots, list):
+        return None
+    try:
+        return all(not slot.get("is_processing", True) for slot in slots)
+    except AttributeError:
+        return None
+
+
+async def _try_active_release_sticky_endpoint(
+    role: str,
+    endpoints: tuple[LLMEndpoint, ...],
+    candidate_indices: set[int],
+    *,
+    min_idle_seconds: float,
+    probe_timeout_seconds: float,
+) -> int | None:
+    """sticky戦略で空き接続先が無い場合に、実際には誰も使っていない占有を
+    GET /slots で確認し、見つかれば強制解放してその index を返す。
+
+    provider="llama_cpp" の接続先のみ対象（他はスキップ）。ある占有中の
+    接続先を確認するには、その占有者「全員」が min_idle_seconds 秒以上
+    無通信であることが前提（1人でも直近アクティブなら、その接続先は
+    確認自体を行わずスキップする＝返信を読んでいるだけの生きた会話を
+    横取りしない）。index の小さい順に見て、最初に確認できた空きで打ち
+    切る（不要なプローブを増やさない）。
+
+    Args:
+        role: "main" または "sub"。
+        endpoints: 選択対象の接続先タプル（build_model 呼び出し時点の
+            config.main_endpoints / config.sub_endpoints）。
+        candidate_indices: 占有中とみなされている index の集合
+            （現在時刻に使用可能な接続先のみに絞り込み済みであること）。
+        min_idle_seconds: [llm].sticky_active_release_min_idle_seconds。
+        probe_timeout_seconds: [llm].sticky_active_release_probe_timeout_seconds。
+
+    Returns:
+        強制解放できた接続先の index。見つからなければ None。
+    """
+    now = time.time()
+    for index in sorted(candidate_indices):
+        if endpoints[index].provider != "llama_cpp":
+            continue
+        occupant_sessions = list(_STICKY_ENDPOINT_OCCUPANTS.get((role, index), set()))
+        if not occupant_sessions:
+            continue
+        if any(
+            _STICKY_LAST_ACTIVITY_AT.get((role, sid)) is None or now - _STICKY_LAST_ACTIVITY_AT[(role, sid)] < min_idle_seconds
+            for sid in occupant_sessions
+        ):
+            continue
+        idle = await _probe_llama_cpp_slots_idle(endpoints[index].base_url, probe_timeout_seconds)
+        if idle:
+            for sid in occupant_sessions:
+                _discard_sticky_occupant(role, sid)
+            return index
+    return None
 
 
 def _endpoint_available_now(endpoint: LLMEndpoint) -> bool:
@@ -841,12 +995,14 @@ def _endpoint_available_now(endpoint: LLMEndpoint) -> bool:
     return now_hour >= start or now_hour < end
 
 
-def _select_endpoint(
+async def _select_endpoint(
     role: str,
     endpoints: tuple[LLMEndpoint, ...],
     strategy: str,
     *,
     inherit_from_role: str | None = None,
+    min_idle_seconds: float = 300.0,
+    probe_timeout_seconds: float = 3.0,
 ) -> LLMEndpoint:
     """config.ini [llm].main_routing_strategy / sub_routing_strategy に従って接続先を1つ選ぶ。
 
@@ -855,6 +1011,9 @@ def _select_endpoint(
     接続先は常に対象に含まれるため、config.py の _as_llm_endpoints が最低1件の
     常時使用可能な接続先を要求しており、絞り込み結果が空になることは無い
     （念のため空になった場合は全件にフォールバックする）。
+
+    sticky戦略でGET /slotsによる能動解放（_try_active_release_sticky_endpoint
+    参照）を行うため async def。build_model()からawaitで呼ぶ。
 
     Args:
         role: "main" または "sub"（ルーティング状態を役割ごとに分けるためのキー）。
@@ -871,6 +1030,11 @@ def _select_endpoint(
             継承できる。まだ inherit_from_role 側の選択が行われていない
             （このセッションでメインエージェントが一度もLLM呼び出しをして
             いない）場合のみ、安全側として通常のロジックへフォールバックする。
+        min_idle_seconds: [llm].sticky_active_release_min_idle_seconds。
+            sticky戦略で空きが無い場合、占有者全員がこの秒数以上無通信で
+            なければ GET /slots による確認自体を行わない。
+        probe_timeout_seconds: [llm].sticky_active_release_probe_timeout_seconds。
+            GET /slots 問い合わせ自体のタイムアウト秒数。
 
     Returns:
         選ばれた LLMEndpoint。使用可能な接続先が1件の場合は strategy に
@@ -911,20 +1075,40 @@ def _select_endpoint(
         if state_key in _STICKY_ASSIGNED_INDEX and _STICKY_ASSIGNED_INDEX[state_key] in eligible_indices:
             index = _STICKY_ASSIGNED_INDEX[state_key]
         else:
-            if state_key in _STICKY_ASSIGNED_INDEX:
-                stale_index = _STICKY_ASSIGNED_INDEX[state_key]
-                _STICKY_ENDPOINT_OCCUPANTS.get((role, stale_index), set()).discard(session_id)
-            # 初回選択時（または再固定時）は、他のどの会話もsticky固定して
-            # いない接続先（＝ _STICKY_ENDPOINT_OCCUPANTS が空）を優先する。
-            # 複数の空き接続先があるときはハッシュで決定的に選ぶ（同じ会話
-            # なら毎回同じ計算結果になる）。空きが無ければ現在使用可能な
-            # 接続先からハッシュで選ぶ（衝突を許容する）。
-            occupied_indices = {i for (r, i), sessions in _STICKY_ENDPOINT_OCCUPANTS.items() if r == role and sessions}
-            free_indices = [i for i in eligible_indices if i not in occupied_indices]
-            candidates = free_indices if free_indices else eligible_indices
-            index = candidates[zlib.crc32(session_id.encode("utf-8")) % len(candidates)]
-            _STICKY_ASSIGNED_INDEX[state_key] = index
-            _STICKY_ENDPOINT_OCCUPANTS.setdefault((role, index), set()).add(session_id)
+            # ここから先（空き判定→能動解放の確認→占有確定）はロックで
+            # 直列化する。GET /slots の await をまたぐため、ロックが無いと
+            # 複数の新規会話が同時に同じ占有先を「空いている」と誤判定し、
+            # 二重に占有してしまう（_STICKY_ASSIGNMENT_LOCK のコメント参照）。
+            async with _STICKY_ASSIGNMENT_LOCK:
+                if state_key in _STICKY_ASSIGNED_INDEX:
+                    stale_index = _STICKY_ASSIGNED_INDEX[state_key]
+                    _STICKY_ENDPOINT_OCCUPANTS.get((role, stale_index), set()).discard(session_id)
+                # 初回選択時（または再固定時）は、他のどの会話もsticky固定して
+                # いない接続先（＝ _STICKY_ENDPOINT_OCCUPANTS が空）を優先する。
+                occupied_indices = {i for (r, i), sessions in _STICKY_ENDPOINT_OCCUPANTS.items() if r == role and sessions}
+                free_indices = [i for i in eligible_indices if i not in occupied_indices]
+                if not free_indices:
+                    # 空きが1件も無い場合、provider="llama_cpp"の占有先だけは
+                    # GET /slots で実際に使われているか確認し、誰も使っていなければ
+                    # 強制解放して空きとして扱う（forget_session()が呼ばれずに
+                    # 残った占有＝タブを閉じずにネットワーク切断された等の対策）。
+                    freed_index = await _try_active_release_sticky_endpoint(
+                        role,
+                        endpoints,
+                        occupied_indices & set(eligible_indices),
+                        min_idle_seconds=min_idle_seconds,
+                        probe_timeout_seconds=probe_timeout_seconds,
+                    )
+                    if freed_index is not None:
+                        free_indices = [freed_index]
+                # 複数の空き接続先があるときはハッシュで決定的に選ぶ（同じ会話
+                # なら毎回同じ計算結果になる）。空きが無ければ現在使用可能な
+                # 接続先からハッシュで選ぶ（衝突を許容する）。
+                candidates = free_indices if free_indices else eligible_indices
+                index = candidates[zlib.crc32(session_id.encode("utf-8")) % len(candidates)]
+                _STICKY_ASSIGNED_INDEX[state_key] = index
+                _STICKY_ENDPOINT_OCCUPANTS.setdefault((role, index), set()).add(session_id)
+        _STICKY_LAST_ACTIVITY_AT[state_key] = time.time()
     elif strategy == "priority_failover":
         # 使用可能な接続先を先頭から順に見て、クールダウン中でない最初の
         # 接続先を使う。全滅時は安全側として使用可能な先頭へフォールバック
@@ -976,7 +1160,7 @@ def mark_last_endpoint_failed(role: str) -> None:
     )
 
 
-def build_model(config: Config, role: Literal["main", "sub"] = "main") -> ChatOpenAI:
+async def build_model(config: Config, role: Literal["main", "sub"] = "main") -> ChatOpenAI:
     """llama.cpp server の OpenAI 互換エンドポイントに繋ぐ ChatOpenAI を作る。
 
     Ollama 固有の API・ライブラリは使わず、langchain-openai の ChatOpenAI
@@ -1027,7 +1211,14 @@ def build_model(config: Config, role: Literal["main", "sub"] = "main") -> ChatOp
     endpoints = config.main_endpoints if role == "main" else config.sub_endpoints
     routing_strategy = config.main_routing_strategy if role == "main" else config.sub_routing_strategy
     inherit_from_role = "main" if role == "sub" and config.sub_endpoints_inherit_main else None
-    endpoint = _select_endpoint(role, endpoints, routing_strategy, inherit_from_role=inherit_from_role)
+    endpoint = await _select_endpoint(
+        role,
+        endpoints,
+        routing_strategy,
+        inherit_from_role=inherit_from_role,
+        min_idle_seconds=config.sticky_active_release_min_idle_seconds,
+        probe_timeout_seconds=config.sticky_active_release_probe_timeout_seconds,
+    )
 
     extra_body: dict[str, Any] = {}
     if config.top_k is not None:
@@ -1117,7 +1308,7 @@ def build_model(config: Config, role: Literal["main", "sub"] = "main") -> ChatOp
         streaming=True,
         stream_usage=config.track_token_usage,
         stream_chunk_timeout=config.stream_chunk_timeout_seconds,
-        callbacks=[_DebugResponseLogger()],
+        callbacks=[_DebugResponseLogger(), _StickyActivityTouchCallback(role, session_id or "")],
         loop_guard_enabled=config.thinking_loop_guard_enabled,
         loop_guard_window_chars=config.thinking_loop_guard_window_chars,
         loop_guard_check_interval_chars=config.thinking_loop_guard_check_interval_chars,

@@ -105,7 +105,7 @@ async def test_connection_error_retries_with_endpoint_switch_then_succeeds(monke
     build_calls = {"n": 0}
     mark_failed_calls = []
 
-    def fake_build_model(config, role):
+    async def fake_build_model(config, role):
         idx = build_calls["n"]
         build_calls["n"] += 1
         # 最初の呼び出し分（idx=0）は maybe_compact に直接渡す初期モデルなので
@@ -128,7 +128,11 @@ async def test_connection_error_retries_with_endpoint_switch_then_succeeds(monke
 @pytest.mark.asyncio
 async def test_connection_error_exhausts_retry_budget_and_skips_compaction(monkeypatch, tmp_path) -> None:
     model = _ScriptedModel([httpx.TransportError("down")] * 10)
-    monkeypatch.setattr(context_compaction, "build_model", lambda config, role: model)
+
+    async def fake_build_model(config, role):
+        return model
+
+    monkeypatch.setattr(context_compaction, "build_model", fake_build_model)
     monkeypatch.setattr(context_compaction, "mark_last_endpoint_failed", lambda role: None)
 
     result = await maybe_compact(
@@ -148,7 +152,7 @@ async def test_loop_detected_force_closes_client_and_retries_then_succeeds(monke
     closed_models = []
     build_calls = {"n": 0}
 
-    def fake_build_model(config, role):
+    async def fake_build_model(config, role):
         build_calls["n"] += 1
         return models[build_calls["n"]]
 
@@ -178,7 +182,10 @@ async def test_loop_detected_exhausts_retry_budget_and_skips_compaction(monkeypa
     async def fake_aclose_model_client(m):
         closed_models.append(m)
 
-    monkeypatch.setattr(context_compaction, "build_model", lambda config, role: model)
+    async def fake_build_model(config, role):
+        return model
+
+    monkeypatch.setattr(context_compaction, "build_model", fake_build_model)
     monkeypatch.setattr(context_compaction, "aclose_model_client", fake_aclose_model_client)
 
     result = await maybe_compact(

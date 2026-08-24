@@ -1516,7 +1516,7 @@ async def _setup() -> None:
     init_llm_concurrency(_config.llm_max_concurrent_requests)
 
 
-def _rebuild_graph(thread_id: str):
+async def _rebuild_graph(thread_id: str):
     """既存の system_prompt・checkpointer を使い回し、指定セッションのグラフだけを
     （再）構築して cl.user_session へ保存する。
 
@@ -1541,7 +1541,7 @@ def _rebuild_graph(thread_id: str):
         変数として使い続けること。
     """
     set_current_session(thread_id)
-    graph = build_graph(_config, _system_prompt, _checkpointer)
+    graph = await build_graph(_config, _system_prompt, _checkpointer)
     cl.user_session.set("graph", graph)
     return graph
 
@@ -1588,7 +1588,7 @@ async def on_stop() -> None:
     rebuild_ok = False
     for _retry in range(2):
         try:
-            _rebuild_graph(thread_id)
+            await _rebuild_graph(thread_id)
             rebuild_ok = True
             break
         except Exception:  # noqa: BLE001
@@ -1649,7 +1649,7 @@ async def on_chat_start() -> None:
         username = resolve_log_username(user.identifier if user else None)
         cl.user_session.set("chat_log_path", build_log_path(_config.chat_log_dir, username, thread_id))
     # このセッション専用のグラフを構築する（他タブとはLLMクライアントを共有しない）。
-    _rebuild_graph(thread_id)
+    await _rebuild_graph(thread_id)
     cl.user_session.set("work_dir", None)
     cl.user_session.set("work_dir_access", None)
     # 次の on_message でLLMへ実際の作業ディレクトリ絶対パスを知らせるためのフラグ
@@ -1736,7 +1736,7 @@ if _config.thread_store_enabled:
             # 追記継続だと「いつ再開したか」が分からなくなるため）。
             cl.user_session.set("chat_log_path", build_log_path(_config.chat_log_dir, username, thread_id))
 
-        _rebuild_graph(thread_id)
+        await _rebuild_graph(thread_id)
 
         meta = thread.get("metadata") or {}
         if isinstance(meta, str):
@@ -2481,7 +2481,7 @@ async def _run_context_compaction(
     cumulative_main = cl.user_session.get("token_usage_cumulative_main")
     if not should_compact(cumulative_main, last_usage, len(messages), _config):
         return False
-    summary_model = build_model(_config, role="main")
+    summary_model = await build_model(_config, role="main")
     new_messages = await maybe_compact(messages, summary_model, _config, role="main")
     if new_messages is None:
         return False
@@ -3273,7 +3273,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                 # 7分11秒間ハング。2026-07-31: 同型の事象が再発し、
                 # ユーザーが手動キャンセルするまで復帰しなかった）。
                 await aclose_active_llm_clients(thread_id)
-                graph = _rebuild_graph(thread_id)
+                graph = await _rebuild_graph(thread_id)
                 logging.getLogger(__name__).warning(
                     "ThinkingLoopDetected: リトライ前にLLMグラフを再構築しました [%s]",
                     describe_current_task(),
@@ -3321,7 +3321,7 @@ async def _on_message_impl(message: cl.Message) -> None:
             # llama-server側で旧ストリームがactiveなまま残り、次のターンが
             # 応答ヘッダー待ちでハングして復旧不能になる。
             await aclose_active_llm_clients(thread_id)
-            graph = _rebuild_graph(thread_id)
+            graph = await _rebuild_graph(thread_id)
             logging.getLogger(__name__).warning(
                 "エラーのためグラフを再構築しました: %s [%s]",
                 turn_broken_exc,

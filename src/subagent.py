@@ -216,7 +216,7 @@ async def _invoke_with_loop_retry(model, messages: list, config: Config, tools: 
                 await adispatch_custom_event("subagent_loop_retry", {"snippet": exc.snippet})
             except Exception:  # noqa: BLE001 - UI通知の失敗でリトライ自体を止めない
                 logger.debug("subagent_loop_retry イベントの送出に失敗しました", exc_info=True)
-            current_model = build_model(config, role="sub").bind_tools(tools)
+            current_model = (await build_model(config, role="sub")).bind_tools(tools)
             logger.warning(
                 "subagent: リトライ前にLLMモデルを再構築しました" "（client_broken=%s） [%s]",
                 exc.client_broken,
@@ -346,7 +346,7 @@ async def _invoke_with_timeout_retry(
             # except LLM_CONNECTION_ERRORS と同じフック。他戦略では実質
             # 無視される。src/llm.py の mark_last_endpoint_failed 参照）。
             mark_last_endpoint_failed("sub")
-            current_model = build_model(config, role="sub").bind_tools(tools)
+            current_model = (await build_model(config, role="sub")).bind_tools(tools)
     raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -492,7 +492,7 @@ async def run_subagent(
     Returns:
         サブエージェントの最終回答テキスト。
     """
-    model = build_model(config, role="sub").bind_tools(tools)
+    model = (await build_model(config, role="sub")).bind_tools(tools)
     tools_by_name = {t.name: t for t in tools}
     messages: list = [SystemMessage(content=system_prompt), HumanMessage(content=task)]
 
@@ -600,7 +600,7 @@ async def run_subagent(
             # 圧縮用モデルはツール未bindの素のインスタンスを使う（本編の model は
             # bind_tools 済みで、要約専用の呼び出しにツール定義を含める必要が
             # 無いため。src/context_compaction.py の maybe_compact docstring参照）。
-            summary_model = build_model(config, role="sub")
+            summary_model = await build_model(config, role="sub")
             # messages[0] は run_subagent 開始時に積んだ SystemMessage。graph.py の
             # メインエージェントは system_prompt を state["messages"] に含めず
             # call_model 側で毎回付け足す構造のため要約対象から自然に外れるが、

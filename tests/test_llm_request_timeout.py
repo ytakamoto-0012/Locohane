@@ -24,7 +24,7 @@ async def test_build_model_sets_request_timeout() -> None:
     config = load_config()
     session_id = f"test-session-timeout-{id(object())}"
     llm.set_current_session(session_id)
-    model = llm.build_model(config)
+    model = await llm.build_model(config)
     try:
         # request_timeout が httpx.Timeout である（None でない）ことを確認。
         # これにより openai SDK が毎リクエスト self.timeout で httpx の
@@ -44,7 +44,7 @@ async def test_build_model_httpx_client_has_timeout() -> None:
     config = load_config()
     session_id = f"test-session-httpx-timeout-{id(object())}"
     llm.set_current_session(session_id)
-    model = llm.build_model(config)
+    model = await llm.build_model(config)
     try:
         assert model.http_async_client.timeout is not None
         assert isinstance(model.http_async_client.timeout, httpx.Timeout)

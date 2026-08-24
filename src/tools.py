@@ -116,12 +116,12 @@ _SUBAGENT_AGENT_TYPE: contextvars.ContextVar[str | None] = contextvars.ContextVa
 # agent_type は制限なし）。agents/*.md のプロンプト文面だけでこの制約を
 # 課しているagent_typeは、低パラメータモデルでは指示を無視して他スキルの
 # 読み込み専用スクリプトまで呼んでしまうことがある（本番同等のeval
-# ケースで実際に発生: explore が本来analyze-docs専用のread_excel.pyを
-# 呼んでxlsxを調査し、analyze-docs向けの誤診断防止ルールが適用されない
-# まま処理が進んでしまった）。プロンプトの記述と実際の許可を一致させる
-# ため、コード側でも強制する。
+# ケースで実際に発生: explore-websearch が本来analyze-docs専用の
+# read_excel.pyを呼んでxlsxを調査し、analyze-docs向けの誤診断防止ルールが
+# 適用されないまま処理が進んでしまった）。プロンプトの記述と実際の許可を
+# 一致させるため、コード側でも強制する。
 _AGENT_TYPE_RUN_SCRIPT_SKILL_ALLOWLIST: dict[str, frozenset[str]] = {
-    "explore": frozenset({"web-search"}),
+    "explore-websearch": frozenset({"web-search"}),
 }
 
 
@@ -1058,11 +1058,14 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
     allowed_roots = [workdir]
     if _DEFAULT_WORKDIR is not None:
         allowed_roots.append(_resolve_exec_workdir())
+    display_roots = list(allowed_roots)
     if _PATH_MEMORY_DIR is not None:
         allowed_roots.append(_PATH_MEMORY_DIR)
     try:
         guard_dir = Path(tempfile.mkdtemp(prefix="agent_fs_guard_"))
-        guard_src = _python_fs_guard_preamble(allowed_roots, tmp_dir_roots=_tmp_dir_parents(workdir))
+        guard_src = _python_fs_guard_preamble(
+            allowed_roots, tmp_dir_roots=_tmp_dir_parents(workdir), display_roots=display_roots
+        )
         (guard_dir / "sitecustomize.py").write_text(guard_src, encoding="utf-8")
     except OSError:
         logger.warning("run_script: 書き込みガード用の一時ファイル作成に失敗したため、ガード無しで実行します。")
@@ -2908,9 +2911,9 @@ def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float
     return "[生成/更新ファイル]\n" + "\n".join(lines)
 
 
-def _exec_guard_roots() -> list[Path]:
+def _exec_guard_roots() -> tuple[list[Path], list[Path]]:
     """execute_python_code系（execute_python_code/execute_python_code_background）
-    のガードに渡す allowed_roots を組み立てる。
+    のガードに渡す (allowed_roots, display_roots) を組み立てる。
 
     実際の作業ディレクトリ（_resolve_workdir(need_write=True)。書き込み
     不可と判定されていれば default_workdir へ自動的に倒れる。倒れた場合は
@@ -2919,12 +2922,17 @@ def _exec_guard_roots() -> list[Path]:
     default_workdir以外を指している場合でも常に念のため加える）に加え、
     path_memory_dir（LLM生成コードが path_memory.register()/resolve() を
     直接呼ぶ場合にロックファイル書き込みが必要になるLocohane内部の
-    状態ディレクトリ）を含める。default_workdir自体（`_tmp_<thread_id>`
-    以外のサブディレクトリや直下）は意図的に含めない
+    状態ディレクトリ）を allowed_roots に含める。default_workdir自体
+    （`_tmp_<thread_id>` 以外のサブディレクトリや直下）は意図的に含めない
     （default_workdirはサーバー側の共有ディレクトリのため、他セッションが
     誤参照する事故を避けるため常に自セッション専用の`_tmp_<thread_id>`
     だけに書き込みを限定する。_restrict_default_workdir参照）。
     4箇所の呼び出し元での重複を避けるための共通ヘルパー。
+
+    display_roots は allowed_roots から path_memory_dir を除いたもの。
+    書き込みガード違反時にLLMへ「ここに書き直せ」と提示する候補は
+    path_memory_dir（ロックファイル専用でユーザー成果物の置き場ではない）を
+    含めるべきではないため分離している。
 
     以前は実行用ディレクトリ（_tmp_<thread_id>）の親から作業ディレクトリを
     逆算していたが、_tmp_<thread_id> が常に default_workdir 配下に固定
@@ -2934,12 +2942,17 @@ def _exec_guard_roots() -> list[Path]:
     なってしまう）。
     """
     roots = [_restrict_default_workdir(_resolve_workdir(need_write=True)), _resolve_exec_workdir()]
+    display_roots = list(roots)
     if _PATH_MEMORY_DIR is not None:
         roots.append(_PATH_MEMORY_DIR)
-    return roots
+    return roots, display_roots
 
 
-def _python_fs_guard_preamble(allowed_roots: Sequence[Path], tmp_dir_roots: Sequence[Path] = ()) -> str:
+def _python_fs_guard_preamble(
+    allowed_roots: Sequence[Path],
+    tmp_dir_roots: Sequence[Path] = (),
+    display_roots: Sequence[Path] | None = None,
+) -> str:
     """execute_python_code / run_script が実行するコードの先頭（または
     サブプロセスの sitecustomize.py）に連結する、書き込みサンドボックス用の
     ガードコードを生成する。
@@ -2993,6 +3006,12 @@ def _python_fs_guard_preamble(allowed_roots: Sequence[Path], tmp_dir_roots: Sequ
             使い、allowed_roots とは独立（execute_python_code_readonly は
             allowed_roots=[] で全面書き込み禁止だが、他セッションtmp判定
             自体はここに渡す tmp_dir_roots で別途機能する）。
+        display_roots: 書き込みガード違反時にLLMへ「ここに書き直せ」と
+            提示する候補の一覧。省略時は allowed_roots をそのまま使う。
+            allowed_roots には path_memory_dir 等、内部用でユーザー
+            成果物の置き場として案内すべきでないパスが混じることがあるため
+            分離できるようにしている（_exec_guard_roots/
+            _run_script_guard_env 参照）。重複は自動的に除去される。
 
     Returns:
         コード文字列の先頭に連結する、あるいは sitecustomize.py として
@@ -3006,6 +3025,7 @@ def _python_fs_guard_preamble(allowed_roots: Sequence[Path], tmp_dir_roots: Sequ
     # あった。repr(tuple(...)) なら空リストは正しく "()" になる。
     allowed_repr = repr(tuple(str(p) for p in allowed_roots))
     tmp_roots_repr = repr(tuple(str(p) for p in tmp_dir_roots))
+    display_repr = repr(tuple(str(p) for p in (display_roots if display_roots is not None else allowed_roots)))
     return f'''\
 import builtins as _guard_builtins
 import io as _guard_io
@@ -3013,6 +3033,7 @@ import os as _guard_os
 import shutil as _guard_shutil
 
 _GUARD_ALLOWED = [_guard_os.path.realpath(_p) for _p in {allowed_repr}]
+_GUARD_DISPLAY = list(dict.fromkeys(_guard_os.path.realpath(_p) for _p in {display_repr}))
 _GUARD_TMP_ROOTS = [_guard_os.path.realpath(_p) for _p in {tmp_roots_repr}]
 _GUARD_OWN_TMP_NAME = "_tmp_" + _guard_os.environ.get("AGENT_THREAD_ID", "_no_session")
 
@@ -3028,9 +3049,11 @@ def _guard_check_foreign_tmp(_path):
         if _target.startswith(_root + _guard_os.sep):
             _first = _target[len(_root) + 1 :].split(_guard_os.sep, 1)[0]
             if _first.startswith("_tmp_") and _first != _GUARD_OWN_TMP_NAME:
+                _own_dir = _guard_os.path.join(_root, _GUARD_OWN_TMP_NAME)
                 raise PermissionError(
                     f"[一時ディレクトリガード] 他セッションの一時ディレクトリへは"
-                    f"アクセスできません: {{_path}}"
+                    f"アクセスできません: {{_path}}\\n"
+                    f"あなた自身の一時フォルダを使ってやり直してください: {{_own_dir}}"
                 )
             return
 
@@ -3044,11 +3067,16 @@ def _guard_check(_path, _op):
     for _root in _GUARD_ALLOWED:
         if _target == _root or _target.startswith(_root + _guard_os.sep):
             return
+    if _GUARD_ALLOWED:
+        _allowed_list = "、".join(_GUARD_DISPLAY or _GUARD_ALLOWED)
+        raise PermissionError(
+            f"[書き込みサンドボックスガード] 作業ディレクトリ配下以外は{{_op}}できません: {{_path}}\\n"
+            f"次のいずれか配下に書き込み先を変更してやり直してください: {{_allowed_list}}\\n"
+            "パスが分からない・合っているか不安な場合は check_work_dir_status ツールで確認してください。"
+        )
     raise PermissionError(
-        f"[書き込みサンドボックスガード] 作業ディレクトリ配下以外は{{_op}}できません: {{_path}}\\n"
-        "作業ディレクトリ（またはセッション専用の一時フォルダ _tmp_<thread_id>）配下のみ"
-        "書き込み・削除可能です。default_workdir直下など共有フォルダへは"
-        "直接書き込めません。"
+        f"[書き込みサンドボックスガード] このツールは書き込み・削除が一切できません: {{_path}}\\n"
+        "書き込みが必要な場合は execute_python_code ツールを使ってやり直してください。"
     )
 
 
@@ -3289,7 +3317,10 @@ async def execute_python_code(code: str) -> str:
         before_snapshot = {}
 
     try:
-        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
+        _guard_allowed_roots, _guard_display_roots = _exec_guard_roots()
+        _fs_guard = _python_fs_guard_preamble(
+            _guard_allowed_roots, tmp_dir_roots=_tmp_dir_parents(workdir.parent), display_roots=_guard_display_roots
+        )
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
@@ -3506,7 +3537,10 @@ async def execute_python_code_background(code: str) -> str:
         before_snapshot = {}
 
     try:
-        _fs_guard = _python_fs_guard_preamble(_exec_guard_roots(), tmp_dir_roots=_tmp_dir_parents(workdir.parent))
+        _guard_allowed_roots, _guard_display_roots = _exec_guard_roots()
+        _fs_guard = _python_fs_guard_preamble(
+            _guard_allowed_roots, tmp_dir_roots=_tmp_dir_parents(workdir.parent), display_roots=_guard_display_roots
+        )
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=str(workdir), delete=False, encoding="utf-8")
         tmp.write(_fs_guard + code)
         tmp.close()
