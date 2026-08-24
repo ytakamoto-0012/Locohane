@@ -50,6 +50,7 @@ from .llm import (
     ThinkingLoopDetected,
     build_model,
     describe_current_task,
+    mark_last_endpoint_failed,
     pick_loop_nudge_message,
 )
 
@@ -339,6 +340,12 @@ async def _invoke_with_timeout_retry(
                 max_retries,
                 exc,
             )
+            # [subagent].sub_routing_strategy=priority_failover の場合、直近
+            # 使用した接続先を一時的にクールダウンし、次の build_model() で
+            # 次点の接続先へ切り替わるようにする（app.py の
+            # except LLM_CONNECTION_ERRORS と同じフック。他戦略では実質
+            # 無視される。src/llm.py の mark_last_endpoint_failed 参照）。
+            mark_last_endpoint_failed("sub")
             current_model = build_model(config, role="sub").bind_tools(tools)
     raise AssertionError("unreachable")  # pragma: no cover
 
@@ -601,7 +608,7 @@ async def run_subagent(
             # 保持する構造が異なる。除外せずに渡すと要約で先頭が切り捨てられた際に
             # サブエージェントが以後システムプロンプト（役割・ツール方針等）を
             # 失ってしまうため、常に保持対象として明示的に除外してから渡す。
-            new_tail = await maybe_compact(messages[1:], summary_model, config)
+            new_tail = await maybe_compact(messages[1:], summary_model, config, role="sub")
             if new_tail is not None:
                 logger.info(
                     "subagent: 会話履歴を圧縮しました (iter=%d) [%s]",

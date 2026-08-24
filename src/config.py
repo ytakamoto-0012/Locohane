@@ -81,6 +81,16 @@ class Config:
         sub_routing_strategy: sub_endpoints が複数ある場合の選び方
             （sub_endpoints_inherit_main が True の場合は無視される）。
             形式は main_routing_strategy と同じ。
+        main_connection_error_max_retries: メインエージェントのターン中に
+            LLMサーバーとの通信エラー（LLM_CONNECTION_ERRORS、src/llm.py参照）
+            を検知した場合、直近使用した接続先を一時的にクールダウンした上で
+            （mark_last_endpoint_failed。main_routing_strategy=priority_failover
+            の場合のみ次点の接続先へ切り替わり、round_robin/random は呼び出し
+            ごとに元から切り替わる）グラフを再構築し、同じ反復をこの回数まで
+            自動リトライする（app.py の on_message 参照）。0を指定すると
+            従来通りリトライせず、ユーザーへ通信エラーを通知してターンを
+            中断する。サブエージェント（dispatch_agent）側の同種の設定は
+            [subagent].background_llm_timeout_max_retries。
         temperature: 生成時のtemperature。
         top_p: 累積確率上位のみサンプリングする閾値。None なら未指定
             （llama-server既定に委ねる）。
@@ -586,6 +596,7 @@ class Config:
     sub_endpoints: tuple[LLMEndpoint, ...]
     sub_endpoints_inherit_main: bool
     sub_routing_strategy: str
+    main_connection_error_max_retries: int
     temperature: float
     top_p: float | None
     top_k: int | None
@@ -1455,6 +1466,12 @@ def load_config(config_path: Path | None = None) -> Config:
         sub_routing_strategy=_as_routing_strategy(
             os.getenv("LLM_SUB_ROUTING_STRATEGY", llm.get("sub_routing_strategy", "round_robin")),
             "sub_routing_strategy",
+        ),
+        main_connection_error_max_retries=int(
+            os.getenv(
+                "LLM_MAIN_CONNECTION_ERROR_MAX_RETRIES",
+                llm.get("main_connection_error_max_retries", 3),
+            )
         ),
         temperature=float(os.getenv("LLM_TEMPERATURE", llm.get("temperature", 0.3))),
         top_p=_as_optional_float(os.getenv("LLM_TOP_P", llm.get("top_p", ""))),

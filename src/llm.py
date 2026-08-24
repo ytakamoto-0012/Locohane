@@ -221,6 +221,43 @@ async def aclose_active_llm_clients(session_id: str) -> None:
         raise pending_cancel
 
 
+async def aclose_model_client(model: ChatOpenAI) -> None:
+    """指定した1つのモデルインスタンスに紐づく httpx.AsyncClient だけを強制クローズする。
+
+    aclose_active_llm_clients(session_id) はセッション内の全クライアントを
+    一括で閉じるため、dispatch_agent の並列サブエージェントやメイングラフが
+    同じセッションで同時に別のクライアントを使用中だと巻き添えで
+    "Cannot send a request, as the client has been closed" を招く
+    （src/subagent.py の _invoke_with_loop_retry docstring 参照）。
+
+    要約専用モデル（src/context_compaction.py の maybe_compact 等、
+    build_model() を都度その場だけで使い捨てる呼び出し元）のように、
+    「このモデルインスタンス1つの接続だけを確実に切断したいが、同じ
+    セッションの他のクライアントには触れたくない」場合はこちらを使う。
+
+    build_model() は ChatLlamaCpp(http_async_client=async_client) という
+    形で httpx.AsyncClient を明示的に渡しており、langchain_openai は
+    それをそのまま model.root_async_client._client として保持する
+    （openai.AsyncOpenAI.close() が呼ぶのと同じクライアント。実測で
+    `model.root_async_client._client is async_client` を確認済み）。
+    ライブラリの非公開属性に依存するため、将来のバージョンアップで
+    属性名が変わった場合に備えて例外は握りつぶし、ログのみに留める
+    （force closeできなくても、build_model()側でリトライ用に新しい
+    クライアントを都度生成する設計のため、呼び出し元のリトライ自体は
+    引き続き機能する）。
+
+    Args:
+        model: build_model() が返した ChatOpenAI（ChatLlamaCpp）インスタンス。
+    """
+    client = getattr(getattr(model, "root_async_client", None), "_client", None)
+    if client is None:
+        return
+    try:
+        await client.aclose()
+    except Exception:  # noqa: BLE001 - 1回のクローズ失敗でリトライ自体を止めない
+        logger.debug("モデル専用クライアントのクローズ中に例外が発生しました", exc_info=True)
+
+
 class ThinkingLoopDetected(Exception):
     """LLM応答（thinking/本文）が反復ループに陥ったと判定され、生成を打ち切ったことを示す。
 

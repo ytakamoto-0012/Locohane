@@ -2482,7 +2482,7 @@ async def _run_context_compaction(
     if not should_compact(cumulative_main, last_usage, len(messages), _config):
         return False
     summary_model = build_model(_config, role="main")
-    new_messages = await maybe_compact(messages, summary_model, _config)
+    new_messages = await maybe_compact(messages, summary_model, _config, role="main")
     if new_messages is None:
         return False
     logging.getLogger(__name__).debug(
@@ -2669,6 +2669,12 @@ async def _on_message_impl(message: cl.Message) -> None:
     loop_exc: ThinkingLoopDetected | None = None
     turn_broken_exc: Exception | None = None
     checkpointer_needs_rebuild: bool = False
+    # LLMサーバーとの通信エラー（LLM_CONNECTION_ERRORS）を検知した場合の
+    # 自動リトライ回数と上限（[llm].main_connection_error_max_retries）。
+    # loop_exc/empty応答用の total_retries とは別予算で管理する（下の
+    # except LLM_CONNECTION_ERRORS / if turn_broken_exc is not None 参照）。
+    connection_retry_attempt = 0
+    connection_error_max_retries = _config.main_connection_error_max_retries
     # total_retries（無言終了・反復ループ用のエラーリトライ予算）とは別に、
     # ターン内コンテキスト圧縮（_CompactionCheckpoint）による継続を扱うため
     # for range(...) ではなく手動カウンタの while True にしている。圧縮継続は
@@ -3034,7 +3040,10 @@ async def _on_message_impl(message: cl.Message) -> None:
             # thinking/answerを確定送信 → チェックポイントの orphan steps
             # を片付ける → turn_broken_exc をセットして finally 後のリビルド
             # 分岐へ合流する。GraphRecursionError ブロックと同型のパターン。
-            # 自動リトライはせず、ユーザーへメッセージを送って中断する。
+            # [llm].main_connection_error_max_retries 回までは、接続先を
+            # 切り替えつつ自動リトライする（下の if turn_broken_exc is not
+            # None: 参照）。リトライを使い切った場合のみユーザーへメッセージを
+            # 送って中断する。
             turn_broken_exc = exc
             logging.getLogger(__name__).warning(
                 "LLMサーバーとの通信エラーを検知しました: %s [%s]",
@@ -3292,6 +3301,15 @@ async def _on_message_impl(message: cl.Message) -> None:
             return
 
         if turn_broken_exc is not None:
+            # 接続エラー（LLM_CONNECTION_ERRORS）で、かつ
+            # main_connection_error_max_retries の予算が残っている場合のみ、
+            # 下のリビルド後に中断せず自動リトライする。_CheckpointerTimeout・
+            # 未分類例外（安全網）はこれまで通り常に中断する
+            # （通信先の切り替えでは解決しない種類の失敗のため）。
+            can_retry_connection_error = (
+                isinstance(turn_broken_exc, LLM_CONNECTION_ERRORS)
+                and connection_retry_attempt < connection_error_max_retries
+            )
             if checkpointer_needs_rebuild:
                 await _rebuild_checkpointer(thread_id)
                 logging.getLogger(__name__).warning(
@@ -3316,6 +3334,22 @@ async def _on_message_impl(message: cl.Message) -> None:
                     repaired,
                     describe_current_task(),
                 )
+            if can_retry_connection_error:
+                connection_retry_attempt += 1
+                logging.getLogger(__name__).warning(
+                    "通信エラーのため接続先を切り替えて自動リトライします(%d/%d回目) [%s]",
+                    connection_retry_attempt,
+                    connection_error_max_retries,
+                    describe_current_task(),
+                )
+                turn_broken_exc = None
+                checkpointer_needs_rebuild = False
+                # inputs=None はチェックポイントの pending task（agentノードの
+                # 続き＝失敗したLLM呼び出しそのもの）から再開する意味であり、
+                # 新しいユーザー発言を追加するわけではない
+                # （_CompactionCheckpoint 経路と同じ考え方）。
+                inputs = None
+                continue
             await cl.Message(
                 content="通信エラーのため中断しました。 少し待って「続けて」と送信してください。",
                 type="system_message",

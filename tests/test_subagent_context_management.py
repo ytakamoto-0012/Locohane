@@ -108,7 +108,7 @@ async def test_compaction_excludes_leading_system_message(monkeypatch) -> None:
 
     captured_maybe_compact_args = {}
 
-    async def fake_maybe_compact(messages, model, config):
+    async def fake_maybe_compact(messages, model, config, *, role="sub"):
         captured_maybe_compact_args["messages"] = list(messages)
         return [HumanMessage(content="[要約]圧縮済み")]
 

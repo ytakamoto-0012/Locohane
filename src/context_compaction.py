@@ -14,17 +14,26 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from .config import Config
 from .context_trim import last_ai_total_tokens, trim_old_tool_messages
+from .llm import (
+    LLM_CONNECTION_ERRORS,
+    ThinkingLoopDetected,
+    aclose_model_client,
+    build_model,
+    mark_last_endpoint_failed,
+)
 
 logger = logging.getLogger(__name__)
 
 _SUMMARY_HEADER = "[自動要約: コンテキスト圧縮のため、以前の会話の一部を要約しました。" "この内容を踏まえて続きの作業を行ってください]\n"
 _PLAN_STATUS_HEADER = "[承認済みの実行計画（最優先タスク）。要約とは無関係にコード側が機械的に付与しています]\n"
 _PRE_NOTE_MARKER = "[コンテキスト圧縮が近づいています]"
+_LOOP_NUDGE_TEXT = "直前の要約生成は同じ内容を繰り返すループに陥ったため打ち切りました。" "落ち着いて、要約対象の会話履歴を踏まえてもう一度簡潔に要約し直してください。"
 
 
 def maybe_append_precompact_note_nudge(messages: list[BaseMessage], config: Config) -> list[BaseMessage]:
@@ -231,6 +240,8 @@ async def maybe_compact(
     messages: list[BaseMessage],
     model,
     config: Config,
+    *,
+    role: Literal["main", "sub"] = "main",
 ) -> list[BaseMessage] | None:
     """必要なら古い会話履歴を要約し、状態更新用のメッセージ列を返す。
 
@@ -240,23 +251,49 @@ async def maybe_compact(
     その間に別の処理が会話履歴を読みに行った場合に不整合な中間状態
     （メッセージが一時的に空）を観測しうるため）:
 
-        new_messages = await maybe_compact(messages, model, config)
+        new_messages = await maybe_compact(messages, model, config, role="main")
         if new_messages is not None:
             await graph.aupdate_state(
                 config,
                 {"messages": [RemoveMessage(id=m.id) for m in messages] + new_messages},
             )
 
+    要約LLM呼び出しが通信エラー（LLM_CONNECTION_ERRORS）またはループ検知
+    （ThinkingLoopDetected）で失敗した場合、app.py の on_message /
+    src/subagent.py の run_subagent と同じ方針で接続先を切り替えつつ
+    モデルを再構築してリトライする（下記 Notes 参照）。両方の予算を
+    使い切った場合のみ、従来通り None を返して今回の圧縮をスキップする。
+
     Args:
         messages: 現在の会話履歴全体（state["messages"]）。
         model: 要約に使うモデル（build_model() の素のインスタンスでよい。
-            ツールは不要）。
+            ツールは不要）。リトライが発生した場合、このインスタンスは
+            以降使われなくなる（新しいインスタンスに差し替わる）。
         config: context_compaction_* 設定を含むアプリ設定。
+        role: "main"（app.py の要約呼び出し）または "sub"（dispatch_agent
+            内の要約呼び出し）。接続先の再選択・リトライ回数上限（main:
+            main_connection_error_max_retries / sub:
+            subagent_background_llm_timeout_max_retries）・クライアントの
+            強制クローズ方針を build_model() のロールごとの接続先設定に
+            合わせるために使う。
 
     Returns:
         要約が実行された場合、「要約結果のHumanMessage」+「直近ターンの
         メッセージ（新しいidを振った複製）」のリスト。圧縮不要、または
         要約LLM呼び出しに失敗した場合は None（呼び出し元は何もしない）。
+
+    Notes:
+        ThinkingLoopDetected発生時は、そのモデルインスタンス専用の
+        httpx.AsyncClientのみを aclose_model_client() で強制クローズする
+        （aclose_active_llm_clients()は同一セッションの他クライアント
+        － 並行実行中の別サブエージェントやメイングラフ － まで巻き添えで
+        閉じてしまうため、要約専用のこの経路では使わない。src/subagent.py
+        の _invoke_with_loop_retry と同じ理由）。これにより、ストリームの
+        後始末(aclose)自体が失敗・タイムアウトして接続が生きたまま
+        llama-server側の生成が終わらない状態
+        （ThinkingLoopDetected.client_broken=True）
+        でも、次のリトライ・次のターンのLLM呼び出しが応答ヘッダー待ちで
+        ハングし続けることを防ぐ。
     """
     cut_index = _find_cut_index(messages, config.context_compaction_keep_recent_turns)
     if cut_index is None:
@@ -291,12 +328,74 @@ async def maybe_compact(
         logger.exception("要約プロンプトの読み込みに失敗しました: %s", config.context_compaction_prompt_path)
         return None
 
-    try:
-        response = await model.ainvoke([HumanMessage(content=prompt + "\n\n---\n\n# 要約対象の会話履歴\n\n" + text)])
-    except Exception:
-        # 要約自体の失敗で本編の会話を壊さないよう、失敗時は元の履歴のまま続行する。
-        logger.exception("会話履歴の自動要約に失敗しました。今回は圧縮をスキップします")
-        return None
+    summary_prompt = prompt + "\n\n---\n\n# 要約対象の会話履歴\n\n" + text
+    local_input: list[BaseMessage] = [HumanMessage(content=summary_prompt)]
+    current_model = model
+    connection_attempt = 0
+    loop_attempt = 0
+    response = None
+    while True:
+        try:
+            response = await current_model.ainvoke(local_input)
+            break
+        except LLM_CONNECTION_ERRORS as exc:
+            # config属性へのアクセスをexcept節内に留めているのは、テスト用の
+            # 簡易Configスタブ（retry関連フィールドを持たない）が、通信エラー・
+            # ループ検知いずれも起きない成功系のテストで壊れないようにするため。
+            connection_max_retries = (
+                config.main_connection_error_max_retries
+                if role == "main"
+                else config.subagent_background_llm_timeout_max_retries
+            )
+            if connection_attempt >= connection_max_retries:
+                # 要約自体の失敗で本編の会話を壊さないよう、失敗時は元の履歴のまま続行する。
+                logger.exception("会話履歴の自動要約が通信エラーで失敗しました。今回は圧縮をスキップします")
+                return None
+            connection_attempt += 1
+            logger.warning(
+                "要約LLM呼び出しが通信エラーのため接続先を切り替えて再試行します" "(%d/%d回目, role=%s): %s",
+                connection_attempt,
+                connection_max_retries,
+                role,
+                exc,
+            )
+            # main_routing_strategy/sub_routing_strategy=priority_failover の
+            # 場合のみ次点の接続先へ切り替わる（他戦略では実質無視される。
+            # app.py の except LLM_CONNECTION_ERRORS と同じフック）。
+            mark_last_endpoint_failed(role)
+            current_model = build_model(config, role=role)
+        except ThinkingLoopDetected as exc:
+            # このモデルインスタンス専用のクライアントだけを、リトライするか
+            # 諦めるかに関わらず無条件で強制クローズする（client_broken の
+            # 真偽にも関わらない。理由は _invoke_with_loop_retry と同じ:
+            # httpcoreのTraceフックがクローズ失敗をログするだけで再raiseせず
+            # client_broken が立たないケースがあるため）。ここを諦める分岐の
+            # 前に置かないと、リトライ予算を使い切った最後の1回だけ後始末
+            # されずに終わり、ストリームの後始末自体が失敗してllama-server側
+            # の生成が終わらないまま（client_broken=True）次のLLM呼び出しが
+            # 応答ヘッダー待ちでハングし続ける（ユーザー報告の疑いに対応）。
+            await aclose_model_client(current_model)
+            loop_max_retries = config.thinking_loop_guard_max_retries
+            if loop_attempt >= loop_max_retries:
+                logger.warning(
+                    "要約LLM応答がループし、%d回リトライしましたが改善しなかったため" "今回は圧縮をスキップします",
+                    loop_max_retries,
+                )
+                return None
+            loop_attempt += 1
+            logger.warning(
+                "要約LLM応答のループを検知したため再試行します" "(%d/%d回目, client_broken=%s): %r",
+                loop_attempt,
+                loop_max_retries,
+                exc.client_broken,
+                exc.snippet,
+            )
+            current_model = build_model(config, role=role)
+            local_input = [HumanMessage(content=summary_prompt), HumanMessage(content=_LOOP_NUDGE_TEXT)]
+        except Exception:
+            # 要約自体の失敗で本編の会話を壊さないよう、失敗時は元の履歴のまま続行する。
+            logger.exception("会話履歴の自動要約に失敗しました。今回は圧縮をスキップします")
+            return None
 
     summary_text = response.content if isinstance(response.content, str) else str(response.content)
     if not summary_text.strip():
