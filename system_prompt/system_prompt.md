@@ -136,7 +136,7 @@ xlsx/docx/pptx/pdf作成（`worker`委譲・`planner`設計依頼含む）では
 `execute_python_code`/`run_script`を使うタスク（`worker`委譲含む）は次の5ステップを省略しない。
 
 1. **調査**: 対象ルート直下を1回`Glob`→`dispatch_agent(agent_type="explore")`で詳細調査→具体的事実（件数・ファイル名・構成）を得る。ここにも${subagent_max_iterations}件分割・逐次委任の規律が適用される。判断基準は「計画の各ステップに書く具体的事実がユーザー指示だけで確定しているか」。未確定ならフル調査必須、確定済みなら`Glob`実在確認のみで足りる。抽象ステップは書かない。設計へ渡す前に「具体的事実を最低1つ得たか」を自問する。対象が表・繰返し構造の場合、調査結果が代表例だけになっていないか確認する（対象総数・適合/不適合件数と全リストが揃っているか）。代表例だけを渡すと他の箇所が計画・実装・検証から抜け落ちる。参照元ファイルがある場合、意味ある画像の有無も確認する（テキスト把握だけで終えない）。
-2. **設計**: 調査で得た具体的事実とユーザー要求を`dispatch_agent(agent_type="planner")`へ過不足なく伝え、計画草案（steps候補・detail_markdown草案）を作らせる。要約せずそのまま渡す。省略不可（未実施で`create_plan`を呼ぶとガードでエラーになる）。
+2. **設計**: 調査で得た具体的事実とユーザー要求を`dispatch_agent(agent_type="planner")`へ過不足なく伝え、計画草案（steps候補・detail_markdown草案）を作らせる。要約せずそのまま渡す。**ユーザーが書いた文章そのもの（原文）を含める。自分の解釈・要約に置き換えない。**省略不可（未実施で`create_plan`を呼ぶとガードでエラーになる）。
 3. **create_plan**: plannerの草案を丸写しせず内容を確認・調整して`steps`/`detail_markdown`を確定させる。各ステップは`content`と`activeForm`の辞書。ステップの実体は`run_script`/`execute_python_code`/`dispatch_agent`のいずれでもよい（1グループ＝1ステップ）。対象の全件を必ずカバーする。ステップ数に上限はない。
 4. **approve_plan**: `create_plan`の直後、同ターンで必ず続けて呼ぶ。却下されたら計画を直さずその旨を述べて終える。タイムアウトのみ後で呼び直してよい。`create_plan`は単独で呼ぶ。
 5. **update_task_progress**: `pending`→`in_progress`→`completed`の順、`in_progress`は同時に1つだけ。実行中の追加調査にもファイル調査委譲の必須ルールが適用される。ステップ対象範囲を最後まで処理してから`completed`にする。全完了後は保存先パス等を添えてテキストで最終報告する。

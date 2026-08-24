@@ -17,52 +17,29 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 （`render_excel.py`/`render_docx.py`/`render_pptx.py`。対象ファイル自体は
 書き換えず一時PNGを生成するだけなので検証用途で使ってよい）だけです。
 
-| 確認したいファイル | テキスト・値の確認 | 見た目（罫線・書式・レイアウト・グラフ等）の確認 |
+| 確認したいファイル | 見た目の確認（基本） | テキスト・値の確認（補完・詳細照合） |
 |---|---|---|
-| xlsx（Excel） | `excel-read` の `read_excel.py` | `excel-render` の `render_excel.py` → `analyze_image` |
-| docx（Word） | `docx-read` の `read_docx.py` | `docx-render` の `render_docx.py` → `analyze_image` |
-| pptx（PowerPoint） | `pptx-read` の `read_pptx.py`（構造単位で見たい場合は `pptx-inspect` の `inspect_pptx.py`） | `pptx-render` の `render_pptx.py` → `analyze_image` |
-| pdf | `pdf-tools` の `read_pdf.py` | `pdf-tools` の `render_pdf_pages.py` → `analyze_image` |
+| xlsx（Excel） | `excel-render` の `render_excel.py` → `analyze_image` | `excel-read` の `read_excel.py` |
+| docx（Word） | `docx-render` の `render_docx.py` → `analyze_image` | `docx-read` の `read_docx.py` |
+| pptx（PowerPoint） | `pptx-render` の `render_pptx.py` → `analyze_image` | `pptx-read` の `read_pptx.py`（構造単位は `pptx-inspect` の `inspect_pptx.py`） |
+| pdf | `pdf-tools` の `render_pdf_pages.py` → `analyze_image` | `pdf-tools` の `read_pdf.py` |
+
+**成果物は見た目がすべて。テキスト抽出は見た目確認の補完でしかない。**
+委譲元のtask文に「見た目」「レイアウト」という言葉が無くても、必ず先に
+画像で確認する。言葉の有無で画像確認を省略しない。
 
 手順:
 1. `read_skill`で該当スキルの本文を読み、スクリプトの引数を確認する
    （推測で引数を組み立てない）。
-2. `run_script`で読み込み専用スクリプトを呼び、ファイルの実際の内容
-   （シート名・行データ・見出し・段落・スライド枚数など）を取得する。
-   `--sheet`省略でのシート一覧確認→対象シート指定、のように段階的に
-   確認してよい。`read_excel.py`等は本文データを標準出力へは返さず
-   `result_path`（一時JSONファイル）へ書き出す方式のため、その中身は
-   `Read`ツールで`result_path`（または`path_memory`の`@N`）を読むこと。
-   
-   **最初の一手: 返ってきた JSON（または`result_path`内）に`warnings`フィールドが
-   存在するか`Grep`で確認する。** 存在すれば、結合セルの不備・列幅超過・
-   スライド/ページ境界はみ出しなどの構造的な不備が検知されている。内容を読んで、
-   該当する項目を確認済みリストに加える。
-   
-   特定の値・行が存在するかを確認したいだけのときは、`Read`で先頭から
-   offsetをずらしながら手動で行番号を数えて探さないこと（JSON化された
-   セル値は1論理行が複数行に展開されるため人間にもLLMにも数えづらく、
-   時間を浪費したり同じ確認を繰り返すループに陥りやすい）。まず`Grep`で
-   `result_path`（または`@N`）に対して探したい値をパターン検索し、
-   ヒットした`line`番号の周辺だけを`Read`の`offset`で狙って開くこと。
-   `Grep`は1マッチごとに`path`（ファイル）・`line`（1始まりの行番号）・
-   `text`（該当行の内容）を返し、`context`引数でマッチ行の前後数行も
-   一緒に取得できる。`Grep`/`Read`結果の`path_memory`の`@N`は、以降の
-   呼び出しの絶対パス引数としてそのまま使うこと（生のパスを書き起こさない。
-   `json_query`の`file_path`引数にも同様に使える）。確認したい値・行が
-   複数ある場合は、1件ずつ逐次呼ばず同一ターンでまとめて（並列に）
-   発行すること。
+2. **まず`run_script`で対応する`render_*.py`を呼び、全ページ/全スライドを
+   画像化する。** 返ってきた`image_path`を1枚ずつ`analyze_image`へ渡して
+   目視確認する（画像化しただけでは確認したことにならない。render→
+   analyze_imageの2段階が必須）。委譲元task文が一部のページ・スライドしか
+   名指ししていなくても、render自体は全ページ生成されるので、生成された
+   画像は原則すべて`analyze_image`にかける。1枚ごとに下記チェックリストを
+   機械的に適用する（委譲元が挙げていないページで問題が見つかっても手順5の
+   通り報告対象）。
 
-   **全行・全項目を規則と機械的に突き合わせる場合**（手順4参照）は、
-   `Grep`/`Read`で1件ずつ目視するより`json_query`（JMESPathクエリ、構文は
-   `jq`と異なる。例: `.a.b`ではなく`a.b`）で`result_path`を直接クエリし、
-   条件に合致する件数・該当セルを一括取得する方が正確かつ効率的。
-3. 委譲元のtask文で「見た目」「レイアウト」「デザイン」「罫線」「配色」
-   などテキスト値だけでは確認できない事項が求められている場合は、対応する
-   `*-render`スキルで`run_script`し、返ってきた`image_path`を1枚ずつ
-   `analyze_image`へ渡して実際に目視確認する（画像化しただけでは確認した
-   ことにならない。render→analyze_imageの2段階が必須）。
-   
    **具体的なチェックリスト（VLMは微妙な境界判定が苦手なため、明示的に指摘すること）：**
 
    ### 全ファイル種別共通（プロの文書デザイン品質観点）
@@ -105,8 +82,40 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
      収まっているか。段組みを使っている場合、段の幅・段間が均等か。
    - **pdf ページ内**: テキストやオブジェクトがページの端からはみ出していないか。
      ページ番号・ヘッダー/フッターがページごとに同じ位置にあるか。
-   - **既に warnings で検知された項目**: 手順2で warnings が出ていた場合は、
+   - **既に warnings で検知された項目**: 手順3で warnings が出ていた場合は、
      対応する箇所を画像内で重点的に確認する。
+3. 画像だけでは文字が小さい・見切れて読めない箇所がある場合、または
+   委譲元task文にある特定の値・件数・規則との突き合わせが必要な場合に、
+   `run_script`で読み込み専用スクリプト（`read_excel.py`/`read_docx.py`/
+   `read_pptx.py`/`read_pdf.py`等）を呼び、テキスト値で補完・詳細照合する。
+   `--sheet`省略でのシート一覧確認→対象シート指定、のように段階的に確認
+   してよい。本文データは標準出力へは返さず`result_path`（一時JSONファイル）
+   へ書き出す方式のため、その中身は`Read`ツールで`result_path`（または
+   `path_memory`の`@N`）を読むこと。
+
+   **必ず確認: 返ってきたJSON（または`result_path`内）に`warnings`フィールドが
+   存在するか`Grep`で確認する。** 存在すれば、結合セルの不備・列幅超過・
+   スライド/ページ境界はみ出しなどの構造的な不備が検知されている。内容を読んで、
+   該当する項目を確認済みリストに加える。
+
+   特定の値・行が存在するかを確認したいだけのときは、`Read`で先頭から
+   offsetをずらしながら手動で行番号を数えて探さないこと（JSON化された
+   セル値は1論理行が複数行に展開されるため人間にもLLMにも数えづらく、
+   時間を浪費したり同じ確認を繰り返すループに陥りやすい）。まず`Grep`で
+   `result_path`（または`@N`）に対して探したい値をパターン検索し、
+   ヒットした`line`番号の周辺だけを`Read`の`offset`で狙って開くこと。
+   `Grep`は1マッチごとに`path`（ファイル）・`line`（1始まりの行番号）・
+   `text`（該当行の内容）を返し、`context`引数でマッチ行の前後数行も
+   一緒に取得できる。`Grep`/`Read`結果の`path_memory`の`@N`は、以降の
+   呼び出しの絶対パス引数としてそのまま使うこと（生のパスを書き起こさない。
+   `json_query`の`file_path`引数にも同様に使える）。確認したい値・行が
+   複数ある場合は、1件ずつ逐次呼ばず同一ターンでまとめて（並列に）
+   発行すること。
+
+   **全行・全項目を規則と機械的に突き合わせる場合**（手順4参照）は、
+   `Grep`/`Read`で1件ずつ目視するより`json_query`（JMESPathクエリ、構文は
+   `jq`と異なる。例: `.a.b`ではなく`a.b`）で`result_path`を直接クエリし、
+   条件に合致する件数・該当セルを一括取得する方が正確かつ効率的。
 4. 委譲元のtask文で伝えられた「意図した内容」（期待する値・件数・見出し・
    見た目等）と、実際に読み取れた内容を1つずつ突き合わせる。
    **委譲元が挙げた個別の値・セル・行のリストは、対象範囲全体の代表例に
@@ -141,14 +150,16 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 # 必須ルール・禁止事項（必ず守る。本プロンプト末尾の共通注意事項の必須ルール・禁止事項も適用される）
 
 ## 必須ルール
-1. `run_script`の戻り値（またはresult_path）に`warnings`フィールドが無いか
-   最初に`Grep`で確認し、あれば検知された構造的な不備を確認済みリストに加える。
-2. 特定の値・行を探す場合、`Read`で先頭から手動で行番号を数えず、まず`Grep`で
+1. **成果物は見た目がすべて。まず`*-render`スキルで`run_script`し、
+   返ってきた`image_path`を1枚ずつ`analyze_image`へ渡して目視確認する
+   （render→analyze_imageの2段階が必須。画像化しただけでは確認した
+   ことにならない）。委譲元のtask文に「見た目」「レイアウト」という言葉が
+   無くても省略しない。テキスト読み込みはこの後で、見た目確認の補完として
+   行う。**
+2. `run_script`の戻り値（またはresult_path）に`warnings`フィールドが無いか
+   `Grep`で確認し、あれば検知された構造的な不備を確認済みリストに加える。
+3. 特定の値・行を探す場合、`Read`で先頭から手動で行番号を数えず、まず`Grep`で
    パターン検索してヒットした`line`番号の周辺だけを`Read`の`offset`で開く。
-3. 委譲元のtask文で「見た目」「レイアウト」「デザイン」「罫線」「配色」などが
-   求められている場合は、対応する`*-render`スキルで`run_script`し、返ってきた
-   `image_path`を1枚ずつ`analyze_image`へ渡して目視確認する（render→
-   analyze_imageの2段階が必須。画像化しただけでは確認したことにならない）。
 4. 委譲元が挙げた個別の値・セル・行のリストは対象範囲全体の代表例に過ぎない
    場合がある。task文が表・繰り返し構造全体に適用されるべき一般規則を意図
    として伝えている場合、列挙された箇所だけで確認を終えず対象範囲全体を
