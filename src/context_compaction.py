@@ -32,6 +32,11 @@ logger = logging.getLogger(__name__)
 
 _SUMMARY_HEADER = "[自動要約: コンテキスト圧縮のため、以前の会話の一部を要約しました。" "この内容を踏まえて続きの作業を行ってください]\n"
 _PLAN_STATUS_HEADER = "[承認済みの実行計画（最優先タスク）。要約とは無関係にコード側が機械的に付与しています]\n"
+_THREAD_NOTE_STATUS_HEADER = (
+    "[thread note の現在の状態。要約とは無関係にコード側が機械的に付与しています。"
+    "要約に含まれていない具体的な事実（値・件数・該当箇所等）が必要になったら、"
+    "ここに挙がっているtopic名を read_thread_note でそのまま読んでください]\n"
+)
 _PRE_NOTE_MARKER = "[コンテキスト圧縮が近づいています]"
 _LOOP_NUDGE_TEXT = "直前の要約生成は同じ内容を繰り返すループに陥ったため打ち切りました。" "落ち着いて、要約対象の会話履歴を踏まえてもう一度簡潔に要約し直してください。"
 
@@ -403,9 +408,10 @@ async def maybe_compact(
         return None
 
     summary_content = _SUMMARY_HEADER + summary_text
-    # 要約LLMの読み取り精度に依存せず、圧縮のたびに100%正確な最新の計画状態を
-    # 機械的に追記する（要約対象の tool_calls 引数は _messages_to_text に含まれず
-    # 要約LLMからは元々見えないため、要約結果に計画が反映される保証が無い）。
+    # 要約LLMの読み取り精度に依存せず、圧縮のたびに100%正確な最新の計画状態・
+    # thread noteの状態を機械的に追記する（要約対象の tool_calls 引数は
+    # _messages_to_text に含まれず要約LLMからは元々見えないため、要約結果に
+    # 計画・thread noteの存在が反映される保証が無い）。
     # tools.py からの import はモジュール先頭ではなくここで遅延させる: tools.py は
     # 起動時に `from .subagent import run_subagent` を行っており、subagent.py が
     # このモジュール（context_compaction）を（context_trim と同様の位置づけで）
@@ -414,11 +420,14 @@ async def maybe_compact(
     # importになり ImportError になる（subagent.py 冒頭のコメント参照）。
     # 実際に呼ばれるのはアプリ起動が完了しモジュール初期化が済んだ後のため、
     # 関数内 import なら安全。
-    from .tools import current_plan_status_text
+    from .tools import current_plan_status_text, thread_note_status_text
 
     plan_status = current_plan_status_text()
     if plan_status:
         summary_content += "\n\n" + _PLAN_STATUS_HEADER + plan_status
+    note_status = thread_note_status_text()
+    if note_status:
+        summary_content += "\n\n" + _THREAD_NOTE_STATUS_HEADER + note_status
     summary_message = HumanMessage(content=summary_content)
     # kept_messages は同一の aupdate_state 呼び出し内で RemoveMessage と
     # 競合しないよう、新しい id を振った複製にする（add_messages リデューサは

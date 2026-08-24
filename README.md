@@ -729,6 +729,11 @@ YAML frontmatter 付き Markdown ファイルとして保存する。ロジッ�
 - ライフサイクルは `_tmp_<thread_id>` 全体と同じで、`[default_workdir]`の
   `retention_days`/`cleanup_interval_hours`（本ドキュメント「設定リファレンス」
   参照）による自動削除の対象、または手動削除も可能。
+- コンテキスト圧縮（要約）が発生すると、要約LLMが書き出し済みのトピックを
+  要約に残すとは限らないため、`src/context_compaction.py` の `maybe_compact`
+  がトピック一覧（`list_thread_notes`相当）を要約結果とは無関係に機械的に
+  再注入する。これにより圧縮後もモデルはthread noteの存在・トピック名を
+  見失わない（承認済み実行計画の再注入と同じ仕組み）。
 
 ---
 

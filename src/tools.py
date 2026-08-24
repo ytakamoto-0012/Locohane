@@ -1755,6 +1755,35 @@ def write_thread_note(topic: str, content: str) -> str:
     )
 
 
+def _format_thread_notes_listing(path: Path) -> str | None:
+    """thread note ファイルをトピック一覧のテキストへ整形する。
+
+    list_thread_notes（ツール）と thread_note_status_text（圧縮再注入）の
+    両方が同じ整形結果を共有するための single source of truth。
+
+    Returns:
+        トピックごとの「文字数・書き込み件数・最終更新日時と書き込み者」の
+        一覧テキスト。ファイルが無い、または有効なトピックが無ければ None。
+    """
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    blocks = _parse_thread_notes(text)
+    if not blocks:
+        return None
+    grouped: dict[str, list[_ThreadNoteBlock]] = {}
+    for b in blocks:
+        grouped.setdefault(b.topic, []).append(b)
+    lines = [f"thread note のトピック一覧（{len(grouped)}件、ファイル全体 {len(text)} 文字）:"]
+    for topic, items in grouped.items():
+        total_chars = sum(len(b.content) for b in items)
+        last = items[-1]
+        lines.append(
+            f'- "{topic}": {total_chars}文字（{len(items)}件の書き込み、最終更新 {last.timestamp} by {last.author}）'
+        )
+    return "\n".join(lines)
+
+
 @tool
 def list_thread_notes() -> str:
     """スレッド全体で共有されるノート（write_thread_note の書き込み先）の
@@ -1770,23 +1799,33 @@ def list_thread_notes() -> str:
         （main または agent_type）」の一覧。ノートがまだ無ければその旨を返す。
     """
     path = _thread_notes_path()
+    listing = _format_thread_notes_listing(path)
+    if listing is not None:
+        return listing
     if not path.is_file():
         return "thread note はまだありません。write_thread_note で最初のトピックを書き込めます。"
-    text = path.read_text(encoding="utf-8", errors="replace")
-    blocks = _parse_thread_notes(text)
-    if not blocks:
-        return "thread note ファイルは存在しますが、有効なトピックがまだありません。"
-    grouped: dict[str, list[_ThreadNoteBlock]] = {}
-    for b in blocks:
-        grouped.setdefault(b.topic, []).append(b)
-    lines = [f"thread note のトピック一覧（{len(grouped)}件、ファイル全体 {len(text)} 文字）:"]
-    for topic, items in grouped.items():
-        total_chars = sum(len(b.content) for b in items)
-        last = items[-1]
-        lines.append(
-            f'- "{topic}": {total_chars}文字（{len(items)}件の書き込み、最終更新 {last.timestamp} by {last.author}）'
-        )
-    return "\n".join(lines)
+    return "thread note ファイルは存在しますが、有効なトピックがまだありません。"
+
+
+def thread_note_status_text() -> str:
+    """現在の thread note のトピック一覧を、圧縮再注入（context_compaction.py）
+    向けに機械的に整形する。
+
+    current_plan_status_text と同じ理由（要約LLMは write_thread_note の
+    tool_calls 引数・ToolMessage を見て要約に含めるかどうかを自分で判断
+    しており、含め忘れると圧縮後にthread noteの存在自体が失われる）で、
+    要約LLMの出力とは無関係に summary へ無条件で追記するために使う。
+
+    thread note が無い、またはchainlitセッション文脈外（テスト・evals等で
+    cl.user_session.get() が ChainlitContextException を送出する場合）は
+    空文字列を返す。
+    """
+    try:
+        path = _thread_notes_path()
+        listing = _format_thread_notes_listing(path)
+    except Exception:
+        return ""
+    return listing or ""
 
 
 @tool
