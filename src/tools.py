@@ -86,6 +86,7 @@ from .config import (
 from .images import image_followup_message, is_image_file, to_data_url
 from .llm import get_current_session
 from .ask_relay import clear_pending_ask, dispatch_to_live_viewers, register_pending_ask
+from .plan_persist import persist_plan_state
 from .subagent import is_truncated_result, run_subagent
 
 logger = logging.getLogger(__name__)
@@ -4212,6 +4213,7 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     cl.user_session.set("plan", plan)
     cl.user_session.set("plan_approved", still_approved)
     cl.user_session.set("awaiting_approve_plan_call", not still_approved)
+    await persist_plan_state()
     message = cl.Message(content=_render_plan_payload(plan, approved=still_approved))
     await message.send()
     cl.user_session.set("plan_message", message)
@@ -4362,6 +4364,7 @@ async def approve_plan() -> str:
     if _PLAN_AUTO_APPROVE:
         cl.user_session.set("plan_approved", True)
         cl.user_session.set("plan_denied_just_now", False)
+        await persist_plan_state()
         message: cl.Message | None = cl.user_session.get("plan_message")
         if message is not None:
             message.content = _render_plan_payload(plan, approved=True)
@@ -4389,6 +4392,7 @@ async def approve_plan() -> str:
     # 前回却下時に立てたフラグが誤って残らないよう、承認・タイムアウト時は
     # 明示的にクリアする（このターンは却下ではないため）。
     cl.user_session.set("plan_denied_just_now", False)
+    await persist_plan_state()
     message: cl.Message | None = cl.user_session.get("plan_message")
     if message is not None:
         message.content = _render_plan_payload(plan, approved=approved)
@@ -4453,6 +4457,11 @@ async def update_task_progress(step_index: int, status: str) -> str:
     finished = all(s["status"] == "completed" for s in plan)
     if finished:
         cl.user_session.set("plan_approved", False)
+    # ステップ進捗も plan_approved と同じ理由で即時persistする。完了時に
+    # 限定すると、途中のステップ更新後にターンが異常終了した場合（停止
+    # ボタン・通信エラー等）、再開時のチェックリスト表示が前回persist時点
+    # （create_plan直後など）まで巻き戻ってしまう。
+    await persist_plan_state()
 
     message: cl.Message | None = cl.user_session.get("plan_message")
     if message is not None:
@@ -4500,6 +4509,8 @@ async def lock_plan_mode() -> str:
     """
     was_approved = bool(cl.user_session.get("plan_approved"))
     cl.user_session.set("plan_approved", False)
+    if was_approved:
+        await persist_plan_state()
     plan = cl.user_session.get("plan")
     message: cl.Message | None = cl.user_session.get("plan_message")
     if message is not None and plan is not None:
@@ -4531,6 +4542,7 @@ async def toggle_plan_mode_from_ui() -> None:
         return
     approved = not currently_approved
     cl.user_session.set("plan_approved", approved)
+    await persist_plan_state()
     message: cl.Message | None = cl.user_session.get("plan_message")
     if message is not None:
         finished = all(s["status"] == "completed" for s in plan)

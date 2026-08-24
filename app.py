@@ -88,6 +88,7 @@ from src.log_rotation import LineCountRotatingFileHandler
 from src.mcp_client import init_mcp_tools, shutdown_mcp_tools
 from src.memory import render_memory_block
 from src.ask_relay import pending_asks as _pending_asks, resolve_pending_ask
+from src.plan_persist import register_plan_persist
 from src.project_instructions import render_project_instructions_block
 from src.skills import build_system_prompt, render_skills_block, scan_skills
 from src.subagent import is_truncated_result
@@ -1894,6 +1895,38 @@ async def _persist_work_dir(resolved: str | None) -> None:
         thread_id,
         metadata={"work_dir": resolved},
     )
+
+
+async def _persist_plan_state() -> None:
+    """plan/plan_approved の変更を、ターン完了を待たずに即座に thread_store へ
+    保存する。src/plan_persist.py 経由で src/tools.py の各ツール
+    （create_plan/approve_plan/update_task_progress/lock_plan_mode/
+    toggle_plan_mode_from_ui）から呼ばれる（同モジュールのdocstring参照）。
+
+    _persist_work_dir と同じ理由・同じパターン: 承認直後のターンが停止
+    ボタン・通信エラー・思考ループ上限・recursion_limit・計画却下等で異常
+    終了すると、ターン完了時のまとめてスナップショット（_on_message_impl
+    末尾）に到達せず、承認済み状態が一度もDBへ保存されないままスレッドが
+    再開時に古い（未承認の）metadataへ巻き戻ってしまう
+    （2026-08-24 ユーザー報告）。ここで即座に保存することで、ターンの
+    成否に関わらず状態を一致させる。
+    """
+    if not (_config.thread_store_enabled and _thread_store_conn is not None):
+        return
+    thread_id = cl.user_session.get("thread_id")
+    if thread_id is None:
+        return
+    await thread_store.save_thread(
+        _thread_store_conn,
+        thread_id,
+        metadata={
+            "plan": cl.user_session.get("plan"),
+            "plan_approved": cl.user_session.get("plan_approved"),
+        },
+    )
+
+
+register_plan_persist(_persist_plan_state)
 
 
 @cl.on_settings_update
