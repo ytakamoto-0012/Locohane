@@ -1447,35 +1447,25 @@ def _resolve_workdir(need_write: bool = False) -> Path:
 
 @tool
 def check_work_dir_status() -> str:
-    """現在の作業ディレクトリの実際のアクセス状況を確認する。
+    """作業ディレクトリのアクセス状況を確認する。
 
-    work_dir を作業フォルダアイコンで変更した
-    直後は自動的にこの確認が行われ、結果がサイドパネルに表示されるため、通常は
-    明示的に呼び出す必要はない。ただし run_script や execute_python_code が
-    ファイルの読み書きで原因不明のエラー（ファイルが見つからない、書き込め
-    ない等）を返した場合、それが「作業ディレクトリ自体へのアクセス問題
-    （サーバー側から見えない・読み取り専用共有である等）」なのか「スクリプト
-    側の問題」なのかを切り分けたいときに使う。
-
-    os.access() のような簡易判定ではなく、実際にディレクトリ一覧の取得と、
-    一時ファイルの作成・書き込み・削除を試みることで正確に判定する
-    （ローカルネットワーク越しの共有フォルダ等では簡易判定が実態と食い違う
-    ことがあるため）。
+    run_script / execute_python_code が原因不明の読み書きエラーを返した
+    ときに使う。
 
     Returns:
-        作業ディレクトリのパス、状態（読み書き可能 / 読み取り専用（書き込み
-        不可）/ アクセス不可（読み取りも不可）/ 存在しない）、アクセス不可の
-        場合にどこへ自動フォールバックされるかをまとめた説明文字列。
-        init_tools() が未実行の場合は例外を送出せず「エラー: ...」形式の
-        文字列を返す。
+        パス・状態（読み書き可能/読み取り専用/アクセス不可/存在しない）・
+        フォールバック先をまとめた文字列。書き込みのフォールバック先は
+        既定フォルダ直下ではなく専用サブフォルダ（_tmp_<thread_id>）。
     """
     if _DEFAULT_WORKDIR is None:
         return "エラー: init_tools() が未実行です"
+    exec_tmp_dir = _resolve_exec_workdir()
     work_dir = cl.user_session.get("work_dir")
     if not work_dir:
         return (
             f"作業ディレクトリ: 未設定（既定フォルダ {_DEFAULT_WORKDIR} を使用）\n"
-            "状態: 読み書き可能（既定フォルダはサーバー側の設定のため通常アクセス可能）"
+            "状態: 読み書き可能\n"
+            f"書き込み先: {exec_tmp_dir}"
         )
     status = probe_workdir_access(Path(work_dir))
     cl.user_session.set("work_dir_access", status)
@@ -1491,13 +1481,10 @@ def check_work_dir_status() -> str:
     if status.error:
         lines.append(f"詳細: {status.error}")
     if not status.exists or not status.readable:
-        lines.append(f"影響: 読み取り・書き込みとも既定フォルダ（{_DEFAULT_WORKDIR}）を自動的に使用します。")
+        lines.append(f"読み取り先: {_DEFAULT_WORKDIR}")
+        lines.append(f"書き込み先: {exec_tmp_dir}")
     elif not status.writable:
-        lines.append(
-            f"影響: 書き込みが必要な処理（execute_python_code, run_script の出力生成）は"
-            f"既定フォルダ（{_DEFAULT_WORKDIR}）を自動的に使用します。既存ファイルの読み取りは"
-            "引き続きこの作業ディレクトリを使用します。"
-        )
+        lines.append(f"書き込み先: {exec_tmp_dir}（読み取りは元の作業ディレクトリのまま）")
     return "\n".join(lines)
 
 
