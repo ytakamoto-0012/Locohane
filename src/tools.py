@@ -2180,9 +2180,18 @@ def grep_tool(
 def json_query(query: str, file_path: str = "", json_text: str = "") -> str:
     """JSON/dictデータにJMESPathクエリを実行する。
 
-    JMESPath は jq とは構文が異なる点に注意（`.a.b` ではなく `a.b`、
-    `items[?age > \\`30\\`].name` のように書く）。読み取り専用のため、
-    計画の有無に関わらずいつでも呼んでよい。
+    JMESPath は jq とは構文が異なる点に注意。
+    - パスの先頭に `.` は付けない（`.a.b` ではなく `a.b`）。
+    - フィルタ `[?...]` の右辺で数値・真偽値・null を書くときはバッククォートで
+      囲む。バックスラッシュでのエスケープは不要（正: `` age > `30` ``）。
+    - 文字列リテラルはシングルクォートで囲む（例: `name == 'foo'`）。
+
+    例:
+    - `items[?active == `true`].{name: name, id: id}` → active が true の
+      要素だけを name/id に整形して抽出
+    - `a.b[0].c` → ネストしたキー・配列インデックスへのアクセス
+
+    読み取り専用のため、計画の有無に関わらずいつでも呼んでよい。
 
     Args:
         query: JMESPathクエリ文字列。
