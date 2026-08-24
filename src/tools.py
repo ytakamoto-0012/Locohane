@@ -109,19 +109,52 @@ _IN_SUBAGENT: contextvars.ContextVar[bool] = contextvars.ContextVar("_in_subagen
 _SUBAGENT_RUN_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("_subagent_run_id", default=None)
 
 # 現在実行中のサブエージェントの agent_type 名（サブエージェント外では None）。
-# _AGENT_TYPE_RUN_SCRIPT_SKILL_ALLOWLIST によるスキル制限のチェックに使う。
+# _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST によるスキル/スクリプト制限のチェックに使う。
 _SUBAGENT_AGENT_TYPE: contextvars.ContextVar[str | None] = contextvars.ContextVar("_subagent_agent_type", default=None)
 
-# agent_type ごとに run_script で呼んでよいスキル名を制限する（未登録の
-# agent_type は制限なし）。agents/*.md のプロンプト文面だけでこの制約を
-# 課しているagent_typeは、低パラメータモデルでは指示を無視して他スキルの
-# 読み込み専用スクリプトまで呼んでしまうことがある（本番同等のeval
-# ケースで実際に発生: explore-websearch が本来analyze-docs専用の
-# read_excel.pyを呼んでxlsxを調査し、analyze-docs向けの誤診断防止ルールが
-# 適用されないまま処理が進んでしまった）。プロンプトの記述と実際の許可を
-# 一致させるため、コード側でも強制する。
-_AGENT_TYPE_RUN_SCRIPT_SKILL_ALLOWLIST: dict[str, frozenset[str]] = {
+# agent_type ごとに run_script で呼んでよいスキル/スクリプトを制限する（未登録の
+# agent_type は制限なし）。要素は「スキル名の文字列」（そのスキル配下の全スクリプト
+# を許可）または「(スキル名, スクリプトファイル名)」のタプル（そのスクリプトのみ
+# 許可）のいずれかを混在できる。pdf-tools のように同一スキル配下に読み込み専用
+# スクリプト（read_pdf.py/render_pdf_pages.py）と書き込みスクリプト（create_pdf.py）
+# が混在するスキルは、スキル名単位ではなくタプルで個別に許可すること。
+#
+# agents/*.md のプロンプト文面だけでこの制約を課しているagent_typeは、低パラメータ
+# モデルでは指示を無視して他スキルの読み込み専用スクリプトまで呼んでしまうことが
+# ある（本番同等のevalケースで実際に発生: explore-websearch が本来analyze-docs専用の
+# read_excel.pyを呼んでxlsxを調査し、analyze-docs向けの誤診断防止ルールが適用され
+# ないまま処理が進んでしまった）。プロンプトの記述と実際の許可を一致させるため、
+# コード側でも強制する。analyze-docs/verifier は「書き込み系スクリプトは絶対に
+# 呼び出さない」とプロンプト上で強く約束しているため、同じ理由でここに含める。
+_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST: dict[str, frozenset[str | tuple[str, str]]] = {
     "explore-websearch": frozenset({"web-search"}),
+    "analyze-docs": frozenset(
+        {
+            "docx-render",
+            "docx-read",
+            "excel-render",
+            "excel-read",
+            "excel-vba-read",
+            "pptx-render",
+            "pptx-read",
+            "pptx-inspect",
+            ("pdf-tools", "render_pdf_pages.py"),
+            ("pdf-tools", "read_pdf.py"),
+        }
+    ),
+    "verifier": frozenset(
+        {
+            "excel-render",
+            "excel-read",
+            "docx-render",
+            "docx-read",
+            "pptx-render",
+            "pptx-read",
+            "pptx-inspect",
+            ("pdf-tools", "render_pdf_pages.py"),
+            ("pdf-tools", "read_pdf.py"),
+        }
+    ),
 }
 
 
@@ -2296,11 +2329,12 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
         「エラー: ...」形式の文字列（呼び出し側はそのまま返せばよい）。
     """
     current_agent_type = _SUBAGENT_AGENT_TYPE.get()
-    allowed_skills = _AGENT_TYPE_RUN_SCRIPT_SKILL_ALLOWLIST.get(current_agent_type) if current_agent_type else None
-    if allowed_skills is not None and skill_name not in allowed_skills:
+    allowed = _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST.get(current_agent_type) if current_agent_type else None
+    if allowed is not None and skill_name not in allowed and (skill_name, script_filename) not in allowed:
         return (
-            f"エラー: agent_type=\"{current_agent_type}\" から呼び出せる run_script のスキルは "
-            f"{sorted(allowed_skills)} に限定されています（skill={skill_name} は対象外）。"
+            f"エラー: agent_type=\"{current_agent_type}\" から呼び出せる run_script のスキル/スクリプトは "
+            f"{sorted(str(a) for a in allowed)} に限定されています"
+            f"（skill={skill_name}, script={script_filename} は対象外）。"
             "ファイルの内容確認が必要な場合は、委譲元に対応するサブエージェント"
             "（office文書/PDFなら analyze-docs、書き込みが要るなら worker）へ"
             "改めて委譲するよう伝えてください。"

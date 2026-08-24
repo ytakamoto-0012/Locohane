@@ -50,7 +50,7 @@ def test_explore_remains_read_only() -> None:
 
 def test_explore_websearch_resolves_with_web_search_run_script() -> None:
     # explore-websearch はrun_scriptを持つが、web-search（search_web.py）専用として
-    # 許可済み（プロンプト側の限定に加えコード側 _AGENT_TYPE_RUN_SCRIPT_SKILL_ALLOWLIST
+    # 許可済み（プロンプト側の限定に加えコード側 _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST
     # でも強制。詳細は test_tools_run_script_agent_type_skill_allowlist.py）。
     agent_types = scan_agent_types(_AGENTS_DIR)
     resolved = _resolve_agent_types(agent_types)
