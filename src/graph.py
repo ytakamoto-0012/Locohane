@@ -51,7 +51,7 @@ EMPTY_RESPONSE_NUDGE = (
 )
 
 
-async def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer):
+async def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer, *, wait_when_busy: bool = True):
     """手書きの ReAct グラフをコンパイルして返す。
 
     agent ノード（call_model）と tools ノード（ImageAwareToolNode(get_all_tools())）を
@@ -64,12 +64,13 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
             call_model が毎回メッセージ列の先頭に付与する。
         checkpointer: AsyncSqliteSaver など LangGraph のチェックポインタ。
             会話状態（MessagesState）の永続化に使う。
+        wait_when_busy: build_model() の同名引数にそのまま渡す。
 
     Returns:
         コンパイル済みの LangGraph（CompiledStateGraph）。
         astream_events / ainvoke などで実行できる。
     """
-    model = (await build_model(config, role="main")).bind_tools(get_all_tools())
+    model = (await build_model(config, role="main", wait_when_busy=wait_when_busy)).bind_tools(get_all_tools())
 
     async def call_model(state: MessagesState) -> dict:
         """agent ノード: システムプロンプトを先頭に付けてモデルを呼ぶ。
@@ -150,7 +151,7 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
     return graph.compile(checkpointer=checkpointer)
 
 
-async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer):
+async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer, *, wait_when_busy: bool = True):
     """LangGraph 標準の create_react_agent にそのまま委譲してグラフを作る。
 
     ノード配線・tool_calls の分岐はすべて create_react_agent 内部に隠蔽される。
@@ -162,12 +163,13 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
         system_prompt: スキル一覧を注入済みのシステムプロンプト。
             create_react_agent の prompt 引数にそのまま渡す。
         checkpointer: AsyncSqliteSaver など LangGraph のチェックポインタ。
+        wait_when_busy: build_model() の同名引数にそのまま渡す。
 
     Returns:
         コンパイル済みの LangGraph（CompiledStateGraph）。
         astream_events / ainvoke などで実行できる。
     """
-    model = await build_model(config, role="main")
+    model = await build_model(config, role="main", wait_when_busy=wait_when_busy)
 
     def pre_model_hook(state: MessagesState) -> dict:
         """モデル呼び出し直前に、入力を絞り、必要なら引継ぎ促しを差し込む。
@@ -228,7 +230,7 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
     )
 
 
-async def build_graph(config: Config, system_prompt: str, checkpointer):
+async def build_graph(config: Config, system_prompt: str, checkpointer, *, wait_when_busy: bool = True):
     """config.graph_impl に応じて手書き／prebuilt のグラフを構築する。
 
     Args:
@@ -237,6 +239,9 @@ async def build_graph(config: Config, system_prompt: str, checkpointer):
         system_prompt: スキル一覧を注入済みのシステムプロンプト。
         checkpointer: AsyncSqliteSaver など LangGraph のチェックポインタ。
             会話状態（MessagesState）の永続化に使う。
+        wait_when_busy: build_model() の同名引数にそのまま渡す。既定True
+            （空きが出るまで待つ）。app.py の on_chat_start/on_chat_resume
+            （直後に生成するとは限らない操作）はFalseを渡す。
 
     Returns:
         コンパイル済みの LangGraph（CompiledStateGraph）。
@@ -246,9 +251,9 @@ async def build_graph(config: Config, system_prompt: str, checkpointer):
         ValueError: config.graph_impl が "handwritten" / "prebuilt" 以外の場合。
     """
     if config.graph_impl == "handwritten":
-        return await _build_handwritten_graph(config, system_prompt, checkpointer)
+        return await _build_handwritten_graph(config, system_prompt, checkpointer, wait_when_busy=wait_when_busy)
     if config.graph_impl == "prebuilt":
-        return await _build_prebuilt_graph(config, system_prompt, checkpointer)
+        return await _build_prebuilt_graph(config, system_prompt, checkpointer, wait_when_busy=wait_when_busy)
     raise ValueError(f"unknown graph_impl: {config.graph_impl!r}")
 
 

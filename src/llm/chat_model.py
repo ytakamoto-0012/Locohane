@@ -274,7 +274,12 @@ class ChatLlamaCpp(ChatOpenAI):
         return super()._generate(*args, **kwargs)
 
 
-async def build_model(config: Config, role: Literal["main", "sub"] = "main") -> ChatOpenAI:
+async def build_model(
+    config: Config,
+    role: Literal["main", "sub"] = "main",
+    *,
+    wait_when_busy: bool = True,
+) -> ChatOpenAI:
     """llama.cpp server の OpenAI 互換エンドポイントに繋ぐ ChatOpenAI を作る。
 
     Ollama 固有の API・ライブラリは使わず、langchain-openai の ChatOpenAI
@@ -308,6 +313,19 @@ async def build_model(config: Config, role: Literal["main", "sub"] = "main") -> 
             の場合、role="sub" は sub_routing_strategy を使わず、同一
             セッションでメインエージェントが直近実際に使った接続先を
             そのまま継承する。
+        wait_when_busy: main_routing_strategy/sub_routing_strategy=round_robin
+            かつ provider="llama_cpp" の接続先が全てビジーだった場合、空きが
+            出るまで待つか（True、既定）。False の場合は待たずにフェイル
+            セーフ選択する。build_model() はグラフ構築時にしか呼ばれず
+            （実際の生成のたびには呼ばれない）、構築直後に生成が続くとは
+            限らない呼び出し元（スレッド再開・新規セッション開始等、直後に
+            メッセージ送信するとは限らない操作）でTrueのままだと、無関係な
+            他セッションの生成中に長時間ブロックしてしまう
+            （2026-08-26 ユーザー報告: 生成中に会話履歴を切り替えると
+            ロードが極端に遅くなる。app.py の on_chat_start/on_chat_resume
+            はFalseを渡す）。直後に生成が確定している呼び出し元
+            （ThinkingLoopDetected・接続エラー時の再構築など）は既定のTrue
+            のままにする。
 
     Returns:
         streaming=True で構築された ChatLlamaCpp インスタンス（未 bind_tools）。
@@ -332,6 +350,7 @@ async def build_model(config: Config, role: Literal["main", "sub"] = "main") -> 
         inherit_from_role=inherit_from_role,
         probe_timeout_seconds=config.round_robin_slots_probe_timeout_seconds,
         busy_poll_interval_seconds=config.round_robin_busy_poll_interval_seconds,
+        wait_when_busy=wait_when_busy,
     )
     logger.info(
         "build_model()呼び出し: role=%s routing_strategy=%s session_id=%r -> "

@@ -47,8 +47,23 @@ _active_async_clients: "dict[str, weakref.WeakSet[httpx.AsyncClient]]" = {}
 # 呼び出し元（evals/ の評価ハーネス等）向け。
 _CURRENT_SESSION_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("_current_session_id", default=None)
 
+# _CURRENT_SESSION_ID（thread_id）とは別に、実際のブラウザタブ／接続
+# （cl.context.session.id）単位の識別子を保持する。_LAST_SELECTED_INDEX の
+# キーに使う（下記参照）。_CURRENT_SESSION_ID をそのまま使わない理由:
+# 同じ thread_id を複数タブで同時に開く操作（同じ会話を別タブで開く／
+# _stop_thread_generating で他タブから停止する等）はこのアプリが正式に
+# サポートしており、_active_async_clients はまさにその複数タブ間で
+# 意図的に共有する必要があるため thread_id をキーにしているが（上記
+# docstring参照）、_LAST_SELECTED_INDEX（「このタブの直近の接続先選択」）
+# まで thread_id 単位で共有してしまうと、同じスレッドを開いた別タブの
+# build_model() 呼び出しが割り込んで上書きし、role="sub" の
+# inherit_from_role 継承が本来とは別タブの接続先を拾ってしまう恐れがある
+# （2026-08-26 監査で発見）。tab_id 未指定（evals/ の評価ハーネス等）の
+# 場合は従来通り session_id をそのまま使う。
+_CURRENT_TAB_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("_current_tab_id", default=None)
 
-def set_current_session(session_id: str | None) -> None:
+
+def set_current_session(session_id: str | None, *, tab_id: str | None = None) -> None:
     """これ以降このタスク（及びその子タスク）で build_model() が生成する
     httpx.AsyncClient を、どのセッションに紐づけて登録するかを設定する。
 
@@ -59,9 +74,16 @@ def set_current_session(session_id: str | None) -> None:
 
     Args:
         session_id: このセッションの thread_id（cl.user_session の
-            "thread_id"）。
+            "thread_id"）。_active_async_clients のキーに使う（複数タブで
+            同じ thread_id を開いた場合も意図的に共有する。上記docstring
+            参照）。
+        tab_id: 実際のブラウザタブ／接続の識別子（app.py から渡す場合は
+            cl.context.session.id）。_LAST_SELECTED_INDEX のキーに使う
+            （_CURRENT_TAB_ID docstring参照）。省略時は session_id を
+            そのまま使う（tab_id の概念が無い呼び出し元向けの後方互換）。
     """
     _CURRENT_SESSION_ID.set(session_id)
+    _CURRENT_TAB_ID.set(tab_id if tab_id is not None else session_id)
 
 
 def get_current_session() -> str | None:
@@ -281,13 +303,17 @@ async def _select_round_robin_endpoint(
     *,
     probe_timeout_seconds: float,
     busy_poll_interval_seconds: float,
+    wait_when_busy: bool = True,
 ) -> int:
     """round_robin戦略の本体。呼び出しごとに順番を回しつつ、provider="llama_cpp"
     の接続先だけは選ぶ前に GET /slots で空きスロットの有無を確認する。
 
     空きが無い（全スロット生成中）候補はスキップして次点へ回し、候補を一巡
-    しても1件も空きが見つからなければ busy_poll_interval_seconds 秒待って
-    から再試行する（空きが出るまで無期限に待機する）。
+    しても1件も空きが見つからなければ、wait_when_busy=True（既定）なら
+    busy_poll_interval_seconds 秒待ってから再試行する（空きが出るまで無期限に
+    待機する）。wait_when_busy=False なら待たずに次点の候補（order[0]）を
+    暫定選択して即座に返す（呼び出し元が「今すぐ何らかの接続先が確定すれば
+    よく、生成の予定が無い/未確定の操作」の場合に使う。build_model() 参照）。
     provider="openai_compatible"の接続先は確認を行わず、従来通り即座に選ぶ
     （空き状況が分からないサーバー種別のため）。
 
@@ -302,6 +328,8 @@ async def _select_round_robin_endpoint(
         endpoints: 選択対象の接続先タプル。
         probe_timeout_seconds: [llm].round_robin_slots_probe_timeout_seconds。
         busy_poll_interval_seconds: [llm].round_robin_busy_poll_interval_seconds。
+        wait_when_busy: False の場合、全候補ビジー時に待機せず即座に
+            フェイルセーフ選択する。
 
     Returns:
         選ばれた接続先の index（endpoints に対する）。
@@ -343,6 +371,16 @@ async def _select_round_robin_endpoint(
                 endpoint.base_url,
             )
         attempt += 1
+        if not wait_when_busy:
+            index = order[0]
+            logger.warning(
+                "接続先選択[round_robin]: role=%s 候補%s全ての空きスロットが無いですが、"
+                "wait_when_busy=False のため待機せず index=%d を暫定選択します",
+                role,
+                order,
+                index,
+            )
+            return index
         logger.warning(
             "接続先選択[round_robin]: role=%s 候補%s全ての空きスロットが無いため%.1f秒待機します"
             "（試行%d回目、次回は使用可能時間帯を再確認します）",
@@ -362,6 +400,7 @@ async def _select_endpoint(
     inherit_from_role: str | None = None,
     probe_timeout_seconds: float = 3.0,
     busy_poll_interval_seconds: float = 2.0,
+    wait_when_busy: bool = True,
 ) -> LLMEndpoint:
     """config.ini [llm].main_routing_strategy / sub_routing_strategy に従って接続先を1つ選ぶ。
 
@@ -394,17 +433,24 @@ async def _select_endpoint(
         busy_poll_interval_seconds: [llm].round_robin_busy_poll_interval_seconds。
             round_robin戦略で候補の全接続先に空きスロットが無かった場合、
             再確認までに待機する秒数。
+        wait_when_busy: round_robin戦略で候補の全接続先がビジーだった場合に
+            空きが出るまで待つか（True、既定）、待たずにフェイルセーフ選択
+            するか（False）。build_model() の同名引数を参照。
 
     Returns:
         選ばれた LLMEndpoint。使用可能な接続先が1件かつ strategy が
         round_robin 以外の場合は常にそれを返す（round_robin は1件しか
         無い場合でも GET /slots による空き確認・待機を行う）。
     """
-    # mark_last_endpoint_failed() が後で引けるようにするための「選択時点の
-    # 会話ID」。未設定（サブエージェント経由でset_current_session未実行など）
-    # なら空文字として扱う。
+    # ログ表示・呼び出し元の把握用（会話単位のID）。未設定（サブエージェント
+    # 経由でset_current_session未実行など）なら空文字として扱う。
     session_id = _CURRENT_SESSION_ID.get() or ""
-    state_key = (role, session_id)
+    # _LAST_SELECTED_INDEX のキーは session_id（thread_id）ではなく tab_id
+    # を使う。同じ thread_id を複数タブで同時に開いた場合でも、「このタブが
+    # 直近実際に選んだ接続先」がタブをまたいで上書き・混線しないようにする
+    # ため（mark_last_endpoint_failed() 参照。_CURRENT_TAB_ID docstring参照）。
+    tab_id = _CURRENT_TAB_ID.get() or session_id
+    state_key = (role, tab_id)
 
     logger.info(
         "接続先選択[開始]: role=%s strategy=%s session_id=%r inherit_from_role=%r "
@@ -418,7 +464,7 @@ async def _select_endpoint(
     )
 
     if inherit_from_role is not None:
-        inherited_index = _LAST_SELECTED_INDEX.get((inherit_from_role, session_id))
+        inherited_index = _LAST_SELECTED_INDEX.get((inherit_from_role, tab_id))
         if inherited_index is not None and inherited_index < len(endpoints):
             _LAST_SELECTED_INDEX[state_key] = inherited_index
             logger.info(
@@ -439,7 +485,7 @@ async def _select_endpoint(
             session_id,
             inherit_from_role,
             inherit_from_role,
-            session_id,
+            tab_id,
         )
 
     # round_robin戦略はこのあと _select_round_robin_endpoint 内で待機の
@@ -509,6 +555,7 @@ async def _select_endpoint(
             endpoints,
             probe_timeout_seconds=probe_timeout_seconds,
             busy_poll_interval_seconds=busy_poll_interval_seconds,
+            wait_when_busy=wait_when_busy,
         )
 
     _LAST_SELECTED_INDEX[state_key] = index
@@ -539,16 +586,17 @@ def mark_last_endpoint_failed(role: str) -> None:
     切り替わる（round_robin/random 戦略では index は記録されるが参照
     されないため実質無視される）。
 
-    _LAST_SELECTED_INDEX は (role, セッションID) 単位で管理しているため、
-    複数タブ・複数ユーザーが同時に接続していても、他セッションの選択に
-    巻き込まれず「このセッションが直近実際に使っていた接続先」だけを
-    クールダウンできる。
+    _LAST_SELECTED_INDEX は (role, タブID) 単位で管理しているため、
+    複数タブ・複数ユーザーが同時に接続していても、他タブの選択に
+    巻き込まれず「このタブが直近実際に使っていた接続先」だけを
+    クールダウンできる（同じ thread_id を複数タブで開いた場合も含む。
+    _CURRENT_TAB_ID docstring参照）。
 
     Args:
         role: "main" または "sub"。
     """
-    session_id = _CURRENT_SESSION_ID.get() or ""
-    index = _LAST_SELECTED_INDEX.get((role, session_id))
+    tab_id = _CURRENT_TAB_ID.get() or _CURRENT_SESSION_ID.get() or ""
+    index = _LAST_SELECTED_INDEX.get((role, tab_id))
     if index is None:
         return
     _ENDPOINT_COOLDOWN_UNTIL[(role, index)] = time.time() + _ENDPOINT_FAILOVER_COOLDOWN_SECONDS

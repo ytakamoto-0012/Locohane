@@ -272,6 +272,91 @@ async def test_round_robin_recomputes_eligible_endpoints_on_each_busy_wait_cycle
     assert len(eligible_calls) >= 2
 
 
+@pytest.mark.asyncio
+async def test_round_robin_wait_when_busy_false_skips_wait_and_picks_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
+    """wait_when_busy=False なら、全候補ビジーでも待機せず即座にフェイルセーフ選択すること。
+
+    2026-08-26 ユーザー報告: 唯一の接続先が他タブの生成でビジーな間、
+    on_chat_resume（会話履歴の切り替え）が固まる不具合の回帰テスト。
+    on_chat_start/on_chat_resume は wait_when_busy=False を渡す
+    （app.py _rebuild_graph docstring参照）。
+    """
+    calls = 0
+
+    async def _always_busy(base_url: str, timeout_seconds: float) -> bool | None:
+        nonlocal calls
+        calls += 1
+        return False
+
+    monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _always_busy)
+
+    endpoints = _llama_cpp_endpoints(1)
+    session_id = _unique_session_id("no-wait-busy")
+    try:
+        llm.set_current_session(session_id)
+        picked = await llm._select_endpoint(
+            "main",
+            endpoints,
+            "round_robin",
+            probe_timeout_seconds=1.0,
+            busy_poll_interval_seconds=5.0,
+            wait_when_busy=False,
+        )
+        assert picked.base_url == endpoints[0].base_url
+        # 待機ループ（busy_poll_interval_seconds=5秒）に入らず、1周目のprobeのみで返ること。
+        assert calls == 1
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_last_selected_index_is_scoped_per_tab_not_per_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """同じ thread_id を複数タブで同時に開いた場合でも、_LAST_SELECTED_INDEX
+    （ひいては role="sub" の inherit_from_role 継承）がタブ間で混線しないこと。
+
+    2026-08-26 監査で発見: 以前は _LAST_SELECTED_INDEX を (role, thread_id) で
+    キーイングしていたため、同じ会話を別タブで同時に開く（あるいは
+    _stop_thread_generating で他タブから操作する）と、タブAのmain接続先選択が
+    タブBの直近選択を上書きし、タブBのdispatch_agent（role="sub",
+    inherit_from_role="main"）が誤ってタブAの接続先を継承しうる不具合があった。
+    set_current_session(thread_id, tab_id=...) でタブ単位のキーに分離して修正した。
+    """
+    endpoints = _endpoints(2)  # provider未指定=openai_compatible。/slotsは呼ばれない。
+    thread_id = _unique_session_id("shared-thread")
+    tab_a = f"{thread_id}-tabA"
+    tab_b = f"{thread_id}-tabB"
+
+    try:
+        # タブA・タブBが同じ thread_id（同じ会話）を開き、それぞれ独立に
+        # role="main" の接続先を選ぶ（_rebuild_graph相当）。
+        llm.set_current_session(thread_id, tab_id=tab_a)
+        picked_a = await llm._select_endpoint("main", endpoints, "round_robin")
+
+        llm.set_current_session(thread_id, tab_id=tab_b)
+        picked_b = await llm._select_endpoint("main", endpoints, "round_robin")
+
+        # 2件の接続先を交互に回すround_robinの性質上、連続する2回の呼び出しは
+        # 異なる接続先を選ぶはず（前提の健全性チェック）。
+        assert picked_a.base_url != picked_b.base_url
+
+        # タブAのコンテキストに戻ってrole="sub"を選ぶと、タブBの選択ではなく
+        # タブA自身が直近選んだ接続先を継承すること。
+        llm.set_current_session(thread_id, tab_id=tab_a)
+        picked_sub_a = await llm._select_endpoint(
+            "sub", endpoints, "round_robin", inherit_from_role="main"
+        )
+        assert picked_sub_a.base_url == picked_a.base_url
+
+        # 同様にタブBのコンテキストではタブB自身の選択を継承すること。
+        llm.set_current_session(thread_id, tab_id=tab_b)
+        picked_sub_b = await llm._select_endpoint(
+            "sub", endpoints, "round_robin", inherit_from_role="main"
+        )
+        assert picked_sub_b.base_url == picked_b.base_url
+    finally:
+        llm.forget_session(thread_id)
+
+
 def test_sticky_is_no_longer_a_valid_routing_strategy() -> None:
     """sticky戦略は完全に削除され、config.pyのバリデーションも受け付けないこと。"""
     from src.config import LLM_ROUTING_STRATEGIES

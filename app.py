@@ -1539,7 +1539,7 @@ async def _setup() -> None:
     init_llm_concurrency(_config.llm_max_concurrent_requests)
 
 
-async def _rebuild_graph(thread_id: str):
+async def _rebuild_graph(thread_id: str, *, wait_when_busy: bool = True):
     """既存の system_prompt・checkpointer を使い回し、指定セッションのグラフだけを
     （再）構築して cl.user_session へ保存する。
 
@@ -1558,13 +1558,28 @@ async def _rebuild_graph(thread_id: str):
     Args:
         thread_id: このセッションの thread_id（cl.user_session の
             "thread_id"）。
+        wait_when_busy: build_graph()/build_model() の同名引数にそのまま渡す。
+            既定True（round_robin戦略・provider="llama_cpp"で全接続先が
+            ビジーなら空きが出るまで待つ）。on_chat_start/on_chat_resume/
+            on_stop は「グラフを構築するだけで直後に生成するとは限らない、
+            かつUI操作としては即座に完了してほしい」操作のためFalseを渡す。
+            これを渡さないと、他タブが生成中で接続先が唯一かつビジーな間、
+            無関係なはずのスレッド切替・新規セッション開始・停止ボタンが
+            その生成が終わるまでブロックされてしまう（2026-08-26 ユーザー
+            報告）。ThinkingLoopDetected/接続エラー時の再構築だけは、直後に
+            同じ生成を即リトライするためTrueのままにする（空いている接続先を
+            選びたい）。
 
     Returns:
         新しく構築されたコンパイル済みグラフ。呼び出し元はこれをローカル
         変数として使い続けること。
     """
-    set_current_session(thread_id)
-    graph = await build_graph(_config, _system_prompt, _checkpointer)
+    # tab_id=cl.context.session.id: 同じ thread_id を複数タブで同時に開いた
+    # 場合でも、round_robin/priority_failoverの「直近選択」（_LAST_SELECTED_INDEX）
+    # がタブをまたいで混線しないようにする（set_current_session docstring参照。
+    # 2026-08-26 監査で発見した既存の軽微なエッジケースの修正）。
+    set_current_session(thread_id, tab_id=cl.context.session.id)
+    graph = await build_graph(_config, _system_prompt, _checkpointer, wait_when_busy=wait_when_busy)
     cl.user_session.set("graph", graph)
     return graph
 
@@ -1608,10 +1623,14 @@ async def on_stop() -> None:
         cancelled = exc
     # _rebuild_graph が例外を送出しても検知できないまま処理が終わるのを防ぐ。
     # 最大2回まで試行する。
+    # wait_when_busy=False: 停止ボタンは「今すぐUIの制御を取り戻す」操作であり、
+    # 直後に生成するとは限らない（on_chat_start/on_chat_resumeと同様）。他タブが
+    # 唯一の接続先を使って生成中だと、Trueのままではそのタブの生成が終わるまで
+    # 停止ボタン自体が固まってしまう（_rebuild_graph docstring参照）。
     rebuild_ok = False
     for _retry in range(2):
         try:
-            await _rebuild_graph(thread_id)
+            await _rebuild_graph(thread_id, wait_when_busy=False)
             rebuild_ok = True
             break
         except Exception:  # noqa: BLE001
@@ -1672,7 +1691,9 @@ async def on_chat_start() -> None:
         username = resolve_log_username(user.identifier if user else None)
         cl.user_session.set("chat_log_path", build_log_path(_config.chat_log_dir, username, thread_id))
     # このセッション専用のグラフを構築する（他タブとはLLMクライアントを共有しない）。
-    await _rebuild_graph(thread_id)
+    # wait_when_busy=False: 新規セッション開始は直後に生成するとは限らないため、
+    # 他タブが唯一の接続先を使用中でも待たない（_rebuild_graph docstring参照）。
+    await _rebuild_graph(thread_id, wait_when_busy=False)
     cl.user_session.set("work_dir", None)
     cl.user_session.set("work_dir_access", None)
     # 次の on_message でLLMへ実際の作業ディレクトリ絶対パスを知らせるためのフラグ
@@ -1759,7 +1780,10 @@ if _config.thread_store_enabled:
             # 追記継続だと「いつ再開したか」が分からなくなるため）。
             cl.user_session.set("chat_log_path", build_log_path(_config.chat_log_dir, username, thread_id))
 
-        await _rebuild_graph(thread_id)
+        # wait_when_busy=False: スレッド再開は直後に生成するとは限らないため、
+        # 他タブが唯一の接続先を使用中でも待たない（_rebuild_graph docstring参照。
+        # 2026-08-26 ユーザー報告: 生成中の別タブがある間スレッド切替が固まる不具合）。
+        await _rebuild_graph(thread_id, wait_when_busy=False)
 
         meta = thread.get("metadata") or {}
         if isinstance(meta, str):
@@ -2647,7 +2671,9 @@ async def _on_message_impl(message: cl.Message) -> None:
     # dispatch_agent 経由でこのタスクから派生するサブエージェントの
     # build_model() 呼び出しも、このセッションへ紐づけて登録されるようにする
     # （src/llm.py の set_current_session / _CURRENT_SESSION_ID 参照）。
-    set_current_session(thread_id)
+    # tab_id=cl.context.session.id: 同じ thread_id を複数タブで同時に開いた
+    # 場合の _LAST_SELECTED_INDEX 混線防止（_rebuild_graph 内の同種コメント参照）。
+    set_current_session(thread_id, tab_id=cl.context.session.id)
     graph = cl.user_session.get("graph")
     config = {
         "configurable": {"thread_id": thread_id},

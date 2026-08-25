@@ -62,7 +62,7 @@ async def test_resuming_a_thread_does_not_change_its_sort_position(tmp_path, mon
         monkeypatch.setattr(cl_data, "_data_layer", layer)
         monkeypatch.setattr(cl_data, "_data_layer_initialized", True)
         # グラフ構築（LLMクライアント等）はこのテストの関心事ではないため無効化する。
-        async def _noop_rebuild_graph(thread_id):
+        async def _noop_rebuild_graph(thread_id, **kwargs):
             return None
 
         monkeypatch.setattr(app, "_rebuild_graph", _noop_rebuild_graph)
@@ -144,7 +144,7 @@ async def test_patch_prevents_disconnect_from_bumping_thread_order(tmp_path, mon
         monkeypatch.setattr(app, "_thread_store_conn", conn)
         monkeypatch.setattr(cl_data, "_data_layer", layer)
         monkeypatch.setattr(cl_data, "_data_layer_initialized", True)
-        async def _noop_rebuild_graph(thread_id):
+        async def _noop_rebuild_graph(thread_id, **kwargs):
             return None
 
         monkeypatch.setattr(app, "_rebuild_graph", _noop_rebuild_graph)
