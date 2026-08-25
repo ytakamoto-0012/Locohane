@@ -1332,6 +1332,29 @@ async def _setup() -> None:
             logging.getLogger(lib).setLevel(logging.WARNING)
         root_logger.addHandler(file_handler)
 
+    # 診断用: このプロセスが実際にメモリ上に持っている接続先設定を、起動の
+    # たびに必ずログの先頭付近に残す（config.ini はプロセス起動時に一度だけ
+    # 読み込まれホットリロードされないため、「config.iniを編集したのに挙動が
+    # 変わらない」＝実は編集後に再起動していない、という原因を特定できる
+    # ようにするため。詳細な選択過程は _select_endpoint() のログを参照）。
+    logging.getLogger(__name__).info(
+        "LLM接続先設定（起動時読込み）: main_routing_strategy=%s main_endpoints=%s",
+        _config.main_routing_strategy,
+        [
+            f"[{i}] base_url={e.base_url} model={e.model} start={e.start} end={e.end} provider={e.provider}"
+            for i, e in enumerate(_config.main_endpoints)
+        ],
+    )
+    logging.getLogger(__name__).info(
+        "LLM接続先設定（起動時読込み）: sub_endpoints_inherit_main=%s sub_routing_strategy=%s sub_endpoints=%s",
+        _config.sub_endpoints_inherit_main,
+        _config.sub_routing_strategy,
+        [
+            f"[{i}] base_url={e.base_url} model={e.model} start={e.start} end={e.end} provider={e.provider}"
+            for i, e in enumerate(_config.sub_endpoints)
+        ],
+    )
+
     # 第1段階 Discovery: スキルを走査して name+description をシステムプロンプトへ。
     # skills_dir と locohane_skills_dirs をマージ（同名は locohane 側優先）。
     skills = scan_skills([_config.skills_dir, *_config.locohane_skills_dirs])

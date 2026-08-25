@@ -512,6 +512,46 @@ class _StickyActivityTouchCallback(BaseCallbackHandler):
         _STICKY_LAST_ACTIVITY_AT[(self._role, self._session_id)] = time.time()
 
 
+class _RequestEndpointLogger(BaseCallbackHandler):
+    """実際にHTTPリクエストが送信される瞬間（on_chat_model_start/on_llm_start）に、
+    このモデルインスタンスが向いている接続先を記録する診断用コールバック。
+
+    _select_endpoint() のログは「選択した」時点の記録に過ぎず、選択結果が
+    実際に ChatLlamaCpp インスタンスへ正しく渡り、かつそのインスタンスが
+    使い回される限りその接続先へ送られ続けているかは別途確認が必要
+    （build_model() は role="main" の場合グラフ構築時に1回しか呼ばれず、
+    以降のターンは同じモデルインスタンスを使い回す。src/graph.py 参照）。
+    build_model()呼び出し1回につき固定の base_url/model を持つ単純な
+    クロージャのため、on_llm_start/on_chat_model_start のたびに同じ値を
+    ログへ出すだけだが、「このセッションのこの役割で、いつ・何回、実際に
+    リクエストが飛んだか」を base_url と突き合わせて時系列で追えるように
+    する（会話が続く間ずっと同じ接続先しか使われていないことの直接証拠、
+    または想定外に接続先が変わっていないことの確認に使う）。
+    """
+
+    def __init__(self, role: str, session_id: str, base_url: str, model: str) -> None:
+        self._role = role
+        self._session_id = session_id
+        self._base_url = base_url
+        self._model = model
+
+    def _log(self, run_id: Any) -> None:  # noqa: ANN401
+        logger.info(
+            "接続先使用[実リクエスト送信]: role=%s session_id=%r base_url=%s model=%s run_id=%s",
+            self._role,
+            self._session_id,
+            self._base_url,
+            self._model,
+            run_id,
+        )
+
+    def on_llm_start(self, serialized: dict, prompts: list[str], *, run_id: Any = None, **kwargs: Any) -> None:  # noqa: ANN401
+        self._log(run_id)
+
+    def on_chat_model_start(self, serialized: dict, messages: list, *, run_id: Any = None, **kwargs: Any) -> None:  # noqa: ANN401
+        self._log(run_id)
+
+
 def describe_current_task(now: float | None = None) -> str:
     """現在の asyncio.Task の診断情報を1文字列にまとめる。
 
@@ -1046,23 +1086,82 @@ async def _select_endpoint(
     session_id = _CURRENT_SESSION_ID.get() or ""
     state_key = (role, session_id)
 
+    logger.info(
+        "接続先選択[開始]: role=%s strategy=%s session_id=%r inherit_from_role=%r "
+        "endpoints_total=%d endpoints=%s",
+        role,
+        strategy,
+        session_id,
+        inherit_from_role,
+        len(endpoints),
+        [f"[{i}] {e.base_url} model={e.model} start={e.start} end={e.end}" for i, e in enumerate(endpoints)],
+    )
+
     if inherit_from_role is not None:
         inherited_index = _LAST_SELECTED_INDEX.get((inherit_from_role, session_id))
         if inherited_index is not None and inherited_index < len(endpoints):
             _LAST_SELECTED_INDEX[state_key] = inherited_index
+            logger.info(
+                "接続先選択[結果]: role=%s session_id=%r -> index=%d base_url=%s model=%s "
+                "(理由: inherit_from_role=%s の直近選択を継承)",
+                role,
+                session_id,
+                inherited_index,
+                endpoints[inherited_index].base_url,
+                endpoints[inherited_index].model,
+                inherit_from_role,
+            )
             return endpoints[inherited_index]
+        logger.info(
+            "接続先選択: role=%s session_id=%r inherit_from_role=%s の直近選択が無いため通常ロジックへフォールバック "
+            "(_LAST_SELECTED_INDEX に (%s, %r) が未登録)",
+            role,
+            session_id,
+            inherit_from_role,
+            inherit_from_role,
+            session_id,
+        )
 
     eligible_indices = [i for i, e in enumerate(endpoints) if _endpoint_available_now(e)]
     if not eligible_indices:
         eligible_indices = list(range(len(endpoints)))
+    excluded_indices = [i for i in range(len(endpoints)) if i not in eligible_indices]
+    if excluded_indices:
+        logger.info(
+            "接続先選択: role=%s session_id=%r 時間帯外のため除外されたインデックス=%s "
+            "（%sのstart/end設定を確認）",
+            role,
+            session_id,
+            excluded_indices,
+            [f"[{i}] base_url={endpoints[i].base_url} start={endpoints[i].start} end={endpoints[i].end}" for i in excluded_indices],
+        )
 
     if len(eligible_indices) == 1:
         index = eligible_indices[0]
         _LAST_SELECTED_INDEX[state_key] = index
+        logger.info(
+            "接続先選択[結果]: role=%s strategy=%s session_id=%r -> index=%d/%d base_url=%s model=%s "
+            "(理由: 使用可能な接続先が1件しかないためstrategyに関わらず強制選択。endpoints_total=%d)",
+            role,
+            strategy,
+            session_id,
+            index,
+            len(endpoints),
+            endpoints[index].base_url,
+            endpoints[index].model,
+            len(endpoints),
+        )
         return endpoints[index]
 
     if strategy == "random":
         index = random.choice(eligible_indices)
+        logger.info(
+            "接続先選択[random]: role=%s session_id=%r candidates=%s -> index=%d",
+            role,
+            session_id,
+            eligible_indices,
+            index,
+        )
     elif strategy == "sticky":
         # 会話（thread_id）単位で常に同じ接続先を選ぶ。llama.cpp はプロンプト
         # 先頭が同じだとKVキャッシュが効くため、同一会話を毎回同じサーバーに
@@ -1074,6 +1173,14 @@ async def _select_endpoint(
         # 呼び出しに限り現在使用可能な接続先の中から再固定する。
         if state_key in _STICKY_ASSIGNED_INDEX and _STICKY_ASSIGNED_INDEX[state_key] in eligible_indices:
             index = _STICKY_ASSIGNED_INDEX[state_key]
+            logger.info(
+                "接続先選択[sticky/キャッシュヒット]: role=%s session_id=%r state_key=%r -> index=%d "
+                "(理由: _STICKY_ASSIGNED_INDEXに既存の固定先あり)",
+                role,
+                session_id,
+                state_key,
+                index,
+            )
         else:
             # ここから先（空き判定→能動解放の確認→占有確定）はロックで
             # 直列化する。GET /slots の await をまたぐため、ロックが無いと
@@ -1087,6 +1194,7 @@ async def _select_endpoint(
                 # いない接続先（＝ _STICKY_ENDPOINT_OCCUPANTS が空）を優先する。
                 occupied_indices = {i for (r, i), sessions in _STICKY_ENDPOINT_OCCUPANTS.items() if r == role and sessions}
                 free_indices = [i for i in eligible_indices if i not in occupied_indices]
+                freed_index: int | None = None
                 if not free_indices:
                     # 空きが1件も無い場合、provider="llama_cpp"の占有先だけは
                     # GET /slots で実際に使われているか確認し、誰も使っていなければ
@@ -1105,9 +1213,29 @@ async def _select_endpoint(
                 # なら毎回同じ計算結果になる）。空きが無ければ現在使用可能な
                 # 接続先からハッシュで選ぶ（衝突を許容する）。
                 candidates = free_indices if free_indices else eligible_indices
-                index = candidates[zlib.crc32(session_id.encode("utf-8")) % len(candidates)]
+                crc = zlib.crc32(session_id.encode("utf-8"))
+                index = candidates[crc % len(candidates)]
                 _STICKY_ASSIGNED_INDEX[state_key] = index
                 _STICKY_ENDPOINT_OCCUPANTS.setdefault((role, index), set()).add(session_id)
+                logger.info(
+                    "接続先選択[sticky/新規固定]: role=%s session_id=%r state_key=%r "
+                    "eligible_indices=%s occupied_indices=%s free_indices(active_release後)=%s "
+                    "freed_index=%s candidates=%s crc32(session_id)=%d %% len(candidates)=%d -> index=%d "
+                    "_STICKY_ENDPOINT_OCCUPANTS(role=%s)=%s",
+                    role,
+                    session_id,
+                    state_key,
+                    eligible_indices,
+                    sorted(occupied_indices),
+                    free_indices,
+                    freed_index,
+                    candidates,
+                    crc,
+                    len(candidates),
+                    index,
+                    role,
+                    {i: sorted(sessions) for (r, i), sessions in _STICKY_ENDPOINT_OCCUPANTS.items() if r == role},
+                )
         _STICKY_LAST_ACTIVITY_AT[state_key] = time.time()
     elif strategy == "priority_failover":
         # 使用可能な接続先を先頭から順に見て、クールダウン中でない最初の
@@ -1119,12 +1247,47 @@ async def _select_endpoint(
             if _ENDPOINT_COOLDOWN_UNTIL.get((role, i), 0.0) <= now:
                 index = i
                 break
+        logger.info(
+            "接続先選択[priority_failover]: role=%s session_id=%r eligible_indices=%s "
+            "cooldown_until(role別全件)=%s now=%.3f -> index=%d",
+            role,
+            session_id,
+            eligible_indices,
+            {k: v for k, v in _ENDPOINT_COOLDOWN_UNTIL.items() if k[0] == role},
+            now,
+            index,
+        )
     else:  # "round_robin"（既定）
         counter = _ROUND_ROBIN_COUNTERS.get(role, 0)
         index = eligible_indices[counter % len(eligible_indices)]
         _ROUND_ROBIN_COUNTERS[role] = counter + 1
+        logger.info(
+            "接続先選択[round_robin]: role=%s session_id=%r counter(選択前)=%d eligible_indices=%s "
+            "counter %% len(eligible_indices)=%d %% %d -> index=%d counter(選択後)=%d",
+            role,
+            session_id,
+            counter,
+            eligible_indices,
+            counter,
+            len(eligible_indices),
+            index,
+            _ROUND_ROBIN_COUNTERS[role],
+        )
 
     _LAST_SELECTED_INDEX[state_key] = index
+    logger.info(
+        "接続先選択[最終結果]: role=%s strategy=%s session_id=%r -> index=%d/%d base_url=%s model=%s "
+        "state_key=%r _LAST_SELECTED_INDEX(role別全件)=%s",
+        role,
+        strategy,
+        session_id,
+        index,
+        len(endpoints),
+        endpoints[index].base_url,
+        endpoints[index].model,
+        state_key,
+        {k: v for k, v in _LAST_SELECTED_INDEX.items() if k[0] == role},
+    )
     return endpoints[index]
 
 
@@ -1219,6 +1382,16 @@ async def build_model(config: Config, role: Literal["main", "sub"] = "main") -> 
         min_idle_seconds=config.sticky_active_release_min_idle_seconds,
         probe_timeout_seconds=config.sticky_active_release_probe_timeout_seconds,
     )
+    logger.info(
+        "build_model()呼び出し: role=%s routing_strategy=%s session_id=%r -> "
+        "base_url=%s model=%s [diag] %s",
+        role,
+        routing_strategy,
+        _CURRENT_SESSION_ID.get(),
+        endpoint.base_url,
+        endpoint.model,
+        describe_current_task(),
+    )
 
     extra_body: dict[str, Any] = {}
     if config.top_k is not None:
@@ -1308,7 +1481,11 @@ async def build_model(config: Config, role: Literal["main", "sub"] = "main") -> 
         streaming=True,
         stream_usage=config.track_token_usage,
         stream_chunk_timeout=config.stream_chunk_timeout_seconds,
-        callbacks=[_DebugResponseLogger(), _StickyActivityTouchCallback(role, session_id or "")],
+        callbacks=[
+            _DebugResponseLogger(),
+            _StickyActivityTouchCallback(role, session_id or ""),
+            _RequestEndpointLogger(role, session_id or "", endpoint.base_url, endpoint.model),
+        ],
         loop_guard_enabled=config.thinking_loop_guard_enabled,
         loop_guard_window_chars=config.thinking_loop_guard_window_chars,
         loop_guard_check_interval_chars=config.thinking_loop_guard_check_interval_chars,
