@@ -204,7 +204,7 @@ class TestForeignTmpDirGuard:
         assert "他セッション" in result
 
     def test_read_own_tmp_dir_still_succeeds(self, file_tools_env) -> None:
-        own = file_tools_env / "_tmp_thread-1"
+        own = file_tools_env / f"_tmp_{tools._workdir._exec_tmp_name()}"
         own.mkdir()
         f = own / "own.txt"
         f.write_text("mine", encoding="utf-8")

@@ -38,8 +38,8 @@ PDFの読み込み（テキスト抽出／ページの画像化）とPDFの生�
 {"path": "C:\\foo\\report.pdf", "total_pages": 42, "start_page": 1, "end_page": 20,
  "metadata": {"title": "資料タイトル", "author": null, "subject": null},
  "pages_count": 20,
- "result_path": "C:\\...\\_tmp_<thread_id>\\pdf_read\\1a2b3c4d_20260805_153012_123456.json",
- "path_memory": {"@7": "C:\\...\\_tmp_<thread_id>\\pdf_read\\1a2b3c4d_20260805_153012_123456.json"}}
+ "result_path": "C:\\...\\_tmp_<name>\\pdf_read\\1a2b3c4d_20260805_153012_123456.json",
+ "path_memory": {"@7": "C:\\...\\_tmp_<name>\\pdf_read\\1a2b3c4d_20260805_153012_123456.json"}}
 ```
 ページ本文（`pages`、各要素は `{"page", "text", "width_pt", "height_pt"}`）は標準出力からは省かれ、
 `result_path` が指すJSONファイルにのみ含まれます。`Read` ツールで
@@ -85,9 +85,9 @@ offset/limitと同じ考え方のページ版です）。
 ```json
 {"path": "C:\\foo\\report.pdf", "total_pages": 3, "start_page": 1, "end_page": 3, "dpi": 150,
  "images": [
-   {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\pdf_rendered\\1a2b3c4d_p1.png"},
-   {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\pdf_rendered\\1a2b3c4d_p2.png"},
-   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\pdf_rendered\\1a2b3c4d_p3.png"}
+   {"page": 1, "image_path": "C:\\...\\_tmp_<name>\\pdf_rendered\\1a2b3c4d_p1.png"},
+   {"page": 2, "image_path": "C:\\...\\_tmp_<name>\\pdf_rendered\\1a2b3c4d_p2.png"},
+   {"page": 3, "image_path": "C:\\...\\_tmp_<name>\\pdf_rendered\\1a2b3c4d_p3.png"}
  ]}
 ```
 `images`には`total_pages`件全てが含まれる。
@@ -102,7 +102,7 @@ offset/limitと同じ考え方のページ版です）。
 エッジケース:
 - ファイル不在・ディレクトリ指定・壊れたPDF/暗号化PDFはエラー終了します。
 - 生成されるPNGはセッション専用一時フォルダ（ユーザーが設定した作業ディレクトリとは別で、`default_workdir`配下）
-  （`_tmp_<thread_id>/pdf_rendered/`）に保存されます。同一PDF・同一ページの
+  （`_tmp_<name>/pdf_rendered/`）に保存されます。同一PDF・同一ページの
   再実行時は上書きされ、会話終了時に自動的に削除されます。
 - 一部のページのみ内部的に破損している場合、そのページの要素は
   `image_path` の代わりに `error`（失敗理由）を持ち、他のページは通常通り

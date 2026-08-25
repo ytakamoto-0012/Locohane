@@ -76,7 +76,7 @@ LLMがどのスキルを読むか・どのスクリプトを叩くかは**すべ
 - **テキストのみ**。`encoding="utf-8", errors="replace"` でデコードされるため、バイナリ・画像等をそのまま `run_script` の戻り値として返す経路はない。生成物を見せたい場合はファイルに保存し、そのパスを stdout に含めて後続手順で扱わせる — **画像ファイルであれば `view_image` ツールでLLMへ視覚情報として渡せる**（`references/`/`assets/`配下の既存画像だけでなく、`run_script` がその場で生成した画像ファイルも同じ経路で見せられる。対応拡張子: png/jpg/jpeg/gif/webp/bmp）。ただしこれはVision対応モデルが前提であり、テキスト専用モデルでは画像部分は無視される点に注意。
 - **タイムアウトあり**（既定60秒、`config.ini` の `script_timeout` で変更可）。超過時は `run_script` が「エラー: スクリプトが N 秒でタイムアウトしました。」を返し、スクリプト側の出力は破棄される。
 - **`.py` は設定された Python 実行ファイルで起動**（`config.ini` の `script_python`）。それ以外の拡張子はOSに実行を委ねる（Windowsネイティブ環境のため、shebang行は解釈されない点に注意。`.py` 以外のスクリプトを置く場合は `.bat`/`.exe`等、Windowsで直接実行可能な形式にすること）。
-- **作業ディレクトリ（cwd）はスキルフォルダではなく、ユーザーの作業ディレクトリ**（`tools.py` の `_resolve_workdir()`。Chainlit設定の `work_dir`、未設定時は `config.ini` の `default_workdir`）になる。スキル自身のファイル（`scripts/`内の補助モジュール等）を参照する場合は `Path(__file__).resolve().parent` を使い、cwd起点の相対パスに依存しないこと。生成物をスキル実行のたびに使い捨てたいだけなら、cwd配下のセッション専用一時フォルダ `_tmp_<thread_id>/`（環境変数 `AGENT_THREAD_ID` で取得、会話終了時に自動削除される。`pdf-tools` の `render_pdf_pages.py` 参照）に書くと、スキル本体のディレクトリを汚さず済む。
+- **作業ディレクトリ（cwd）はスキルフォルダではなく、ユーザーの作業ディレクトリ**（`tools.py` の `_resolve_workdir()`。Chainlit設定の `work_dir`、未設定時は `config.ini` の `default_workdir`）になる。スキル自身のファイル（`scripts/`内の補助モジュール等）を参照する場合は `Path(__file__).resolve().parent` を使い、cwd起点の相対パスに依存しないこと。生成物をスキル実行のたびに使い捨てたいだけなら、cwd配下のセッション専用一時フォルダ `_tmp_<name>/`（名前は環境変数 `AGENT_EXEC_TMP_NAME` で取得、無ければ `AGENT_THREAD_ID` へフォールバック。会話終了時に自動削除される。`pdf-tools` の `render_pdf_pages.py` 参照）に書くと、スキル本体のディレクトリを汚さず済む。
 - 呼び出し側は `skill_name` とスクリプトのファイル名（`script_filename`）のみを渡す。`_resolve_script_filename()` が `skill_name/scripts/` 配下（`_safe_path()` により `skills/` ルート配下に強制、ディレクトリトラバーサル対策）を再帰探索して解決するため、`scripts/` プレフィックスや絶対パスを書く必要はない。見つからない場合・`scripts/` ディレクトリ自体が無い場合は実行前にエラーを返す。
 
 ### 4-3. 推奨する値渡しの規約（コード非強制・慣例）
@@ -188,17 +188,23 @@ Chainlit UI上に `cl.File`（または画像なら `cl.Image`）付きメッセ
     | 2 | 2枚目 | ![2枚目](C:\...\out2.png) |
 ```
 
-### 4-6. 中間生成物の一時保存先: `_tmp_<thread_id>/` と `exec_tmp_dir()`
+### 4-6. 中間生成物の一時保存先: `_tmp_<name>/` と `exec_tmp_dir()`
 
-会話終了時に自動削除されるセッション専用の一時フォルダ `_tmp_<thread_id>/` を
+会話終了時に自動削除されるセッション専用の一時フォルダ `_tmp_<name>/` を
 作れる。中間生成物（変換途中のPDF、レンダリング画像など、最終成果物ではない
 ファイル）はここに書き、作業ディレクトリ本体を汚さないこと。
+
+`<name>` は「作成時刻（ミリ秒まで）+ thread_id」（例:
+`20260826_012433_572_<thread_id>`）。default_workdir 直下に並ぶ `_tmp_*`
+フォルダをファイラーで見たとき作成順に並ぶようにするための先頭タイムスタンプ
+であり、スキルスクリプト側はこの厳密なフォーマットを気にする必要はなく、
+下記の環境変数からそのまま読めばよい。
 
 **基準ディレクトリは常に default_workdir（環境変数 `AGENT_DEFAULT_WORKDIR`）**
 であり、`run_script` の cwd（4-2参照。ユーザーが ChatSettings で指定した
 work_dir になりうる）**ではない**。work_dir はユーザー指定の場所のため
 config.ini `[default_workdir].retention_days` の保持日数ベース自動削除の対象外
-であり、`Path.cwd()` を基準にすると `_tmp_<thread_id>/` が work_dir 配下に
+であり、`Path.cwd()` を基準にすると `_tmp_<name>/` が work_dir 配下に
 作られたまま消えずに溜まり続ける（過去に実際に発生した回帰。cwd基準は
 バグであり仕様ではない）。`AGENT_DEFAULT_WORKDIR` は `run_script`/
 `execute_python_code` のサブプロセス起動時に常に注入される
@@ -216,14 +222,14 @@ if src_dir and src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 import path_memory
 
-out_dir = path_memory.exec_tmp_dir("pdf_pages")  # _tmp_<thread_id>/pdf_pages を作成して返す
+out_dir = path_memory.exec_tmp_dir("pdf_pages")  # _tmp_<name>/pdf_pages を作成して返す
 ```
 
 **互換性の注意**: `register_output_path`（4-1）は「`AGENT_SRC_DIR` 未設定・import失敗
 時は例外を出さず None へフォールバックする」ソフト依存だが、`exec_tmp_dir()` は違う。
 呼び出すには先に `import path_memory` が成功している必要があり、それが失敗する環境
 （`AGENT_SRC_DIR` を注入しない Agent Skills ランタイム等）では import 文の時点で
-スクリプトが動かなくなる。`_tmp_<thread_id>/` の作成自体は本来 `os.environ` と
+スクリプトが動かなくなる。`_tmp_<name>/` の作成自体は本来 `os.environ` と
 `pathlib` だけで完結する処理であり、これを `path_memory` の import に依存させると、
 Locohane 以外の環境でも単体で動くことを前提にしたスキル（`skills/OFFICE_SKILLS_README.md`
 2節参照）の可搬性を落としてしまう。
@@ -237,9 +243,15 @@ import os
 from pathlib import Path
 
 def _exec_tmp_dir(category: str | None = None) -> Path:
-    thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
+    # ディレクトリ名は AGENT_EXEC_TMP_NAME（execute_python_code が実際に
+    # 作ったディレクトリと同じ名前）を優先し、無ければ AGENT_THREAD_ID
+    # （生のthread_id、作成時刻プレフィックス無し）へフォールバックする。
+    # ここを AGENT_THREAD_ID 単独にすると、execute_python_code が作る
+    # 実際のディレクトリ名（先頭に作成時刻が付く）と食い違い、書き込み
+    # ガードに「他セッションの一時ディレクトリ」として弾かれる。
+    name = os.environ.get("AGENT_EXEC_TMP_NAME") or os.environ.get("AGENT_THREAD_ID") or "_no_session"
     base_dir = Path(os.environ.get("AGENT_DEFAULT_WORKDIR") or "./data/temp")
-    out_dir = base_dir / f"_tmp_{thread_id}"
+    out_dir = base_dir / f"_tmp_{name}"
     if category:
         out_dir = out_dir / category
     out_dir.mkdir(parents=True, exist_ok=True)

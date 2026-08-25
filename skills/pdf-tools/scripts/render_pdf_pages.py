@@ -55,7 +55,7 @@ def main() -> int:
     dpi = _CAPTURE_DPI
     scale = dpi / 72
 
-    thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
+    thread_id = os.environ.get("AGENT_EXEC_TMP_NAME") or os.environ.get("AGENT_THREAD_ID") or "_no_session"
     base_dir = Path(os.environ.get("AGENT_DEFAULT_WORKDIR") or "./data/temp")
     rendered_dir = base_dir / f"_tmp_{thread_id}" / "pdf_rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)

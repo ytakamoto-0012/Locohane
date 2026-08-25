@@ -198,7 +198,7 @@ def render_office_file(
     target_dpi : int
         出力JSONの`target_dpi`フィールドとして返す（crop機能は常時OFF）
     thread_id : str | None
-        AGENT_THREAD_ID。None なら "_no_session"
+        AGENT_EXEC_TMP_NAME（無ければAGENT_THREAD_ID）。None なら "_no_session"
 
     Returns
     -------
@@ -206,7 +206,7 @@ def render_office_file(
         レンダリング結果
     """
     if thread_id is None:
-        thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
+        thread_id = os.environ.get("AGENT_EXEC_TMP_NAME") or os.environ.get("AGENT_THREAD_ID") or "_no_session"
 
     # 1. OLE → PDF 変換
     pdf_path = _convert_office_to_pdf(path, tool, thread_id)

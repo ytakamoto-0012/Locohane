@@ -217,20 +217,22 @@ def exec_tmp_dir(category: str | None = None) -> Path:
     ChatSettings で指定した work_dir になりうるが、work_dir は保持日数ベースの
     自動削除（default_workdir の retention_days）の対象外のため、cwd を基準に
     すると中間生成物が消えずに溜まり続ける事故につながる（過去に実際に
-    発生。cwd基準はバグであり仕様ではない）。thread_id は env_params() と
-    同じ AGENT_THREAD_ID を読むため、未設定時は "_no_session" にフォール
-    バックする。
+    発生。cwd基準はバグであり仕様ではない）。ディレクトリ名は
+    AGENT_EXEC_TMP_NAME（`_exec_tmp_name()` が生成する作成時刻プレフィックス
+    付きthread_id。メインプロセスの `_resolve_exec_workdir()` と同じ名前）を
+    読み、未設定時は AGENT_THREAD_ID（env_params() と同じ、生のthread_id）
+    へフォールバックし、どちらも無ければ "_no_session" にフォールバックする。
 
     Args:
-        category: `_tmp_<thread_id>` 直下にさらに切るサブディレクトリ名
-            （例: "pdf_rendered"）。省略時は `_tmp_<thread_id>` 自体を返す。
+        category: `_tmp_<name>` 直下にさらに切るサブディレクトリ名
+            （例: "pdf_rendered"）。省略時は `_tmp_<name>` 自体を返す。
 
     Returns:
         作成済みの絶対パス。
     """
-    thread_id = os.environ.get("AGENT_THREAD_ID") or "_no_session"
+    name = os.environ.get("AGENT_EXEC_TMP_NAME") or os.environ.get("AGENT_THREAD_ID") or "_no_session"
     base = Path(os.environ.get("AGENT_DEFAULT_WORKDIR") or "./data/temp")
-    out_dir = base / f"_tmp_{thread_id}"
+    out_dir = base / f"_tmp_{name}"
     if category:
         out_dir = out_dir / category
     out_dir.mkdir(parents=True, exist_ok=True)

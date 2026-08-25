@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -43,7 +44,7 @@ def _foreign_tmp_dir_error(path: Path) -> str | None:
         他セッションの一時ディレクトリ配下と判定できればエラー文字列、
         そうでなければ None。
     """
-    own_name = f"_tmp_{cl.user_session.get('thread_id') or '_no_session'}"
+    own_name = f"_tmp_{_exec_tmp_name()}"
     try:
         resolved = path.resolve()
     except OSError:
@@ -74,7 +75,7 @@ def _foreign_tmp_dir_names() -> frozenset[str]:
     glob_tool.py の `glob_search`/grep_tool.py の `grep_search` の
     `exclude_names` へ渡す。
     """
-    own_name = f"_tmp_{cl.user_session.get('thread_id') or '_no_session'}"
+    own_name = f"_tmp_{_exec_tmp_name()}"
     names: set[str] = set()
     for parent in _tmp_dir_parents(_resolve_workdir()):
         try:
@@ -133,6 +134,61 @@ def _resolve_workdir(need_write: bool = False) -> Path:
             return _state._DEFAULT_WORKDIR
     return Path(work_dir)
 
+def _exec_tmp_name() -> str:
+    """`_tmp_<name>` の `<name>` 部分を返す（作成時刻プレフィックス付きthread_id）。
+
+    以前は thread_id（UUID等）をそのまま使っていたため、default_workdir
+    直下に並ぶ `_tmp_*` フォルダをファイラーで見ても作成順に並ばず、
+    調査時にどれが最新か分かりにくいという問題があった。作成時刻
+    （ミリ秒まで）を先頭に付けることで、名前順ソート＝作成順になる
+    ようにする。
+
+    同一スレッド（同一プロセス内）では `_state._EXEC_TMP_NAME_CACHE` に
+    一度決めた値をキャッシュし、以後は同じ値を返す
+    （セッション終了時は `forget_session_tool_semaphores()` が片付ける）。
+    キャッシュしない場合、
+    `_subprocess_env()` が環境変数へ渡す値を計算する呼び出しと、
+    `_resolve_exec_workdir()` がディレクトリ実体を作る呼び出しが、いずれも
+    このタイムスタンプ生成を経由するため、ごく僅かなタイミング差で
+    互いに異なる名前を計算してしまい、サブプロセス側の書き込みガード
+    （`_python_fs_guard.py` の `_GUARD_OWN_TMP_NAME`）と実際に作られる
+    ディレクトリ名が食い違って自分のディレクトリへの書き込みがブロック
+    される事故があった（2026-08-26 発見・修正）。
+
+    プロセス再起動やスレッド再開でキャッシュが空でも、default_workdir
+    直下に既に `_tmp_<何か>_<thread_id>` が存在すればその名前を探して
+    再利用する（毎回時刻を変えると、スレッド再開のたびに別の
+    ディレクトリへ分裂してしまうため）。この探索は、旧バージョンが
+    作ったプレフィックス無しの `_tmp_<thread_id>` も
+    `endswith(f"_{thread_id}")` で拾えるため、そのまま追記先として
+    使われる（後方互換）。
+
+    Returns:
+        `_tmp_` の直後に続く名前。キャッシュにも既存ディレクトリにも
+        見つからなければ `<YYYYMMDD_HHMMSS_ffffff（ミリ秒まで）>_<thread_id>`
+        を新規に生成してキャッシュする（ディレクトリ自体はここでは
+        作成しない）。
+    """
+    thread_id = cl.user_session.get("thread_id") or "_no_session"
+    cached = _state._EXEC_TMP_NAME_CACHE.get(thread_id)
+    if cached is not None:
+        return cached
+    name = None
+    if _state._DEFAULT_WORKDIR is not None:
+        try:
+            for entry in _state._DEFAULT_WORKDIR.iterdir():
+                if entry.name.startswith("_tmp_") and entry.name.endswith(f"_{thread_id}") and entry.is_dir():
+                    name = entry.name[len("_tmp_"):]
+                    break
+        except OSError:
+            pass
+    if name is None:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        name = f"{stamp}_{thread_id}"
+    _state._EXEC_TMP_NAME_CACHE[thread_id] = name
+    return name
+
+
 def _resolve_exec_workdir() -> Path:
     """execute_python_code / run_script が中間生成物を書く実行用ディレクトリ。
 
@@ -163,8 +219,7 @@ def _resolve_exec_workdir() -> Path:
     Returns:
         `_tmp_<thread_id>` ディレクトリの絶対パス。
     """
-    thread_id = cl.user_session.get("thread_id") or "_no_session"
-    d = _state._DEFAULT_WORKDIR / f"_tmp_{thread_id}"
+    d = _state._DEFAULT_WORKDIR / f"_tmp_{_exec_tmp_name()}"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

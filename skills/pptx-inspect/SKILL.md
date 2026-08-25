@@ -39,7 +39,7 @@ metadata:
 ```json
 {"path": "C:\\foo\\template.pptx", "total_slides": 4, "start_slide": 1, "end_slide": 4,
  "slides_count": 4, "slide_width_cm": 25.4, "slide_height_cm": 19.05,
- "result_path": "C:\\...\\_tmp_<thread_id>\\pptx_inspect\\1a2b3c4d_20260805_153012_123456.json"}
+ "result_path": "C:\\...\\_tmp_<name>\\pptx_inspect\\1a2b3c4d_20260805_153012_123456.json"}
 ```
 スライド単位のshape構造（`slides`、各要素は
 `{"index", "layout_name", "layout_index", "shapes", "notes_present"}`。

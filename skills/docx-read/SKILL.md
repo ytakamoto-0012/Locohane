@@ -51,8 +51,8 @@ Word文書（`.docx`）を読み込み、段落・表・文書プロパティ・
   "body_order_count": 452,
   "core_properties": {"title": "報告書", "author": "山田太郎", "created": "2026-01-10T09:00:00", "modified": null},
   "track_changes": {"has_pending_revisions": false, "insertion_count": 0, "deletion_count": 0},
-  "result_path": "C:\\...\\_tmp_<thread_id>\\docx_read\\1a2b3c4d_20260805_153012_123456.json",
-  "path_memory": {"@7": "C:\\...\\_tmp_<thread_id>\\docx_read\\1a2b3c4d_20260805_153012_123456.json"}
+  "result_path": "C:\\...\\_tmp_<name>\\docx_read\\1a2b3c4d_20260805_153012_123456.json",
+  "path_memory": {"@7": "C:\\...\\_tmp_<name>\\docx_read\\1a2b3c4d_20260805_153012_123456.json"}
 }
 ```
 

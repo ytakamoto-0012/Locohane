@@ -196,7 +196,7 @@ import shutil as _guard_shutil
 _GUARD_ALLOWED = [_guard_os.path.realpath(_p) for _p in {allowed_repr}]
 _GUARD_DISPLAY = list(dict.fromkeys(_guard_os.path.realpath(_p) for _p in {display_repr}))
 _GUARD_TMP_ROOTS = [_guard_os.path.realpath(_p) for _p in {tmp_roots_repr}]
-_GUARD_OWN_TMP_NAME = "_tmp_" + _guard_os.environ.get("AGENT_THREAD_ID", "_no_session")
+_GUARD_OWN_TMP_NAME = "_tmp_" + (_guard_os.environ.get("AGENT_EXEC_TMP_NAME") or _guard_os.environ.get("AGENT_THREAD_ID", "_no_session"))
 
 
 def _guard_check_foreign_tmp(_path):

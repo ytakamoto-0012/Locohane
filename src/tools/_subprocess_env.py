@@ -10,7 +10,7 @@ import tempfile
 
 from . import _state
 from ._python_fs_guard import _python_fs_guard_preamble
-from ._workdir import _resolve_exec_workdir, _tmp_dir_parents
+from ._workdir import _exec_tmp_name, _resolve_exec_workdir, _tmp_dir_parents
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +26,17 @@ def _subprocess_env() -> dict[str, str]:
     AGENT_SRC_DIR は execute_python_code のサブプロセスが
     `src/path_memory.py` をインポートするために使う。
     AGENT_DEFAULT_WORKDIR は `_resolve_exec_workdir()`/`path_memory.exec_tmp_dir()`
-    が中間生成物置き場 `_tmp_<thread_id>/` の基準ディレクトリを決めるために使う
+    が中間生成物置き場 `_tmp_<name>/` の基準ディレクトリを決めるために使う
     （run_script の cwd が指すユーザー指定 work_dir は保持日数ベースの自動削除
     対象外のため、cwd 基準にすると中間生成物が消えずに溜まり続ける。常に
     default_workdir 基準に固定することで自動削除の対象に含める。
     `_restrict_default_workdir` 参照）。
+    AGENT_EXEC_TMP_NAME は `_tmp_<name>/` の `<name>` 部分（`_exec_tmp_name()`
+    が生成する、作成時刻プレフィックス付きthread_id）。サブプロセス側
+    （skills配下の各スクリプト・`path_memory.exec_tmp_dir()`）はこの値を使って
+    メインプロセスの `_resolve_exec_workdir()` と同じディレクトリ名を組み立てる。
+    未設定時は AGENT_THREAD_ID（生のthread_id、時刻プレフィックス無し）へ
+    フォールバックする。
 
     config.ini `[paths].bin_path`（既定は空）に列挙されたディレクトリを PATH の
     先頭へ追加する。コマンド名を素の状態で叩く外部バイナリのスキルは、事前に
@@ -40,6 +46,7 @@ def _subprocess_env() -> dict[str, str]:
     """
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     env["AGENT_THREAD_ID"] = cl.user_session.get("thread_id") or "_no_session"
+    env["AGENT_EXEC_TMP_NAME"] = _exec_tmp_name()
     if _state._PATH_MEMORY_DIR is not None:
         env["AGENT_PATH_MEMORY_DIR"] = str(_state._PATH_MEMORY_DIR)
     env["AGENT_PATH_MEMORY_MAX_ENTRIES"] = str(_state._PATH_MEMORY_MAX_ENTRIES)

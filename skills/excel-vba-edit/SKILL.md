@@ -45,7 +45,7 @@ End Sub
 - `--new`なしは対象パスを開いて編集（不在ならエラー）。
 - `--new`直後のシート構成は**「Sheet1」1枚のみ**（Excel COMの`Workbooks.Add()`が作る既定）。「Sheet1〜Sheet3の3枚」を前提にexcel-editスキルの`rename_sheet`等を組むと存在しないシート名でエラーになる。2枚目以降が必要なら先にexcel-editスキルの`add_sheet`で追加してからリネームすること。
 - `--output`省略で対象パスへ上書き保存（出力先拡張子は必ず`.xlsm`）。
-- VBAコードは複数行文字列になりやすいため、`--ops-json`直埋め込みより最初から`--ops-file <絶対パス>`（`execute_python_code`でops配列を組み立て`json.dump`で一時ファイルへ書き出し、そのパスを渡す）を基本とする。**`execute_python_code`のcwdは`run_script`の作業ディレクトリとは別（セッション専用の`_tmp_<thread_id>`）**なので、ユーザーの作業ディレクトリを狙わず単純に相対パス（`open("ops.json", "w", ...)`）で書き、`os.path.abspath("ops.json")`で得た絶対パスをそのまま`--ops-file`に渡せばよい（excel-editスキルSKILL.mdの同記述も参照）。
+- VBAコードは複数行文字列になりやすいため、`--ops-json`直埋め込みより最初から`--ops-file <絶対パス>`（`execute_python_code`でops配列を組み立て`json.dump`で一時ファイルへ書き出し、そのパスを渡す）を基本とする。**`execute_python_code`のcwdは`run_script`の作業ディレクトリとは別（セッション専用の`_tmp_<name>`）**なので、ユーザーの作業ディレクトリを狙わず単純に相対パス（`open("ops.json", "w", ...)`）で書き、`os.path.abspath("ops.json")`で得た絶対パスをそのまま`--ops-file`に渡せばよい（excel-editスキルSKILL.mdの同記述も参照）。
 
 ### 引数一覧
 

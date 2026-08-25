@@ -146,6 +146,15 @@ _DISPATCH_AGENT_SEMAPHORES: "dict[str | None, asyncio.Semaphore]" = {}
 _TOOL_CALL_MAX_PARALLEL: int = 1
 _TOOL_CALL_SEMAPHORES: "dict[str | None, asyncio.Semaphore]" = {}
 
+# `_tmp_<name>`（execute_python_code / run_script の中間生成物置き場）の
+# `<name>` 部分（作成時刻プレフィックス付きthread_id）を、スレッド（thread_id）
+# ごとにキャッシュする辞書。_workdir.py の _exec_tmp_name() が使う。
+# キャッシュしないと、同一スレッド内で名前を計算する複数の呼び出し箇所
+# （環境変数へ渡す計算とディレクトリ実体を作る計算）がごく僅かなタイミング差で
+# 異なる名前を生成してしまい、書き込みガードと実ディレクトリ名が食い違う
+# 事故があった（2026-08-26 発見・修正）。
+_EXEC_TMP_NAME_CACHE: "dict[str, str]" = {}
+
 
 def _get_session_semaphore(registry: "dict[str | None, asyncio.Semaphore]", max_parallel: int) -> "asyncio.Semaphore | None":
     """現在のセッション（llm.get_current_session()）専用の Semaphore を
@@ -166,12 +175,14 @@ def _get_session_semaphore(registry: "dict[str | None, asyncio.Semaphore]", max_
 
 def forget_session_tool_semaphores(session_id: str) -> None:
     """セッション終了時（@cl.on_chat_end）に、そのセッション専用の Semaphore
-    エントリを辞書から削除する。Semaphore 自体は参照が無くなり次第GCされるが、
-    辞書キー（session_id文字列）がプロセス寿命中ずっと残り続けるのを防ぐのが
-    目的（src/llm.py の forget_session() と同じ理由）。
+    エントリ・`_exec_tmp_name()` キャッシュエントリを辞書から削除する。
+    Semaphore 自体は参照が無くなり次第GCされるが、辞書キー（session_id文字列）
+    がプロセス寿命中ずっと残り続けるのを防ぐのが目的（src/llm.py の
+    forget_session() と同じ理由）。
     """
     _TOOL_CALL_SEMAPHORES.pop(session_id, None)
     _DISPATCH_AGENT_SEMAPHORES.pop(session_id, None)
+    _EXEC_TMP_NAME_CACHE.pop(session_id, None)
 
 
 async def _tool_call_semaphore_wrap(request, execute):

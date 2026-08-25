@@ -38,9 +38,9 @@ DOCXページを画像化してLLMに見せるスキルです。`render_docx.py`
 ```json
 {"path": "C:\\foo\\report.docx", "tool": "docx", "total_pages": 3, "start_page": 1, "end_page": 3, "dpi": 300, "target_dpi": 150, "crop_applied": false,
  "images": [
-   {"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300},
-   {"page": 2, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300},
-   {"page": 3, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300}
+   {"page": 1, "image_path": "C:\\...\\_tmp_<name>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300},
+   {"page": 2, "image_path": "C:\\...\\_tmp_<name>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300},
+   {"page": 3, "image_path": "C:\\...\\_tmp_<name>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300}
  ]}
 ```
 `images`には`total_pages`件全てが含まれる。
@@ -59,7 +59,7 @@ DOCXページを画像化してLLMに見せるスキルです。`render_docx.py`
   返るJSONの形が通常時と異なる点に注意（`images: []`に加えて`start_page`/`end_page`が
   `null`になり、**`target_dpi`キー自体が無くなる**）。
 - 生成されるPNGはセッション専用一時フォルダ（ユーザーが設定した作業ディレクトリとは別で、`default_workdir`配下）
-  （`_tmp_<thread_id>/rendered/`）に保存されます。同一ファイルの再実行時は
+  （`_tmp_<name>/rendered/`）に保存されます。同一ファイルの再実行時は
   上書きされ、会話終了時に自動的に削除されます。
 - 依存パッケージ `pywin32`・`pypdfium2`・`pillow` が実行環境に無い場合は
   `ImportError` で終了コード非0になります。

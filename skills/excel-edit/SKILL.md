@@ -30,7 +30,7 @@ xlsx/xlsm の新規作成・既存編集を行うスキル。`edit_excel.py` を
 
 opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`run_script`はシェルを介さず引数をそのまま子プロセスへ渡すため引用符エスケープは不要）。次のいずれかに該当する場合は、最初から（構文エラーを待たず）`execute_python_code`でopsをlist/dictとして組み立て`json.dump`で一時ファイルへ書き出し、`--ops-file <絶対パス>`で渡す：①ops要素数が5個超、②1つの文字列値に日本語10文字超を含む。`--ops-json`で構文エラー（引用符の閉じ忘れ等）が1回でも出たら、直そうとせず即座に`--ops-file`方式へ切り替える。
 
-**`execute_python_code`の`cwd`は`run_script`の作業ディレクトリ（＝ユーザーが設定した作業ディレクトリ）とは別物**（`execute_python_code`はセッション専用の一時フォルダ`_tmp_<thread_id>`をcwdとして実行される）。opsファイルはユーザーの作業ディレクトリを狙わず、単純に相対パス（例:`open("ops.json", "w", ...)`）で書けばよい。`run_script`側は自セッションの`_tmp_<thread_id>`配下を読み取れるので、`os.path.abspath("ops.json")`で得た絶対パスをそのまま`--ops-file`に渡せば動く。ユーザーの作業ディレクトリ直下に`_tmp_`で始まる名前のファイルを自分で作ろうとしない（無関係な安全ガードに引っかかる）。
+**`execute_python_code`の`cwd`は`run_script`の作業ディレクトリ（＝ユーザーが設定した作業ディレクトリ）とは別物**（`execute_python_code`はセッション専用の一時フォルダ`_tmp_<name>`をcwdとして実行される）。opsファイルはユーザーの作業ディレクトリを狙わず、単純に相対パス（例:`open("ops.json", "w", ...)`）で書けばよい。`run_script`側は自セッションの`_tmp_<name>`配下を読み取れるので、`os.path.abspath("ops.json")`で得た絶対パスをそのまま`--ops-file`に渡せば動く。ユーザーの作業ディレクトリ直下に`_tmp_`で始まる名前のファイルを自分で作ろうとしない（無関係な安全ガードに引っかかる）。
 
 生成・更新したファイルは出力JSONの`path_memory`（例`{"@12": "C:\\foo\\book.xlsx"}`）に自動登録される。以降`run_script`の`script_args`には絶対パスの代わりに`@N`をそのまま渡せる。
 

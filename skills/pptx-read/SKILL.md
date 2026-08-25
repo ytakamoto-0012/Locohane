@@ -37,7 +37,7 @@ pptxの読み込み（テキスト・表・発表者ノートの抽出）を行�
 ```json
 {"path": "C:\\foo\\sample.pptx", "total_slides": 12, "start_slide": 1, "end_slide": 12,
  "slides_count": 12,
- "result_path": "C:\\...\\_tmp_<thread_id>\\pptx_read\\1a2b3c4d_20260805_153012_123456.json"}
+ "result_path": "C:\\...\\_tmp_<name>\\pptx_read\\1a2b3c4d_20260805_153012_123456.json"}
 ```
 スライドごとの本文（`slides`、各要素は `{"index", "title", "texts", "tables", "notes"}`）は
 標準出力からは省かれ、`result_path` が指すJSONファイルにのみ含まれます。

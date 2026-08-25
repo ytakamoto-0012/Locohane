@@ -109,12 +109,14 @@ from excel_common import setup_utf8_stdio, ...  # スキルのファミリーに
 子プロセスに注入される以下の環境変数を使う（`src/tools.py`の`_subprocess_env()`）:
 
 - `AGENT_SRC_DIR`: `src/path_memory.py`をimportするためのパス
-- `AGENT_THREAD_ID` / `AGENT_PATH_MEMORY_DIR` / `AGENT_PATH_MEMORY_MAX_ENTRIES`: `@N`パスメモリー登録用
+- `AGENT_THREAD_ID` / `AGENT_PATH_MEMORY_DIR` / `AGENT_PATH_MEMORY_MAX_ENTRIES`: `@N`パスメモリー登録用（`register_output_path`）
+- `AGENT_EXEC_TMP_NAME`: `_tmp_<name>/`（中間生成物置き場）のディレクトリ名（`write_json_result`）。未設定時は`AGENT_THREAD_ID`（作成時刻プレフィックス無しの生のthread_id）へフォールバックする
 
-いずれも**未設定時は例外を出さずNoneへフォールバックする**設計（`AGENT_THREAD_ID`
-未設定時は`"_no_session"`扱い）。そのため他基盤でこれらの環境変数を用意しなくても
-スクリプト自体は単体で動作するが、`@N`によるパス参照の簡略化機能だけが働かない
-（生成物のパスは`result_path`/`output_path`に絶対パスとしてそのまま出力される）。
+いずれも**未設定時は例外を出さずNoneへフォールバックする**設計（`AGENT_THREAD_ID`/
+`AGENT_EXEC_TMP_NAME`とも未設定時は`"_no_session"`扱い）。そのため他基盤でこれらの
+環境変数を用意しなくてもスクリプト自体は単体で動作するが、`@N`によるパス参照の
+簡略化機能だけが働かない（生成物のパスは`result_path`/`output_path`に絶対パスと
+してそのまま出力される）。
 
 ## 3. read/inspect側がwrite側の全能力を読み返せるとは限らない
 

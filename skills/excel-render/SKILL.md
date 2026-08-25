@@ -36,7 +36,7 @@ PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フ�
 ```json
 {"path": "C:\\foo\\book.xlsx", "tool": "excel", "total_pages": 5, "start_page": 1, "end_page": 5,
  "dpi": 300, "target_dpi": 300, "crop_applied": true,
- "images": [{"page": 1, "image_path": "C:\\...\\_tmp_<thread_id>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300, "cropped": true}, ...]}
+ "images": [{"page": 1, "image_path": "C:\\...\\_tmp_<name>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300, "cropped": true}, ...]}
 ```
 `images`には全ページ（=全シート、通常は`total_pages`件）が含まれる。
 `images`の各要素は常に`original_dpi`（クロップ前の実解像度）を持つ。`cropped`（bbox検出に
@@ -54,7 +54,7 @@ PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フ�
 
 ## エッジケース
 
-ファイル不在／ディレクトリ指定／拡張子が`.xlsx`・`.xlsm`・`.xls`以外／壊れたファイル／Excel未インストールはエラー終了。シートが1枚も無い等でPDFが0ページになった場合は終了コード0で返るが、通常時とJSONの形が異なる点に注意（`images: []`に加え`start_page`/`end_page`が`null`になり、**`target_dpi`キー自体が無くなる**）。生成PNGは`_tmp_<thread_id>/rendered/`に保存され同一ファイル再実行時は上書き、会話終了時に自動削除。`pywin32`/`pypdfium2`/`pillow`未導入は`ImportError`（該当する`pip install <パッケージ名>`をユーザーに促す）。
+ファイル不在／ディレクトリ指定／拡張子が`.xlsx`・`.xlsm`・`.xls`以外／壊れたファイル／Excel未インストールはエラー終了。シートが1枚も無い等でPDFが0ページになった場合は終了コード0で返るが、通常時とJSONの形が異なる点に注意（`images: []`に加え`start_page`/`end_page`が`null`になり、**`target_dpi`キー自体が無くなる**）。生成PNGは`_tmp_<name>/rendered/`に保存され同一ファイル再実行時は上書き、会話終了時に自動削除。`pywin32`/`pypdfium2`/`pillow`未導入は`ImportError`（該当する`pip install <パッケージ名>`をユーザーに促す）。
 
 内部でEXCEL.EXEを一時起動する。処理完了時は必ず終了させるが、`run_script`のタイムアウト等でスクリプトが強制終了された場合は残留する可能性がある。この場合はタスクマネージャーでの手動終了ではなく、`excel-recalc`スキルの`recalc_excel.py`または`excel-vba-edit`スキルの`edit_vba.py`を`script_args`を`["--recover-locks"]`だけにして実行する（自セッションがexcel-render等で起動して残留したCOMプロセスのうち、まだ生存しているものだけを内部で終了する）。
 

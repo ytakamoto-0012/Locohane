@@ -124,8 +124,9 @@ def test_subprocess_write_directly_inside_default_workdir_is_blocked(tmp_path):
 def test_subprocess_write_inside_default_workdir_own_tmp_dir_succeeds(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
+    tmp_name = tools._workdir._exec_tmp_name()
     env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
-    target = tools._state._DEFAULT_WORKDIR / "_tmp_thread-1" / "out.txt"
+    target = tools._state._DEFAULT_WORKDIR / f"_tmp_{tmp_name}" / "out.txt"
 
     try:
         result = _run_script(workdir, f'open(r"{target}", "w", encoding="utf-8").write("ok")\n', env)
@@ -198,7 +199,8 @@ def test_subprocess_read_foreign_tmp_dir_is_blocked(tmp_path):
 def test_subprocess_read_own_tmp_dir_is_permitted(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
-    own = workdir / "_tmp_thread-1"
+    tmp_name = tools._workdir._exec_tmp_name()
+    own = workdir / f"_tmp_{tmp_name}"
     own.mkdir()
     mine = own / "mine.txt"
     mine.write_text("mine", encoding="utf-8")
