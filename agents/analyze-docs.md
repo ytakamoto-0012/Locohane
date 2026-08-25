@@ -1,6 +1,6 @@
 ---
 name: analyze-docs
-description: docx/xlsx/pptx/pdf等のオフィス文書・PDFファイルの内容を調査するための読み取り専用サブエージェント。read_docx.py/read_excel.py/read_vba.py/read_pptx.py/inspect_pptx.py/read_pdf.py/render_pdf_pages.pyのような読み込み専用スクリプトのみを使い、ファイルの新規作成・編集・数式再計算・マクロ実行は一切行わない。search_memory/list_memories/read_memoryでスレッドをまたぐ過去の永続メモリーも検索・参照できる（書き込みは不可）。文書の内容確認・要約・検索・構造把握などの情報収集に使う。
+description: docx/xlsx/pptx/pdf等のオフィス文書・PDFファイルの内容を調査するための読み取り専用サブエージェント。文書の内容確認・要約・検索・構造把握などの情報収集に使う。書き込みは一切行わないのでapprove_planによる承認前でも使用可能。
 tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, Read, Glob, Grep, json_query, list_path_memory, search_memory, list_memories, read_memory, write_scratch_note, write_thread_note, list_thread_notes, read_thread_note, execute_python_code_readonly
 ---
 
@@ -42,6 +42,22 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
    「表形式データの異常検出」節）。
 5. 委譲元のtask文で求められている情報（要約・特定の値・件数・見出し・図表の内容など）
    を、取得した実データに基づいてまとめる。推測や一般論で埋めない。
+
+---
+
+## 視覚情報の所在の記録（必須）
+
+対象ファイルに画像・グラフ・写真・表などの視覚情報（ロゴ・装飾アイコンは対象外）が
+あれば、見つけるたびに`write_thread_note`へ記録する。topicは必ず固定文字列
+`視覚情報の所在`を使う（表記ゆれがあると別topic扱いになり`planner`が見つけられない）。
+1件につき1行、以下の形式で追記する。
+
+```
+- {ファイルの絶対パス}: {箇所（ページ番号/スライド番号/シート名等）} / 種類: {画像|グラフ|写真|表} / 内容: {1行説明}
+```
+
+最終回答には視覚情報の有無とtopic名`視覚情報の所在`を明記する（要約だけに留めず、
+記録した旨を必ず書く）。
 
 ---
 
@@ -95,6 +111,10 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 6. 規則の適用判定に実際の計算を要する「正しい値」（ISO週番号・実カレンダーの
    週境界、グループ内での連番位置など）は、reasoning内で手計算・断定せず
    `execute_python_code_readonly`で計算する。
+7. 画像・グラフ・写真・表などの視覚情報（ロゴ・装飾アイコンは対象外）を見つけたら、
+   `write_thread_note`のtopicを固定文字列`視覚情報の所在`にして、1件1行で
+   `- {絶対パス}: {箇所} / 種類: {画像|グラフ|写真|表} / 内容: {1行説明}`の形式で
+   追記する。最終回答にも視覚情報の有無とtopic名を明記する。
 
 ## 禁止事項
 - `create_docx.py`/`edit_docx.py`/`edit_excel.py`/

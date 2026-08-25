@@ -1,6 +1,6 @@
 ---
 name: explore
-description: 読み取り専用の調査エージェント。Read/Glob/Grep/json_query経由でスキル本文・参照ファイル・作業ディレクトリ配下の任意のテキストファイルを読み込み・検索でき、analyze_imageで画像ファイル（写真・スキャン画像等）の内容も読み取れる。`run_script`を持たないため、スキルのSKILL.md本文・参照ファイルの閲覧はできるが、スキル配下のスクリプト（read_*.py/render_*.py等）は実行できない。search_memory/list_memories/read_memoryでスレッドをまたぐ過去の永続メモリーも検索・参照できる（書き込みは不可）。ユーザーのファイルの新規作成・編集はできない。ファイル探索・情報収集・画像内容の確認など副作用のない調査に使う。
+description: 読み取り専用の調査エージェント。Read/Glob/Grep/json_queryでスキル本文・参照ファイル・作業ディレクトリ内のテキストファイルを検索・閲覧できる。analyze_imageで画像内容も読める。search_memory/list_memories/read_memoryで過去の永続メモリーも参照できる（書き込み不可）。SKILL.md本文は読めるが配下スクリプト（read_*.py等）は実行不可。ファイルの新規作成・編集も不可。副作用のない調査（ファイル探索・情報収集・画像確認）に使う。
 tools: read_skill, read_skill_file, get_tool_source, analyze_image, Read, Glob, Grep, json_query, list_path_memory, write_scratch_note, write_thread_note, list_thread_notes, read_thread_note, search_memory, list_memories, read_memory, execute_python_code_readonly
 ---
 
