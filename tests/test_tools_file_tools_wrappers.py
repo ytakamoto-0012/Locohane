@@ -37,10 +37,10 @@ def file_tools_env(tmp_path, monkeypatch):
     workdir.mkdir()
     path_memory_dir = tmp_path / "path_memory_data"
 
-    monkeypatch.setattr(tools, "_PATH_MEMORY_DIR", path_memory_dir)
-    monkeypatch.setattr(tools, "_PATH_MEMORY_MAX_ENTRIES", 500)
-    monkeypatch.setattr(tools, "_DEFAULT_WORKDIR", workdir)
-    monkeypatch.setattr(tools, "_LLM_CONFIG", None)
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_DIR", path_memory_dir)
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_MAX_ENTRIES", 500)
+    monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", workdir)
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", None)
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
 
     return workdir
@@ -259,8 +259,8 @@ def skill_tools_env(tmp_path, monkeypatch):
     """
     root = tmp_path / "skills"
     root.mkdir()
-    monkeypatch.setattr(tools, "_SKILLS_ROOTS", [root])
-    monkeypatch.setattr(tools, "_LLM_CONFIG", None)
+    monkeypatch.setattr(tools._state, "_SKILLS_ROOTS", [root])
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", None)
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
     return root
 

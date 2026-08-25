@@ -18,8 +18,8 @@ from src import tools
 def path_memory_env(tmp_path, monkeypatch):
     path_memory_dir = tmp_path / "path_memory_data"
 
-    monkeypatch.setattr(tools, "_PATH_MEMORY_DIR", path_memory_dir)
-    monkeypatch.setattr(tools, "_PATH_MEMORY_MAX_ENTRIES", 500)
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_DIR", path_memory_dir)
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_MAX_ENTRIES", 500)
 
     class _FakeUserSession:
         def get(self, key):
@@ -78,7 +78,7 @@ def test_trailing_japanese_is_not_captured_into_path(path_memory_env) -> None:
 
 
 def test_returns_text_unchanged_when_path_memory_dir_unset(monkeypatch) -> None:
-    monkeypatch.setattr(tools, "_PATH_MEMORY_DIR", None)
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_DIR", None)
 
     text = r"\\cadstr0\DT_CAE\Datas\model.prt を確認して"
 

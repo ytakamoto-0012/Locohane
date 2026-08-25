@@ -68,7 +68,7 @@ def _config(tmp_path: Path) -> _FakeConfig:
 
 @pytest.mark.asyncio
 async def test_thread_note_status_is_injected_independently_of_summary_llm(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(tools, "_DEFAULT_WORKDIR", tmp_path)
+    monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", tmp_path)
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession({"thread_id": "t1"}))
     tools.write_thread_note.invoke({"topic": "調査結果", "content": "件数は123件だった"})
 
@@ -83,7 +83,7 @@ async def test_thread_note_status_is_injected_independently_of_summary_llm(monke
 
 @pytest.mark.asyncio
 async def test_no_thread_note_appends_nothing(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(tools, "_DEFAULT_WORKDIR", tmp_path)
+    monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", tmp_path)
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession({"thread_id": "t1"}))
 
     result = await maybe_compact(_messages(), _CapturingModel(), _config(tmp_path))

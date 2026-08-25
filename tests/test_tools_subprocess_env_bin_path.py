@@ -8,12 +8,17 @@ evals・app.py実行時のどちらも追加の手動設定なしで呼び出せ
 機能（2026-08-01追加）。
 """
 
+import importlib
 import os
 from dataclasses import dataclass, field
 
 import pytest
 
 from src import tools
+
+# tools._subprocess_env は同名の関数を持つモジュールで、`tools` パッケージ側は
+# 関数を再エクスポートしていないため、モジュール自体は importlib で直接取得する。
+_subprocess_env_module = importlib.import_module("src.tools._subprocess_env")
 
 
 class _FakeUserSession:
@@ -32,17 +37,17 @@ class _FakeConfig:
 
 @pytest.fixture(autouse=True)
 def _base_env(monkeypatch):
-    monkeypatch.setattr(tools, "_PATH_MEMORY_DIR", None)
-    monkeypatch.setattr(tools, "_PATH_MEMORY_MAX_ENTRIES", 500)
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_DIR", None)
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_MAX_ENTRIES", 500)
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
 
 
 def test_existing_bin_dir_is_prepended_to_path(tmp_path, monkeypatch):
     bin_dir = tmp_path / "tools" / "bin"
     bin_dir.mkdir(parents=True)
-    monkeypatch.setattr(tools, "_LLM_CONFIG", _FakeConfig(bin_path=[bin_dir]))
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", _FakeConfig(bin_path=[bin_dir]))
 
-    env = tools._subprocess_env()
+    env = _subprocess_env_module._subprocess_env()
 
     entries = env["PATH"].split(os.pathsep)
     assert str(bin_dir) == entries[0]
@@ -51,9 +56,9 @@ def test_existing_bin_dir_is_prepended_to_path(tmp_path, monkeypatch):
 def test_nonexistent_bin_dir_is_ignored(tmp_path, monkeypatch):
     missing = tmp_path / "does_not_exist" / "bin"
     original_path = os.environ.get("PATH", "")
-    monkeypatch.setattr(tools, "_LLM_CONFIG", _FakeConfig(bin_path=[missing]))
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", _FakeConfig(bin_path=[missing]))
 
-    env = tools._subprocess_env()
+    env = _subprocess_env_module._subprocess_env()
 
     assert str(missing) not in env.get("PATH", "")
     assert env.get("PATH", "") == original_path
@@ -61,9 +66,9 @@ def test_nonexistent_bin_dir_is_ignored(tmp_path, monkeypatch):
 
 def test_no_config_leaves_path_untouched(monkeypatch):
     original_path = os.environ.get("PATH", "")
-    monkeypatch.setattr(tools, "_LLM_CONFIG", None)
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", None)
 
-    env = tools._subprocess_env()
+    env = _subprocess_env_module._subprocess_env()
 
     assert env.get("PATH", "") == original_path
 
@@ -73,9 +78,9 @@ def test_multiple_bin_dirs_all_prepended_in_order(tmp_path, monkeypatch):
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
-    monkeypatch.setattr(tools, "_LLM_CONFIG", _FakeConfig(bin_path=[first, second]))
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", _FakeConfig(bin_path=[first, second]))
 
-    env = tools._subprocess_env()
+    env = _subprocess_env_module._subprocess_env()
 
     entries = env["PATH"].split(os.pathsep)
     assert entries[0] == str(first)

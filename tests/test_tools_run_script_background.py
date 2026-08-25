@@ -141,26 +141,26 @@ def _stub_prepare_script_execution(monkeypatch, cmd: list, workdir) -> None:
     def _fake(skill_name, script_filename, script_args=None):
         return cmd, workdir
 
-    monkeypatch.setattr(tools, "_prepare_script_execution", _fake)
+    monkeypatch.setattr(tools._script_job, "_prepare_script_execution", _fake)
 
 
 def _setup(monkeypatch, tmp_path, thread_id: str = "thread-1") -> None:
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession(thread_id))
-    monkeypatch.setattr(tools, "_BACKGROUND_JOBS", {})
-    monkeypatch.setattr(tools, "_CODE_EXEC_ENABLED", True)
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS", 5)
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS", 1800)
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(tools._script_job, "_BACKGROUND_JOBS", {})
+    monkeypatch.setattr(tools._state, "_CODE_EXEC_ENABLED", True)
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS", 5)
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS", 1800)
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS", 0)
     # 既定は「タイムアウトせずすぐ終わる」テストが安全上限に絶対到達しないよう
     # 十分大きめにしつつ、バグで本当にハングした場合にテストが長時間待たされ
     # ないよう短めにしておく（tests/test_tools_dispatch_agent.py と同じ方針）。
     # 安全上限フォールバックを検証するテストではさらに小さい値へ個別に上書きする。
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 5)
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS", 5)
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 5)
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS", 5)
     _install_fake_message(monkeypatch)
     workdir = tmp_path / "workdir"
     workdir.mkdir(exist_ok=True)
-    monkeypatch.setattr(tools, "_DEFAULT_WORKDIR", workdir)
+    monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", workdir)
 
 
 def _extract_job_id(text: str) -> str:
@@ -172,18 +172,18 @@ def _extract_job_id(text: str) -> str:
 async def _wait_until_job_registered(timeout: float = 2.0) -> "tools._BackgroundJob":
     elapsed = 0.0
     step = 0.01
-    while not tools._BACKGROUND_JOBS and elapsed < timeout:
+    while not tools._script_job._BACKGROUND_JOBS and elapsed < timeout:
         await asyncio.sleep(step)
         elapsed += step
-    assert tools._BACKGROUND_JOBS, "ジョブが登録されませんでした"
-    return next(iter(tools._BACKGROUND_JOBS.values()))
+    assert tools._script_job._BACKGROUND_JOBS, "ジョブが登録されませんでした"
+    return next(iter(tools._script_job._BACKGROUND_JOBS.values()))
 
 
 @pytest.mark.asyncio
 async def test_run_script_background_normal_completion_returns_final_result_directly(monkeypatch, tmp_path) -> None:
     """安全上限内に終わる通常ケースでは、1回の呼び出しで最終結果がそのまま返る。"""
     _setup(monkeypatch, tmp_path)
-    workdir = tools._DEFAULT_WORKDIR
+    workdir = tools._state._DEFAULT_WORKDIR
     _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
     fake_process = _FakeProcess(stdout_lines=[b"hello\n"], exit_code=0)
     _install_fake_subprocess(monkeypatch, fake_process)
@@ -193,7 +193,7 @@ async def test_run_script_background_normal_completion_returns_final_result_dire
     assert "job_id=" not in result
     assert "[終了コード] 0" in result
     assert "[標準出力]\nhello" in result
-    assert tools._BACKGROUND_JOBS == {}
+    assert tools._script_job._BACKGROUND_JOBS == {}
 
 
 @pytest.mark.asyncio
@@ -225,8 +225,8 @@ async def test_execute_python_code_background_normal_completion_registers_output
 async def test_safety_cap_fallback_returns_job_id_and_keeps_job_running(monkeypatch, tmp_path) -> None:
     """安全上限を超えるとjob_idを返してターンを終えるが、ジョブ自体は動き続ける（asyncio.shield）。"""
     _setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
-    workdir = tools._DEFAULT_WORKDIR
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    workdir = tools._state._DEFAULT_WORKDIR
     _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
     fake_process = _FakeProcess(started_running=True)
     _install_fake_subprocess(monkeypatch, fake_process)
@@ -235,7 +235,7 @@ async def test_safety_cap_fallback_returns_job_id_and_keeps_job_running(monkeypa
     assert "job_id=" in started
     job_id = _extract_job_id(started)
 
-    job = tools._BACKGROUND_JOBS[job_id]
+    job = tools._script_job._BACKGROUND_JOBS[job_id]
     assert job.status == "running"
     assert not job.runner_task.done()  # shieldにより安全上限超過でもキャンセルされていない
 
@@ -250,9 +250,9 @@ async def test_progress_is_pushed_without_llm_and_stops_after_completion(monkeyp
     """進捗pushはLLMを介さず cl.Message で type="system_message" として直接送られ、
     ジョブ完了後は止まる。"""
     _setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS", 0.02)
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS", 0.02)
     sent = _install_fake_message(monkeypatch)
-    workdir = tools._DEFAULT_WORKDIR
+    workdir = tools._state._DEFAULT_WORKDIR
     _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
     fake_process = _FakeProcess(started_running=True)
     _install_fake_subprocess(monkeypatch, fake_process)
@@ -278,8 +278,8 @@ async def test_progress_is_pushed_without_llm_and_stops_after_completion(monkeyp
 @pytest.mark.asyncio
 async def test_cross_session_access_is_rejected(monkeypatch, tmp_path) -> None:
     _setup(monkeypatch, tmp_path, thread_id="session-a")
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
-    workdir = tools._DEFAULT_WORKDIR
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    workdir = tools._state._DEFAULT_WORKDIR
     _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
     fake_process = _FakeProcess(started_running=True)
     _install_fake_subprocess(monkeypatch, fake_process)
@@ -294,15 +294,15 @@ async def test_cross_session_access_is_rejected(monkeypatch, tmp_path) -> None:
     assert "現在のセッションのものではありません" in stop_result
 
     fake_process.finish(0)
-    await tools._BACKGROUND_JOBS[job_id].runner_task
+    await tools._script_job._BACKGROUND_JOBS[job_id].runner_task
 
 
 @pytest.mark.asyncio
 async def test_poll_rate_limiting_rejects_too_soon(monkeypatch, tmp_path) -> None:
     _setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS", 60)
-    workdir = tools._DEFAULT_WORKDIR
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS", 60)
+    workdir = tools._state._DEFAULT_WORKDIR
     _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
     fake_process = _FakeProcess(started_running=True)
     _install_fake_subprocess(monkeypatch, fake_process)
@@ -318,34 +318,34 @@ async def test_poll_rate_limiting_rejects_too_soon(monkeypatch, tmp_path) -> Non
     assert job_id in second
 
     fake_process.finish(0)
-    await tools._BACKGROUND_JOBS[job_id].runner_task
+    await tools._script_job._BACKGROUND_JOBS[job_id].runner_task
 
 
 @pytest.mark.asyncio
 async def test_stop_script_job_cancels_running_job_cleanly(monkeypatch, tmp_path) -> None:
     _setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
-    workdir = tools._DEFAULT_WORKDIR
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    workdir = tools._state._DEFAULT_WORKDIR
     _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
     fake_process = _FakeProcess(started_running=True)
     _install_fake_subprocess(monkeypatch, fake_process)
 
     started = await tools.run_script_background.ainvoke({"skill_name": "demo", "script_filename": "count.py"})
     job_id = _extract_job_id(started)
-    job = tools._BACKGROUND_JOBS[job_id]
+    job = tools._script_job._BACKGROUND_JOBS[job_id]
 
     result = await tools.stop_script_job.ainvoke({"job_id": job_id})
 
     assert result.startswith("強制終了しました。")
     assert job.status == "killed"
     assert fake_process.killed is True
-    assert job_id not in tools._BACKGROUND_JOBS
+    assert job_id not in tools._script_job._BACKGROUND_JOBS
 
 
 @pytest.mark.asyncio
 async def test_exception_inside_job_is_returned_as_error_not_lost(monkeypatch, tmp_path) -> None:
     _setup(monkeypatch, tmp_path)
-    workdir = tools._DEFAULT_WORKDIR
+    workdir = tools._state._DEFAULT_WORKDIR
     _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
     fake_process = _FakeProcess(exit_code=0)
     fake_process.stdout = _RaisingStreamReader([], fake_process._gate, raise_after=0)
@@ -355,7 +355,7 @@ async def test_exception_inside_job_is_returned_as_error_not_lost(monkeypatch, t
 
     assert result.startswith("エラー: バックグラウンド実行中に問題が発生しました: boom")
     assert "Traceback (most recent call last)" in result
-    assert tools._BACKGROUND_JOBS == {}
+    assert tools._script_job._BACKGROUND_JOBS == {}
 
 
 @pytest.mark.asyncio
@@ -363,8 +363,8 @@ async def test_timeout_kills_process_and_returns_timeout_prefixed_result(monkeyp
     """_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS（既存の強制終了ロジック）が
     インライン待機の統合後も変わらず機能することの回帰確認。"""
     _setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(tools, "_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS", 0.05)
-    workdir = tools._DEFAULT_WORKDIR
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS", 0.05)
+    workdir = tools._state._DEFAULT_WORKDIR
     _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
     fake_process = _FakeProcess(started_running=True)
     _install_fake_subprocess(monkeypatch, fake_process)
@@ -374,19 +374,19 @@ async def test_timeout_kills_process_and_returns_timeout_prefixed_result(monkeyp
     assert "job_id=" not in result
     assert "秒の上限に達したため強制終了しました" in result
     assert fake_process.killed is True
-    assert tools._BACKGROUND_JOBS == {}
+    assert tools._script_job._BACKGROUND_JOBS == {}
 
 
 @pytest.mark.asyncio
 async def test_run_script_background_unknown_skill_creates_no_job(monkeypatch, tmp_path) -> None:
     _setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(tools, "_SKILLS_ROOTS", [tmp_path])  # 実在するがスキルが無いルート
+    monkeypatch.setattr(tools._state, "_SKILLS_ROOTS", [tmp_path])  # 実在するがスキルが無いルート
     captured = _install_fake_subprocess(monkeypatch, _FakeProcess())
 
     result = await tools.run_script_background.ainvoke({"skill_name": "no-such-skill", "script_filename": "x.py"})
 
     assert result.startswith("エラー:")
-    assert tools._BACKGROUND_JOBS == {}
+    assert tools._script_job._BACKGROUND_JOBS == {}
     assert "cmd" not in captured
 
 
@@ -398,7 +398,7 @@ async def test_execute_python_code_background_without_plan_approval_creates_no_j
     result = await tools.execute_python_code_background.ainvoke({"code": "print(1)"})
 
     assert result.startswith("エラー:")
-    assert tools._BACKGROUND_JOBS == {}
+    assert tools._script_job._BACKGROUND_JOBS == {}
     assert "cmd" not in captured
 
 
@@ -411,5 +411,5 @@ async def test_execute_python_code_background_empty_code_creates_no_job(monkeypa
     result = await tools.execute_python_code_background.ainvoke({"code": "   "})
 
     assert result.startswith("エラー:")
-    assert tools._BACKGROUND_JOBS == {}
+    assert tools._script_job._BACKGROUND_JOBS == {}
     assert "cmd" not in captured

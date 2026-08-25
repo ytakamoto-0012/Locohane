@@ -15,7 +15,7 @@ from src import tools
 def skills_root(tmp_path, monkeypatch):
     root = tmp_path / "skills"
     root.mkdir()
-    monkeypatch.setattr(tools, "_SKILLS_ROOTS", [root])
+    monkeypatch.setattr(tools._state, "_SKILLS_ROOTS", [root])
     return root
 
 
@@ -39,7 +39,7 @@ def test_resolves_file_directly_under_scripts(skills_root) -> None:
     target = scripts_dir / "count.py"
     target.write_text("print('hi')", encoding="utf-8")
 
-    resolved = tools._resolve_script_filename("demo-skill", "count.py")
+    resolved = tools._safe_path._resolve_script_filename("demo-skill", "count.py")
 
     assert resolved == target.resolve()
 
@@ -53,7 +53,7 @@ def test_prefers_shallowest_match_when_duplicated(skills_root) -> None:
     deep = nested_dir / "read_file.py"
     deep.write_text("deep", encoding="utf-8")
 
-    resolved = tools._resolve_script_filename("demo-skill", "read_file.py")
+    resolved = tools._safe_path._resolve_script_filename("demo-skill", "read_file.py")
 
     assert resolved == shallow.resolve()
 
@@ -64,7 +64,7 @@ def test_legacy_scripts_prefix_is_absorbed_via_basename(skills_root) -> None:
     target = scripts_dir / "read_file.py"
     target.write_text("print('hi')", encoding="utf-8")
 
-    resolved = tools._resolve_script_filename("demo-skill", "scripts/read_file.py")
+    resolved = tools._safe_path._resolve_script_filename("demo-skill", "scripts/read_file.py")
 
     assert resolved == target.resolve()
 
@@ -74,11 +74,11 @@ def test_missing_file_raises_value_error(skills_root) -> None:
     scripts_dir.mkdir(parents=True)
 
     with pytest.raises(ValueError, match="見つかりません"):
-        tools._resolve_script_filename("demo-skill", "nope.py")
+        tools._safe_path._resolve_script_filename("demo-skill", "nope.py")
 
 
 def test_missing_scripts_dir_raises_value_error(skills_root) -> None:
     (skills_root / "demo-skill").mkdir()
 
     with pytest.raises(ValueError, match="scripts"):
-        tools._resolve_script_filename("demo-skill", "count.py")
+        tools._safe_path._resolve_script_filename("demo-skill", "count.py")

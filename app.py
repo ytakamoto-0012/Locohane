@@ -2693,11 +2693,11 @@ async def _on_message_impl(message: cl.Message) -> None:
     turn_broken_exc: Exception | None = None
     checkpointer_needs_rebuild: bool = False
     # LLMサーバーとの通信エラー（LLM_CONNECTION_ERRORS）を検知した場合の
-    # 自動リトライ回数と上限（[llm].main_connection_error_max_retries）。
+    # 自動リトライ回数と上限（[graph].connection_error_max_retries）。
     # loop_exc/empty応答用の total_retries とは別予算で管理する（下の
     # except LLM_CONNECTION_ERRORS / if turn_broken_exc is not None 参照）。
     connection_retry_attempt = 0
-    connection_error_max_retries = _config.main_connection_error_max_retries
+    connection_error_max_retries = _config.graph_connection_error_max_retries
     # total_retries（無言終了・反復ループ用のエラーリトライ予算）とは別に、
     # ターン内コンテキスト圧縮（_CompactionCheckpoint）による継続を扱うため
     # for range(...) ではなく手動カウンタの while True にしている。圧縮継続は
@@ -3063,7 +3063,7 @@ async def _on_message_impl(message: cl.Message) -> None:
             # thinking/answerを確定送信 → チェックポイントの orphan steps
             # を片付ける → turn_broken_exc をセットして finally 後のリビルド
             # 分岐へ合流する。GraphRecursionError ブロックと同型のパターン。
-            # [llm].main_connection_error_max_retries 回までは、接続先を
+            # [graph].connection_error_max_retries 回までは、接続先を
             # 切り替えつつ自動リトライする（下の if turn_broken_exc is not
             # None: 参照）。リトライを使い切った場合のみユーザーへメッセージを
             # 送って中断する。
@@ -3325,7 +3325,7 @@ async def _on_message_impl(message: cl.Message) -> None:
 
         if turn_broken_exc is not None:
             # 接続エラー（LLM_CONNECTION_ERRORS）で、かつ
-            # main_connection_error_max_retries の予算が残っている場合のみ、
+            # graph_connection_error_max_retries の予算が残っている場合のみ、
             # 下のリビルド後に中断せず自動リトライする。_CheckpointerTimeout・
             # 未分類例外（安全網）はこれまで通り常に中断する
             # （通信先の切り替えでは解決しない種類の失敗のため）。

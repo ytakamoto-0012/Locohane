@@ -1,0 +1,163 @@
+"""パスメモリー（@N参照）関連の共有ヘルパー。"""
+
+from __future__ import annotations
+
+import chainlit as cl
+import re
+
+from .. import path_memory
+
+from . import _state
+
+
+_PATH_MEMORY_TOKEN_RE = re.compile(r"^@(\d+)$")
+
+
+def _resolve_path_memory_token(value: str) -> tuple[str, str | None]:
+    """value が `@N` 形式のパスメモリー参照なら実パスへ解決する。
+
+    Args:
+        value: analyze_image の relative_path や run_script の args の
+            要素として渡された文字列。
+
+    Returns:
+        (解決後の値, エラーメッセージ) のタプル。
+        - `@N` 形式でなければ (value, None)（従来通りそのまま使う）。
+        - `@N` 形式で解決できれば (実パス, None)。
+        - `@N` 形式だがパスメモリーが利用できない・未登録の場合は
+          (value, "パスメモリー ... は登録されていません。..." というエラー文)。
+          呼び出し側はこのエラー文をそのまま「エラー: ...」として返すこと。
+    """
+    if not _PATH_MEMORY_TOKEN_RE.match(value):
+        return value, None
+    if _state._PATH_MEMORY_DIR is None:
+        return value, f"パスメモリー機能が利用できません: {value}"
+    thread_id = cl.user_session.get("thread_id") or "_no_session"
+    resolved = path_memory.resolve(thread_id, value, _state._PATH_MEMORY_DIR)
+    if resolved is None:
+        return value, (f"パスメモリー {value} は登録されていません。" "list_path_memory ツールで現在の登録内容を確認してください。")
+    return resolved, None
+
+
+_PATH_MEMORY_TEXT_TOKEN_RE = re.compile(r"(?<![\w@])@(\d+)\b")
+
+
+def _resolve_path_memory_tokens_in_text(text: str) -> str:
+    """自由記述テキスト中に埋め込まれた `@N` パスメモリー参照を実パスへ置換する。
+
+    dispatch_agent の task 引数のように、モデルが自然文の中でパスに触れる場面では
+    文字列全体が `@N` のみであることを前提とする _resolve_path_memory_token は使えない。
+    このヘルパーは文中に複数含まれうる `@N` を正規表現で検出し、解決できたものだけを
+    実パスへ置き換える。未登録・パスメモリー機能が使えない等で解決できないトークンは
+    エラーにせず元の `@N` 文字列のまま残す（自由文の一部が理由で呼び出し自体を
+    失敗させないため）。
+
+    Args:
+        text: `@N` を含みうる自由記述テキスト（dispatch_agent の task 等）。
+
+    Returns:
+        解決できた `@N` を実パスへ置換したテキスト。`@N` を含まない、または
+        どれも解決できなかった場合は text をそのまま返す。
+    """
+
+    def _replace(match: re.Match) -> str:
+        token = match.group(0)
+        resolved, error = _resolve_path_memory_token(token)
+        return token if error else resolved
+
+    return _PATH_MEMORY_TEXT_TOKEN_RE.sub(_replace, text)
+
+_RAW_UNC_PATH_RE = re.compile(r"\\\\[A-Za-z0-9_.\-]+(?:\\[A-Za-z0-9_.\-]+)+")
+
+
+def register_raw_unc_paths_in_text(text: str) -> str:
+    """ユーザー入力テキスト中の生UNCパスを path_memory へ事前登録し `@N` へ置換する。
+
+    低パラメータモデルはツール呼び出しのJSON argsにUNCパス（`\\\\server\\share\\...`）
+    を書き起こす際にバックスラッシュのエスケープを誤りやすい（ISSUE-002）。
+    ユーザーがチャット本文に生のUNCパスを直接書いた場合、そのままではLLMが
+    このパスを手で再構築する必要が生じるため、on_message でLLMに渡す前に
+    本文中のUNCパスを検出して path_memory へ登録し、本文中の当該箇所を
+    `@N` に置き換える。これによりLLMは以後そのターンから `@N` を使えばよく、
+    生のUNCパス文字列を手で書き起こす場面自体を無くす。
+
+    検出対象はUNCパスの正常形のみ（`\\\\server\\share` 以上の深さを要求し、
+    セグメントはASCII英数字・`_`・`.`・`-` に限定して地の文の巻き込みを防ぐ）。
+    ローカル絶対パス（`C:\\...`）や、既にLLMの誤変換で崩れた二重バックスラッシュ
+    形状の検出は今回のスコープ外（将来必要になれば別途拡張する）。
+
+    Args:
+        text: ユーザーのメッセージ本文（message.content）。
+
+    Returns:
+        検出したUNCパスを `@N` に置換したテキスト。path_memory機能が
+        利用できない場合やUNCパスを含まない場合は text をそのまま返す。
+    """
+    if _state._PATH_MEMORY_DIR is None:
+        return text
+    thread_id = cl.user_session.get("thread_id") or "_no_session"
+
+    def _replace(match: re.Match) -> str:
+        path = match.group(0)
+        index = path_memory.register(
+            thread_id,
+            path,
+            _state._PATH_MEMORY_DIR,
+            _state._PATH_MEMORY_MAX_ENTRIES,
+            description="ユーザー入力",
+        )
+        return f"@{index}" if index is not None else path
+
+    return _RAW_UNC_PATH_RE.sub(_replace, text)
+
+def _register_path_memory(paths: list[str], description: str | None = None) -> dict[str, str]:
+    """パスの一覧を path_memory レジストリへ登録し、{"@N": path, ...} を返す。
+
+    旧 skills/file-tools/scripts/_common.py の register_paths()（run_script
+    サブプロセス経由・環境変数依存）を、同一プロセス内の直接呼び出しに
+    置き換えたもの（Read/Glob/Grep/json_query が使う）。
+
+    Args:
+        paths: 登録したい絶対パス文字列のリスト。
+        description: 各パスに添える短い説明（省略可）。
+
+    Returns:
+        {"@N": path, ...} の辞書。path_memory が利用できない環境でも
+        例外を投げず空辞書を返す。
+    """
+    if _state._PATH_MEMORY_DIR is None:
+        return {}
+    thread_id = cl.user_session.get("thread_id") or "_no_session"
+    result: dict[str, str] = {}
+    for path in paths:
+        index = path_memory.register(thread_id, path, _state._PATH_MEMORY_DIR, _state._PATH_MEMORY_MAX_ENTRIES, description=description)
+        if index is not None:
+            result[f"@{index}"] = path
+    return result
+
+
+def _dedupe_paths_with_path_memory(result: dict, path_memory_map: dict[str, str]) -> None:
+    """Glob 結果に含まれるフルパスの重複を `@N` 参照へ置き換える（in-place）。
+
+    `glob_search()` の戻り値は同じ絶対パスを `files`・`file_details[].path`・
+    `directories[].path` に持ち、さらに `path_memory` にも同じパスが載るため、
+    1件あたり同じ長い文字列が最大4回会話履歴へ積まれていた。297件のフォルダを
+    Glob した実測で1回の ToolMessage が約10万文字に達し、数回の呼び出しだけで
+    コンテキスト上限（128k）を使い切って処理が中断する事象が eval
+    （レシピ画像297枚ケース）で観測された。
+
+    `@N` はそのまま各ツールの絶対パス引数へ渡せる（`_resolve_path_memory_token`
+    が解決する）ため、`path_memory` に対応表がある限り情報は失われない。
+
+    Args:
+        result: `glob_search()` の戻り値（この関数が直接書き換える）。
+        path_memory_map: `{"@N": 絶対パス}`。空なら何もしない。
+    """
+    if not path_memory_map:
+        return
+    token_by_path = {path: token for token, path in path_memory_map.items()}
+    result["files"] = [token_by_path.get(p, p) for p in result.get("files", [])]
+    for detail in result.get("file_details", []):
+        detail["path"] = token_by_path.get(detail["path"], detail["path"])
+    for directory in result.get("directories", []):
+        directory["path"] = token_by_path.get(directory["path"], directory["path"])

@@ -59,42 +59,42 @@ class _FakeMessage:
 
 def _setup(monkeypatch, carry_over: bool) -> None:
     monkeypatch.setattr(
-        tools, "_LLM_CONFIG", _Cfg(file_tools_duplicate_guard_carry_over_to_main=carry_over)
+        tools._state, "_LLM_CONFIG", _Cfg(file_tools_duplicate_guard_carry_over_to_main=carry_over)
     )
     monkeypatch.setattr(
-        tools,
+        tools._state,
         "_AGENT_TYPES",
-        {"explore": tools.ResolvedAgentType(description="", system_prompt="", tools=[])},
+        {"explore": tools._state.ResolvedAgentType(description="", system_prompt="", tools=[])},
     )
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
     monkeypatch.setattr(tools.cl, "Message", _FakeMessage)
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_JOBS", {})
+    monkeypatch.setattr(tools._dispatch_agent_job, "_DISPATCH_AGENT_JOBS", {})
 
 
 def test_session_key_is_shared_when_carry_over_enabled(monkeypatch) -> None:
     _setup(monkeypatch, carry_over=True)
-    token = tools._SUBAGENT_RUN_ID.set("run-1")
+    token = tools._state._SUBAGENT_RUN_ID.set("run-1")
     try:
-        assert tools._duplicate_guard_session_key("k") == "k"
+        assert tools._state._duplicate_guard_session_key("k") == "k"
     finally:
-        tools._SUBAGENT_RUN_ID.reset(token)
+        tools._state._SUBAGENT_RUN_ID.reset(token)
 
 
 def test_session_key_is_isolated_per_subagent_run(monkeypatch) -> None:
     _setup(monkeypatch, carry_over=False)
     # サブエージェント外（メインエージェント）は素のキー。
-    assert tools._duplicate_guard_session_key("k") == "k"
+    assert tools._state._duplicate_guard_session_key("k") == "k"
 
-    token_a = tools._SUBAGENT_RUN_ID.set("run-a")
+    token_a = tools._state._SUBAGENT_RUN_ID.set("run-a")
     try:
-        key_a = tools._duplicate_guard_session_key("k")
+        key_a = tools._state._duplicate_guard_session_key("k")
     finally:
-        tools._SUBAGENT_RUN_ID.reset(token_a)
-    token_b = tools._SUBAGENT_RUN_ID.set("run-b")
+        tools._state._SUBAGENT_RUN_ID.reset(token_a)
+    token_b = tools._state._SUBAGENT_RUN_ID.set("run-b")
     try:
-        key_b = tools._duplicate_guard_session_key("k")
+        key_b = tools._state._duplicate_guard_session_key("k")
     finally:
-        tools._SUBAGENT_RUN_ID.reset(token_b)
+        tools._state._SUBAGENT_RUN_ID.reset(token_b)
 
     assert key_a != "k"
     assert key_b != "k"
@@ -108,11 +108,11 @@ async def test_dispatch_agent_assigns_unique_run_id_per_call(monkeypatch) -> Non
 
     async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
         # サブエージェント内から見えるキーを記録する。
-        seen.append(tools._duplicate_guard_session_key("analyze_image_call_signatures"))
+        seen.append(tools._state._duplicate_guard_session_key("analyze_image_call_signatures"))
         await asyncio.sleep(0)
         return "ok"
 
-    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
     await tools.dispatch_agent.ainvoke({"task": "a", "agent_type": "explore"})
     await tools.dispatch_agent.ainvoke({"task": "b", "agent_type": "explore"})
@@ -120,6 +120,6 @@ async def test_dispatch_agent_assigns_unique_run_id_per_call(monkeypatch) -> Non
     assert len(seen) == 2
     assert seen[0] != seen[1], "dispatch_agent 呼び出しごとに別の記録先になること"
     # 実行後はメインエージェントのコンテキストへ戻る（ContextVar がリセットされる）。
-    assert tools._duplicate_guard_session_key("analyze_image_call_signatures") == (
+    assert tools._state._duplicate_guard_session_key("analyze_image_call_signatures") == (
         "analyze_image_call_signatures"
     )

@@ -36,7 +36,7 @@ class _FakeConfig:
     context_compaction_prompt_path: Path
     context_trim_truncated_max_chars: int
     context_compaction_summary_source_max_chars: int
-    main_connection_error_max_retries: int = 3
+    graph_connection_error_max_retries: int = 3
     subagent_background_llm_timeout_max_retries: int = 3
     thinking_loop_guard_max_retries: int = 2
 
@@ -136,7 +136,7 @@ async def test_connection_error_exhausts_retry_budget_and_skips_compaction(monke
     monkeypatch.setattr(context_compaction, "mark_last_endpoint_failed", lambda role: None)
 
     result = await maybe_compact(
-        _messages(), model, _config(tmp_path, main_connection_error_max_retries=2), role="main"
+        _messages(), model, _config(tmp_path, graph_connection_error_max_retries=2), role="main"
     )
 
     assert result is None

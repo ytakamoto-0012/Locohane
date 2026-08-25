@@ -22,29 +22,29 @@ def _dummy_mcp_tool_b(x: str) -> str:
 
 
 def test_get_all_tools_includes_base_tools_only_by_default(monkeypatch) -> None:
-    monkeypatch.setattr(tools, "_MCP_TOOLS", [])
+    monkeypatch.setattr(tools.registry, "_MCP_TOOLS", [])
 
     all_tools = tools.get_all_tools()
 
-    assert all_tools == tools._BASE_TOOLS
+    assert all_tools == tools.registry._BASE_TOOLS
 
 
 def test_register_mcp_tools_then_get_all_tools_includes_both(monkeypatch) -> None:
-    monkeypatch.setattr(tools, "_MCP_TOOLS", [])
+    monkeypatch.setattr(tools.registry, "_MCP_TOOLS", [])
 
     tools.register_mcp_tools([_dummy_mcp_tool_a, _dummy_mcp_tool_b])
     all_tools = tools.get_all_tools()
 
-    assert len(all_tools) == len(tools._BASE_TOOLS) + 2
+    assert len(all_tools) == len(tools.registry._BASE_TOOLS) + 2
     assert _dummy_mcp_tool_a in all_tools
     assert _dummy_mcp_tool_b in all_tools
-    for base_tool in tools._BASE_TOOLS:
+    for base_tool in tools.registry._BASE_TOOLS:
         assert base_tool in all_tools
 
 
 def test_register_mcp_tools_replaces_previous_registration(monkeypatch) -> None:
-    monkeypatch.setattr(tools, "_MCP_TOOLS", [_dummy_mcp_tool_a])
+    monkeypatch.setattr(tools.registry, "_MCP_TOOLS", [_dummy_mcp_tool_a])
 
     tools.register_mcp_tools([_dummy_mcp_tool_b])
 
-    assert tools._MCP_TOOLS == [_dummy_mcp_tool_b]
+    assert tools.registry._MCP_TOOLS == [_dummy_mcp_tool_b]

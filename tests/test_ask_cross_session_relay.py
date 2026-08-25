@@ -10,7 +10,7 @@
 
 当初 approve_plan だけに個別対応（_ask_action_with_cross_session_relay）していたが、
 同じ問題が ask_user_question/ask_user_choice にもあったため、
-src.tools._ask_with_cross_session_relay（元セッション側、factory一般化版）と
+src.tools._ask_relay_helper._ask_with_cross_session_relay（元セッション側、factory一般化版）と
 app._relay_pending_ask（app.on_chat_resume から起動される、戻ってきた新セッション側）
 が、src.ask_relay の asyncio.Future を介して連携する形に一般化した。
 """
@@ -79,7 +79,7 @@ async def test_local_session_wins_when_it_answers_first(monkeypatch) -> None:
     def factory():
         return tools.cl.AskActionMessage(content="content", actions=actions, timeout=30).send()
 
-    res = await tools._ask_with_cross_session_relay(thread_id, factory, 30)
+    res = await tools._ask_relay_helper._ask_with_cross_session_relay(thread_id, factory, 30)
 
     assert res == response
     assert thread_id not in app._pending_asks
@@ -121,7 +121,7 @@ async def test_relayed_session_answer_unblocks_dead_original_session(monkeypatch
     def factory():
         return tools.cl.AskActionMessage(content="content", actions=actions, timeout=30).send()
 
-    local_call_task = asyncio.create_task(tools._ask_with_cross_session_relay(thread_id, factory, 30))
+    local_call_task = asyncio.create_task(tools._ask_relay_helper._ask_with_cross_session_relay(thread_id, factory, 30))
 
     await asyncio.wait_for(local_started.wait(), timeout=1)
     assert thread_id in app._pending_asks
@@ -174,7 +174,7 @@ async def test_relay_answer_still_wins_after_local_socket_times_out(monkeypatch)
     def factory():
         return tools.cl.AskActionMessage(content="content", actions=actions, timeout=30).send()
 
-    local_call_task = asyncio.create_task(tools._ask_with_cross_session_relay(thread_id, factory, 30))
+    local_call_task = asyncio.create_task(tools._ask_relay_helper._ask_with_cross_session_relay(thread_id, factory, 30))
 
     await asyncio.wait_for(local_timed_out.wait(), timeout=1)
     # local_ask_task が None で先に終わった直後に、戻ってきた新セッションが回答する。

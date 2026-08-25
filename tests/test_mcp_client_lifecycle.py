@@ -27,9 +27,9 @@ def _make_config(settings_path: Path, connect_timeout: float = 20.0, call_timeou
 
 @pytest.fixture(autouse=True)
 def _reset_mcp_tools(monkeypatch):
-    monkeypatch.setattr(tools, "_MCP_TOOLS", [])
+    monkeypatch.setattr(tools.registry, "_MCP_TOOLS", [])
     yield
-    monkeypatch.setattr(tools, "_MCP_TOOLS", [])
+    monkeypatch.setattr(tools.registry, "_MCP_TOOLS", [])
 
 
 @pytest.mark.asyncio
@@ -84,7 +84,7 @@ async def test_init_mcp_tools_skips_failing_server_without_raising(tmp_path) -> 
     try:
         await mcp_client.init_mcp_tools(config)
 
-        assert tools.get_all_tools() == tools._BASE_TOOLS
+        assert tools.get_all_tools() == tools.registry._BASE_TOOLS
     finally:
         await mcp_client.shutdown_mcp_tools()
 
@@ -95,4 +95,4 @@ async def test_init_mcp_tools_no_settings_file_registers_nothing(tmp_path) -> No
 
     await mcp_client.init_mcp_tools(config)
 
-    assert tools.get_all_tools() == tools._BASE_TOOLS
+    assert tools.get_all_tools() == tools.registry._BASE_TOOLS

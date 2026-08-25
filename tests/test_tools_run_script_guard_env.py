@@ -10,6 +10,7 @@ run_script はスキル作者が書いた既存の scripts/ 配下のファイ�
 in-process呼び出しでは検証できない）。
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -29,13 +30,13 @@ class _FakeUserSession:
 
 @pytest.fixture(autouse=True)
 def _base_env(tmp_path, monkeypatch):
-    monkeypatch.setattr(tools, "_PATH_MEMORY_DIR", None)
-    monkeypatch.setattr(tools, "_PATH_MEMORY_MAX_ENTRIES", 500)
-    monkeypatch.setattr(tools, "_LLM_CONFIG", None)
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_DIR", None)
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_MAX_ENTRIES", 500)
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", None)
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
     default_workdir = tmp_path / "default_workdir"
     default_workdir.mkdir()
-    monkeypatch.setattr(tools, "_DEFAULT_WORKDIR", default_workdir)
+    monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", default_workdir)
 
 
 def _run_script(workdir, script_body: str, env: dict) -> subprocess.CompletedProcess:
@@ -56,11 +57,11 @@ def test_guard_dir_created_with_sitecustomize(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 
-    env, guard_dir = tools._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
 
     assert guard_dir is not None
     assert (guard_dir / "sitecustomize.py").exists()
-    assert str(guard_dir) in env["PYTHONPATH"].split(tools.os.pathsep)
+    assert str(guard_dir) in env["PYTHONPATH"].split(os.pathsep)
     shutil.rmtree(guard_dir, ignore_errors=True)
 
 
@@ -69,7 +70,7 @@ def test_subprocess_write_outside_workdir_is_blocked(tmp_path):
     outside = tmp_path / "outside"
     workdir.mkdir()
     outside.mkdir()
-    env, guard_dir = tools._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
     target = outside / "leaked.txt"
 
     try:
@@ -86,7 +87,7 @@ def test_subprocess_write_outside_workdir_is_blocked(tmp_path):
 def test_subprocess_write_inside_workdir_succeeds(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
-    env, guard_dir = tools._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
     target = workdir / "out.txt"
 
     try:
@@ -106,8 +107,8 @@ def test_subprocess_write_directly_inside_default_workdir_is_blocked(tmp_path):
     """
     workdir = tmp_path / "workdir"
     workdir.mkdir()
-    env, guard_dir = tools._run_script_guard_env(workdir)
-    target = tools._DEFAULT_WORKDIR / "out.txt"
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    target = tools._state._DEFAULT_WORKDIR / "out.txt"
 
     try:
         result = _run_script(workdir, f'open(r"{target}", "w", encoding="utf-8").write("ok")\n', env)
@@ -123,8 +124,8 @@ def test_subprocess_write_directly_inside_default_workdir_is_blocked(tmp_path):
 def test_subprocess_write_inside_default_workdir_own_tmp_dir_succeeds(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
-    env, guard_dir = tools._run_script_guard_env(workdir)
-    target = tools._DEFAULT_WORKDIR / "_tmp_thread-1" / "out.txt"
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    target = tools._state._DEFAULT_WORKDIR / "_tmp_thread-1" / "out.txt"
 
     try:
         result = _run_script(workdir, f'open(r"{target}", "w", encoding="utf-8").write("ok")\n', env)
@@ -141,8 +142,8 @@ def test_subprocess_write_inside_path_memory_dir_succeeds(tmp_path, monkeypatch)
     workdir.mkdir()
     path_memory_dir = tmp_path / "path_memory"
     path_memory_dir.mkdir()
-    monkeypatch.setattr(tools, "_PATH_MEMORY_DIR", path_memory_dir)
-    env, guard_dir = tools._run_script_guard_env(workdir)
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_DIR", path_memory_dir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
     target = path_memory_dir / "thread-1.json.lock"
 
     try:
@@ -162,7 +163,7 @@ def test_subprocess_read_outside_workdir_is_permitted(tmp_path):
     outside.mkdir()
     existing = outside / "template.txt"
     existing.write_text("hello", encoding="utf-8")
-    env, guard_dir = tools._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
 
     try:
         result = _run_script(workdir, f'print(open(r"{existing}", "r", encoding="utf-8").read())\n', env)
@@ -182,7 +183,7 @@ def test_subprocess_read_foreign_tmp_dir_is_blocked(tmp_path):
     foreign.mkdir()
     leaked = foreign / "leaked.txt"
     leaked.write_text("secret", encoding="utf-8")
-    env, guard_dir = tools._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
 
     try:
         result = _run_script(workdir, f'open(r"{leaked}", "r", encoding="utf-8").read()\n', env)
@@ -201,7 +202,7 @@ def test_subprocess_read_own_tmp_dir_is_permitted(tmp_path):
     own.mkdir()
     mine = own / "mine.txt"
     mine.write_text("mine", encoding="utf-8")
-    env, guard_dir = tools._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
 
     try:
         result = _run_script(workdir, f'print(open(r"{mine}", "r", encoding="utf-8").read())\n', env)

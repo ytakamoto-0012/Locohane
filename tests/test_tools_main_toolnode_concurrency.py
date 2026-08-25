@@ -39,7 +39,7 @@ def _setup(monkeypatch) -> None:
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
     # 他テストが同じセッションキー（未設定時は None）で生成した Semaphore を
     # 再利用しないよう、辞書を空の状態から始める。
-    monkeypatch.setattr(tools, "_TOOL_CALL_SEMAPHORES", {})
+    monkeypatch.setattr(tools._state, "_TOOL_CALL_SEMAPHORES", {})
 
 
 def _make_node(*, include_sync_tool: bool = False):
@@ -119,7 +119,7 @@ async def test_main_toolnode_default_max_parallel_serializes_calls(monkeypatch) 
 @pytest.mark.asyncio
 async def test_main_toolnode_max_parallel_two_caps_concurrency(monkeypatch) -> None:
     _setup(monkeypatch)
-    monkeypatch.setattr(tools, "_TOOL_CALL_MAX_PARALLEL", 2)
+    monkeypatch.setattr(tools._state, "_TOOL_CALL_MAX_PARALLEL", 2)
     node, get_max_concurrent = _make_node()
 
     await node.ainvoke(_tool_call_input(["dummy_a", "dummy_b"]))
@@ -130,7 +130,7 @@ async def test_main_toolnode_max_parallel_two_caps_concurrency(monkeypatch) -> N
 @pytest.mark.asyncio
 async def test_main_toolnode_max_parallel_disabled_allows_full_concurrency(monkeypatch) -> None:
     _setup(monkeypatch)
-    monkeypatch.setattr(tools, "_TOOL_CALL_MAX_PARALLEL", 0)
+    monkeypatch.setattr(tools._state, "_TOOL_CALL_MAX_PARALLEL", 0)
     node, get_max_concurrent = _make_node()
 
     await node.ainvoke(_tool_call_input(["dummy_a", "dummy_b"]))
@@ -142,7 +142,7 @@ async def test_main_toolnode_max_parallel_disabled_allows_full_concurrency(monke
 async def test_main_toolnode_guards_sync_tool_too(monkeypatch) -> None:
     """同期 def ツールも awrap_tool_call 経由で正しくガードされることを確認する。"""
     _setup(monkeypatch)
-    monkeypatch.setattr(tools, "_TOOL_CALL_MAX_PARALLEL", 1)
+    monkeypatch.setattr(tools._state, "_TOOL_CALL_MAX_PARALLEL", 1)
     node, get_max_concurrent = _make_node(include_sync_tool=True)
 
     await node.ainvoke(_tool_call_input(["dummy_a", "dummy_b", "dummy_c_sync"]))
@@ -158,7 +158,7 @@ async def test_main_toolnode_max_parallel_is_independent_per_session(monkeypatch
     セッションAの直列化がセッションBの実行をブロックしないことを確認する。
     """
     _setup(monkeypatch)
-    monkeypatch.setattr(tools, "_TOOL_CALL_MAX_PARALLEL", 1)
+    monkeypatch.setattr(tools._state, "_TOOL_CALL_MAX_PARALLEL", 1)
     node_a, get_max_concurrent_a = _make_node()
     node_b, get_max_concurrent_b = _make_node()
 

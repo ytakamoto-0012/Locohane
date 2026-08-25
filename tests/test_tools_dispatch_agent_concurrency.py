@@ -52,23 +52,23 @@ class _FakeMessage:
 
 
 def _setup(monkeypatch, tmp_path=None) -> None:
-    monkeypatch.setattr(tools, "_LLM_CONFIG", object())
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", object())
     monkeypatch.setattr(
-        tools,
+        tools._state,
         "_AGENT_TYPES",
-        {"explore": tools.ResolvedAgentType(description="", system_prompt="", tools=[])},
+        {"explore": tools._state.ResolvedAgentType(description="", system_prompt="", tools=[])},
     )
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession())
     monkeypatch.setattr(tools.cl, "Message", _FakeMessage)
     # 他テストが同じセッションキー（未設定時は None）で生成した Semaphore を
     # 再利用しないよう、辞書を空の状態から始める。
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_SEMAPHORES", {})
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_SEMAPHORES", {})
     # ジョブレジストリも他テストの残留状態を引き継がないよう空にしておく。
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_JOBS", {})
+    monkeypatch.setattr(tools._dispatch_agent_job, "_DISPATCH_AGENT_JOBS", {})
     if tmp_path is not None:
         workdir = tmp_path / "workdir"
         workdir.mkdir(exist_ok=True)
-        monkeypatch.setattr(tools, "_DEFAULT_WORKDIR", workdir)
+        monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", workdir)
 
 
 async def _dispatch_three(monkeypatch) -> tuple[list[str], int]:
@@ -83,7 +83,7 @@ async def _dispatch_three(monkeypatch) -> tuple[list[str], int]:
         concurrent -= 1
         return f"done:{task.splitlines()[-1]}"
 
-    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
     results = await asyncio.gather(
         tools.dispatch_agent.ainvoke({"task": "a", "agent_type": "explore"}),
@@ -106,7 +106,7 @@ async def test_dispatch_agent_default_max_parallel_serializes_calls(monkeypatch)
 @pytest.mark.asyncio
 async def test_dispatch_agent_max_parallel_two_caps_concurrency(monkeypatch) -> None:
     _setup(monkeypatch)
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_MAX_PARALLEL", 2)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_MAX_PARALLEL", 2)
     results, max_concurrent = await _dispatch_three(monkeypatch)
 
     assert max_concurrent == 2
@@ -116,7 +116,7 @@ async def test_dispatch_agent_max_parallel_two_caps_concurrency(monkeypatch) -> 
 @pytest.mark.asyncio
 async def test_dispatch_agent_max_parallel_disabled_allows_full_concurrency(monkeypatch) -> None:
     _setup(monkeypatch)
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_MAX_PARALLEL", 0)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_MAX_PARALLEL", 0)
     results, max_concurrent = await _dispatch_three(monkeypatch)
 
     assert max_concurrent == 3
@@ -132,7 +132,7 @@ async def test_dispatch_agent_max_parallel_is_independent_per_session(monkeypatc
     dispatch_agent呼び出しをブロックしないことを確認する。
     """
     _setup(monkeypatch)
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_MAX_PARALLEL", 1)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_MAX_PARALLEL", 1)
 
     concurrent = 0
     max_concurrent = 0
@@ -145,7 +145,7 @@ async def test_dispatch_agent_max_parallel_is_independent_per_session(monkeypatc
         concurrent -= 1
         return f"done:{task.splitlines()[-1]}"
 
-    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
     async def run_in_session(thread_id: str, task: str) -> str:
         llm.set_current_session(thread_id)
@@ -180,7 +180,7 @@ async def test_dispatch_agent_injects_work_dir_hint_into_task(monkeypatch, tmp_p
         captured["task"] = task
         return "ok"
 
-    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
     await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
 
@@ -200,7 +200,7 @@ async def test_dispatch_agent_hint_injection_is_swallowed_when_default_workdir_u
         captured["task"] = task
         return "ok"
 
-    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
     result = await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
 

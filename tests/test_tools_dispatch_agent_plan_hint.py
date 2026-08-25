@@ -10,9 +10,15 @@ cl.user_session の ground truth を機械的に注入する」パターンを�
 計画全体・現在位置を認識できることを確認する。
 """
 
+import importlib
+
 import pytest
 
 from src import tools
+
+# tools.dispatch_agent は@toolオブジェクトで上書き済みのため、モジュール自体は
+# importlib で sys.modules から直接取得する。
+dispatch_agent_module = importlib.import_module("src.tools.dispatch_agent")
 
 
 class _FakeUserSession:
@@ -35,23 +41,23 @@ class _FakeMessage:
 
 
 def _setup(monkeypatch, tmp_path, plan: list | None = None) -> None:
-    monkeypatch.setattr(tools, "_LLM_CONFIG", object())
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", object())
     monkeypatch.setattr(
-        tools,
+        tools._state,
         "_AGENT_TYPES",
-        {"explore": tools.ResolvedAgentType(description="", system_prompt="", tools=[])},
+        {"explore": tools._state.ResolvedAgentType(description="", system_prompt="", tools=[])},
     )
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession({"plan": plan} if plan is not None else {}))
     monkeypatch.setattr(tools.cl, "Message", _FakeMessage)
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_SEMAPHORES", {})
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_JOBS", {})
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_BACKGROUND_JOB_RETENTION_SECONDS", 1800)
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS", 0)
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 5)
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS", 5)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_SEMAPHORES", {})
+    monkeypatch.setattr(tools._dispatch_agent_job, "_DISPATCH_AGENT_JOBS", {})
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_JOB_RETENTION_SECONDS", 1800)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 5)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS", 5)
     workdir = tmp_path / "workdir"
     workdir.mkdir(exist_ok=True)
-    monkeypatch.setattr(tools, "_DEFAULT_WORKDIR", workdir)
+    monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", workdir)
 
 
 def test_task_with_plan_hint_prepends_plan_status_when_plan_exists(monkeypatch, tmp_path) -> None:
@@ -60,7 +66,7 @@ def test_task_with_plan_hint_prepends_plan_status_when_plan_exists(monkeypatch, 
     ]
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession({"plan": plan}))
 
-    hinted = tools._task_with_plan_hint("月間版を作って")
+    hinted = dispatch_agent_module._task_with_plan_hint("月間版を作って")
 
     assert hinted.startswith("[実行計画（進行中・最優先タスク）]")
     # in_progress ステップは content ではなく activeForm が表示される（_render_plan の仕様）。
@@ -71,7 +77,7 @@ def test_task_with_plan_hint_prepends_plan_status_when_plan_exists(monkeypatch, 
 def test_task_with_plan_hint_passthrough_when_no_plan(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession({}))
 
-    hinted = tools._task_with_plan_hint("月間版を作って")
+    hinted = dispatch_agent_module._task_with_plan_hint("月間版を作って")
 
     assert hinted == "月間版を作って"
 
@@ -88,7 +94,7 @@ async def test_dispatch_agent_injects_plan_hint_into_task_reaching_subagent(monk
         captured["task"] = task
         return "ok"
 
-    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
     await tools.dispatch_agent.ainvoke({"task": "月間版を作って", "agent_type": "explore"})
 
@@ -105,7 +111,7 @@ async def test_dispatch_agent_task_unchanged_by_plan_hint_when_no_plan(monkeypat
         captured["task"] = task
         return "ok"
 
-    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
     await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
 

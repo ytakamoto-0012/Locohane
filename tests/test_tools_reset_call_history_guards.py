@@ -45,10 +45,10 @@ def test_duplicate_guard_allows_previously_blocked_call_after_reset(monkeypatch)
 
     signature = "Read\x00foo.txt\x000\x00None"
     # 上限(1回)まで消費させ、2回目が拒否される状態を作る。
-    assert tools._record_and_check_duplicate("file_tools_call_signatures", signature, 1) is False
-    assert tools._record_and_check_duplicate("file_tools_call_signatures", signature, 1) is True
+    assert tools._duplicate_guard._record_and_check_duplicate("file_tools_call_signatures", signature, 1) is False
+    assert tools._duplicate_guard._record_and_check_duplicate("file_tools_call_signatures", signature, 1) is True
 
     tools.reset_call_history_guards_after_compaction()
 
     # リセット後は同じシグネチャでも「初回」として扱われる。
-    assert tools._record_and_check_duplicate("file_tools_call_signatures", signature, 1) is False
+    assert tools._duplicate_guard._record_and_check_duplicate("file_tools_call_signatures", signature, 1) is False

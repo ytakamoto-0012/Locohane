@@ -36,7 +36,7 @@ def guard_dirs(tmp_path):
 def _run_guarded(
     tmp_path, allowed_roots, body: str, tmp_dir_roots=(), agent_thread_id: str | None = None
 ) -> subprocess.CompletedProcess:
-    guard_src = tools._python_fs_guard_preamble(allowed_roots, tmp_dir_roots=tmp_dir_roots)
+    guard_src = tools._python_fs_guard._python_fs_guard_preamble(allowed_roots, tmp_dir_roots=tmp_dir_roots)
     script_path = tmp_path / "script.py"
     script_path.write_text(guard_src + "\n" + body, encoding="utf-8")
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}

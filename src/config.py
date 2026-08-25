@@ -98,16 +98,6 @@ class Config:
         sub_routing_strategy: sub_endpoints が複数ある場合の選び方
             （sub_endpoints_inherit_main が True の場合は無視される）。
             形式は main_routing_strategy と同じ。
-        main_connection_error_max_retries: メインエージェントのターン中に
-            LLMサーバーとの通信エラー（LLM_CONNECTION_ERRORS、src/llm.py参照）
-            を検知した場合、直近使用した接続先を一時的にクールダウンした上で
-            （mark_last_endpoint_failed。main_routing_strategy=priority_failover
-            の場合のみ次点の接続先へ切り替わり、round_robin/random は呼び出し
-            ごとに元から切り替わる）グラフを再構築し、同じ反復をこの回数まで
-            自動リトライする（app.py の on_message 参照）。0を指定すると
-            従来通りリトライせず、ユーザーへ通信エラーを通知してターンを
-            中断する。サブエージェント（dispatch_agent）側の同種の設定は
-            [subagent].background_llm_timeout_max_retries。
         temperature: 生成時のtemperature。
         top_p: 累積確率上位のみサンプリングする閾値。None なら未指定
             （llama-server既定に委ねる）。
@@ -339,6 +329,12 @@ class Config:
             人間向けに経過秒数・標準出力/標準エラー末尾をチャットへ直接
             送る間隔（秒）。cl.Message送信のみでLLM呼び出しを伴わず
             トークンを消費しない。
+        script_background_job_output_tail_chars: 上記の進捗表示、および
+            check_script_job/stop_script_job/read_thread_note が「実行中」
+            「強制終了時点」等で末尾のみ表示する際の、標準出力/標準エラー/
+            進捗メモの最大文字数。全量を表示するとコンテキストを圧迫する
+            ため切り詰める。dispatch_agent の進捗表示（_dispatch_agent_job.py）
+            も同じ値を共有する。
         script_plan_approval_exempt_scripts: run_script/run_script_background
             の計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト（{(スキル名, スクリプトファイル名), ...}）。
@@ -386,6 +382,16 @@ class Config:
             最大反復回数。LangGraph の recursion_limit にそのまま渡す
             （単位はノード遷移数で、subagent_max_iterations とは数え方が
             異なる）。
+        graph_connection_error_max_retries: メインエージェントのターン中に
+            LLMサーバーとの通信エラー（LLM_CONNECTION_ERRORS、src/llm.py参照）
+            を検知した場合、直近使用した接続先を一時的にクールダウンした上で
+            （mark_last_endpoint_failed。main_routing_strategy=priority_failover
+            の場合のみ次点の接続先へ切り替わり、round_robin/random は呼び出し
+            ごとに元から切り替わる）グラフを再構築し、同じ反復をこの回数まで
+            自動リトライする（app.py の on_message 参照）。0を指定すると
+            従来通りリトライせず、ユーザーへ通信エラーを通知してターンを
+            中断する。サブエージェント（dispatch_agent）側の同種の設定は
+            [subagent].background_llm_timeout_max_retries。
         graph_tool_max_parallel: メインエージェントのツール呼び出し
             （ImageAwareToolNode）を、1セッションあたり同時に何件まで
             並列実行してよいか。ToolNode は同一AIMessage内の複数tool_calls
@@ -622,7 +628,6 @@ class Config:
     sub_endpoints: tuple[LLMEndpoint, ...]
     sub_endpoints_inherit_main: bool
     sub_routing_strategy: str
-    main_connection_error_max_retries: int
     temperature: float
     top_p: float | None
     top_k: int | None
@@ -721,6 +726,7 @@ class Config:
     script_background_min_poll_message: str
     script_background_inline_wait_max_seconds: int
     script_background_progress_push_interval_seconds: int
+    script_background_job_output_tail_chars: int
 
     # --- run_script/run_script_background の計画承認免除ホワイトリスト ---
     script_plan_approval_exempt_scripts: frozenset[tuple[str, str]]
@@ -740,6 +746,7 @@ class Config:
     # --- グラフ実装切替 ---
     graph_impl: str
     graph_recursion_limit: int
+    graph_connection_error_max_retries: int
     graph_tool_max_parallel: int
     graph_token_guard_enabled: bool
     graph_token_guard_soft_threshold: int
@@ -1505,12 +1512,6 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv("LLM_SUB_ROUTING_STRATEGY", llm.get("sub_routing_strategy", "round_robin")),
             "sub_routing_strategy",
         ),
-        main_connection_error_max_retries=int(
-            os.getenv(
-                "LLM_MAIN_CONNECTION_ERROR_MAX_RETRIES",
-                llm.get("main_connection_error_max_retries", 3),
-            )
-        ),
         temperature=float(os.getenv("LLM_TEMPERATURE", llm.get("temperature", 0.3))),
         top_p=_as_optional_float(os.getenv("LLM_TOP_P", llm.get("top_p", ""))),
         top_k=_as_optional_int(os.getenv("LLM_TOP_K", llm.get("top_k", ""))),
@@ -1668,6 +1669,12 @@ def load_config(config_path: Path | None = None) -> Config:
                 scripts.get("background_progress_push_interval_seconds", 20),
             )
         ),
+        script_background_job_output_tail_chars=int(
+            os.getenv(
+                "SCRIPT_BACKGROUND_JOB_OUTPUT_TAIL_CHARS",
+                scripts.get("background_job_output_tail_chars", 4000),
+            )
+        ),
         script_plan_approval_exempt_scripts=_parse_plan_approval_exempt_scripts(
             os.getenv(
                 "SCRIPT_PLAN_APPROVAL_EXEMPT_SCRIPTS",
@@ -1715,6 +1722,12 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         graph_impl=os.getenv("GRAPH_IMPL", graph.get("implementation", "handwritten")),
         graph_recursion_limit=int(os.getenv("GRAPH_RECURSION_LIMIT", graph.get("recursion_limit", 50))),
+        graph_connection_error_max_retries=int(
+            os.getenv(
+                "GRAPH_CONNECTION_ERROR_MAX_RETRIES",
+                graph.get("connection_error_max_retries", 3),
+            )
+        ),
         graph_tool_max_parallel=int(os.getenv("GRAPH_TOOL_MAX_PARALLEL", graph.get("max_parallel", 1))),
         graph_token_guard_enabled=_as_bool(os.getenv("GRAPH_TOKEN_GUARD_ENABLED", graph.get("token_guard_enabled", True))),
         graph_token_guard_soft_threshold=int(

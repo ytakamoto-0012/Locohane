@@ -40,21 +40,21 @@ class _FakeMessage:
 
 
 def _setup(monkeypatch, *, require_planner: bool = True) -> _FakeUserSession:
-    monkeypatch.setattr(tools, "_LLM_CONFIG", object())
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", object())
     monkeypatch.setattr(
-        tools,
+        tools._state,
         "_AGENT_TYPES",
         {
-            "planner": tools.ResolvedAgentType(description="", system_prompt="", tools=[]),
-            "worker": tools.ResolvedAgentType(description="", system_prompt="", tools=[]),
+            "planner": tools._state.ResolvedAgentType(description="", system_prompt="", tools=[]),
+            "worker": tools._state.ResolvedAgentType(description="", system_prompt="", tools=[]),
         },
     )
     session = _FakeUserSession()
     monkeypatch.setattr(tools.cl, "user_session", session)
     monkeypatch.setattr(tools.cl, "Message", _FakeMessage)
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_SEMAPHORES", {})
-    monkeypatch.setattr(tools, "_DISPATCH_AGENT_JOBS", {})
-    monkeypatch.setattr(tools, "_PLAN_REQUIRE_PLANNER_DISPATCH", require_planner)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_SEMAPHORES", {})
+    monkeypatch.setattr(tools._dispatch_agent_job, "_DISPATCH_AGENT_JOBS", {})
+    monkeypatch.setattr(tools._state, "_PLAN_REQUIRE_PLANNER_DISPATCH", require_planner)
     return session
 
 
@@ -62,7 +62,7 @@ async def _dispatch_planner(monkeypatch) -> None:
     async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
         return "計画草案です。"
 
-    monkeypatch.setattr(tools, "run_subagent", fake_run_subagent)
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
     await tools.dispatch_agent.ainvoke({"task": "設計してください", "agent_type": "planner"})
 
 

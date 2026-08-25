@@ -277,7 +277,7 @@ async def maybe_compact(
         config: context_compaction_* 設定を含むアプリ設定。
         role: "main"（app.py の要約呼び出し）または "sub"（dispatch_agent
             内の要約呼び出し）。接続先の再選択・リトライ回数上限（main:
-            main_connection_error_max_retries / sub:
+            graph_connection_error_max_retries / sub:
             subagent_background_llm_timeout_max_retries）・クライアントの
             強制クローズ方針を build_model() のロールごとの接続先設定に
             合わせるために使う。
@@ -348,7 +348,7 @@ async def maybe_compact(
             # 簡易Configスタブ（retry関連フィールドを持たない）が、通信エラー・
             # ループ検知いずれも起きない成功系のテストで壊れないようにするため。
             connection_max_retries = (
-                config.main_connection_error_max_retries
+                config.graph_connection_error_max_retries
                 if role == "main"
                 else config.subagent_background_llm_timeout_max_retries
             )

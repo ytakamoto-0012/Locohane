@@ -19,15 +19,15 @@ from src import tools
 
 
 def _set_agent_type(agent_type):
-    return tools._SUBAGENT_AGENT_TYPE.set(agent_type)
+    return tools._state._SUBAGENT_AGENT_TYPE.set(agent_type)
 
 
 def test_explore_websearch_blocked_from_non_web_search_skill():
     token = _set_agent_type("explore-websearch")
     try:
-        result = tools._prepare_script_execution("excel-read", "read_excel.py", ["dummy.xlsx"])
+        result = tools._script_job._prepare_script_execution("excel-read", "read_excel.py", ["dummy.xlsx"])
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert isinstance(result, str)
     assert result.startswith("エラー")
@@ -44,7 +44,7 @@ def _call_past_guard(skill_name: str, script_filename: str):
     「エラー: ...限定されています」という文字列を返して即座に戻るため）。
     """
     try:
-        return tools._prepare_script_execution(skill_name, script_filename, ["dummy"])
+        return tools._script_job._prepare_script_execution(skill_name, script_filename, ["dummy"])
     except (RuntimeError, ValueError) as e:
         return f"passed_guard_then_failed_downstream: {e}"
 
@@ -54,7 +54,7 @@ def test_explore_websearch_allowed_web_search_skill_passes_allowlist_guard():
     try:
         result = _call_past_guard("web-search", "search_web.py")
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert "限定されています" not in result
 
@@ -70,7 +70,7 @@ def test_worker_agent_type_is_unrestricted():
     try:
         result = _call_past_guard("excel-read", "read_excel.py")
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert "限定されています" not in result
 
@@ -84,7 +84,7 @@ def test_explore_agent_type_is_unrestricted():
     try:
         result = _call_past_guard("excel-read", "read_excel.py")
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert "限定されています" not in result
 
@@ -94,7 +94,7 @@ def test_analyze_docs_allowed_read_only_skill_passes_allowlist_guard():
     try:
         result = _call_past_guard("excel-read", "read_excel.py")
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert "限定されています" not in result
 
@@ -104,9 +104,9 @@ def test_analyze_docs_blocked_from_write_skill():
     # とプロンプト上で約束しているが、これをコード側でも強制する。
     token = _set_agent_type("analyze-docs")
     try:
-        result = tools._prepare_script_execution("excel-edit", "edit_excel.py", ["dummy.xlsx"])
+        result = tools._script_job._prepare_script_execution("excel-edit", "edit_excel.py", ["dummy.xlsx"])
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert isinstance(result, str)
     assert result.startswith("エラー")
@@ -118,7 +118,7 @@ def test_analyze_docs_allowed_pdf_tools_read_only_script_passes_allowlist_guard(
     try:
         result = _call_past_guard("pdf-tools", "read_pdf.py")
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert "限定されています" not in result
 
@@ -130,9 +130,9 @@ def test_analyze_docs_blocked_from_pdf_tools_write_script():
     # ブロックされることを確認する。
     token = _set_agent_type("analyze-docs")
     try:
-        result = tools._prepare_script_execution("pdf-tools", "create_pdf.py", ["dummy"])
+        result = tools._script_job._prepare_script_execution("pdf-tools", "create_pdf.py", ["dummy"])
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert isinstance(result, str)
     assert result.startswith("エラー")
@@ -143,7 +143,7 @@ def test_verifier_allowed_read_only_skill_passes_allowlist_guard():
     try:
         result = _call_past_guard("docx-read", "read_docx.py")
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert "限定されています" not in result
 
@@ -151,9 +151,9 @@ def test_verifier_allowed_read_only_skill_passes_allowlist_guard():
 def test_verifier_blocked_from_write_skill():
     token = _set_agent_type("verifier")
     try:
-        result = tools._prepare_script_execution("docx-edit", "edit_docx.py", ["dummy.docx"])
+        result = tools._script_job._prepare_script_execution("docx-edit", "edit_docx.py", ["dummy.docx"])
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert isinstance(result, str)
     assert result.startswith("エラー")
@@ -163,9 +163,9 @@ def test_verifier_blocked_from_write_skill():
 def test_verifier_blocked_from_pdf_tools_write_script():
     token = _set_agent_type("verifier")
     try:
-        result = tools._prepare_script_execution("pdf-tools", "create_pdf.py", ["dummy"])
+        result = tools._script_job._prepare_script_execution("pdf-tools", "create_pdf.py", ["dummy"])
     finally:
-        tools._SUBAGENT_AGENT_TYPE.reset(token)
+        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
 
     assert isinstance(result, str)
     assert result.startswith("エラー")
