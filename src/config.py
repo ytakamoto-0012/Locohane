@@ -26,12 +26,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.ini"
 
 # main_routing_strategy / sub_routing_strategy が取りうる値。
-# src/llm.py の _select_endpoint() がこの文字列で分岐する。
-LLM_ROUTING_STRATEGIES = frozenset({"round_robin", "random", "priority_failover", "sticky"})
+# src/llm/routing.py の _select_endpoint() がこの文字列で分岐する。
+LLM_ROUTING_STRATEGIES = frozenset({"round_robin", "random", "priority_failover"})
 
-# LLMEndpoint.provider が取りうる値。"llama_cpp" のみ、sticky戦略で占有中の
-# 接続先が実際にはもう使われていない場合に GET /slots で能動的に確認・解放する
-# 対象になる（src/llm.py の _probe_llama_cpp_slots_idle() 参照）。
+# LLMEndpoint.provider が取りうる値。"llama_cpp" のみ、round_robin戦略が
+# 選択候補にする際 GET /slots で実際に空きスロットがあるか確認する対象になる
+# （src/llm/routing.py の _probe_llama_cpp_slots_available() 参照）。
 LLM_PROVIDERS = frozenset({"openai_compatible", "llama_cpp"})
 
 # reasoning_format が取りうる値（llama-server の --reasoning-format と同じ）。
@@ -52,12 +52,13 @@ class LLMEndpoint:
             日をまたぐ範囲（例: start=22, end=6 なら22:00〜翌6:00）として扱う。
         end: この接続先が使用可能でなくなる時刻（start参照）。
         provider: "openai_compatible"（既定）または "llama_cpp"。
-            "llama_cpp" の場合のみ、sticky戦略で占有中と記録された接続先が
-            実際には誰にも使われていないケース（forget_session()が呼ばれずに
-            残ったタブ切断等）を GET /slots で能動的に確認し、本当に空いて
-            いれば占有記録を強制解放する（src/llm.py の
-            _probe_llama_cpp_slots_idle() 参照）。llama.cpp server 固有の
-            管理APIのため、それ以外のOpenAI互換サーバーでは使えない。
+            "llama_cpp" の場合のみ、round_robin戦略が選択候補にする際
+            GET /slots で実際に空きスロットがあるか確認する（空きが無ければ
+            スキップして次点へ、全滅なら空きが出るまで待機する。
+            src/llm/routing.py の _probe_llama_cpp_slots_available() 参照）。
+            llama.cpp server 固有の管理APIのため、それ以外のOpenAI互換
+            サーバーでは使えない（provider="openai_compatible"のままにする
+            こと。その場合は確認を行わず従来通り即座に選ぶ）。
     """
 
     base_url: str
@@ -80,7 +81,10 @@ class Config:
             従って呼び出しごとに選ぶ（src/llm.py の build_model/_select_endpoint
             参照）。
         main_routing_strategy: main_endpoints が複数ある場合の選び方
-            （"round_robin"/"random"/"priority_failover"/"sticky" のいずれか）。
+            （"round_robin"/"random"/"priority_failover" のいずれか）。
+            "round_robin" かつ provider="llama_cpp" の接続先は、選ぶ前に
+            GET /slots で空きスロットの有無を確認する（src/llm/routing.py
+            の _select_round_robin_endpoint() 参照）。
         sub_endpoints: サブエージェント（dispatch_agent）用のLLM接続先リスト
             （[llm].sub_url）。形式は main_endpoints と同じ。sub_url が未指定
             （キー無し、または値が空）の場合は main_url をそのまま使う。
@@ -164,13 +168,15 @@ class Config:
             間隔」の上限）。build_model（src/llm.py）がChatLlamaCppの
             コンストラクタに渡す。大きなコンテキストのプロンプト処理(prefill)
             に時間がかかる環境ほどこの秒数に到達しやすい。
-        sticky_active_release_min_idle_seconds: sticky戦略で占有中の接続先
-            （provider="llama_cpp"のみ対象）について、GET /slots で実際の
-            空き状況を確認しにいくまでに最低限求める無通信時間（秒）。
-            会話が単に返信を読んでいるだけの間に横取りされるのを防ぐガード
-            （src/llm.py の _STICKY_LAST_ACTIVITY_AT / _select_endpoint参照）。
-        sticky_active_release_probe_timeout_seconds: 上記 GET /slots
-            問い合わせ自体のタイムアウト秒数（短く、fail-safe側に倒す）。
+        round_robin_slots_probe_timeout_seconds: round_robin戦略が
+            provider="llama_cpp"の接続先を候補にする際に送る GET /slots
+            問い合わせ自体のタイムアウト秒数。短く、確認できなければ
+            fail-safe側（＝空きとみなして選ぶ）に倒す
+            （src/llm/routing.py の _probe_llama_cpp_slots_available() 参照）。
+        round_robin_busy_poll_interval_seconds: round_robin戦略で、時間帯
+            制約の対象となっている全接続先のスロットが埋まっていた場合に、
+            再度空き状況を確認するまで待機する秒数
+            （src/llm/routing.py の _select_round_robin_endpoint() 参照）。
         skills_dir: スキル群を格納するディレクトリの絶対パス。
         agents_dir: エージェント種別定義（dispatch_agent の agent_type、
             ClaudeCode の .claude/agents/*.md 相当）を格納するディレクトリの
@@ -637,8 +643,8 @@ class Config:
     request_timeout_seconds: float
     stream_chunk_timeout_seconds: float
     llm_max_concurrent_requests: int
-    sticky_active_release_min_idle_seconds: float
-    sticky_active_release_probe_timeout_seconds: float
+    round_robin_slots_probe_timeout_seconds: float
+    round_robin_busy_poll_interval_seconds: float
 
     # --- 保存先パス（すべて絶対パス） ---
     skills_dir: Path
@@ -1537,16 +1543,16 @@ def load_config(config_path: Path | None = None) -> Config:
                 llm.get("max_concurrent_requests", 1),
             )
         ),
-        sticky_active_release_min_idle_seconds=float(
+        round_robin_slots_probe_timeout_seconds=float(
             os.getenv(
-                "LLM_STICKY_ACTIVE_RELEASE_MIN_IDLE_SECONDS",
-                llm.get("sticky_active_release_min_idle_seconds", 300),
+                "LLM_ROUND_ROBIN_SLOTS_PROBE_TIMEOUT_SECONDS",
+                llm.get("round_robin_slots_probe_timeout_seconds", 3),
             )
         ),
-        sticky_active_release_probe_timeout_seconds=float(
+        round_robin_busy_poll_interval_seconds=float(
             os.getenv(
-                "LLM_STICKY_ACTIVE_RELEASE_PROBE_TIMEOUT_SECONDS",
-                llm.get("sticky_active_release_probe_timeout_seconds", 3),
+                "LLM_ROUND_ROBIN_BUSY_POLL_INTERVAL_SECONDS",
+                llm.get("round_robin_busy_poll_interval_seconds", 2),
             )
         ),
         skills_dir=_resolve(PROJECT_ROOT, os.getenv("SKILLS_DIR", paths.get("skills_dir", "./skills"))),
