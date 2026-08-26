@@ -138,8 +138,8 @@ def _guard_awaiting_approve_plan(input):  # noqa: A002
 
 
 def _guard_main_agent_tool_limit(input):  # noqa: A002
-    """[main_agent_tool_guard] に登録済みのツールを、メインエージェントが直接
-    呼べる回数を制限し、dispatch_agentへの委譲を促すガード。
+    """[main_agent_tool_guard] の許可リストに基づき、メインエージェントが直接
+    呼べるツールとその回数を制限し、dispatch_agentへの委譲を促すガード。
 
     旧実装は Glob専用（_check_main_agent_glob_limit）・run_script専用
     （旧 _check_main_agent_run_script_limit）と対象ごとにコードを決め打ちして
@@ -148,10 +148,17 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
     ことだった（英検3級PDF調査、2026-08-10）。ビルトインツールを一切問わず
     任意の名前を登録できるよう、ImageAwareToolNode.invoke/ainvoke の共通
     差し込みポイント（_guard_awaiting_approve_plan と同じ場所）でツール名
-    そのものを判定する汎用ガードに統合し、Globガードもここへ統合済み
-    （既定の [main_agent_tool_guard].entries に ["Glob", 1] を含める）。
+    そのものを判定する汎用ガードに統合し、Globガードもここへ統合済み。
 
-    登録形式（[main_agent_tool_guard].entries）の各要素は
+    本ガードは許可リスト（ホワイトリスト）方式: [main_agent_tool_guard].allow_entries
+    に登録されていないツール名・run_scriptスキルスクリプトは、メインエージェント
+    から一切呼び出せない（登録＝完全ブロックの0や、登録すらされていない場合を
+    区別しない。どちらも「呼べない」という結果は同じ）。そのためメインエージェントの
+    基本運用に必須なツール（dispatch_agent・create_plan・ask_user_question等）も
+    含め、config.ini 側で明示的に登録しておく必要がある（多くは max_calls=-1
+    の無制限指定で登録する）。
+
+    登録形式（[main_agent_tool_guard].allow_entries）の各要素は
     [対象, max_calls] の2要素で、対象は2種類を許容する:
       - 文字列1件（例: "Glob", "analyze_image"）: そのツール名の呼び出し
         そのものを引数を問わず対象にする。
@@ -160,14 +167,14 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
         run_script_background で、かつ args の skill_name/script_filename が
         一致する場合のみ対象にする。
     max_calls はエントリごとに個別指定する（ツールごとに許容回数を変えたい
-    ケースがあるため、旧実装のような全体共通の1値ではない）。0以下を指定すると
-    「1回も呼べない（完全ブロック）」を意味する。他の呼び出し回数ガード
-    （_check_file_tools_duplicate が使う _record_and_check_duplicate）は
-    0以下を「無制限（ガード無効）」として扱うが、本ガードは対象を明示的に
-    登録するホワイトリスト方式であり、「登録した上で無制限にする」は
-    「そもそも登録しない」のと同義で意味を成さない。そのため0以下を
-    _record_and_check_duplicate へ委譲せず、ここで先に「常時ブロック」として
-    扱う（このガード固有の意味論であり、他の呼び出し回数ガードには影響しない）。
+    ケースがあるため、旧実装のような全体共通の1値ではない）。
+      - 0  : 登録はするが完全ブロック（1回も呼べない）。
+      - -1 : 登録した上で回数無制限に許可する。
+      - 1以上: その回数まで許可し、超過分を拒否する。
+    他の呼び出し回数ガード（_check_file_tools_duplicate が使う
+    _record_and_check_duplicate）は0以下を「無制限（ガード無効）」として
+    扱うが、本ガードは0と-1の意味が逆になる点に注意（このガード固有の
+    意味論であり、他の呼び出し回数ガードには影響しない）。
 
     サブエージェント（dispatch_agent経由）内部での呼び出しは対象外
     （_IN_SUBAGENT が True の間はガードしない。調査そのものが役目のため）。
@@ -177,8 +184,8 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
             （_extract_tool_call_from_node_input 参照）。
 
     Returns:
-        上限に達していればブロックする結果（{"messages": [ToolMessage]}）、
-        そうでなければ None（呼び出し側は通常通りツールを実行してよい）。
+        呼び出せない場合はブロックする結果（{"messages": [ToolMessage]}）、
+        呼び出してよい場合は None（呼び出し側は通常通りツールを実行してよい）。
     """
     cfg = _state._LLM_CONFIG
     guard_enabled = cfg.main_agent_tool_guard_enabled if cfg else False
@@ -186,9 +193,7 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
         return None
     if _IN_SUBAGENT.get():
         return None
-    entries = cfg.main_agent_tool_guard_entries if cfg else frozenset()
-    if not entries:
-        return None
+    entries = cfg.main_agent_tool_guard_allow_entries if cfg else frozenset()
     entries_by_key = dict(entries)
     call = _extract_tool_call_from_node_input(input)
     if not call:
@@ -206,14 +211,16 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
             signature = f"{name}:{pair[0]}/{pair[1]}"
             guard_max_calls = entries_by_key[pair]
     if signature is None:
+        # 許可リストに存在しない＝メインエージェントからは一切呼び出せない。
+        content = f"エラー: {name} はメインエージェントとして許可されていません（main_agent_tool_guard.allow_entries未登録）。"
+    elif guard_max_calls == -1:
         return None
-    if guard_max_calls > 0 and not _record_and_check_duplicate("main_agent_tool_guard_call_count", signature, guard_max_calls):
+    elif guard_max_calls <= 0:
+        content = f"エラー: {name} はメインエージェントとして呼び出しを禁止されています（max_calls=0）。"
+    elif not _record_and_check_duplicate("main_agent_tool_guard_call_count", signature, guard_max_calls):
         return None
-    content = (
-        f"エラー: {name} はメインエージェントとして呼び出しを禁止されています" "（max_calls=0）。"
-        if guard_max_calls <= 0
-        else (f"エラー: {name} はメインエージェントとして既に呼び出し上限" f"（{guard_max_calls}回）に達しています。")
-    )
+    else:
+        content = f"エラー: {name} はメインエージェントとして既に呼び出し上限（{guard_max_calls}回）に達しています。"
     # agent_type一覧はagents/*.mdの走査結果（_state._AGENT_TYPES）から動的に組み立てる。
     # 種別を文言へ決め打ちすると、将来 agent_type が増減しても案内が追従せず、
     # 存在しない/古い種別へ誘導してしまう（dispatch_agentの不明agent_typeエラー

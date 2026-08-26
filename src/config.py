@@ -356,19 +356,20 @@ class Config:
             （dispatch_agent）内での呼び出し履歴を、メインエージェントの重複
             判定へ持ち越すかどうか。True なら両者で呼び出し集合を共有し、
             False なら別々に管理する（src/tools.py の _IN_SUBAGENT 参照）。
-        main_agent_tool_guard_enabled: メインエージェント自身が
-            main_agent_tool_guard_entries に登録済みのツールを直接呼び出せる
-            回数を制限するガード機能の有効/無効。plan_approval_exempt_scripts
-            は計画承認を免除するだけで直接呼び出し自体は妨げないため、
+        main_agent_tool_guard_enabled: メインエージェント自身が呼び出せる
+            ツールを main_agent_tool_guard_allow_entries の許可リストへ限定する
+            ガード機能の有効/無効。plan_approval_exempt_scripts は計画承認を
+            免除するだけで直接呼び出し自体は妨げないため、
             render_pdf_pages.py→analyze_image のような「1件の重い調査」を
             メインエージェントが委譲せず自分で最後まで実行し続けてトークン
             上限に達する事例（src/tools.py の _guard_main_agent_tool_limit
             参照）を防ぐための汎用ガード。ビルトインツール名（Glob・
             analyze_image 等）も run_script 配下のスキルスクリプトも同じ
             リストへ登録できる（旧・Glob専用ガード main_agent_glob_guard は
-            本ガードへ統合済み。既定で ["Glob", 1] を登録し、従来と同じ挙動を
-            引き継ぐ）。
-        main_agent_tool_guard_entries: 本ガードの対象エントリの集合
+            本ガードへ統合済み）。true にする場合、メインエージェントに
+            必要な全ツールを main_agent_tool_guard_allow_entries へ登録すること
+            （未登録＝呼び出し不可のため）。
+        main_agent_tool_guard_allow_entries: 本ガードの許可リストの集合
             （frozenset[tuple[str | tuple[str, str], int]]）。各要素は
             (対象, max_calls) のペア。対象が文字列1件（例: "Glob",
             "analyze_image"）ならビルトインツール名そのもの、2要素タプル
@@ -376,13 +377,15 @@ class Config:
             run_script/run_script_background 経由で呼ばれる
             (スキル名, スクリプトファイル名) の組を表す。max_calls は
             エントリごとに個別指定でき、メインエージェントが1ターンあたり
-            そのエントリを何回まで直接呼び出せるかを表す（0以下はそのエントリを
-            完全ブロックする＝1回も呼び出せない。本ガードはホワイトリスト方式の
-            ため「登録した上で無制限」は意味を成さず、他の呼び出し回数ガード
-            （_record_and_check_duplicate）とは0の意味が逆になる点に注意）。
-            plan_approval_exempt_scripts とは独立したリストで、
-            ここに登録されていないツール・スクリプトはガード対象外。空集合
-            なら本ガード自体が事実上無効（何も登録されていないため）。
+            そのエントリを何回まで直接呼び出せるかを表す（0=完全ブロック、
+            -1=登録した上で無制限に許可、1以上=その回数まで許可。他の
+            呼び出し回数ガード（_record_and_check_duplicate）は0以下を
+            「無制限」として扱うが、本ガードは0と-1の意味が逆になる点に
+            注意）。plan_approval_exempt_scripts とは独立したリストで、
+            **ここに登録されていないツール・スクリプトは main_agent_tool_guard_
+            enabled=true の間、メインエージェントから一切呼び出せない**
+            （許可リスト方式）。空集合なら main_agent_tool_guard_enabled=true
+            の間メインエージェントはいかなるツールも呼び出せなくなる。
         graph_impl: ReAct ループの実装切替。"handwritten"（手書き
             StateGraph）または "prebuilt"（LangGraph の
             create_react_agent）。build_graph() が参照する。
@@ -752,7 +755,7 @@ class Config:
     #     登録できる。Glob専用だった旧ガードもここへ統合済み。src/tools.py の
     #     _guard_main_agent_tool_limit） ---
     main_agent_tool_guard_enabled: bool
-    main_agent_tool_guard_entries: frozenset[tuple[str | tuple[str, str], int]]
+    main_agent_tool_guard_allow_entries: frozenset[tuple[str | tuple[str, str], int]]
 
     # --- グラフ実装切替 ---
     graph_impl: str
@@ -1324,9 +1327,9 @@ def _parse_agent_type_run_script_allowlist(value: str | None) -> frozenset[tuple
         スクリプトが混在するスキルは、スキル名単位ではなくこちらで個別に
         許可すること。
     例: [["explore-websearch", "web-search"],
-         ["analyze-docs", "docx-read"],
-         ["analyze-docs", ["pdf-tools", "render_pdf_pages.py"]]]
-    _parse_main_agent_tool_guard_entries と同様 ast.literal_eval で読む
+         ["explore", "docx-read"],
+         ["explore", ["pdf-tools", "render_pdf_pages.py"]]]
+    _parse_main_agent_tool_guard_allow_entries と同様 ast.literal_eval で読む
     （末尾カンマ等の緩い記法も許容するため）。
 
     Args:
@@ -1374,8 +1377,14 @@ def _parse_agent_type_run_script_allowlist(value: str | None) -> frozenset[tuple
     return frozenset(entries)
 
 
-def _parse_main_agent_tool_guard_entries(value: str | None) -> frozenset[tuple[str | tuple[str, str], int]]:
+def _parse_main_agent_tool_guard_allow_entries(value: str | None) -> frozenset[tuple[str | tuple[str, str], int]]:
     """config.ini の [main_agent_tool_guard].entries をパースする。
+
+    本ガードは許可リスト（ホワイトリスト）方式であり、ここに登録されて
+    いないツール名・run_scriptスキルスクリプトはメインエージェントから
+    一切呼び出せない（src/tools/tool_node.py の _guard_main_agent_tool_limit
+    参照）。そのため main_agent_tool_guard_enabled=true で運用する場合、
+    メインエージェントに必要な全ツールをここへ登録する必要がある。
 
     各要素は [対象, max_calls] の2要素配列。max_calls をエントリごとに
     個別指定できるようにするため、plan_approval_exempt_scripts のような
@@ -1388,13 +1397,22 @@ def _parse_main_agent_tool_guard_entries(value: str | None) -> frozenset[tuple[s
       - [スキル名, スクリプトファイル名] の2要素配列（例:
         ["pdf-tools","render_pdf_pages.py"]）: run_script/
         run_script_background 経由で呼ばれるスキルスクリプト。
-    例: entries = [["Glob", 1], ["analyze_image", 2], [["pdf-tools","render_pdf_pages.py"], 1]]
+    max_calls は次の3通りの意味を持つ:
+      - 0     : 登録はするが完全ブロック（1回も呼び出せない）。
+      - -1    : 登録した上で回数無制限に許可する
+                （dispatch_agent/create_plan のような、1ターン内で
+                複数回呼ぶのが正常な基本運用ツール向け）。
+      - 1以上 : その回数まで許可し、超過分を拒否する。
+      -2以下は指定ミス防止のためエラーにする。
+    例: entries = [["Glob", 1], ["dispatch_agent", -1], [["pdf-tools","render_pdf_pages.py"], 0]]
     Python風のリストリテラルを ast.literal_eval で読む（末尾カンマ等の
     緩い記法も許容するため）。
 
     Args:
         value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
-            空欄・None なら空集合を返す。
+            空欄・None なら空集合を返す（許可リスト方式のため、この場合
+            main_agent_tool_guard_enabled=true だとメインエージェントは
+            いかなるツールも呼び出せなくなる点に注意）。
 
     Returns:
         {(対象, max_calls), ...} の frozenset。対象はツール名の文字列、または
@@ -1402,8 +1420,8 @@ def _parse_main_agent_tool_guard_entries(value: str | None) -> frozenset[tuple[s
 
     Raises:
         ValueError: リストとして解釈できない場合、各要素が [対象, max_calls] の
-            2要素でない場合、対象が文字列でも2要素配列でもない場合、または
-            max_calls が整数でない場合。
+            2要素でない場合、対象が文字列でも2要素配列でもない場合、
+            max_calls が整数でない場合、または max_calls が -2 以下の場合。
     """
     if not value or not value.strip():
         return frozenset()
@@ -1411,13 +1429,13 @@ def _parse_main_agent_tool_guard_entries(value: str | None) -> frozenset[tuple[s
     try:
         parsed = ast.literal_eval(text)
     except (ValueError, SyntaxError) as e:
-        raise ValueError(f"main_agent_tool_guard.entries はPythonのリスト形式で指定してください: {text!r}") from e
+        raise ValueError(f"main_agent_tool_guard.allow_entries はPythonのリスト形式で指定してください: {text!r}") from e
     if not isinstance(parsed, list):
-        raise ValueError(f"main_agent_tool_guard.entries はリスト（配列）形式で指定してください: {text!r}")
+        raise ValueError(f"main_agent_tool_guard.allow_entries はリスト（配列）形式で指定してください: {text!r}")
     entries: set[tuple[str | tuple[str, str], int]] = set()
     for item in parsed:
         if not (isinstance(item, (list, tuple)) and len(item) == 2):
-            raise ValueError(f"main_agent_tool_guard.entries の各要素は [対象, max_calls] の2要素にしてください: {item!r}")
+            raise ValueError(f"main_agent_tool_guard.allow_entries の各要素は [対象, max_calls] の2要素にしてください: {item!r}")
         target, max_calls = item
         key: str | tuple[str, str]
         if isinstance(target, str):
@@ -1426,11 +1444,16 @@ def _parse_main_agent_tool_guard_entries(value: str | None) -> frozenset[tuple[s
             key = (str(target[0]), str(target[1]))
         else:
             raise ValueError(
-                "main_agent_tool_guard.entries の対象はツール名の文字列、または"
+                "main_agent_tool_guard.allow_entries の対象はツール名の文字列、または"
                 f"[スキル名, スクリプトファイル名] の2要素にしてください: {target!r}"
             )
         if not isinstance(max_calls, int) or isinstance(max_calls, bool):
-            raise ValueError(f"main_agent_tool_guard.entries の max_calls は整数にしてください: {max_calls!r}")
+            raise ValueError(f"main_agent_tool_guard.allow_entries の max_calls は整数にしてください: {max_calls!r}")
+        if max_calls < -1:
+            raise ValueError(
+                "main_agent_tool_guard.allow_entries の max_calls は -1以上の整数にしてください"
+                f"（0=完全ブロック、-1=無制限、1以上=その回数まで許可）: {max_calls!r}"
+            )
         entries.add((key, max_calls))
     return frozenset(entries)
 
@@ -1771,13 +1794,13 @@ def load_config(config_path: Path | None = None) -> Config:
                 scripts.get(
                     "agent_type_run_script_allowlist",
                     '[["explore-websearch","web-search"],'
-                    '["analyze-docs","docx-render"],["analyze-docs","docx-read"],'
-                    '["analyze-docs","excel-render"],["analyze-docs","excel-read"],'
-                    '["analyze-docs","excel-vba-read"],'
-                    '["analyze-docs","pptx-render"],["analyze-docs","pptx-read"],'
-                    '["analyze-docs","pptx-inspect"],'
-                    '["analyze-docs",["pdf-tools","render_pdf_pages.py"]],'
-                    '["analyze-docs",["pdf-tools","read_pdf.py"]],'
+                    '["explore","docx-render"],["explore","docx-read"],'
+                    '["explore","excel-render"],["explore","excel-read"],'
+                    '["explore","excel-vba-read"],'
+                    '["explore","pptx-render"],["explore","pptx-read"],'
+                    '["explore","pptx-inspect"],'
+                    '["explore",["pdf-tools","render_pdf_pages.py"]],'
+                    '["explore",["pdf-tools","read_pdf.py"]],'
                     '["verifier","excel-render"],["verifier","excel-read"],'
                     '["verifier","docx-render"],["verifier","docx-read"],'
                     '["verifier","pptx-render"],["verifier","pptx-read"],'
@@ -1811,10 +1834,10 @@ def load_config(config_path: Path | None = None) -> Config:
                 main_agent_tool_guard.get("enabled", True),
             )
         ),
-        main_agent_tool_guard_entries=_parse_main_agent_tool_guard_entries(
+        main_agent_tool_guard_allow_entries=_parse_main_agent_tool_guard_allow_entries(
             os.getenv(
-                "MAIN_AGENT_TOOL_GUARD_ENTRIES",
-                main_agent_tool_guard.get("entries", '[["Glob", 1]]'),
+                "MAIN_AGENT_TOOL_GUARD_ALLOW_ENTRIES",
+                main_agent_tool_guard.get("allow_entries", '[["Glob", 1]]'),
             )
         ),
         graph_impl=os.getenv("GRAPH_IMPL", graph.get("implementation", "handwritten")),
