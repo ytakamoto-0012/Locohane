@@ -45,7 +45,7 @@ def _resolve_run_script_command(skill_name: str, script_filename: str, script_ar
             f"{sorted(str(a) for a in allowed)} に限定されています"
             f"（skill={skill_name}, script={script_filename} は対象外）。"
             "ファイルの内容確認が必要な場合は、委譲元に対応するサブエージェント"
-            "（office文書/PDFなら analyze-docs、書き込みが要るなら worker）へ"
+            "（office文書/PDFなら explore、書き込みが要るなら worker）へ"
             "改めて委譲するよう伝えてください。"
         )
 

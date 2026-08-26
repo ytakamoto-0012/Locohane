@@ -57,10 +57,10 @@ _SUBAGENT_AGENT_TYPE: contextvars.ContextVar[str | None] = contextvars.ContextVa
 #
 # agents/*.md のプロンプト文面だけでこの制約を課しているagent_typeは、低パラメータ
 # モデルでは指示を無視して他スキルの読み込み専用スクリプトまで呼んでしまうことが
-# ある（本番同等のevalケースで実際に発生: explore-websearch が本来analyze-docs専用の
-# read_excel.pyを呼んでxlsxを調査し、analyze-docs向けの誤診断防止ルールが適用され
+# ある（本番同等のevalケースで実際に発生: explore-websearch が本来explore専用の
+# read_excel.pyを呼んでxlsxを調査し、explore向けの誤診断防止ルールが適用され
 # ないまま処理が進んでしまった）。プロンプトの記述と実際の許可を一致させるため、
-# コード側でも強制する。analyze-docs/verifier は「書き込み系スクリプトは絶対に
+# コード側でも強制する。explore/verifier は「書き込み系スクリプトは絶対に
 # 呼び出さない」とプロンプト上で強く約束しているため、同じ理由でここに含める。
 #
 # ここでの初期値は init_tools() 未実行時（テスト等）のフォールバック。通常起動時は
@@ -70,7 +70,7 @@ _SUBAGENT_AGENT_TYPE: contextvars.ContextVar[str | None] = contextvars.ContextVa
 # `from ._state import _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` は再代入が反映されないため禁止）。
 _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST: dict[str, frozenset[str | tuple[str, str]]] = {
     "explore-websearch": frozenset({"web-search"}),
-    "analyze-docs": frozenset(
+    "explore": frozenset(
         {
             "docx-render",
             "docx-read",
