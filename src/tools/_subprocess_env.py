@@ -121,3 +121,40 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
     existing_path = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(guard_dir) + (os.pathsep + existing_path if existing_path else "")
     return env, guard_dir
+
+
+def _run_script_readonly_guard_env(workdir: Path) -> tuple[dict[str, str], Path] | None:
+    """run_script_readonly が起動するサブプロセスへ、書き込みを場所を問わず
+    一切禁止した環境変数を組み立てる。
+
+    _run_script_guard_env と同じ sitecustomize.py 差し込み方式だが、
+    allowed_roots を空リストで渡すことで全面書き込み禁止にする
+    （execute_python_code_readonly と同じ方針。_python_fs_guard_preamble の
+    `_GUARD_ALLOWED` が空なら「このツールは書き込み・削除が一切できません」に
+    分岐する）。他セッションの `_tmp_<thread_id>` への読み取りブロック
+    （tmp_dir_roots）は _run_script_guard_env と同様に効かせる。
+
+    run_script_readonly は書き込み不可であることを根拠に計画承認
+    （Plan Mode）を免除しているため、_run_script_guard_env と異なり
+    ガード注入に失敗した場合はガード無しにフォールバックせず None を返す
+    （呼び出し側はこれを実行中止の合図として扱う。fail-closed）。
+
+    Args:
+        workdir: このスクリプト実行の cwd（_resolve_workdir の解決結果）。
+
+    Returns:
+        (env, guard_dir) のタプル。guard_dir は呼び出し側がサブプロセス
+        終了後に削除する一時ディレクトリ。一時ファイル作成に失敗した場合は
+        None（ガード無しでの実行を許さない）。
+    """
+    env = _subprocess_env()
+    try:
+        guard_dir = Path(tempfile.mkdtemp(prefix="agent_fs_guard_ro_"))
+        guard_src = _python_fs_guard_preamble([], tmp_dir_roots=_tmp_dir_parents(workdir))
+        (guard_dir / "sitecustomize.py").write_text(guard_src, encoding="utf-8")
+    except OSError:
+        logger.warning("run_script_readonly: 書き込みガード用の一時ファイル作成に失敗したため、実行を中止します。")
+        return None
+    existing_path = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(guard_dir) + (os.pathsep + existing_path if existing_path else "")
+    return env, guard_dir
