@@ -1378,7 +1378,7 @@ def _parse_agent_type_run_script_allowlist(value: str | None) -> frozenset[tuple
 
 
 def _parse_main_agent_tool_guard_allow_entries(value: str | None) -> frozenset[tuple[str | tuple[str, str], int]]:
-    """config.ini の [main_agent_tool_guard].entries をパースする。
+    """config.ini の [main_agent_tool_guard].allow_entries をパースする。
 
     本ガードは許可リスト（ホワイトリスト）方式であり、ここに登録されて
     いないツール名・run_scriptスキルスクリプトはメインエージェントから
@@ -1433,6 +1433,7 @@ def _parse_main_agent_tool_guard_allow_entries(value: str | None) -> frozenset[t
     if not isinstance(parsed, list):
         raise ValueError(f"main_agent_tool_guard.allow_entries はリスト（配列）形式で指定してください: {text!r}")
     entries: set[tuple[str | tuple[str, str], int]] = set()
+    seen_keys: set[str | tuple[str, str]] = set()
     for item in parsed:
         if not (isinstance(item, (list, tuple)) and len(item) == 2):
             raise ValueError(f"main_agent_tool_guard.allow_entries の各要素は [対象, max_calls] の2要素にしてください: {item!r}")
@@ -1454,6 +1455,14 @@ def _parse_main_agent_tool_guard_allow_entries(value: str | None) -> frozenset[t
                 "main_agent_tool_guard.allow_entries の max_calls は -1以上の整数にしてください"
                 f"（0=完全ブロック、-1=無制限、1以上=その回数まで許可）: {max_calls!r}"
             )
+        if key in seen_keys:
+            # 同じ対象を異なる max_calls で複数回登録すると、_guard_main_agent_tool_limit
+            # 側で frozenset を dict() 化する際にどちらが勝つかが Python の
+            # ハッシュシード（PYTHONHASHSEED）依存になり、プロセス起動ごとに
+            # 有効な max_calls が非決定的に変わってしまう（同一設定でも実行の
+            # たびに結果が変わる実害を実測確認済み）。設定ミスとして早期に拒否する。
+            raise ValueError(f"main_agent_tool_guard.allow_entries に同じ対象が重複登録されています: {key!r}")
+        seen_keys.add(key)
         entries.add((key, max_calls))
     return frozenset(entries)
 
