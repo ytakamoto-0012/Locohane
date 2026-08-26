@@ -3074,7 +3074,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                         _accumulate_usage(cumulative, usage)
                         cl.user_session.set("token_usage_cumulative", cumulative)
                         cumulative_main = cl.user_session.get("token_usage_cumulative_main") or _new_usage_totals()
-                        if not _is_subagent_call(event, steps):
+                        if not _is_subagent_call(event, dispatch_agent_run_ids):
                             # last_usage はコンテキスト圧縮の単発閾値判定
                             # （should_compact の single_request_token_threshold）
                             # にのみ使うため、メインエージェント由来のusageでのみ

@@ -1,8 +1,9 @@
 """app.py のトークン使用量集計ヘルパーの回帰テスト。
 
-_is_subagent_call() は、event["parent_ids"] に現在開いている（steps辞書に
-残っている）Step の run_id が含まれるかどうかで、dispatch_agent 内部
-（サブエージェント）由来のイベントかを判定する。
+_is_subagent_call() は、event["parent_ids"] にこれまで観測した
+dispatch_agent の run_id（dispatch_agent_run_ids集合、ターン終了まで
+保持しon_tool_endでもpopしない）が含まれるかどうかで、dispatch_agent
+内部（サブエージェント）由来のイベントかを判定する。
 """
 
 import dataclasses
@@ -25,29 +26,42 @@ def _with_thresholds(monkeypatch, warn: int, alert: int) -> None:
     )
 
 
-class _FakeStep:
-    def __init__(self, step_id: str) -> None:
-        self.id = step_id
-
-
-def test_is_subagent_call_true_when_parent_is_open_step() -> None:
-    steps = {"tool-run-1": _FakeStep("step-1")}
+def test_is_subagent_call_true_when_parent_is_known_dispatch_agent() -> None:
+    dispatch_agent_run_ids = {"tool-run-1"}
     event = {"parent_ids": ["some-other-run", "tool-run-1"]}
 
-    assert _is_subagent_call(event, steps) is True
+    assert _is_subagent_call(event, dispatch_agent_run_ids) is True
 
 
 def test_is_subagent_call_false_for_top_level_event() -> None:
-    steps = {"tool-run-1": _FakeStep("step-1")}
+    dispatch_agent_run_ids = {"tool-run-1"}
     event = {"parent_ids": ["unrelated-run"]}
 
-    assert _is_subagent_call(event, steps) is False
+    assert _is_subagent_call(event, dispatch_agent_run_ids) is False
 
 
-def test_is_subagent_call_false_when_no_steps_open() -> None:
+def test_is_subagent_call_false_when_no_dispatch_agent_seen() -> None:
     event = {"parent_ids": ["some-run"]}
 
-    assert _is_subagent_call(event, {}) is False
+    assert _is_subagent_call(event, set()) is False
+
+
+def test_is_subagent_call_true_after_dispatch_agent_tool_step_already_closed() -> None:
+    """[subagent].background_inline_wait_max_seconds 超過時の回帰テスト。
+
+    dispatch_agent 自身は安全上限超過で早期リターンし on_tool_end が
+    発火済み（＝steps辞書からは既にpopされている）だが、asyncio.shield で
+    温存されたバックグラウンドジョブ（job.runner_task）はその後も動き続け、
+    内部LLM呼び出しのイベントをこのターンの astream_events へ流し続ける
+    （src/subagent.py参照）。dispatch_agent_run_ids は steps と異なり
+    on_tool_end で pop しないため、この遅延イベントも引き続き
+    サブエージェント由来と判定できる必要がある。
+    """
+    dispatch_agent_run_ids = {"tool-run-1"}
+    # steps 相当のものは既に空（pop済み）でも、dispatch_agent_run_ids には残る。
+    event = {"parent_ids": ["tool-run-1"]}
+
+    assert _is_subagent_call(event, dispatch_agent_run_ids) is True
 
 
 def test_format_token_usage_includes_all_three_tiers() -> None:
