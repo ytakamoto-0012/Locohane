@@ -1427,16 +1427,26 @@ async def _setup() -> None:
     skills = scan_skills([_config.skills_dir, *_config.locohane_skills_dirs])
     system_prompt = build_system_prompt(skills, _config.system_prompt_path)
     # エージェント種別（agents/*.md、ClaudeCode の .claude/agents/*.md 相当）を走査し、
-    # 各種別のシステムプロンプトにも {{skills}} を差し込む。
+    # 各種別のシステムプロンプトにも {{skills}}/{{agent_types}} を差し込む
+    # （planner が dispatch_agent の委譲先一覧を steps 設計に使えるようにするため）。
     # agents_dir と locohane_agents_dirs をマージ（同名は locohane 側優先）。
     agent_type_defs = scan_agent_types([_config.agents_dir, *_config.locohane_agents_dirs])
     skills_block = render_skills_block(skills)
-    agent_type_defs = [replace(a, system_prompt=a.system_prompt.replace("{{skills}}", skills_block)) for a in agent_type_defs]
+    agent_types_block = render_agent_types_block(agent_type_defs)
+    agent_type_defs = [
+        replace(
+            a,
+            system_prompt=a.system_prompt.replace("{{skills}}", skills_block).replace(
+                "{{agent_types}}", agent_types_block
+            ),
+        )
+        for a in agent_type_defs
+    ]
     # 永続メモリーの索引（MEMORY.md）を {{memory}} へ差し込む（常に読み込まれる仕様）。
     # subagent 側にはメモリーツールを渡さないため差し込まない。
     system_prompt = system_prompt.replace("{{memory}}", render_memory_block(_config.memory_dir))
     # dispatch_agent が選べるエージェント種別一覧を {{agent_types}} へ差し込む。
-    system_prompt = system_prompt.replace("{{agent_types}}", render_agent_types_block(agent_type_defs))
+    system_prompt = system_prompt.replace("{{agent_types}}", agent_types_block)
     # 計画承認（Plan Mode）を免除される読み取り専用スクリプトのホワイトリストを
     # {{plan_approval_exempt_scripts}} へ差し込む（config.ini の値が唯一の正）。
     system_prompt = system_prompt.replace(

@@ -61,9 +61,10 @@ read_memory, search_memory, list_memories
 - `_resolve_agent_types()`（378-417行）が `tool_lookup = {t.name: t for t in _SUBAGENT_TOOLS}`（395行）を作り、frontmatterの `tools:` に書かれた名前と突き合わせて解決する。**未知のツール名は例外を出さず警告してスキップ**（405-409行）— 誤字に気づきにくいので、追加・変更時はアプリ起動ログを必ず確認すること。
 - 上記リストに **`dispatch_agent` 自体は含まれていない**。これが「サブエージェントはさらに別のサブエージェントへ委譲できない」という制約の実体（各.md本文にある「委譲する手段を持たない」という注記は、この一点のみで担保される説明であり、それ以外の特別な強制ロジックは無い）。
 
-## 4. `{{skills}}` プレースホルダーと共通注意事項の自動連結
+## 4. `{{skills}}`/`{{agent_types}}` プレースホルダーと共通注意事項の自動連結
 
 - `app.py` 525-527行。`scan_agent_types()` の後、`render_skills_block(skills)`（`src/skills.py`、`name: description` 形式のスキル一覧）を各エージェントの `system_prompt` 内の `{{skills}}` へ `str.replace` で差し込む（`dataclasses.replace` でイミュータブルに更新）。**スキルの本文そのものは含まれず、一覧のみ**（skills側の progressive disclosure 第1段階と同じ扱い）。
+- 同じ箇所で `render_agent_types_block(agent_type_defs)`（`src/agent_types.py`、`name: description` 形式のエージェント種別一覧。メインの `system_prompt.md` に差し込む `{{agent_types}}` と同じブロックを使い回す）を各エージェントの `system_prompt` 内の `{{agent_types}}` へも差し込む。ただし実際に本文で `{{agent_types}}` を使うのは `agents/planner.md` のみ（`create_plan` に渡す `steps` 候補を設計する際、`dispatch_agent` の委譲先一覧と「1ステップ=1回の委譲」の粒度を突き合わせるため）。他のエージェント種別は `dispatch_agent` を持たず孫委譲できないため `{{agent_types}}` を本文に書く必要はない。
 - `app.py` 550行。`system_prompt/subagent_common.md`（作業量・トークン上限に達した際の振る舞いに加え、`write_scratch_note` での途中経過の書き残し方・最終回答を生データの羅列にせず簡潔にまとめる指示を含む共通文）を**全エージェントの system_prompt 末尾に自動連結**する。個々の `agents/*.md` 側で同様の注意書きを重複して書く必要はない。
 
 ## 5. メインエージェントからの呼び出し方法

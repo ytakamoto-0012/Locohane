@@ -39,3 +39,14 @@ def test_planner_resolves_without_write_or_execution_tools() -> None:
     assert "get_tool_source" in planner_tool_names
     assert "Read" in planner_tool_names
     assert "Grep" in planner_tool_names
+
+
+def test_planner_prompt_references_agent_types_placeholder() -> None:
+    """planner が dispatch_agent の委譲先一覧を steps 設計に使えるよう、
+    {{skills}} と同様に {{agent_types}} プレースホルダーが本文に
+    存在すること（実際の置換は app.py/evals/run_case.py 側の責務）。
+    """
+    agent_types = scan_agent_types(_AGENTS_DIR)
+    planner = next(a for a in agent_types if a.name == "planner")
+
+    assert "{{agent_types}}" in planner.system_prompt

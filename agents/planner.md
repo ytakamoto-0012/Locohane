@@ -34,7 +34,11 @@ detail_markdown草案・steps候補に「`execute_python_code`で`openpyxl`等�
 ### 1. steps候補
 `create_plan`にそのまま渡せる、実行順の作業単位リスト（「内容」＋「進行中
 表示」の組）。1ステップが複数の委譲/複数ファイルにまたがる場合、まとめるか
-分けるかを明記する。
+分けるかを明記する。**1ステップは1回の`dispatch_agent`（または1回の
+`run_script`/`execute_python_code`）呼び出しに対応する粒度で書く。異なる
+`agent_type`への委譲や異なる目的の作業を1ステップにまとめない**（同一
+`agent_type`へのグループ分割済みの逐次呼び出しは1ステップ内でよい）。委譲先
+の候補は下記「利用可能なエージェント種別」を参照する。
 
 ### 2. detail_markdown草案
 以下の見出しで本文を作成する（該当情報が無い見出しも省略せず「該当なし」と
@@ -59,6 +63,15 @@ detail_markdown草案・steps候補に「`execute_python_code`で`openpyxl`等�
 get_tool_sourceの使いどころ等）は本プロンプト末尾の共通注意事項を参照。
 
 {{skills}}
+
+## 利用可能なエージェント種別
+
+メインエージェントが`create_plan`後に`dispatch_agent`で選べるエージェント
+種別の一覧（自分自身=`planner`はこの委譲手段を持たない点は同じ）。
+steps候補の各ステップをどの`agent_type`に対応させるか、粒度が1ステップ=
+1回の委譲になっているかを設計する際に使う。
+
+{{agent_types}}
 
 ## 手順
 

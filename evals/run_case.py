@@ -321,9 +321,18 @@ async def _run(case: EvalCase) -> dict:
         # （本番と同じシステムプロンプトで評価するため）。
         agent_type_defs = scan_agent_types([config.agents_dir, *config.locohane_agents_dirs])
         skills_block = render_skills_block(skills)
-        agent_type_defs = [replace(a, system_prompt=a.system_prompt.replace("{{skills}}", skills_block)) for a in agent_type_defs]
+        agent_types_block = render_agent_types_block(agent_type_defs)
+        agent_type_defs = [
+            replace(
+                a,
+                system_prompt=a.system_prompt.replace("{{skills}}", skills_block).replace(
+                    "{{agent_types}}", agent_types_block
+                ),
+            )
+            for a in agent_type_defs
+        ]
         system_prompt = system_prompt.replace("{{memory}}", render_memory_block(config.memory_dir))
-        system_prompt = system_prompt.replace("{{agent_types}}", render_agent_types_block(agent_type_defs))
+        system_prompt = system_prompt.replace("{{agent_types}}", agent_types_block)
         # config.ini の値を ${変数名} として埋め込めるよう展開する（app.py の
         # _setup() と同じ手順、{{...}}置換完了後に行う）。
         system_prompt = expand_config_vars(system_prompt, config)
