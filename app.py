@@ -34,6 +34,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import time
 import uuid
 from dataclasses import replace
@@ -70,6 +71,7 @@ from src.context_compaction import maybe_compact, should_compact
 from src.files import extract_generated_files
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
 from src.images import is_image_file, load_image_bytes, to_data_url
+from src import instance_lock
 from src.llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -842,6 +844,26 @@ async def _on_app_startup() -> None:
     ASGIのlifespan startupイベントとして、サーバーがHTTPリクエストの受付を
     開始する前に必ず完了するため、ここで先に用意しておく必要がある。
     """
+    # 同じ data/ ディレクトリを共有した状態での多重起動を防ぐ（誤って2つ目の
+    # プロセスを起動すると checkpoints.sqlite/chat_threads.sqlite が同時書き込みで
+    # 破損するため）。このフックはASGI lifespanのstartupイベントであり、
+    # 実際にサーバープロセスとして起動した時にのみ一度だけ呼ばれる
+    # （app.py を import するだけのテストコードでは発火しない）ため、
+    # 以降のDBファイルオープン処理より前の最初の行でチェックする
+    # （詳細は src/instance_lock.py 参照）。
+    # 注意: chainlit の on_app_startup ハンドラは wrap_user_function() 内の
+    # `except Exception` に必ず捕まりログ出力されるだけで再送出されない
+    # （chainlit/utils.py 参照）ため、ここで例外を投げっぱなしにしても
+    # サーバー起動は止まらず、2つ目のプロセスがそのままリクエストを受け付けて
+    # しまう。確実に起動を中止させるため、この場でメッセージを表示した上で
+    # プロセスを強制終了する。
+    try:
+        instance_lock.acquire(_config.checkpoint_db.parent / "app.lock")
+    except instance_lock.InstanceAlreadyRunningError as exc:
+        print(f"\n[FATAL] {exc}\n", file=sys.stderr)
+        logging.getLogger(__name__).critical(str(exc))
+        os._exit(1)
+
     global _thread_store_conn, _thread_data_layer
     if _config.thread_store_enabled:
         _thread_store_conn = await thread_store.init_db(_config.thread_store_db)
@@ -889,6 +911,7 @@ async def _on_app_shutdown() -> None:
                 "シャットダウン時のスレッドストア接続クローズに失敗しました（リークを許容）",
                 exc_info=True,
             )
+    instance_lock.release()
 
 
 async def _close_checkpointer_gracefully() -> None:
