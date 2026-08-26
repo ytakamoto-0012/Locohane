@@ -2,6 +2,8 @@ import { useContext } from 'react';
 import { useRecoilValue } from 'recoil';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { ChainlitContext, elementState, sessionIdState, type IStep } from '@chainlit/react-client';
 import type { IMessageElement } from '@chainlit/react-client';
 import { Icon } from './Icon';
@@ -61,6 +63,17 @@ const AVATAR_LABEL: Record<'assistant' | 'system' | 'subagent', string> = {
   subagent: 'SUB'
 };
 
+/** GFMのタスクリスト（- [ ] 項目）が生成する <input type="checkbox"> を
+ *  rehype-sanitizeのデフォルトスキーマは許可しないため、明示的に追加する。 */
+const markdownSanitizeSchema = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), 'input'],
+  attributes: {
+    ...defaultSchema.attributes,
+    input: ['type', 'checked', 'disabled']
+  }
+};
+
 function MessageBubble({ step }: { step: IStep }) {
   const category = messageCategory(step);
   const isUser = category === 'user';
@@ -71,6 +84,7 @@ function MessageBubble({ step }: { step: IStep }) {
         <div className="message-bubble-content">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]]}
             components={{
               a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />
             }}
