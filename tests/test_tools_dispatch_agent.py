@@ -293,6 +293,66 @@ async def test_stop_cancels_running_job_cleanly(monkeypatch, tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_dispatch_agent_jobs_for_thread_stops_running_job(monkeypatch, tmp_path) -> None:
+    """app.py の on_stop / _stop_thread_generating が使う cancel_dispatch_agent_jobs_for_thread の回帰テスト。
+
+    停止ボタン押下時、session.current_task.cancel() はメイングラフのタスクにしか
+    届かず、asyncio.shield() で保護された dispatch_agent の job.runner_task は
+    それだけでは止まらない（2026-08-26 ユーザー報告）。stop_dispatch_agent_job
+    ツールと同じ強制終了を、job_idを知らない停止ボタン経路からも thread_id 指定で
+    一括適用できることを検証する。
+    """
+    _setup(monkeypatch, tmp_path=tmp_path, thread_id="thread-1")
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    started_running = asyncio.Event()
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        started_running.set()
+        await asyncio.sleep(1000)  # cancel_dispatch_agent_jobs_for_thread にキャンセルされる想定
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    job_id = _extract_job_id(started)
+    await started_running.wait()
+
+    job = tools._dispatch_agent_job._DISPATCH_AGENT_JOBS[job_id]
+    await tools.cancel_dispatch_agent_jobs_for_thread("thread-1")
+
+    assert job.status == "killed"
+    assert job.runner_task.cancelled() or job.runner_task.done()
+    assert job_id not in tools._dispatch_agent_job._DISPATCH_AGENT_JOBS
+
+
+@pytest.mark.asyncio
+async def test_cancel_dispatch_agent_jobs_for_thread_ignores_other_threads(monkeypatch, tmp_path) -> None:
+    """thread_id が一致しないジョブには一切触れない（他セッションを巻き添えにしない）。"""
+    _setup(monkeypatch, tmp_path=tmp_path, thread_id="thread-1")
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    started_running = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        started_running.set()
+        await gate.wait()
+        return "ok"
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    job_id = _extract_job_id(started)
+    await started_running.wait()
+
+    job = tools._dispatch_agent_job._DISPATCH_AGENT_JOBS[job_id]
+    await tools.cancel_dispatch_agent_jobs_for_thread("thread-other")
+
+    assert job.status == "running"
+    assert not job.runner_task.done()
+    assert job_id in tools._dispatch_agent_job._DISPATCH_AGENT_JOBS
+
+    gate.set()
+    await job.runner_task
+
+
+@pytest.mark.asyncio
 async def test_exception_inside_job_is_returned_as_error_not_lost(monkeypatch, tmp_path) -> None:
     _setup(monkeypatch, tmp_path=tmp_path)
 

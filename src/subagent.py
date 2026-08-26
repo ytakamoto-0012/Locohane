@@ -48,6 +48,7 @@ from .images import image_followup_message
 from .llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
+    aclose_model_client,
     build_model,
     describe_current_task,
     mark_last_endpoint_failed,
@@ -155,10 +156,15 @@ async def _invoke_with_loop_retry(model, messages: list, config: Config, tools: 
     エージェントやメイングラフが使用中のクライアントまで巻き添えで閉じて
     しまい、"Cannot send a request, as the client has been closed" という
     別の実害を招くため（2026-07-21、app.py側の同種修正で実際に発生し
-    確認済み）。build_model()は呼ばれるたびに新しいhttpx.AsyncClientを
-    生成するため、壊れた可能性のある旧クライアントは単に参照を手放す
-    だけでよい（[llm].no_keepalive_limitsによりコネクションプールでの
-    再利用も元々無効化されている）。
+    確認済み）。代わりに aclose_model_client(current_model) で「この
+    モデルインスタンス1つの接続だけ」を exc.client_broken の真偽に
+    関わらず無条件で強制クローズする（context_compaction.py の
+    maybe_compact と同じパターン）。単に参照を手放して build_model() で
+    新しいクライアントに差し替えるだけでは、旧クライアントのストリーム
+    後始末(aclose)自体が失敗・タイムアウトして接続が生きたまま
+    llama-server側の生成が終わらずに残り続けることがある（2026-08-26
+    ユーザー報告: サブエージェント実行中にループガードが発火すると
+    「接続は切れるがLLMの生成は止まらない」）。
 
     なお build_model() が生成するhttpx.AsyncClientは、呼び出し時点で
     src/llm.py の set_current_session() により設定されているセッションID
@@ -191,6 +197,13 @@ async def _invoke_with_loop_retry(model, messages: list, config: Config, tools: 
             response = await current_model.ainvoke(local_messages)
             return response, current_model
         except ThinkingLoopDetected as exc:
+            # 諦める（raise）か再試行するかに関わらず、このモデルインスタンス
+            # 専用のクライアントだけを無条件で強制クローズする。この分岐より
+            # 後（if attempt >= max_retries の raise の後）に置くと、リトライ
+            # 予算を使い切った最後の1回だけ後始末されずに終わり、ストリームの
+            # 後始末自体が失敗してllama-server側の生成が終わらないまま
+            # 残り続ける（docstring参照）。
+            await aclose_model_client(current_model)
             if attempt >= max_retries:
                 raise
             logger.warning(

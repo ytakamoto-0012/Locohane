@@ -98,6 +98,7 @@ from src.thread_store import ChatThreadDataLayer
 from src import thread_store
 from src.tools import (
     WorkDirAccessStatus,
+    cancel_dispatch_agent_jobs_for_thread,
     forget_session_tool_semaphores,
     init_tools,
     probe_workdir_access,
@@ -328,8 +329,15 @@ async def _stop_thread_generating(thread_id: str) -> bool:
     LLMサーバーへのHTTP接続も強制切断する（cancel()だけでは接続が生きたまま
     CPU/GPU使用率が下がらないため。on_stop()のdocstring参照）。
 
+    session.current_task.cancel() は dispatch_agent の job.runner_task
+    （asyncio.shield() で保護され、メイングラフのタスクとは別に生き続ける）
+    には届かない。放置すると、停止ボタン押下後もサブエージェントの実行
+    ・進捗pushが裏側で動き続けてしまう（on_stop()のdocstring・
+    cancel_dispatch_agent_jobs_for_thread参照）ため、ここで併せて
+    強制終了する。
+
     on_stop()と異なりグラフの再構築（_rebuild_graph）はここでは行わない。
-    呼び出し元は「このスレッドを閲覧しているだけの別セッション」であり、
+    呼び出し元は「このスレッドを開いただけの閲覧側」であり、
     cl.user_session はそのセッション自身のものしか書き換えられないため、
     ここで _rebuild_graph を呼ぶと新しいグラフが無関係な閲覧側セッションへ
     紐づいてしまい、肝心の生成元セッションには反映されない。生成元セッションは
@@ -340,6 +348,17 @@ async def _stop_thread_generating(thread_id: str) -> bool:
     if task is None or task.done():
         return False
     task.cancel()
+    # 独立したtryブロックにする理由はon_stop()と同じ: ここで例外が発生しても
+    # 本来の主目的である接続の強制クローズ（aclose_active_llm_clients）は
+    # 必ず試みる。
+    try:
+        await cancel_dispatch_agent_jobs_for_thread(thread_id)
+    except Exception:  # noqa: BLE001 - ベストエフォート、失敗してもLLMクライアントのクローズは試みる
+        logging.getLogger(__name__).debug(
+            "cross-session停止: dispatch_agentジョブの強制終了に失敗しました [thread_id=%s]",
+            thread_id,
+            exc_info=True,
+        )
     try:
         await aclose_active_llm_clients(thread_id)
     except Exception:  # noqa: BLE001 - ベストエフォート、失敗してもcancel()自体は有効
@@ -1624,6 +1643,13 @@ async def on_stop() -> None:
     その直後に自セッションのグラフを再構築し、新しいLLMクライアントに
     差し替える。
 
+    Chainlit本体が cancel() するのはメイングラフのタスク
+    （session.current_task）のみで、dispatch_agent の job.runner_task
+    （asyncio.shield() で保護されている）には届かない。放置すると、
+    停止ボタンを押してバッジが「停止」になった後もサブエージェントの
+    LLM呼び出し・進捗pushが裏側で動き続けてしまう（2026-08-26
+    ユーザー報告）ため、ここで併せて強制終了する。
+
     以前はプロセス全体で共有される _active_async_clients を一括クローズ
     しており、別タブで実行中の処理まで巻き添えで
     "Cannot send a request, as the client has been closed" 等のエラーで
@@ -1637,9 +1663,17 @@ async def on_stop() -> None:
         # 紐づくセッションのグラフがまだ無いため何もしない。
         logging.getLogger(__name__).warning("on_stop: thread_id が未設定のため何もしません")
         return
-    # aclose_active_llm_clients 内でCancelledErrorが発生しても、後始末
-    # （グラフ再構築・ログ出力）は最後まで実行してから呼び出し元へ伝播する。
+    # aclose_active_llm_clients・cancel_dispatch_agent_jobs_for_thread内で
+    # CancelledErrorが発生しても、後始末（グラフ再構築・ログ出力）は
+    # 最後まで実行してから呼び出し元へ伝播する。2つを同じtryブロックに
+    # まとめると、前者のCancelledErrorで後者（本来の主目的である接続の
+    # 強制クローズ）がスキップされてしまうため、独立したtryブロックに分け、
+    # どちらも必ず試みる。
     cancelled: asyncio.CancelledError | None = None
+    try:
+        await cancel_dispatch_agent_jobs_for_thread(thread_id)
+    except asyncio.CancelledError as exc:
+        cancelled = exc
     try:
         await aclose_active_llm_clients(thread_id)
     except asyncio.CancelledError as exc:
@@ -2242,15 +2276,31 @@ def _resolve_parent_id(event: dict, steps: dict[str, cl.Step]) -> str | None:
     return parent.id if parent else None
 
 
-def _is_subagent_call(event: dict, steps: dict[str, cl.Step]) -> bool:
+def _is_subagent_call(event: dict, dispatch_agent_run_ids: set[str]) -> bool:
     """この astream_events イベントが dispatch_agent 内部（サブエージェント）由来かを判定する。
 
-    _resolve_parent_id() と同じ event["parent_ids"] を使う。祖先に steps
-    （現在開いているツールStep）が含まれていれば、そのツール実行中に
-    発生したイベント＝サブエージェント内部（dispatch_agentの中）由来と
-    判定できる（LLM呼び出しを内部で行うツールは dispatch_agent のみ）。
+    event["parent_ids"]（LangChain が管理する祖先run_idの全チェーン）に、
+    これまで観測した dispatch_agent の run_id が1つでも含まれていれば、
+    その実行中に発生したイベント＝サブエージェント内部由来と判定できる
+    （LLM呼び出しを内部で行うツールは dispatch_agent のみ）。
+
+    以前は steps 辞書（_resolve_parent_id と同じ「現在開いているツール
+    Step」）で判定していたが、それだと [subagent].background_inline_wait_max_seconds
+    超過時に取りこぼす実害があった: dispatch_agent 自身のツール呼び出しは
+    安全上限超過で早期リターンし on_tool_end が発火して steps から
+    自身の run_id が消えるが、asyncio.shield で温存されたバックグラウンド
+    ジョブ（_dispatch_agent_job.py の job.runner_task）は asyncio.create_task
+    生成時点でコピーされた contextvar 経由でその後も astream_events へ
+    内部LLM呼び出しのイベントを流し続ける（src/subagent.py 冒頭のコメント
+    参照）。steps だけで判定すると、この早期リターン後にターン内で届く
+    内部イベントが「メインエージェント由来」に誤分類され、on_chat_model_end
+    ハンドラの last_usage/cumulative_main がサブエージェント内部の巨大な
+    トークン数で汚染され、本来不要なメインエージェントの会話圧縮を誤って
+    引き起こす（2026-08-26調査）。dispatch_agent_run_ids は steps と異なり
+    on_tool_end で pop せずターン終了まで保持することで、早期リターン後の
+    内部イベントも引き続きサブエージェント由来と判定できるようにする。
     """
-    return any(pid in steps for pid in event.get("parent_ids", []))
+    return any(pid in dispatch_agent_run_ids for pid in event.get("parent_ids", []))
 
 
 def _is_dispatch_agent_error(tool_name: str, content: object) -> bool:
@@ -2758,7 +2808,14 @@ async def _on_message_impl(message: cl.Message) -> None:
     while True:
         answer: cl.Message | None = None  # ツール呼び出しごとに区切って新規発行する
         thinking: cl.Step | None = None  # <think> ブロック（reasoning_content）を表示するStep
-        steps: dict[str, cl.Step] = {}  # run_id -> Step（ツール開始/終了を対応付け。_resolve_parent_id/_is_subagent_callが「まだ完了していない祖先」の判定に使うため、on_tool_endで必ずpopする）
+        steps: dict[str, cl.Step] = {}  # run_id -> Step（ツール開始/終了を対応付け。_resolve_parent_idが「まだ完了していない祖先」の判定に使うため、on_tool_endで必ずpopする）
+        # dispatch_agent（サブエージェント委譲）のtool run_id集合。_is_subagent_call
+        # が使う。steps と異なり on_tool_end で pop しない（_is_subagent_call
+        # docstring参照。[subagent].background_inline_wait_max_seconds 超過で
+        # dispatch_agent が早期リターンした後もバックグラウンドジョブが
+        # 投げ続ける内部LLMイベントを、ターンが終わるまでサブエージェント
+        # 由来と判定し続ける必要があるため）。
+        dispatch_agent_run_ids: set[str] = set()
         # 再接続時のStep再同期（_resync_live_steps参照）用に、このターンで
         # 触れた全Step（完了済みも含む）を steps とは別に保持する。steps は
         # on_tool_end で pop される（_resolve_parent_id 等の「現在開いている
@@ -2864,7 +2921,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                             # メインエージェントの回答と見分けが付かないまま届く
                             # （_resolve_parent_id/_is_subagent_call 参照）。
                             # authorを変えてUI側で区別できるようにする。
-                            is_subagent_answer = _is_subagent_call(event, steps)
+                            is_subagent_answer = _is_subagent_call(event, dispatch_agent_run_ids)
                             answer = cl.Message(
                                 content="",
                                 author=SUBAGENT_MESSAGE_AUTHOR if is_subagent_answer else None,
@@ -2888,6 +2945,10 @@ async def _on_message_impl(message: cl.Message) -> None:
                     await step.send()
                     steps[event["run_id"]] = step
                     resync_steps[event["run_id"]] = step
+                    if event["name"] == "dispatch_agent":
+                        # _is_subagent_call docstring参照。steps と違いターン
+                        # 終了までここから取り除かない。
+                        dispatch_agent_run_ids.add(event["run_id"])
 
                 elif kind == "on_tool_end":
                     step = steps.pop(event["run_id"], None)
@@ -2972,7 +3033,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                     # 安全な区切り。ここで should_compact() の条件を満たして
                     # いれば _CompactionCheckpoint を送出し、async for ループの
                     # 外側（except節）で安全に aupdate_state による圧縮を行う。
-                    if step is not None and not _is_subagent_call(event, steps):
+                    if step is not None and not _is_subagent_call(event, dispatch_agent_run_ids):
                         tool_msg = event["data"].get("output")
                         if isinstance(tool_msg, ToolMessage) and tool_msg.tool_call_id in pending_main_tool_ids:
                             pending_main_tool_msgs.append(tool_msg)

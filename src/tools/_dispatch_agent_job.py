@@ -314,6 +314,54 @@ def _dispatch_agent_job_started_message(job_id: str) -> str:
     )
 
 
+async def cancel_dispatch_agent_jobs_for_thread(thread_id: str) -> None:
+    """指定セッションで実行中の dispatch_agent ジョブを全て強制終了する。
+
+    app.py の on_stop（自セッション停止）・_stop_thread_generating
+    （閲覧側からのcross-session停止）から呼ぶ。これらはメイングラフの
+    タスク（session.current_task）しかキャンセルできず、dispatch_agent が
+    起動した job.runner_task は asyncio.shield() で保護されているため
+    その影響を受けない。放置すると、停止ボタンを押してバッジが「停止」に
+    なった後もサブエージェントのLLM呼び出し・進捗push
+    （_push_dispatch_agent_progress）が裏側で動き続ける（2026-08-26
+    ユーザー報告。実測ログ: 停止ボタン押下から約107秒後にジョブが
+    「11回で完了」と自然終了していた）。
+
+    stop_dispatch_agent_job ツールと同じ job.status="killed" +
+    runner_task.cancel() を、対象thread_idの実行中ジョブ全件へ適用する。
+    ツール版と異なり、結果を待つ呼び出し元（LLM）がもう存在しない
+    （ターン自体が終わっている）ため、進捗メモの案内文などは組み立てず、
+    レジストリから取り除くだけでよい。
+    """
+    targets = [
+        (job_id, job)
+        for job_id, job in _DISPATCH_AGENT_JOBS.items()
+        if job.thread_id == thread_id and job.status == "running"
+    ]
+    for job_id, job in targets:
+        job.status = "killed"
+        logger.warning(
+            "dispatch_agent: 停止ボタンにより強制終了します (run_id=%s, job_id=%s, iter=%d/%d)",
+            job.run_id,
+            job_id,
+            job.current_iteration,
+            job.max_iterations,
+        )
+        if job.runner_task is not None:
+            job.runner_task.cancel()
+            try:
+                await job.runner_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 - 停止処理自体は他ジョブの後始末を妨げない
+                logger.debug(
+                    "dispatch_agent強制終了中に例外が発生しました (job_id=%s)",
+                    job_id,
+                    exc_info=True,
+                )
+        _DISPATCH_AGENT_JOBS.pop(job_id, None)
+
+
 def _resolve_dispatch_agent_job(job_id: str) -> "_DispatchAgentJob | str":
     """job_id を現在のセッション所有のジョブへ解決する（他セッションは拒否）。
 
