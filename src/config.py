@@ -338,6 +338,14 @@ class Config:
         script_plan_approval_exempt_scripts: run_script/run_script_background
             の計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト（{(スキル名, スクリプトファイル名), ...}）。
+        script_agent_type_run_script_allowlist: dispatch_agent サブエージェントの
+            agent_type ごとに run_script/run_script_readonly で呼べるスキル/
+            スクリプトを制限するホワイトリスト（{(agent_type, 対象), ...}）。
+            対象は文字列1件（例: "web-search"）ならそのスキル配下の全スクリプトを
+            許可、2要素タプル（例: ("pdf-tools", "render_pdf_pages.py")）なら
+            そのスクリプトのみ許可を表す。未登録の agent_type は制限なし
+            （init_tools() が agent_type ごとにグループ化して
+            _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST へ注入する。src/tools/_state.py参照）。
         file_tools_duplicate_guard_enabled: 読み取り専用の Read/Glob/Grep/
             json_query ツールを同一引数で繰り返し呼び出すのを防ぐガード機能の
             有効/無効。
@@ -730,6 +738,9 @@ class Config:
 
     # --- run_script/run_script_background の計画承認免除ホワイトリスト ---
     script_plan_approval_exempt_scripts: frozenset[tuple[str, str]]
+
+    # --- dispatch_agent のagent_typeごとに run_script で呼べるスキル/スクリプトを制限するホワイトリスト ---
+    script_agent_type_run_script_allowlist: frozenset[tuple[str, str | tuple[str, str]]]
 
     # --- Read/Glob/Grep/json_query 重複呼び出しガード（src/tools.py の _check_file_tools_duplicate） ---
     file_tools_duplicate_guard_enabled: bool
@@ -1299,6 +1310,70 @@ def _parse_plan_approval_exempt_scripts(value: str | None) -> frozenset[tuple[st
     return frozenset(entries)
 
 
+def _parse_agent_type_run_script_allowlist(value: str | None) -> frozenset[tuple[str, str | tuple[str, str]]]:
+    """config.ini の [scripts].agent_type_run_script_allowlist をパースする。
+
+    dispatch_agent サブエージェントの agent_type ごとに、run_script/
+    run_script_readonly で呼んでよいスキル/スクリプトを制限するホワイトリスト
+    （未登録の agent_type は制限なし）。各要素は [agent_type, 対象] の2要素で、
+    対象はさらに次の2種類のいずれかを許容する:
+      - 文字列1件（例: "web-search"）: そのスキル配下の全スクリプトを許可。
+      - [スキル名, スクリプトファイル名] の2要素配列（例:
+        ["pdf-tools", "render_pdf_pages.py"]）: そのスクリプトのみ許可。
+        pdf-tools のように同一スキル配下に読み込み専用スクリプトと書き込み
+        スクリプトが混在するスキルは、スキル名単位ではなくこちらで個別に
+        許可すること。
+    例: [["explore-websearch", "web-search"],
+         ["analyze-docs", "docx-read"],
+         ["analyze-docs", ["pdf-tools", "render_pdf_pages.py"]]]
+    _parse_main_agent_tool_guard_entries と同様 ast.literal_eval で読む
+    （末尾カンマ等の緩い記法も許容するため）。
+
+    Args:
+        value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
+            空欄・None なら空集合を返す。
+
+    Returns:
+        {(agent_type, 対象), ...} の frozenset。対象はスキル名の文字列、または
+        (スキル名, スクリプトファイル名) のタプル。
+
+    Raises:
+        ValueError: リストとして解釈できない場合、各要素が [agent_type, 対象] の
+            2要素でない場合、agent_type が文字列でない場合、または対象が
+            文字列でも2要素配列でもない場合。
+    """
+    if not value or not value.strip():
+        return frozenset()
+    text = value.strip()
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(f"agent_type_run_script_allowlist はPythonのリスト形式で指定してください: {text!r}") from e
+    if not isinstance(parsed, list):
+        raise ValueError(f"agent_type_run_script_allowlist はリスト（配列）形式で指定してください: {text!r}")
+    entries: set[tuple[str, str | tuple[str, str]]] = set()
+    for item in parsed:
+        if not (isinstance(item, (list, tuple)) and len(item) == 2):
+            raise ValueError(
+                f"agent_type_run_script_allowlist の各要素は [agent_type, 対象] の" f"2要素にしてください: {item!r}"
+            )
+        agent_type, target = item
+        if not isinstance(agent_type, str):
+            raise ValueError(f"agent_type_run_script_allowlist の agent_type は文字列にしてください: {agent_type!r}")
+        key: str | tuple[str, str]
+        if isinstance(target, str):
+            key = target
+        elif isinstance(target, (list, tuple)) and len(target) == 2:
+            key = (str(target[0]), str(target[1]))
+        else:
+            raise ValueError(
+                "agent_type_run_script_allowlist の対象はスキル名の文字列、または"
+                f"[スキル名, スクリプトファイル名] の2要素にしてください: {target!r}"
+            )
+        entries.add((agent_type, key))
+    return frozenset(entries)
+
+
 def _parse_main_agent_tool_guard_entries(value: str | None) -> frozenset[tuple[str | tuple[str, str], int]]:
     """config.ini の [main_agent_tool_guard].entries をパースする。
 
@@ -1687,6 +1762,28 @@ def load_config(config_path: Path | None = None) -> Config:
                     '["pptx-read","read_pptx.py"],["pptx-inspect","inspect_pptx.py"],'
                     '["pptx-render","render_pptx.py"],'
                     '["web-search","search_web.py"]]',
+                ),
+            )
+        ),
+        script_agent_type_run_script_allowlist=_parse_agent_type_run_script_allowlist(
+            os.getenv(
+                "SCRIPT_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST",
+                scripts.get(
+                    "agent_type_run_script_allowlist",
+                    '[["explore-websearch","web-search"],'
+                    '["analyze-docs","docx-render"],["analyze-docs","docx-read"],'
+                    '["analyze-docs","excel-render"],["analyze-docs","excel-read"],'
+                    '["analyze-docs","excel-vba-read"],'
+                    '["analyze-docs","pptx-render"],["analyze-docs","pptx-read"],'
+                    '["analyze-docs","pptx-inspect"],'
+                    '["analyze-docs",["pdf-tools","render_pdf_pages.py"]],'
+                    '["analyze-docs",["pdf-tools","read_pdf.py"]],'
+                    '["verifier","excel-render"],["verifier","excel-read"],'
+                    '["verifier","docx-render"],["verifier","docx-read"],'
+                    '["verifier","pptx-render"],["verifier","pptx-read"],'
+                    '["verifier","pptx-inspect"],'
+                    '["verifier",["pdf-tools","render_pdf_pages.py"]],'
+                    '["verifier",["pdf-tools","read_pdf.py"]]]',
                 ),
             )
         ),

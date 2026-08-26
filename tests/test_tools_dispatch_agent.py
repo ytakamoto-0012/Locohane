@@ -316,11 +316,66 @@ async def test_cancel_dispatch_agent_jobs_for_thread_stops_running_job(monkeypat
     await started_running.wait()
 
     job = tools._dispatch_agent_job._DISPATCH_AGENT_JOBS[job_id]
-    await tools.cancel_dispatch_agent_jobs_for_thread("thread-1")
+    result = await tools.cancel_dispatch_agent_jobs_for_thread("thread-1")
 
+    assert result is True
     assert job.status == "killed"
+    assert job.turn_still_waiting is False
     assert job.runner_task.cancelled() or job.runner_task.done()
     assert job_id not in tools._dispatch_agent_job._DISPATCH_AGENT_JOBS
+
+
+@pytest.mark.asyncio
+async def test_cancel_dispatch_agent_jobs_for_thread_cancels_concurrently(monkeypatch, tmp_path) -> None:
+    """同一スレッドで複数のdispatch_agentジョブが並行実行中でも、1件ずつ直列に
+    cancel()→awaitするのではなく全件へ先にcancel()を発行してから並行して
+    後始末を待つことを検証する（2026-08-26レビュー: 直列だと停止ボタンの
+    反応が同時実行ジョブ数に比例して遅延する不具合の回帰防止）。
+
+    各ジョブのrunner_taskがCancelledErrorを実際に受け取るまでの間、
+    asyncio.Event で「まだ後始末中」を可視化し、2件目の後始末が始まった
+    時点で1件目がまだ完了していない（＝直列待ちではなく並行して進んでいる）
+    ことを確認する。
+    """
+    _setup(monkeypatch, tmp_path=tmp_path, thread_id="thread-1")
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_MAX_PARALLEL", 2)
+
+    cleanup_started = [asyncio.Event(), asyncio.Event()]
+    both_cleanups_started = asyncio.Event()
+    started_running = [asyncio.Event(), asyncio.Event()]
+
+    def _make_fake_run_subagent(idx: int):
+        async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+            started_running[idx].set()
+            try:
+                await asyncio.sleep(1000)
+            except asyncio.CancelledError:
+                cleanup_started[idx].set()
+                if all(e.is_set() for e in cleanup_started):
+                    both_cleanups_started.set()
+                # 後始末が並行して進んでいることを検証するため、もう一方の
+                # 後始末開始を待ってから実際にキャンセルを完了させる。
+                await asyncio.wait_for(both_cleanups_started.wait(), timeout=5)
+                raise
+
+        return fake_run_subagent
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", _make_fake_run_subagent(0))
+    started_0 = await tools.dispatch_agent.ainvoke({"task": "t0", "agent_type": "explore"})
+    job_id_0 = _extract_job_id(started_0)
+    await started_running[0].wait()
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", _make_fake_run_subagent(1))
+    started_1 = await tools.dispatch_agent.ainvoke({"task": "t1", "agent_type": "explore"})
+    job_id_1 = _extract_job_id(started_1)
+    await started_running[1].wait()
+
+    result = await asyncio.wait_for(tools.cancel_dispatch_agent_jobs_for_thread("thread-1"), timeout=5)
+
+    assert result is True
+    assert job_id_0 not in tools._dispatch_agent_job._DISPATCH_AGENT_JOBS
+    assert job_id_1 not in tools._dispatch_agent_job._DISPATCH_AGENT_JOBS
 
 
 @pytest.mark.asyncio

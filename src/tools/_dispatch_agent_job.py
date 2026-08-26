@@ -246,6 +246,26 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
             cl.user_session.set("main_agent_tool_guard_call_count", None)
 
 
+_PLANNER_INFO_INSUFFICIENT_MARKER = "情報不足"
+# agents/planner.md の「1. steps候補」「2. detail_markdown草案」の見出し文言。
+# 実際に計画草案を返した回答にはこのいずれかが含まれる。
+_PLANNER_PLAN_STRUCTURE_MARKERS = ("steps候補", "detail_markdown")
+
+
+def _is_planner_info_insufficient(result: str) -> bool:
+    """plannerの最終回答が「情報不足」応答（steps/detail_markdown省略）かを判定する。
+
+    単純な `"情報不足" in result` だと、成果物の内容に「情報不足」という語句
+    （例: 「情報不足の項目に注意喚起を追加する」）がたまたま含まれる正常な
+    計画草案まで誤って「情報不足応答」と判定してしまう。agents/planner.md は
+    情報不足時、steps/detail_markdown を省略すると明記しているため、
+    その見出し文言が一切含まれていない場合に限り情報不足応答とみなす。
+    """
+    if _PLANNER_INFO_INSUFFICIENT_MARKER not in result:
+        return False
+    return not any(marker in result for marker in _PLANNER_PLAN_STRUCTURE_MARKERS)
+
+
 def _finalize_dispatch_agent_job_result(job: "_DispatchAgentJob", job_id: str) -> str:
     """終端状態（completed/killed/error）のジョブを最終結果文字列へ整形し、レジストリから取り除く。
 
@@ -264,7 +284,7 @@ def _finalize_dispatch_agent_job_result(job: "_DispatchAgentJob", job_id: str) -
             # 明記して返す）でsteps/detail_markdownの草案を返さなかった場合は
             # フラグを立てず、メインエージェントがこの回答を無視して
             # create_planを呼んでもガードで止められるようにする。
-            if "情報不足" in result:
+            if _is_planner_info_insufficient(result):
                 cl.user_session.set("planner_dispatched_since_plan", False)
                 cl.user_session.set("planner_info_insufficient", True)
             else:
@@ -314,7 +334,7 @@ def _dispatch_agent_job_started_message(job_id: str) -> str:
     )
 
 
-async def cancel_dispatch_agent_jobs_for_thread(thread_id: str) -> None:
+async def cancel_dispatch_agent_jobs_for_thread(thread_id: str) -> bool:
     """指定セッションで実行中の dispatch_agent ジョブを全て強制終了する。
 
     app.py の on_stop（自セッション停止）・_stop_thread_generating
@@ -332,6 +352,24 @@ async def cancel_dispatch_agent_jobs_for_thread(thread_id: str) -> None:
     ツール版と異なり、結果を待つ呼び出し元（LLM）がもう存在しない
     （ターン自体が終わっている）ため、進捗メモの案内文などは組み立てず、
     レジストリから取り除くだけでよい。
+
+    全件へ cancel() を先に発行してから asyncio.gather で並行して後始末を
+    待つ（1件ずつ cancel()→await を繰り返すと、[subagent].max_parallel で
+    複数ジョブが並行実行中の場合、後始末が遅いジョブ1件が残り全件分の
+    停止ボタンの反応を直列に遅延させてしまうため）。
+
+    dispatch_agent() 自身の TimeoutError/CancelledError 処理は
+    job.turn_still_waiting を即座に False にしてから待つ（_DispatchAgentJob
+    のdocstring参照）が、ここでの強制終了はそれとは独立した経路のため
+    同様に明示的に False へ倒す。倒さないと、このcancel()がまだ
+    _run_dispatch_agent_job のfinally節へ届く前に dispatch_agent() 側の
+    経路がスケジュールされないタイミング次第で、turn_still_waitingが
+    古いTrueのまま観測され、既に別の新しいターンが始まっている
+    main_agent_tool_guard_call_count を誤ってリセットしうる。
+
+    Returns:
+        1件以上のジョブを強制終了した場合 True（停止ボタンの呼び出し元が
+        「何かを止めた」かどうかの判定に使う）。
     """
     targets = [
         (job_id, job)
@@ -340,6 +378,7 @@ async def cancel_dispatch_agent_jobs_for_thread(thread_id: str) -> None:
     ]
     for job_id, job in targets:
         job.status = "killed"
+        job.turn_still_waiting = False
         logger.warning(
             "dispatch_agent: 停止ボタンにより強制終了します (run_id=%s, job_id=%s, iter=%d/%d)",
             job.run_id,
@@ -349,17 +388,19 @@ async def cancel_dispatch_agent_jobs_for_thread(thread_id: str) -> None:
         )
         if job.runner_task is not None:
             job.runner_task.cancel()
-            try:
-                await job.runner_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:  # noqa: BLE001 - 停止処理自体は他ジョブの後始末を妨げない
+    runner_tasks = [(job_id, job.runner_task) for job_id, job in targets if job.runner_task is not None]
+    if runner_tasks:
+        results = await asyncio.gather(*(task for _, task in runner_tasks), return_exceptions=True)
+        for (job_id, _), result in zip(runner_tasks, results):
+            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
                 logger.debug(
                     "dispatch_agent強制終了中に例外が発生しました (job_id=%s)",
                     job_id,
-                    exc_info=True,
+                    exc_info=result,
                 )
+    for job_id, _ in targets:
         _DISPATCH_AGENT_JOBS.pop(job_id, None)
+    return bool(targets)
 
 
 def _resolve_dispatch_agent_job(job_id: str) -> "_DispatchAgentJob | str":

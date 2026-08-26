@@ -98,6 +98,7 @@ from src.thread_store import ChatThreadDataLayer
 from src import thread_store
 from src.tools import (
     WorkDirAccessStatus,
+    cancel_background_script_jobs_for_thread,
     cancel_dispatch_agent_jobs_for_thread,
     forget_session_tool_semaphores,
     init_tools,
@@ -329,12 +330,23 @@ async def _stop_thread_generating(thread_id: str) -> bool:
     LLMサーバーへのHTTP接続も強制切断する（cancel()だけでは接続が生きたまま
     CPU/GPU使用率が下がらないため。on_stop()のdocstring参照）。
 
-    session.current_task.cancel() は dispatch_agent の job.runner_task
-    （asyncio.shield() で保護され、メイングラフのタスクとは別に生き続ける）
-    には届かない。放置すると、停止ボタン押下後もサブエージェントの実行
-    ・進捗pushが裏側で動き続けてしまう（on_stop()のdocstring・
-    cancel_dispatch_agent_jobs_for_thread参照）ため、ここで併せて
+    session.current_task.cancel() は dispatch_agent の job.runner_task・
+    run_script_background/execute_python_code_background の job.runner_task
+    （いずれも asyncio.shield() で保護され、メイングラフのタスクとは別に
+    生き続ける）には届かない。放置すると、停止ボタン押下後もサブエージェント
+    の実行・スクリプト実行・進捗pushが裏側で動き続けてしまう（on_stop()の
+    docstring・cancel_dispatch_agent_jobs_for_thread参照）ため、ここで併せて
     強制終了する。
+
+    重要: メイングラフのタスク（_generating_thread_tasks[thread_id]）が
+    既に None/done() であっても、これらのバックグラウンドジョブは
+    まだ動いている可能性がある（dispatch_agent が安全上限超過で
+    job_id を返してターンを終えた場合、あるいは1回目の停止ボタンで
+    メインタスク自体は既にcancelled=doneになった後、別タブ/再度の停止
+    リクエストがこの関数に来た場合）。メインタスクの有無で早期return
+    すると、この最も典型的なシナリオでバックグラウンドジョブの強制終了が
+    一度も行われなくなってしまう（2026-08-26調査で確認）ため、メインタスク
+    の状態に関わらずジョブの強制終了は必ず試みる。
 
     on_stop()と異なりグラフの再構築（_rebuild_graph）はここでは行わない。
     呼び出し元は「このスレッドを開いただけの閲覧側」であり、
@@ -345,20 +357,27 @@ async def _stop_thread_generating(thread_id: str) -> bool:
     を呼ぶため、そこで自然に復旧する。
     """
     task = _generating_thread_tasks.get(thread_id)
-    if task is None or task.done():
-        return False
-    task.cancel()
-    # 独立したtryブロックにする理由はon_stop()と同じ: ここで例外が発生しても
-    # 本来の主目的である接続の強制クローズ（aclose_active_llm_clients）は
-    # 必ず試みる。
-    try:
-        await cancel_dispatch_agent_jobs_for_thread(thread_id)
-    except Exception:  # noqa: BLE001 - ベストエフォート、失敗してもLLMクライアントのクローズは試みる
-        logging.getLogger(__name__).debug(
-            "cross-session停止: dispatch_agentジョブの強制終了に失敗しました [thread_id=%s]",
-            thread_id,
-            exc_info=True,
-        )
+    task_was_running = task is not None and not task.done()
+    if task_was_running:
+        task.cancel()
+    # dispatch_agent/run_script_background系いずれかのジョブ強制終了で
+    # 例外が起きても、もう一方およびLLMクライアントの強制クローズを
+    # 妨げないよう、独立させつつ並行して試みる。
+    jobs_killed = False
+    job_results = await asyncio.gather(
+        cancel_dispatch_agent_jobs_for_thread(thread_id),
+        cancel_background_script_jobs_for_thread(thread_id),
+        return_exceptions=True,
+    )
+    for result in job_results:
+        if isinstance(result, BaseException):
+            logging.getLogger(__name__).debug(
+                "cross-session停止: バックグラウンドジョブの強制終了に失敗しました [thread_id=%s]",
+                thread_id,
+                exc_info=result,
+            )
+        elif result:
+            jobs_killed = True
     try:
         await aclose_active_llm_clients(thread_id)
     except Exception:  # noqa: BLE001 - ベストエフォート、失敗してもcancel()自体は有効
@@ -367,7 +386,7 @@ async def _stop_thread_generating(thread_id: str) -> bool:
             thread_id,
             exc_info=True,
         )
-    return True
+    return task_was_running or jobs_killed
 
 
 class _CheckpointerTimeout(Exception):
@@ -875,10 +894,16 @@ async def _on_app_startup() -> None:
     # （chainlit/utils.py 参照）ため、ここで例外を投げっぱなしにしても
     # サーバー起動は止まらず、2つ目のプロセスがそのままリクエストを受け付けて
     # しまう。確実に起動を中止させるため、この場でメッセージを表示した上で
-    # プロセスを強制終了する。
+    # プロセスを強制終了する。instance_lock.InstanceAlreadyRunningError
+    # だけでなく Exception 全般を捕まえるのは、instance_lock.acquire() 内の
+    # mkdir/write_bytes/open() 等（msvcrt.locking() 以外の箇所）が送出しうる
+    # OSError（権限不足・ディスク満杯・書き込み不可な既存ロックファイル等）を
+    # 個別に捕まえ損ねると、ロックを一切保持しないままサーバー起動が
+    # 継続してしまい、多重起動防止機能そのものが無音で無効化されるため
+    # （二重起動によるsqlite破損を防ぐ、という本来の目的に反する）。
     try:
         instance_lock.acquire(_config.checkpoint_db.parent / "app.lock")
-    except instance_lock.InstanceAlreadyRunningError as exc:
+    except Exception as exc:  # noqa: BLE001 - ロック取得の失敗は理由を問わず起動を中止する
         print(f"\n[FATAL] {exc}\n", file=sys.stderr)
         logging.getLogger(__name__).critical(str(exc))
         os._exit(1)
@@ -1472,6 +1497,7 @@ async def _setup() -> None:
         dispatch_agent_background_progress_push_interval_seconds=_config.subagent_background_progress_push_interval_seconds,
         dispatch_agent_background_llm_timeout_max_retries=_config.subagent_background_llm_timeout_max_retries,
         plan_approval_exempt_scripts=_config.script_plan_approval_exempt_scripts,
+        agent_type_run_script_allowlist=_config.script_agent_type_run_script_allowlist,
         plans_dir=_config.plans_dir,
         plan_reset_approval_on_recreate=_config.plan_reset_approval_on_recreate,
         plan_require_planner_dispatch=_config.plan_require_planner_dispatch,
@@ -1644,11 +1670,12 @@ async def on_stop() -> None:
     差し替える。
 
     Chainlit本体が cancel() するのはメイングラフのタスク
-    （session.current_task）のみで、dispatch_agent の job.runner_task
-    （asyncio.shield() で保護されている）には届かない。放置すると、
+    （session.current_task）のみで、dispatch_agent・run_script_background/
+    execute_python_code_background それぞれの job.runner_task
+    （いずれも asyncio.shield() で保護されている）には届かない。放置すると、
     停止ボタンを押してバッジが「停止」になった後もサブエージェントの
-    LLM呼び出し・進捗pushが裏側で動き続けてしまう（2026-08-26
-    ユーザー報告）ため、ここで併せて強制終了する。
+    LLM呼び出し・スクリプト実行・進捗pushが裏側で動き続けてしまう
+    （2026-08-26 ユーザー報告）ため、ここで併せて強制終了する。
 
     以前はプロセス全体で共有される _active_async_clients を一括クローズ
     しており、別タブで実行中の処理まで巻き添えで
@@ -1672,6 +1699,10 @@ async def on_stop() -> None:
     cancelled: asyncio.CancelledError | None = None
     try:
         await cancel_dispatch_agent_jobs_for_thread(thread_id)
+    except asyncio.CancelledError as exc:
+        cancelled = exc
+    try:
+        await cancel_background_script_jobs_for_thread(thread_id)
     except asyncio.CancelledError as exc:
         cancelled = exc
     try:

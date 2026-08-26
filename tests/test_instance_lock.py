@@ -6,6 +6,7 @@ import msvcrt
 
 import pytest
 
+import app
 from src import instance_lock
 
 
@@ -57,3 +58,37 @@ def test_acquire_creates_parent_directory(tmp_path):
     lock_path = tmp_path / "nested" / "data" / "app.lock"
     instance_lock.acquire(lock_path)
     assert lock_path.exists()
+
+
+class _StartupAborted(Exception):
+    """テスト用のos._exit()差し替え先が送出する、起動中止を表すセンチネル例外。"""
+
+
+@pytest.mark.asyncio
+async def test_on_app_startup_treats_any_instance_lock_failure_as_fatal(monkeypatch) -> None:
+    """instance_lock.acquire() が InstanceAlreadyRunningError 以外の OSError
+    （mkdir/write_bytes/open() 由来の権限不足・ディスク満杯等、
+    msvcrt.locking() 以外の箇所で発生しうる）を送出した場合も、二重起動検知時
+    と同じく os._exit(1) で起動を中止することを確認する（2026-08-26レビュー:
+    InstanceAlreadyRunningError だけを捕まえていたため、それ以外のOSErrorが
+    chainlit本体のwrap_user_function内のexceptに素通りして飲み込まれ、
+    ロックを一切保持しないまま起動が継続してしまう不具合の回帰防止）。
+    """
+
+    def fake_acquire(lock_path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app.instance_lock, "acquire", fake_acquire)
+
+    exit_calls = []
+
+    def fake_exit(code):
+        exit_calls.append(code)
+        raise _StartupAborted()
+
+    monkeypatch.setattr(app.os, "_exit", fake_exit)
+
+    with pytest.raises(_StartupAborted):
+        await app._on_app_startup()
+
+    assert exit_calls == [1]

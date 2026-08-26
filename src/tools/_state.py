@@ -62,6 +62,12 @@ _SUBAGENT_AGENT_TYPE: contextvars.ContextVar[str | None] = contextvars.ContextVa
 # ないまま処理が進んでしまった）。プロンプトの記述と実際の許可を一致させるため、
 # コード側でも強制する。analyze-docs/verifier は「書き込み系スクリプトは絶対に
 # 呼び出さない」とプロンプト上で強く約束しているため、同じ理由でここに含める。
+#
+# ここでの初期値は init_tools() 未実行時（テスト等）のフォールバック。通常起動時は
+# config.ini の [scripts].agent_type_run_script_allowlist から
+# init_tools() が上書きする（他の値と異なり _script_job.py 側は
+# `_state._AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` と属性アクセスで参照すること。
+# `from ._state import _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` は再代入が反映されないため禁止）。
 _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST: dict[str, frozenset[str | tuple[str, str]]] = {
     "explore-websearch": frozenset({"web-search"}),
     "analyze-docs": frozenset(
@@ -309,6 +315,7 @@ def init_tools(
     dispatch_agent_background_progress_push_interval_seconds: int = 20,
     dispatch_agent_background_llm_timeout_max_retries: int = 3,
     plan_approval_exempt_scripts: Iterable[tuple[str, str]] = (),
+    agent_type_run_script_allowlist: Iterable[tuple[str, str | tuple[str, str]]] | None = None,
     plans_dir: Path | None = None,
     plan_reset_approval_on_recreate: bool = True,
     plan_require_planner_dispatch: bool = True,
@@ -453,6 +460,14 @@ def init_tools(
             計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト。(skill_name, script_filename) の
             並び（config.ini の [scripts].plan_approval_exempt_scripts 由来）。
+        agent_type_run_script_allowlist: dispatch_agent サブエージェントの
+            agent_type ごとに run_script/run_script_readonly で呼んでよい
+            スキル/スクリプトを制限するホワイトリスト。(agent_type, 対象) の
+            並び（config.ini の [scripts].agent_type_run_script_allowlist 由来）。
+            対象はスキル名の文字列（そのスキル配下の全スクリプトを許可）、
+            または (skill_name, script_filename) のタプル（そのスクリプト
+            のみ許可）。None を渡すとモジュール既定値
+            （_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST の初期値）を維持する。
         plans_dir: create_plan が detail_markdown 引数を渡した際に詳細計画
             Markdownを書き出す保存先ディレクトリ（config.ini の
             [paths].plans_dir 由来）。None の場合は detail_markdown を
@@ -500,6 +515,7 @@ def init_tools(
     global _DISPATCH_AGENT_MAX_PARALLEL
     global _TOOL_CALL_MAX_PARALLEL
     global _PLAN_APPROVAL_EXEMPT_SCRIPTS
+    global _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST
     _skills_root_list = [skills_root] if isinstance(skills_root, (str, Path)) else list(skills_root)
     _SKILLS_ROOTS = [Path(p).resolve() for p in _skills_root_list]
     _SCRIPT_PYTHON = script_python
@@ -518,6 +534,11 @@ def init_tools(
     _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS = dispatch_agent_background_progress_push_interval_seconds
     _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES = dispatch_agent_background_llm_timeout_max_retries
     _PLAN_APPROVAL_EXEMPT_SCRIPTS = set(plan_approval_exempt_scripts)
+    if agent_type_run_script_allowlist is not None:
+        grouped: dict[str, set[str | tuple[str, str]]] = {}
+        for agent_type, target in agent_type_run_script_allowlist:
+            grouped.setdefault(agent_type, set()).add(target)
+        _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST = {agent_type: frozenset(targets) for agent_type, targets in grouped.items()}
     _DEFAULT_WORKDIR = Path(default_workdir).resolve()
     _LLM_CONFIG = llm_config
     _AGENT_TYPES = _resolve_agent_types(agent_type_defs)

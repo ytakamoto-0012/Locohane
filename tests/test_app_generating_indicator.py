@@ -404,3 +404,62 @@ async def test_stop_thread_generating_cancels_task_and_closes_llm_clients(monkey
     finally:
         if not task.done():
             task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_stop_thread_generating_cancels_background_jobs_even_when_task_done(monkeypatch) -> None:
+    """2026-08-26レビューで発見した不具合の回帰防止。
+
+    メイングラフのタスクが既に None/done() であっても、dispatch_agent・
+    run_script_background/execute_python_code_background のバックグラウンド
+    ジョブ（いずれも asyncio.shield() で保護されている）はまだ動いている
+    可能性がある（dispatch_agentが安全上限超過でjob_idを返してターンを
+    終えた直後、あるいは1回目の停止ボタンでメインタスク自体は既に
+    cancelled=doneになった後に別タブ/再度の停止リクエストが来た場合等）。
+    旧実装は task.done() で即 return False しており、この最も典型的な
+    シナリオでバックグラウンドジョブの強制終了が一度も行われなかった。
+    """
+    app._generating_thread_tasks.clear()
+    dispatch_calls = []
+    script_calls = []
+    aclose_calls = []
+
+    async def fake_cancel_dispatch(thread_id):
+        dispatch_calls.append(thread_id)
+        return True
+
+    async def fake_cancel_script(thread_id):
+        script_calls.append(thread_id)
+        return False
+
+    async def fake_aclose(thread_id):
+        aclose_calls.append(thread_id)
+
+    monkeypatch.setattr(app, "cancel_dispatch_agent_jobs_for_thread", fake_cancel_dispatch)
+    monkeypatch.setattr(app, "cancel_background_script_jobs_for_thread", fake_cancel_script)
+    monkeypatch.setattr(app, "aclose_active_llm_clients", fake_aclose)
+
+    # メインタスクは未登録（task is None のケース）。
+    assert await app._stop_thread_generating("t1") is True
+
+    assert dispatch_calls == ["t1"]
+    assert script_calls == ["t1"]
+    assert aclose_calls == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_stop_thread_generating_returns_false_when_nothing_to_stop(monkeypatch) -> None:
+    """メインタスクが無く、バックグラウンドジョブも1件も無ければ False のまま。"""
+    app._generating_thread_tasks.clear()
+
+    async def fake_cancel_none(thread_id):
+        return False
+
+    async def fake_aclose(thread_id):
+        pass
+
+    monkeypatch.setattr(app, "cancel_dispatch_agent_jobs_for_thread", fake_cancel_none)
+    monkeypatch.setattr(app, "cancel_background_script_jobs_for_thread", fake_cancel_none)
+    monkeypatch.setattr(app, "aclose_active_llm_clients", fake_aclose)
+
+    assert await app._stop_thread_generating("t1") is False

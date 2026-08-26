@@ -128,6 +128,31 @@ async def test_create_plan_blocked_when_planner_reports_info_insufficient(monkey
     assert session.get("plan") is None
 
 
+async def _dispatch_planner_with_incidental_info_insufficient_mention(monkeypatch) -> None:
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        return (
+            "1. steps候補\n- 商品リストの情報不足の項目に注意喚起を追加する\n\n"
+            "2. detail_markdown草案\n- 背景・目的: 在庫確認\n- 成果物: report.xlsx 1件"
+        )
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+    await tools.dispatch_agent.ainvoke({"task": "設計してください", "agent_type": "planner"})
+
+
+@pytest.mark.asyncio
+async def test_create_plan_not_blocked_when_plan_merely_mentions_info_insufficient(monkeypatch) -> None:
+    """steps候補/detail_markdownを伴う正常な計画草案が、その本文中にたまたま
+    「情報不足」という語句を含むだけで誤ってブロックされないことを確認する
+    （単純な部分文字列一致だった旧実装の誤検知バグの回帰防止）。"""
+    session = _setup(monkeypatch)
+    await _dispatch_planner_with_incidental_info_insufficient_mention(monkeypatch)
+
+    result = await tools.create_plan.ainvoke({"steps": _STEPS})
+
+    assert not result.startswith("エラー")
+    assert session.get("plan") is not None
+
+
 @pytest.mark.asyncio
 async def test_create_plan_guard_disabled_by_config(monkeypatch) -> None:
     session = _setup(monkeypatch, require_planner=False)

@@ -361,6 +361,7 @@ async def _run(case: EvalCase) -> dict:
             script_background_min_poll_message=config.script_background_min_poll_message,
             plans_dir=config.plans_dir,
             plan_approval_exempt_scripts=config.script_plan_approval_exempt_scripts,
+            agent_type_run_script_allowlist=config.script_agent_type_run_script_allowlist,
         )
 
         thread_id = str(uuid.uuid4())

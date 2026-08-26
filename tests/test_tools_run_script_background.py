@@ -343,6 +343,63 @@ async def test_stop_script_job_cancels_running_job_cleanly(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_cancel_background_script_jobs_for_thread_stops_running_job(monkeypatch, tmp_path) -> None:
+    """app.py の on_stop / _stop_thread_generating が使う
+    cancel_background_script_jobs_for_thread の回帰テスト。
+
+    停止ボタン押下時、session.current_task.cancel() はメイングラフのタスクにしか
+    届かず、asyncio.shield() で保護された run_script_background/
+    execute_python_code_background の job.runner_task はそれだけでは止まらない
+    （dispatch_agentのcancel_dispatch_agent_jobs_for_threadと同じ理由。
+    2026-08-26レビューで発見: 停止ボタンがdispatch_agentしか強制終了しない
+    不具合の回帰防止）。stop_script_job ツールと同じ強制終了を、job_idを
+    知らない停止ボタン経路からも thread_id 指定で一括適用できることを検証する。
+    """
+    _setup(monkeypatch, tmp_path, thread_id="thread-1")
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    workdir = tools._state._DEFAULT_WORKDIR
+    _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
+    fake_process = _FakeProcess(started_running=True)
+    _install_fake_subprocess(monkeypatch, fake_process)
+
+    started = await tools.run_script_background.ainvoke({"skill_name": "demo", "script_filename": "count.py"})
+    job_id = _extract_job_id(started)
+    job = tools._script_job._BACKGROUND_JOBS[job_id]
+
+    result = await tools.cancel_background_script_jobs_for_thread("thread-1")
+
+    assert result is True
+    assert job.status == "killed"
+    assert fake_process.killed is True
+    assert job_id not in tools._script_job._BACKGROUND_JOBS
+
+
+@pytest.mark.asyncio
+async def test_cancel_background_script_jobs_for_thread_ignores_other_threads(monkeypatch, tmp_path) -> None:
+    """thread_id が一致しないジョブには一切触れない（他セッションを巻き添えにしない）。"""
+    _setup(monkeypatch, tmp_path, thread_id="thread-1")
+    monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    workdir = tools._state._DEFAULT_WORKDIR
+    _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
+    fake_process = _FakeProcess(started_running=True)
+    _install_fake_subprocess(monkeypatch, fake_process)
+
+    started = await tools.run_script_background.ainvoke({"skill_name": "demo", "script_filename": "count.py"})
+    job_id = _extract_job_id(started)
+    job = tools._script_job._BACKGROUND_JOBS[job_id]
+
+    result = await tools.cancel_background_script_jobs_for_thread("thread-other")
+
+    assert result is False
+    assert job.status == "running"
+    assert fake_process.killed is False
+    assert job_id in tools._script_job._BACKGROUND_JOBS
+
+    fake_process.finish(0)
+    await job.runner_task
+
+
+@pytest.mark.asyncio
 async def test_exception_inside_job_is_returned_as_error_not_lost(monkeypatch, tmp_path) -> None:
     _setup(monkeypatch, tmp_path)
     workdir = tools._state._DEFAULT_WORKDIR

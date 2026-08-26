@@ -18,7 +18,7 @@ from ._duplicate_guard import _track_failure_streak
 from ._path_memory_helpers import _resolve_path_memory_token
 from ._python_fs_guard import _register_exec_output_files
 from ._safe_path import _resolve_script_filename
-from ._state import _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST, _SUBAGENT_AGENT_TYPE
+from ._state import _SUBAGENT_AGENT_TYPE
 from ._subprocess_env import _run_script_guard_env, _run_script_readonly_guard_env
 from ._workdir import _resolve_workdir, _restrict_default_workdir
 
@@ -38,7 +38,7 @@ def _resolve_run_script_command(skill_name: str, script_filename: str, script_ar
         「エラー: ...」形式の文字列（呼び出し側はそのまま返せばよい）。
     """
     current_agent_type = _SUBAGENT_AGENT_TYPE.get()
-    allowed = _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST.get(current_agent_type) if current_agent_type else None
+    allowed = _state._AGENT_TYPE_RUN_SCRIPT_ALLOWLIST.get(current_agent_type) if current_agent_type else None
     if allowed is not None and skill_name not in allowed and (skill_name, script_filename) not in allowed:
         return (
             f"エラー: agent_type=\"{current_agent_type}\" から呼び出せる run_script のスキル/スクリプトは "
@@ -473,6 +473,58 @@ def _resolve_job(job_id: str) -> "_BackgroundJob | str":
     if job.thread_id != thread_id:
         return f"エラー: job_id '{job_id}' は現在のセッションのものではありません。"
     return job
+
+
+async def cancel_background_script_jobs_for_thread(thread_id: str) -> bool:
+    """指定スレッドで実行中の run_script_background/execute_python_code_background
+    ジョブを全て強制終了する。
+
+    app.py の on_stop（自セッション停止）・_stop_thread_generating
+    （閲覧側からのcross-session停止）から、_dispatch_agent_job.py の
+    cancel_dispatch_agent_jobs_for_thread と並べて呼ぶ。dispatch_agent と
+    同じ理由（job.runner_task が asyncio.shield() で保護されており、
+    メイングラフのタスクをcancel()するだけでは止まらない）で、これらの
+    ジョブも停止ボタンだけでは止まらないまま残っていた。
+
+    stop_script_job ツールと同じ「process.kill() → runner_task の自然終了を
+    待つ」方式を使う（runner_task.cancel() を使わないのは、runner_task が
+    サブプロセスのstdout/stderr読み取り・完了待ちのループであり、これを
+    cancel() すると読み取り途中の出力が失われるうえプロセス自体が孤児
+    として残ってしまうため。stop_script_job参照）。
+
+    Returns:
+        1件以上のジョブを強制終了した場合 True。
+    """
+    targets = [
+        (job_id, job)
+        for job_id, job in _BACKGROUND_JOBS.items()
+        if job.thread_id == thread_id and job.status == "running"
+    ]
+    for job_id, job in targets:
+        job.status = "killed"
+        logger.warning(
+            "run_script_background: 停止ボタンにより強制終了します (job_id=%s, skill=%s, script=%s)",
+            job_id,
+            job.skill_name,
+            job.script_filename,
+        )
+        try:
+            job.process.kill()
+        except ProcessLookupError:
+            pass
+    runner_tasks = [(job_id, job.runner_task) for job_id, job in targets if job.runner_task is not None]
+    if runner_tasks:
+        results = await asyncio.gather(*(task for _, task in runner_tasks), return_exceptions=True)
+        for (job_id, _), result in zip(runner_tasks, results):
+            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+                logger.debug(
+                    "run_script_background強制終了中に例外が発生しました (job_id=%s)",
+                    job_id,
+                    exc_info=result,
+                )
+    for job_id, _ in targets:
+        _BACKGROUND_JOBS.pop(job_id, None)
+    return bool(targets)
 
 
 def _finalize_script_job_result(job: "_BackgroundJob", job_id: str) -> str:

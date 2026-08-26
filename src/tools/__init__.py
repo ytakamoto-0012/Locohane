@@ -64,6 +64,7 @@ import chainlit as cl  # noqa: F401 - テストが monkeypatch.setattr(tools.cl,
 
 from . import registry
 from ._dispatch_agent_job import cancel_dispatch_agent_jobs_for_thread
+from ._script_job import cancel_background_script_jobs_for_thread
 from ._state import init_tools
 from .lock_plan_mode import toggle_plan_mode_from_ui
 from .check_work_dir_status import WorkDirAccessStatus, probe_workdir_access
@@ -125,6 +126,7 @@ from .registry import (  # noqa: F401
 __all__ = [
     "ImageAwareToolNode",
     "WorkDirAccessStatus",
+    "cancel_background_script_jobs_for_thread",
     "cancel_dispatch_agent_jobs_for_thread",
     "current_plan_status_text",
     "forget_session_tool_semaphores",
