@@ -28,7 +28,10 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     （未実施の場合はエラーを返しブロックする）。調査で得た具体的事実と
     ユーザー要求をplannerへ丸投げし、その草案を確認・調整してから steps/
     detail_markdown を確定させること。自分の記憶・推測だけでsteps文言
-    （行番号・セル位置等の具体的数値を含む）を作らない。
+    （行番号・セル位置等の具体的数値を含む）を作らない。plannerが情報不足を
+    理由に草案を返さなかった場合もこのツールはブロックされる（不足情報を
+    調査してからplannerを呼び直すこと。この場合の応答を無視してsteps/
+    detail_markdownを自作しても通らない）。
 
     既に approve_plan で承認済み（Edit Automatically）の状態でこのツールを
     再度呼んで steps を差し替えると、config.ini の
@@ -77,6 +80,13 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
         if not isinstance(s, dict) or not s.get("content") or not s.get("activeForm"):
             return f"エラー: steps[{i}] には content と activeForm の両方を" f"文字列で指定してください: {s!r}"
     if _state._PLAN_REQUIRE_PLANNER_DISPATCH and not cl.user_session.get("planner_dispatched_since_plan"):
+        if cl.user_session.get("planner_info_insufficient"):
+            return (
+                "エラー: plannerが情報不足のため計画草案を返しませんでした。"
+                "create_planは呼べません。plannerの回答に書かれた不足情報を"
+                "先に調査し、その事実を添えてdispatch_agent(agent_type=\"planner\")"
+                "を呼び直してください。"
+            )
         return (
             "エラー: create_planの前にdispatch_agent(agent_type=\"planner\")を"
             "呼んでください。調査で得た具体的事実とユーザー要求をplannerへ"
@@ -84,6 +94,7 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
             "（自分の記憶・推測だけでsteps/detail_markdownを構成しない）。"
         )
     cl.user_session.set("planner_dispatched_since_plan", False)
+    cl.user_session.set("planner_info_insufficient", False)
     plan = [{"content": s["content"], "activeForm": s["activeForm"], "status": "pending"} for s in steps]
     # 既に承認済み（Edit Automatically）だった場合にこの呼び出しでも承認状態を
     # 維持するかは config.ini の [plan].reset_approval_on_recreate で切り替え可能

@@ -260,7 +260,16 @@ def _finalize_dispatch_agent_job_result(job: "_DispatchAgentJob", job_id: str) -
             # 消費するフラグ。ここで完了を記録しておくことで、dispatch_agent
             # が安全上限内に即応した場合・check_dispatch_agent_job経由で
             # 後続ターンに完了を取得した場合の両方をカバーする。
-            cl.user_session.set("planner_dispatched_since_plan", True)
+            # ただしplannerが情報不足（agents/planner.mdの指示で「情報不足」と
+            # 明記して返す）でsteps/detail_markdownの草案を返さなかった場合は
+            # フラグを立てず、メインエージェントがこの回答を無視して
+            # create_planを呼んでもガードで止められるようにする。
+            if "情報不足" in result:
+                cl.user_session.set("planner_dispatched_since_plan", False)
+                cl.user_session.set("planner_info_insufficient", True)
+            else:
+                cl.user_session.set("planner_dispatched_since_plan", True)
+                cl.user_session.set("planner_info_insufficient", False)
     elif job.status == "killed":
         result = f"stop_dispatch_agent_job により強制終了されました。\n{job.result or '（強制終了時点で最終回答は未生成でした）'}"
     else:  # "error"

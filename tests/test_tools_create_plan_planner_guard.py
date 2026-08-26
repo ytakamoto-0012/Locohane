@@ -106,6 +106,28 @@ async def test_planner_dispatch_flag_is_consumed_by_create_plan(monkeypatch) -> 
     assert "planner" in second
 
 
+async def _dispatch_planner_info_insufficient(monkeypatch) -> None:
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        return "情報不足のため、対象ファイルの原文を確認してください。"
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+    await tools.dispatch_agent.ainvoke({"task": "設計してください", "agent_type": "planner"})
+
+
+@pytest.mark.asyncio
+async def test_create_plan_blocked_when_planner_reports_info_insufficient(monkeypatch) -> None:
+    """plannerが「情報不足」と返した場合、メインエージェントがそれを無視して
+    create_planを呼んでもブロックされる（応答を無視した誤呼び出しの回帰防止）。"""
+    session = _setup(monkeypatch)
+    await _dispatch_planner_info_insufficient(monkeypatch)
+
+    result = await tools.create_plan.ainvoke({"steps": _STEPS})
+
+    assert result.startswith("エラー")
+    assert "情報不足" in result
+    assert session.get("plan") is None
+
+
 @pytest.mark.asyncio
 async def test_create_plan_guard_disabled_by_config(monkeypatch) -> None:
     session = _setup(monkeypatch, require_planner=False)
