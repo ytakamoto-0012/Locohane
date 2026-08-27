@@ -19,22 +19,30 @@ logger = logging.getLogger(__name__)
 
 
 def _count_contents(path: Path, exclude_names: frozenset[str] = frozenset()) -> dict:
-    """path配下(再帰)に含まれるサブフォルダ数とファイル数を数える。
+    """path直下(非再帰)に含まれるサブフォルダ数とファイル数を数える。
 
-    サブエージェントへの分割委譲判断に使う概算値のため、権限エラー等の
-    walk中の例外は無視して数えられた範囲だけを返す。
+    深い階層まで舐めると時間がかかりすぎるため、意図的に直下のみを見る
+    （配下全体の再帰カウントはしない）。サブエージェントへの分割委譲判断
+    に使う概算値のため、権限エラー等の例外は無視して数えられた範囲だけ
+    を返す。
 
     Args:
-        exclude_names: 走査から除外するディレクトリ名の集合（basenameで
-            一致判定。空なら従来通り無条件で全て数える）。
+        exclude_names: カウントから除外するディレクトリ名の集合
+            （basenameで一致判定。空なら従来通り無条件で全て数える）。
     """
     dir_count = 0
     file_count = 0
-    for _root, dirs, files in os.walk(path, onerror=lambda e: None):
-        if exclude_names:
-            dirs[:] = [d for d in dirs if d not in exclude_names]
-        dir_count += len(dirs)
-        file_count += len(files)
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                if entry.is_dir():
+                    if exclude_names and entry.name in exclude_names:
+                        continue
+                    dir_count += 1
+                elif entry.is_file():
+                    file_count += 1
+    except OSError:
+        pass
     return {"directory_count": dir_count, "file_count": file_count}
 
 
@@ -72,11 +80,14 @@ def _expand_braces(pattern: str) -> list[str]:
 
 
 def glob_search(base: Path, pattern: str, head_limit: int = 200, exclude_names: frozenset[str] = frozenset()) -> dict:
-    """指定ディレクトリ配下でglobパターンに一致するファイル/ディレクトリを検索する。
+    """指定ディレクトリ直下でglobパターンに一致するファイル/ディレクトリを検索する。
+
+    深い階層まで舐めると時間がかかりすぎるため、`pattern` に `**` を含めても
+    `base` の直下しか探索しない（ハードコードの制限で、引数での変更は不可）。
 
     Args:
         base: 検索起点ディレクトリの絶対パス。
-        pattern: globパターン（例: "**/*.py"）。
+        pattern: globパターン（例: "*.py"）。
         head_limit: ファイル・ディレクトリそれぞれに独立に適用する上限件数。
         exclude_names: 結果・件数から除外するディレクトリ名の集合
             （basenameで一致するパス階層を含む一致は丸ごと除外。呼び出し元
@@ -98,11 +109,14 @@ def glob_search(base: Path, pattern: str, head_limit: int = 200, exclude_names: 
     if not base.is_dir():
         raise ValueError(f"検索起点パスがディレクトリではありません: {base}")
 
+    resolved_base = base.resolve()
     try:
         seen: set[Path] = set()
         all_matches: list[Path] = []
         for expanded_pattern in _expand_braces(pattern):
             for p in base.glob(expanded_pattern):
+                if p.parent.resolve() != resolved_base:
+                    continue
                 if p not in seen:
                     seen.add(p)
                     all_matches.append(p)
@@ -145,19 +159,24 @@ def glob_search(base: Path, pattern: str, head_limit: int = 200, exclude_names: 
 
 @tool("Glob")
 def glob_tool(pattern: str, path: str = "", head_limit: int = 200) -> str:
-    """指定ディレクトリ配下でglobパターンに一致するファイル・ディレクトリを検索する。
+    """指定ディレクトリ直下でglobパターンに一致するファイル・ディレクトリを検索する。
+
+    検索は `path` の直下だけが対象で、そのさらに奥のサブディレクトリは
+    探索しない（深い階層まで探すと時間がかかりすぎるため）。奥まで調べたい
+    場合は、目的のサブディレクトリを `path` に指定して改めて呼ぶこと。
 
     ファイル名検索だけでなく、ディレクトリ階層そのものの調査（対象直下に
     ファイルが1件も無くサブディレクトリしか無いかもしれない場合等）にも
-    `"**/*"`/`"*"` 等で使う。読み取り専用のため、計画の有無に関わらず
+    `"*"` で使う。読み取り専用のため、計画の有無に関わらず
     いつでも呼んでよい。ただしメインエージェント自身が呼べるのは1ターンに
     つき既定1回のみ（対象ルート直下の確認用の例外）。2回目以降はエラーを
     返すので、それ以降の調査は `dispatch_agent` へ委譲すること。
 
     Args:
-        pattern: globパターン（例: 配下の全Pythonファイルなら "**/*.py"）。
+        pattern: globパターン（例: 直下の全Pythonファイルなら "*.py"）。
+            `**` を書いても直下までしか探索しない。
             `{a,b,c}` によるシェル同様の選択展開も使える
-            （例: 画像ファイル一括なら "**/*.{jpg,jpeg,png,gif,bmp,webp}"）。
+            （例: 画像ファイル一括なら "*.{jpg,jpeg,png,gif,bmp,webp}"）。
             拡張子の大文字・小文字はどちらか一方を書けば両方一致する
             （Windows上のパス照合は大文字小文字を区別しないため）。
         path: 検索起点ディレクトリの絶対パス（`@N` 可）。省略時は作業ディレクトリ。
