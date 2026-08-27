@@ -19,14 +19,14 @@ from ._path_memory_helpers import _resolve_path_memory_token
 from ._python_fs_guard import _register_exec_output_files
 from ._safe_path import _resolve_script_filename
 from ._state import _SUBAGENT_AGENT_TYPE
-from ._subprocess_env import _run_script_guard_env, _run_script_readonly_guard_env
+from ._subprocess_env import _run_script_guard_env
 from ._workdir import _resolve_workdir, _restrict_default_workdir
 
 logger = logging.getLogger(__name__)
 
 
 def _resolve_run_script_command(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> list[str] | str:
-    """run_script / run_script_readonly 共通の前段処理。
+    """run_script の前段処理。
 
     agent_type ごとのスキル/スクリプト制限チェック（_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST）→
     引数のパスメモリー解決 → スクリプトパス解決 → 実行コマンド組み立て、までを行う。
@@ -112,26 +112,6 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
     return cmd, workdir
 
 
-def _prepare_readonly_script_execution(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> tuple[list[str], Path] | str:
-    """run_script_readonly の前処理。
-
-    _resolve_run_script_command に加え、作業ディレクトリ解決を行う。
-    書き込みを一切行わない前提のため、_prepare_script_execution と異なり
-    計画承認チェックは行わず、cwd も _restrict_default_workdir() による
-    `_tmp_<thread_id>` への縮小は適用しない（書き込み先ではなく既存
-    ファイルの読み取り基準ディレクトリとしてのみ使うため）。
-
-    Returns:
-        検証に成功すれば (cmd, workdir) のタプル。失敗すれば
-        「エラー: ...」形式の文字列（呼び出し側はそのまま返せばよい）。
-    """
-    cmd = _resolve_run_script_command(skill_name, script_filename, script_args)
-    if isinstance(cmd, str):
-        return cmd
-    workdir = _resolve_workdir(need_write=False)
-    return cmd, workdir
-
-
 async def _run_script_impl(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> str:
     """run_script の実行本体。
 
@@ -176,57 +156,6 @@ async def _run_script_impl(skill_name: str, script_filename: str, script_args: l
     if proc.stderr:
         parts.append(f"[標準エラー]\n{proc.stderr.rstrip()}")
     warning = _track_failure_streak("run_script_failure_streak", proc.returncode != 0, "run_script")
-    if warning:
-        parts.append(warning)
-    return "\n".join(parts)
-
-
-async def _run_script_readonly_impl(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> str:
-    """run_script_readonly の実行本体。
-
-    _run_script_impl と異なり計画承認チェックを行わない代わりに、
-    書き込み・削除・改名を場所を問わず一切許可しないガード
-    （_run_script_readonly_guard_env、allowed_roots=[]）で実行する。
-    run_script の書き込みガード（_run_script_guard_env）はガード注入に
-    失敗してもガード無しで実行を続ける（元々計画承認済みでしか呼べない
-    ため）が、こちらは計画承認という後段の歯止めが無いため、ガード注入に
-    失敗した場合は実行自体を中止する（fail-closed）。
-    """
-    prepared = _prepare_readonly_script_execution(skill_name, script_filename, script_args)
-    if isinstance(prepared, str):
-        return prepared
-    cmd, workdir = prepared
-    guarded = _run_script_readonly_guard_env(workdir)
-    if guarded is None:
-        return "エラー: 書き込みガードの準備に失敗したため実行できません（安全のため実行を中止しました）。"
-    env, guard_dir = guarded
-
-    logger.info("run_script_readonly: %s %s cwd=%s", skill_name, script_filename, workdir)
-    try:
-        proc = await asyncio.to_thread(
-            subprocess.run,
-            cmd,
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            timeout=_state._SCRIPT_TIMEOUT,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
-        return f"エラー: スクリプトが {_state._SCRIPT_TIMEOUT} 秒でタイムアウトしました。"
-    except OSError as e:
-        return f"エラー: スクリプトを実行できませんでした: {e}"
-    finally:
-        shutil.rmtree(guard_dir, ignore_errors=True)
-
-    parts = [f"[終了コード] {proc.returncode}"]
-    if proc.stdout:
-        parts.append(f"[標準出力]\n{proc.stdout.rstrip()}")
-    if proc.stderr:
-        parts.append(f"[標準エラー]\n{proc.stderr.rstrip()}")
-    warning = _track_failure_streak("run_script_readonly_failure_streak", proc.returncode != 0, "run_script_readonly")
     if warning:
         parts.append(warning)
     return "\n".join(parts)

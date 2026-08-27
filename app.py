@@ -66,7 +66,12 @@ from src.chat_log import append_turn, build_log_path, resolve_log_username
 from src.cleanup import cleanup_old_dirs, cleanup_old_files
 from src.cleanup import run_cleanup_dirs_loop as cleanup_run_cleanup_dirs_loop
 from src.cleanup import run_cleanup_loop as cleanup_run_cleanup_loop
-from src.config import expand_config_vars, load_config, render_plan_approval_exempt_scripts_block
+from src.config import (
+    expand_config_vars,
+    load_config,
+    render_agent_type_run_script_allowlist_block,
+    render_plan_approval_exempt_scripts_block,
+)
 from src.context_compaction import maybe_compact, should_compact
 from src.files import extract_generated_files
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
@@ -1436,8 +1441,11 @@ async def _setup() -> None:
     agent_type_defs = [
         replace(
             a,
-            system_prompt=a.system_prompt.replace("{{skills}}", skills_block).replace(
-                "{{agent_types}}", agent_types_block
+            system_prompt=a.system_prompt.replace("{{skills}}", skills_block)
+            .replace("{{agent_types}}", agent_types_block)
+            .replace(
+                "{{run_script_allowlist}}",
+                render_agent_type_run_script_allowlist_block(a.name, _config.script_agent_type_run_script_allowlist),
             ),
         )
         for a in agent_type_defs

@@ -189,14 +189,13 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 スキルの frontmatter（name/description）だけはこれとは別に、`src/skills.py` が
 起動時にシステムプロンプトへテキスト注入する（Discovery 段階、こちらはプロンプトベース）。
 
-上記3段階に加えて、スキルの読み込みとは独立したツールが以下の38個ある（いずれも `src/tools.py`）。
+上記3段階に加えて、スキルの読み込みとは独立したツールが以下の37個ある（いずれも `src/tools.py`）。
 
 | ツール | 役割 |
 |--------|------|
 | `read_skill` | スキルの SKILL.md 本文全体を読み込む（progressive disclosure 第2段階） |
 | `read_skill_file` | skills ディレクトリ配下のファイルを読み込む（references/assets 等。progressive disclosure 第3段階） |
 | `run_script` | スキルの scripts/ 配下のスクリプトを実行する（要承認。`config.ini` で承認不要に切替可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `run_script_background` を使う |
-| `run_script_readonly` | `run_script` の読み取り専用版（ファイル書き込み不可、承認不要）。書き込み・削除・改名を場所を問わず一切許可しないガードで実行し、ガード注入自体に失敗した場合は安全側に倒して実行を中止する（`execute_python_code_readonly` と同じ方針）。`_SUBAGENT_TOOLS`（`src/tools/registry.py`）に含まれ、`agents/*.md` の `tools:` で個別に選択して割り当てるサブエージェント専用ツールで、メインエージェントは持たない |
 | `run_script_background` | `run_script` と同じスクリプトを起動する（要承認は同様）。完了までの間、進捗（経過秒数・途中出力）をチャットへ直接通知しながら待つため、LLM自身がポーリングする必要は無い。設定した安全上限（`[scripts].background_inline_wait_max_seconds`）を超えてもなお完了しない場合のみ `job_id` を返してターンを終える |
 | `check_script_job` / `stop_script_job` | 上記の安全上限超過フォールバック時のみ使う、ジョブの状況確認・強制終了。実行中ジョブへの連続 `check_script_job` 呼び出しは `[scripts].background_min_poll_interval_seconds` 未満の間隔だとサーバー側で拒否される |
 | `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `execute_python_code_background` を使う。code内で `@N`（パスメモリ）を参照する場合は `AGENT_SRC_DIR` 環境変数経由で `path_memory.resolve()` を呼んで実パスへ展開する必要がある。実行前ガードにより `src/`・`app.py`・`config.ini`・`skills/` 等プロジェクトフォルダ配下への書き込み・削除・改名はブロックされる。書き込み先は、ユーザーが作業フォルダ（後述「作業ディレクトリの切り替え」参照）を指定していればそのフォルダ、未指定なら `default_workdir` 配下でも自セッション専用の一時領域 `_tmp_<name>` に限られる（`default_workdir` 直下への書き込みは、別セッションの誤動作を防ぐため許可しない） |

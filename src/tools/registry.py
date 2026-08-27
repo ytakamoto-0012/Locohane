@@ -13,7 +13,6 @@ from .check_work_dir_status import check_work_dir_status
 from .write_scratch_note import write_scratch_note
 from .analyze_image import analyze_image
 from .run_script import run_script
-from .run_script_readonly import run_script_readonly
 from .read_tool import read_tool
 from .glob_tool import glob_tool
 from .grep_tool import grep_tool
@@ -46,7 +45,6 @@ _SUBAGENT_TOOLS: list = [
     provide_download,
     show_image,
     run_script,
-    run_script_readonly,
     run_script_background,
     check_script_job,
     stop_script_job,

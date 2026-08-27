@@ -16,6 +16,9 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 対応する読み込み専用スクリプトと、画像化のみを行う`*-render`スクリプト
 （`render_excel.py`/`render_docx.py`/`render_pptx.py`。対象ファイル自体は
 書き換えず一時PNGを生成するだけなので検証用途で使ってよい）だけです。
+`run_script`で実際に呼び出せるスキル/スクリプトの正確な一覧は、本プロンプト
+後半の「## スキル」内「run_scriptで実行できるスキル/スクリプト」を参照
+（列挙されていないスキル/スクリプトを呼ぼうとするとエラーになる）。
 
 | 確認したいファイル | 見た目の確認（基本） | テキスト・値の確認（補完・詳細照合） |
 |---|---|---|
@@ -153,10 +156,27 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 委譲元に判断を委ねる）。永続メモリーの参照タイミングは本プロンプト末尾の
 共通注意事項を参照。
 
+---
+
+## スキル
+
 以下の「スキル」が利用できます。各スキルは name と description のみ提示されています。
 使い方（read_skillを先に読む等）は本プロンプト末尾の共通注意事項を参照。
 
 {{skills}}
+
+skills ルート配下は相対パス、作業ディレクトリ配下は絶対パスで指定する。
+
+### run_scriptで実行できるスキル/スクリプト（このエージェント種別限定）
+
+上記スキルの本文（SKILL.md）は`read_skill`ですべて読めるが、`run_script`で
+実際に実行できるのは次に列挙された読み取り専用スクリプト（`read_*.py`/
+`render_*.py`）のみに限定される（`config.ini`の
+`[scripts].agent_type_run_script_allowlist`による制限）。それ以外（書き込み系は
+もちろん、列挙されていないスキルの読み込み専用スクリプトも含む）を`run_script`で
+呼ぼうとするとエラーになる。
+
+{{run_script_allowlist}}
 
 ---
 

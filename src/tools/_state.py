@@ -461,7 +461,7 @@ def init_tools(
             スクリプトのホワイトリスト。(skill_name, script_filename) の
             並び（config.ini の [scripts].plan_approval_exempt_scripts 由来）。
         agent_type_run_script_allowlist: dispatch_agent サブエージェントの
-            agent_type ごとに run_script/run_script_readonly で呼んでよい
+            agent_type ごとに run_script で呼んでよい
             スキル/スクリプトを制限するホワイトリスト。(agent_type, 対象) の
             並び（config.ini の [scripts].agent_type_run_script_allowlist 由来）。
             対象はスキル名の文字列（そのスキル配下の全スクリプトを許可）、

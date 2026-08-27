@@ -339,7 +339,7 @@ class Config:
             の計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト（{(スキル名, スクリプトファイル名), ...}）。
         script_agent_type_run_script_allowlist: dispatch_agent サブエージェントの
-            agent_type ごとに run_script/run_script_readonly で呼べるスキル/
+            agent_type ごとに run_script で呼べるスキル/
             スクリプトを制限するホワイトリスト（{(agent_type, 対象), ...}）。
             対象は文字列1件（例: "web-search"）ならそのスキル配下の全スクリプトを
             許可、2要素タプル（例: ("pdf-tools", "render_pdf_pages.py")）なら
@@ -1316,8 +1316,8 @@ def _parse_plan_approval_exempt_scripts(value: str | None) -> frozenset[tuple[st
 def _parse_agent_type_run_script_allowlist(value: str | None) -> frozenset[tuple[str, str | tuple[str, str]]]:
     """config.ini の [scripts].agent_type_run_script_allowlist をパースする。
 
-    dispatch_agent サブエージェントの agent_type ごとに、run_script/
-    run_script_readonly で呼んでよいスキル/スクリプトを制限するホワイトリスト
+    dispatch_agent サブエージェントの agent_type ごとに、run_script
+    で呼んでよいスキル/スクリプトを制限するホワイトリスト
     （未登録の agent_type は制限なし）。各要素は [agent_type, 対象] の2要素で、
     対象はさらに次の2種類のいずれかを許容する:
       - 文字列1件（例: "web-search"）: そのスキル配下の全スクリプトを許可。
@@ -1483,6 +1483,43 @@ def render_plan_approval_exempt_scripts_block(entries: frozenset[tuple[str, str]
     if not entries:
         return "（登録なし）"
     return "\n".join(f"- `{skill}` / `{script}`" for skill, script in sorted(entries))
+
+
+def render_agent_type_run_script_allowlist_block(agent_type: str, entries: frozenset[tuple[str, str | tuple[str, str]]]) -> str:
+    """agents/*.md の `{{run_script_allowlist}}` へ差し込むテキストを組み立てる。
+
+    `{{skills}}`（render_skills_block）が全スキル共通で同じ内容を差し込むのに
+    対し、こちらは agent_type ごとに異なる内容を差し込む（呼び出し元
+    （app.py/evals/run_case.py）が AgentType 1件ずつに対して agent_type を
+    渡して呼ぶ）。config.ini の [scripts].agent_type_run_script_allowlist
+    （script_agent_type_run_script_allowlist）は全 agent_type 分の
+    (agent_type, 対象) をまとめて持つ frozenset のため、ここで対象の
+    agent_type 分だけへ絞り込む。表示を安定させるため対象文字列でソートする。
+
+    Args:
+        agent_type: 差し込み先の agents/*.md の frontmatter name。
+        entries: config.script_agent_type_run_script_allowlist（全 agent_type 分）。
+
+    Returns:
+        差し込み用テキスト。対象の agent_type のエントリが1件も無い場合は
+        「（登録なし＝制限なし。run_scriptで全スキルのスクリプトを呼べる）」を返す
+        （_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST は未登録の agent_type を無制限として
+        扱うため、それと矛盾しない文言にする）。
+    """
+    targets = [target for a, target in entries if a == agent_type]
+    if not targets:
+        return "（登録なし＝制限なし。run_scriptで全スキルのスクリプトを呼べる）"
+
+    def _format(target: str | tuple[str, str]) -> str:
+        if isinstance(target, tuple):
+            skill, script = target
+            return f"- `{skill}` / `{script}`"
+        return f"- `{target}`（配下の全スクリプト）"
+
+    def _sort_key(target: str | tuple[str, str]) -> tuple[str, str]:
+        return target if isinstance(target, tuple) else (target, "")
+
+    return "\n".join(_format(t) for t in sorted(targets, key=_sort_key))
 
 
 def load_config(config_path: Path | None = None) -> Config:

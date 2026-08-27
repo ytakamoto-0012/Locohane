@@ -239,7 +239,7 @@ async def _run(case: EvalCase) -> dict:
     from dataclasses import replace
 
     from src.agent_types import render_agent_types_block, scan_agent_types
-    from src.config import expand_config_vars, load_config
+    from src.config import expand_config_vars, load_config, render_agent_type_run_script_allowlist_block
     from src.graph import ainvoke_ensuring_final_text, build_graph
     from src.llm import ThinkingLoopDetected
     from src.memory import render_memory_block
@@ -325,8 +325,11 @@ async def _run(case: EvalCase) -> dict:
         agent_type_defs = [
             replace(
                 a,
-                system_prompt=a.system_prompt.replace("{{skills}}", skills_block).replace(
-                    "{{agent_types}}", agent_types_block
+                system_prompt=a.system_prompt.replace("{{skills}}", skills_block)
+                .replace("{{agent_types}}", agent_types_block)
+                .replace(
+                    "{{run_script_allowlist}}",
+                    render_agent_type_run_script_allowlist_block(a.name, config.script_agent_type_run_script_allowlist),
                 ),
             )
             for a in agent_type_defs

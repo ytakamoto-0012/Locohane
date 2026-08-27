@@ -111,7 +111,6 @@ from .registry import (  # noqa: F401
     read_tool,
     run_script,
     run_script_background,
-    run_script_readonly,
     search_memory,
     show_help,
     show_image,
