@@ -1517,6 +1517,7 @@ async def _setup() -> None:
         plan_approval_exempt_scripts=_config.script_plan_approval_exempt_scripts,
         agent_type_run_script_allowlist=_config.script_agent_type_run_script_allowlist,
         plans_dir=_config.plans_dir,
+        allow_sandbox_dirs=_config.allow_sandbox_dirs,
         plan_reset_approval_on_recreate=_config.plan_reset_approval_on_recreate,
         plan_require_planner_dispatch=_config.plan_require_planner_dispatch,
         plan_auto_approve=_config.plan_auto_approve,

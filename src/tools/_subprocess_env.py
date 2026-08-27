@@ -60,7 +60,38 @@ def _subprocess_env() -> dict[str, str]:
             env["PATH"] = os.pathsep.join([*(str(d) for d in bin_dirs), env.get("PATH", "")])
     return env
 
-def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
+def _allowed_sandbox_dirs_for(skill_name: str, script_filename: str) -> list[Path]:
+    """config.ini [default_workdir].allow_sandbox_dir のうち、指定した
+    (skill_name, script_filename) からの書き込みが許可されているディレクトリ
+    だけを抽出する。
+
+    _state._ALLOW_SANDBOX_DIRS の各エントリ（SandboxDirEntry）は
+    dir（許可ディレクトリ）と allow_entries（そのディレクトリへの書き込みを
+    許可する対象の集合）を持つ。allow_entries には
+    [main_agent_tool_guard].allow_entries と同じ形式で、ビルトインツール名
+    そのもの（文字列）、または (スキル名, スクリプトファイル名) のタプルが
+    入りうる。run_script/run_script_background は常に特定のスキル/スクリプト
+    を実行するため、ここでは skill_name（スキル名単位の許可）と
+    (skill_name, script_filename)（スクリプト単位の許可）のどちらかに
+    一致するエントリのみを対象にする。
+
+    Args:
+        skill_name: 実行しようとしているスキルのフォルダ名。
+        script_filename: 実行しようとしているスクリプトのファイル名。
+
+    Returns:
+        許可されたディレクトリのうち実在するもの（is_dir()）のリスト。
+        存在しないディレクトリは無視する。
+    """
+    result: list[Path] = []
+    for entry in _state._ALLOW_SANDBOX_DIRS:
+        if skill_name in entry.allow_entries or (skill_name, script_filename) in entry.allow_entries:
+            if entry.dir.is_dir():
+                result.append(entry.dir)
+    return result
+
+
+def _run_script_guard_env(workdir: Path, skill_name: str, script_filename: str) -> tuple[dict[str, str], Path | None]:
     """run_script/run_script_background が起動するサブプロセスへ、書き込み
     サンドボックスガードを注入した環境変数を組み立てる。
 
@@ -80,7 +111,10 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
     ここでも明示的に加える。default_workdirはサーバー側の共有ディレクトリの
     ため、直下やその他のサブディレクトリへの書き込みは許可せず、常に
     自セッション専用の`_tmp_<thread_id>`のみに限定する。他セッションが
-    生成物を誤参照する事故の防止）・path_memory_dir（register_output_path() が
+    生成物を誤参照する事故の防止）・config.ini [default_workdir].allow_sandbox_dir
+    のうち今回実行する (skill_name, script_filename) が許可対象になっている
+    追加ディレクトリ（_allowed_sandbox_dirs_for()、既定は空。セッション分離は
+    効かず全セッションから常時書き込み可能）・path_memory_dir（register_output_path() が
     ロックファイルを書き込むLocohane内部の状態ディレクトリ。ユーザー成果物の
     保存先ではないためexecute_python_code側のallowed_rootsとは異なりここにのみ追加）
     配下のみ。それ以外の場所（他ドライブ・Locohaneプロジェクト本体・
@@ -93,6 +127,10 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
 
     Args:
         workdir: このスクリプト実行の cwd（_resolve_workdir の解決結果）。
+        skill_name: 実行しようとしているスキルのフォルダ名（allow_sandbox_dir
+            の allow_entries 照合に使う）。
+        script_filename: 実行しようとしているスクリプトのファイル名
+            （同上）。
 
     Returns:
         (env, guard_dir) のタプル。guard_dir は呼び出し側がサブプロセス
@@ -106,6 +144,7 @@ def _run_script_guard_env(workdir: Path) -> tuple[dict[str, str], Path | None]:
     allowed_roots = [workdir]
     if _state._DEFAULT_WORKDIR is not None:
         allowed_roots.append(_resolve_exec_workdir())
+    allowed_roots.extend(_allowed_sandbox_dirs_for(skill_name, script_filename))
     display_roots = list(allowed_roots)
     if _state._PATH_MEMORY_DIR is not None:
         allowed_roots.append(_state._PATH_MEMORY_DIR)

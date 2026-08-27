@@ -57,7 +57,7 @@ def test_guard_dir_created_with_sitecustomize(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 
-    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "dummy-skill", "dummy.py")
 
     assert guard_dir is not None
     assert (guard_dir / "sitecustomize.py").exists()
@@ -70,7 +70,7 @@ def test_subprocess_write_outside_workdir_is_blocked(tmp_path):
     outside = tmp_path / "outside"
     workdir.mkdir()
     outside.mkdir()
-    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "dummy-skill", "dummy.py")
     target = outside / "leaked.txt"
 
     try:
@@ -87,7 +87,7 @@ def test_subprocess_write_outside_workdir_is_blocked(tmp_path):
 def test_subprocess_write_inside_workdir_succeeds(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
-    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "dummy-skill", "dummy.py")
     target = workdir / "out.txt"
 
     try:
@@ -107,7 +107,7 @@ def test_subprocess_write_directly_inside_default_workdir_is_blocked(tmp_path):
     """
     workdir = tmp_path / "workdir"
     workdir.mkdir()
-    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "dummy-skill", "dummy.py")
     target = tools._state._DEFAULT_WORKDIR / "out.txt"
 
     try:
@@ -125,7 +125,7 @@ def test_subprocess_write_inside_default_workdir_own_tmp_dir_succeeds(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     tmp_name = tools._workdir._exec_tmp_name()
-    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "dummy-skill", "dummy.py")
     target = tools._state._DEFAULT_WORKDIR / f"_tmp_{tmp_name}" / "out.txt"
 
     try:
@@ -144,7 +144,7 @@ def test_subprocess_write_inside_path_memory_dir_succeeds(tmp_path, monkeypatch)
     path_memory_dir = tmp_path / "path_memory"
     path_memory_dir.mkdir()
     monkeypatch.setattr(tools._state, "_PATH_MEMORY_DIR", path_memory_dir)
-    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "dummy-skill", "dummy.py")
     target = path_memory_dir / "thread-1.json.lock"
 
     try:
@@ -164,7 +164,7 @@ def test_subprocess_read_outside_workdir_is_permitted(tmp_path):
     outside.mkdir()
     existing = outside / "template.txt"
     existing.write_text("hello", encoding="utf-8")
-    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "dummy-skill", "dummy.py")
 
     try:
         result = _run_script(workdir, f'print(open(r"{existing}", "r", encoding="utf-8").read())\n', env)
@@ -184,7 +184,7 @@ def test_subprocess_read_foreign_tmp_dir_is_blocked(tmp_path):
     foreign.mkdir()
     leaked = foreign / "leaked.txt"
     leaked.write_text("secret", encoding="utf-8")
-    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "dummy-skill", "dummy.py")
 
     try:
         result = _run_script(workdir, f'open(r"{leaked}", "r", encoding="utf-8").read()\n', env)
@@ -196,6 +196,63 @@ def test_subprocess_read_foreign_tmp_dir_is_blocked(tmp_path):
     assert "一時ディレクトリガード" in result.stderr
 
 
+def test_subprocess_write_inside_allowed_sandbox_dir_succeeds(tmp_path, monkeypatch):
+    """allow_sandbox_dir に登録済みで、かつ実行スキル/スクリプトが
+    allow_entries に一致する場合のみ書き込みが許可される。
+    """
+    from src.config import SandboxDirEntry
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_dir.mkdir()
+    monkeypatch.setattr(
+        tools._state,
+        "_ALLOW_SANDBOX_DIRS",
+        (SandboxDirEntry(dir=sandbox_dir, allow_entries=frozenset({("dummy-skill", "dummy.py")})),),
+    )
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "dummy-skill", "dummy.py")
+    target = sandbox_dir / "out.txt"
+
+    try:
+        result = _run_script(workdir, f'open(r"{target}", "w", encoding="utf-8").write("ok")\n', env)
+    finally:
+        if guard_dir is not None:
+            shutil.rmtree(guard_dir, ignore_errors=True)
+
+    assert result.returncode == 0, result.stderr
+    assert target.read_text(encoding="utf-8") == "ok"
+
+
+def test_subprocess_write_inside_sandbox_dir_blocked_for_unlisted_script(tmp_path, monkeypatch):
+    """allow_sandbox_dir に登録済みでも、allow_entries に一致しないスキル/
+    スクリプトからは書き込めない。
+    """
+    from src.config import SandboxDirEntry
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_dir.mkdir()
+    monkeypatch.setattr(
+        tools._state,
+        "_ALLOW_SANDBOX_DIRS",
+        (SandboxDirEntry(dir=sandbox_dir, allow_entries=frozenset({("dummy-skill", "dummy.py")})),),
+    )
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "other-skill", "other.py")
+    target = sandbox_dir / "out.txt"
+
+    try:
+        result = _run_script(workdir, f'open(r"{target}", "w", encoding="utf-8").write("ok")\n', env)
+    finally:
+        if guard_dir is not None:
+            shutil.rmtree(guard_dir, ignore_errors=True)
+
+    assert result.returncode != 0
+    assert "書き込みサンドボックスガード" in result.stderr
+    assert not target.exists()
+
+
 def test_subprocess_read_own_tmp_dir_is_permitted(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -204,7 +261,7 @@ def test_subprocess_read_own_tmp_dir_is_permitted(tmp_path):
     own.mkdir()
     mine = own / "mine.txt"
     mine.write_text("mine", encoding="utf-8")
-    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir)
+    env, guard_dir = tools._subprocess_env._run_script_guard_env(workdir, "dummy-skill", "dummy.py")
 
     try:
         result = _run_script(workdir, f'print(open(r"{mine}", "r", encoding="utf-8").read())\n', env)

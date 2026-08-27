@@ -20,6 +20,7 @@ from ..agent_types import AgentType
 from ..config import Config
 from ..config import DEFAULT_DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE
 from ..config import DEFAULT_SCRIPT_BACKGROUND_MIN_POLL_MESSAGE
+from ..config import SandboxDirEntry
 from ..config import expand_config_vars
 from ..llm import get_current_session
 from . import registry
@@ -238,6 +239,13 @@ _SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS: int = 0
 _SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS: int = 20
 _SCRIPT_BACKGROUND_JOB_OUTPUT_TAIL_CHARS: int = 4000
 _DEFAULT_WORKDIR: Path | None = None
+# config.ini の [default_workdir].allow_sandbox_dir 由来。work_dir/
+# default_workdir に加えて書き込みサンドボックスガードが許可する追加
+# ディレクトリのエントリ集合（run_script/run_script_background 経由の
+# み対象。execute_python_code系は対象外）。各エントリの allow_entries に
+# 一致したスキルスクリプトからのみ書き込みが許可される
+# （_subprocess_env.py の _allowed_sandbox_dirs_for()/_run_script_guard_env() 参照）。
+_ALLOW_SANDBOX_DIRS: tuple[SandboxDirEntry, ...] = ()
 _LLM_CONFIG: Config | None = None
 _AGENT_TYPES: dict[str, ResolvedAgentType] = {}
 _SUBAGENT_MAX_ITERATIONS: int = 6
@@ -320,6 +328,7 @@ def init_tools(
     plan_reset_approval_on_recreate: bool = True,
     plan_require_planner_dispatch: bool = True,
     plan_auto_approve: bool = False,
+    allow_sandbox_dirs: Iterable[SandboxDirEntry] = (),
 ) -> None:
     """ツールが使う設定を注入する（app 起動時に一度だけ呼ぶ）。
 
@@ -488,6 +497,14 @@ def init_tools(
             確認（承認/却下ボタンの表示・応答待ち）を一切行わず、その場で
             自動的に承認済み扱いにする。False（既定）なら従来通りユーザーの
             明示的な承認を必須にする（config.ini の [plan].auto_approve 由来）。
+        allow_sandbox_dirs: 書き込みサンドボックスガード（run_script/
+            run_script_background 経由のみ対象。execute_python_code系は
+            対象外）が work_dir/default_workdir に加えて書き込み・削除を
+            許可する追加ディレクトリのエントリ集合（config.ini の
+            [default_workdir].allow_sandbox_dir 由来）。各エントリの
+            allow_entries に一致したスキルスクリプトからのみ実際に書き込み
+            が許可される。既定は空で、その場合従来通りの書き込み
+            サンドボックス原則がそのまま適用される。
 
     Returns:
         None。副作用としてモジュール globals を更新するのみ。
@@ -502,6 +519,7 @@ def init_tools(
     global _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS, _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS
     global _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES
     global _DEFAULT_WORKDIR, _LLM_CONFIG, _AGENT_TYPES, _SUBAGENT_MAX_ITERATIONS
+    global _ALLOW_SANDBOX_DIRS
     global _MEMORY_ROOT
     global _PLANS_DIR
     global _HELP_PATH
@@ -540,6 +558,7 @@ def init_tools(
             grouped.setdefault(agent_type, set()).add(target)
         _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST = {agent_type: frozenset(targets) for agent_type, targets in grouped.items()}
     _DEFAULT_WORKDIR = Path(default_workdir).resolve()
+    _ALLOW_SANDBOX_DIRS = tuple(allow_sandbox_dirs)
     _LLM_CONFIG = llm_config
     _AGENT_TYPES = _resolve_agent_types(agent_type_defs)
     _SUBAGENT_MAX_ITERATIONS = subagent_max_iterations

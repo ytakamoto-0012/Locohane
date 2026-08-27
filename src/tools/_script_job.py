@@ -124,7 +124,7 @@ async def _run_script_impl(skill_name: str, script_filename: str, script_args: l
     if isinstance(prepared, str):
         return prepared
     cmd, workdir = prepared
-    env, guard_dir = _run_script_guard_env(workdir)
+    env, guard_dir = _run_script_guard_env(workdir, skill_name, script_filename)
 
     logger.info("run_script: %s %s cwd=%s", skill_name, script_filename, workdir)
     try:

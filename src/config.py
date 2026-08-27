@@ -70,6 +70,35 @@ class LLMEndpoint:
 
 
 @dataclass(frozen=True)
+class SandboxDirEntry:
+    """[default_workdir].allow_sandbox_dir の1エントリ分。
+
+    書き込みサンドボックスガード（run_script/run_script_background 経由の
+    み対象。execute_python_code系は対象外）が、work_dir/default_workdir に
+    加えて書き込み・削除を許可する追加ディレクトリ1件と、その書き込みを
+    許可する対象（ビルトインツール名、または run_script 配下のスキル
+    スクリプト）のペア。src/tools/_subprocess_env.py の
+    _allowed_sandbox_dirs_for() が参照する。
+
+    Attributes:
+        dir: 許可するディレクトリの絶対パス。
+        allow_entries: このディレクトリへの書き込みを許可する対象の集合。
+            [main_agent_tool_guard].allow_entries と同じ形式で、要素は
+            文字列1件（ビルトインツール名そのもの。現状、書き込み
+            サンドボックスガードを持つビルトインツールは run_script/
+            run_script_background のみのため実質未使用だが、将来
+            ビルトインツール側にガードが増えた場合の拡張用）、または
+            (スキル名, スクリプトファイル名) の2要素タプル
+            （run_script/run_script_background 経由で呼ばれるスキル
+            スクリプトのみを許可）のいずれか。空集合なら誰も書き込め
+            ない。
+    """
+
+    dir: Path
+    allow_entries: frozenset[str | tuple[str, str]]
+
+
+@dataclass(frozen=True)
 class Config:
     """アプリ全体の設定。すべて絶対パスに解決済みで保持する。
 
@@ -253,6 +282,23 @@ class Config:
             かった場合に使われる。run_script 専用ではなくエージェント全体の
             作業拠点という位置づけのため、他の run_script 実行設定とは
             分けて保存先パス群に含める。
+        allow_sandbox_dirs: 書き込みサンドボックスガード（run_script/
+            run_script_background 経由のみ対象。execute_python_code系は
+            対象外。src/tools/_subprocess_env.py の
+            _allowed_sandbox_dirs_for()/_run_script_guard_env() 参照）が
+            work_dir/default_workdir に加えて書き込み・削除を許可する
+            追加ディレクトリのエントリ集合（config.ini の
+            [default_workdir].allow_sandbox_dir 由来）。各エントリは
+            SandboxDirEntry（ディレクトリ本体 + そこへの書き込みを許可
+            する対象の集合）で、実行しようとしているスキルスクリプトが
+            そのエントリの allow_entries に含まれる場合にのみ、対応する
+            ディレクトリが allowed_roots に追加される。既定は空タプルで、
+            その場合は従来通りの書き込みサンドボックス原則がそのまま適用
+            される。work_dir/default_workdirと異なりセッション・スレッド
+            ごとの分離は効かず、許可されたディレクトリは全セッションから
+            常時書き込み可能になる点に注意（運用者が用意した固定の共有
+            出力先などを想定した設定）。存在しないディレクトリは実際の
+            ガード適用時に無視される。
         memory_dir: 永続メモリー（User/Feedback/Project/Reference）の
             保存先ルートディレクトリの絶対パス。配下に4種のtype
             サブディレクトリと索引ファイル MEMORY.md を持つ
@@ -677,6 +723,7 @@ class Config:
     log_level: str
     log_clear_on_startup: bool
     default_workdir: Path
+    allow_sandbox_dirs: tuple[SandboxDirEntry, ...]
     memory_dir: Path
     plans_dir: Path
     help_path: Path
@@ -1467,6 +1514,71 @@ def _parse_main_agent_tool_guard_allow_entries(value: str | None) -> frozenset[t
     return frozenset(entries)
 
 
+def _parse_allow_sandbox_dir(value: str | None, base: Path) -> tuple[SandboxDirEntry, ...]:
+    """config.ini の [default_workdir].allow_sandbox_dir をパースする。
+
+    書き込みサンドボックスガード（run_script/run_script_background 経由の
+    み対象。execute_python_code系は対象外）が work_dir/default_workdir に
+    加えて書き込みを許可する追加ディレクトリを、ディレクトリごとの許可
+    リスト（allow_entries）付きで登録する。各要素は
+    {"dir": ディレクトリ, "allow_entries": [...]} の辞書形式。
+    allow_entries の各要素は [main_agent_tool_guard].allow_entries の対象
+    指定と同じ形式（文字列1件でビルトインツール名そのもの、または
+    [スキル名, スクリプトファイル名] の2要素配列でrun_script経由のスキル
+    スクリプトのみを許可）。
+    例: [{"dir": "E:/shared_output", "allow_entries": [["excel-edit", "write_excel.py"]]}]
+    Python風の辞書・リストリテラルを ast.literal_eval で読む（末尾カンマ等の
+    緩い記法も許容するため）。
+
+    Args:
+        value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
+            空欄・None なら空タプルを返す（=書き込みサンドボックス原則が
+            そのまま適用され、追加許可ディレクトリは無い）。
+        base: 相対パスの解決基準ディレクトリ（通常は PROJECT_ROOT）。
+
+    Returns:
+        SandboxDirEntry のタプル。
+
+    Raises:
+        ValueError: リストとして解釈できない場合、各要素が辞書でない場合、
+            "dir" キーが無い・文字列でない場合、"allow_entries" が
+            リストでない場合、またはその要素が文字列でも2要素配列でも
+            ない場合。
+    """
+    if not value or not value.strip():
+        return ()
+    text = value.strip()
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(f"allow_sandbox_dir はPythonのリスト形式で指定してください: {text!r}") from e
+    if not isinstance(parsed, list):
+        raise ValueError(f"allow_sandbox_dir はリスト（配列）形式で指定してください: {text!r}")
+    result: list[SandboxDirEntry] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            raise ValueError(f'allow_sandbox_dir の各要素は {{"dir": ..., "allow_entries": [...]}} の辞書にしてください: {item!r}')
+        dir_value = item.get("dir")
+        if not isinstance(dir_value, str) or not dir_value.strip():
+            raise ValueError(f"allow_sandbox_dir の dir は空でない文字列にしてください: {item!r}")
+        allow_entries_raw = item.get("allow_entries", [])
+        if not isinstance(allow_entries_raw, list):
+            raise ValueError(f"allow_sandbox_dir の allow_entries はリスト（配列）形式にしてください: {item!r}")
+        entries: set[str | tuple[str, str]] = set()
+        for target in allow_entries_raw:
+            if isinstance(target, str):
+                entries.add(target)
+            elif isinstance(target, (list, tuple)) and len(target) == 2:
+                entries.add((str(target[0]), str(target[1])))
+            else:
+                raise ValueError(
+                    "allow_sandbox_dir の allow_entries の各要素はツール名の文字列、または"
+                    f"[スキル名, スクリプトファイル名] の2要素にしてください: {target!r}"
+                )
+        result.append(SandboxDirEntry(dir=_resolve(base, dir_value), allow_entries=frozenset(entries)))
+    return tuple(result)
+
+
 def render_plan_approval_exempt_scripts_block(entries: frozenset[tuple[str, str]]) -> str:
     """system_prompt.md の {{plan_approval_exempt_scripts}} へ差し込むテキストを組み立てる。
 
@@ -1628,6 +1740,10 @@ def load_config(config_path: Path | None = None) -> Config:
         os.getenv("BIN_PATH", paths.get("bin_path", "")),
         PROJECT_ROOT,
     )
+    allow_sandbox_dirs = _parse_allow_sandbox_dir(
+        os.getenv("ALLOW_SANDBOX_DIR", default_workdir_section.get("allow_sandbox_dir", "")),
+        PROJECT_ROOT,
+    )
 
     main_url_raw = os.getenv("LLM_MAIN_URL", llm.get("main_url", _DEFAULT_LLM_URL))
     # sub_url が未指定（キー無し、または値が空）の場合、静的な接続先リストを
@@ -1726,6 +1842,7 @@ def load_config(config_path: Path | None = None) -> Config:
             PROJECT_ROOT,
             _sub_common_data_dir(os.getenv("DEFAULT_WORKDIR", default_workdir_section.get("dir", "${common_data_dir}/temp")), common_data_dir),
         ),
+        allow_sandbox_dirs=allow_sandbox_dirs,
         memory_dir=_resolve(
             PROJECT_ROOT, _sub_common_data_dir(os.getenv("MEMORY_DIR", paths.get("memory_dir", "${common_data_dir}/memory")), common_data_dir)
         ),

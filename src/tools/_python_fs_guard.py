@@ -83,7 +83,12 @@ def _exec_guard_roots() -> tuple[list[Path], list[Path]]:
     default_workdir以外を指している場合でも常に念のため加える）に加え、
     path_memory_dir（LLM生成コードが path_memory.register()/resolve() を
     直接呼ぶ場合にロックファイル書き込みが必要になるLocohane内部の
-    状態ディレクトリ）を allowed_roots に含める。default_workdir自体
+    状態ディレクトリ）を allowed_roots に含める。
+
+    config.ini [default_workdir].allow_sandbox_dir（_state._ALLOW_SANDBOX_DIRS）
+    はここでは対象外（execute_python_code系は対象外。run_script/
+    run_script_background 経由のみ、_subprocess_env.py の
+    _run_script_guard_env() が扱う）。default_workdir自体
     （`_tmp_<thread_id>` 以外のサブディレクトリや直下）は意図的に含めない
     （default_workdirはサーバー側の共有ディレクトリのため、他セッションが
     誤参照する事故を避けるため常に自セッション専用の`_tmp_<thread_id>`
