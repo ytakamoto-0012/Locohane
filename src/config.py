@@ -907,6 +907,12 @@ class Config:
     # 上記と同じ判定対象で、この値以上になったら赤太字で強調表示する
     # （warn_threshold より優先。0以下で無効）。
     ui_token_usage_alert_threshold: int
+    # WebSocket（Socket.IO）のping間隔・タイムアウト秒数。chainlit本体は
+    # これらを指定せずAsyncServerを生成しているため、未設定時は
+    # python-socketio/engineioのデフォルト（25秒/20秒）が使われる
+    # （app.py の _patch_chainlit_websocket_ping_timeout 参照）。
+    websocket_ping_interval_seconds: int
+    websocket_ping_timeout_seconds: int
 
 
 def _resolve(base: Path, value: str) -> Path:
@@ -1729,6 +1735,7 @@ def load_config(config_path: Path | None = None) -> Config:
     mcp = parser["mcp"] if parser.has_section("mcp") else {}
     checkpointer = parser["checkpointer"] if parser.has_section("checkpointer") else {}
     ui = parser["ui"] if parser.has_section("ui") else {}
+    websocket = parser["websocket"] if parser.has_section("websocket") else {}
 
     common_data_dir = _resolve(PROJECT_ROOT, os.getenv("COMMON_DATA_DIR", paths.get("common_data_dir", "./data")))
 
@@ -2260,6 +2267,12 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         ui_token_usage_alert_threshold=int(
             os.getenv("UI_TOKEN_USAGE_ALERT_THRESHOLD", ui.get("token_usage_alert_threshold", 64000))
+        ),
+        websocket_ping_interval_seconds=int(
+            os.getenv("WEBSOCKET_PING_INTERVAL_SECONDS", websocket.get("ping_interval_seconds", 25))
+        ),
+        websocket_ping_timeout_seconds=int(
+            os.getenv("WEBSOCKET_PING_TIMEOUT_SECONDS", websocket.get("ping_timeout_seconds", 20))
         ),
     )
 

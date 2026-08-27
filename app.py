@@ -601,6 +601,36 @@ def _patch_chainlit_disable_disconnect_thread_touch() -> None:
     )
 
 
+def _patch_chainlit_websocket_ping_timeout() -> None:
+    """WebSocket（Socket.IO）の ping_interval/ping_timeout を [websocket]
+    （config.ini）の値で上書きする。
+
+    chainlit/server.py の `sio = socketio.AsyncServer(...)` は
+    ping_interval/ping_timeout を指定していないため、python-socketio/
+    engineio のデフォルト（ping_interval=25秒, ping_timeout=20秒）がそのまま
+    使われる。LLM応答待ちでイベントループがブロッキング気味になる時間帯
+    （dispatch_agent実行中など）にこの20秒を超えると、バックエンド処理自体は
+    問題なく継続しているにもかかわらずWebSocketが切断され、再接続まで
+    Step更新（サイドパネルのタイムライン）がUIに反映されない不具合が起きる
+    （2026-08-28 ユーザー報告。1ターン中に切断が5回連発し、workerによる
+    修正ステップがタイムラインから丸ごと欠落した実例で確認）。
+
+    socketio.AsyncServer は内部で engineio.AsyncServer を self.eio として
+    保持しており、ping_interval/ping_timeout は単純な数値属性のため
+    インスタンス生成後でも書き換えられる（sio生成はchainlitのモジュール
+    import時点で完了済みなので、on_app_startup時点で確実に上書きできる）。
+    """
+    from chainlit.socket import sio as _sio
+
+    _sio.eio.ping_interval = _config.websocket_ping_interval_seconds
+    _sio.eio.ping_timeout = _config.websocket_ping_timeout_seconds
+    logging.getLogger(__name__).info(
+        "WebSocketのping_interval=%s秒 ping_timeout=%s秒を適用しました。",
+        _config.websocket_ping_interval_seconds,
+        _config.websocket_ping_timeout_seconds,
+    )
+
+
 # チャット送信ではなく独自フロントエンドのUIボタン（ツールバーの各アイコン）から
 # 呼ばれる action_callback。これらのクリックは「最初の発言」ではないが、
 # Chainlit本体側にその区別が無い（_patch_chainlit_ignore_ui_action_first_interaction
@@ -912,6 +942,8 @@ async def _on_app_startup() -> None:
         print(f"\n[FATAL] {exc}\n", file=sys.stderr)
         logging.getLogger(__name__).critical(str(exc))
         os._exit(1)
+
+    _patch_chainlit_websocket_ping_timeout()
 
     global _thread_store_conn, _thread_data_layer
     if _config.thread_store_enabled:
