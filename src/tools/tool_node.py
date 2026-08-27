@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import BaseTool
 from langgraph.prebuilt import ToolNode
 import chainlit as cl
 import logging
@@ -238,6 +239,54 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
             )
         ]
     }
+
+
+def filter_main_agent_tools(tools: list[BaseTool], config) -> list[BaseTool]:
+    """[main_agent_tool_guard] 有効時、メインエージェントへ bind するツールを
+    許可されたものだけに絞り込む。
+
+    _guard_main_agent_tool_limit は呼び出し時にしか効かないため、そのままだと
+    未登録・max_calls=0 のツールも docstring 由来の description ごと LLM に
+    見え続け、「見えているのに呼べない」ツールを試みては拒否される無駄な
+    往復（dispatch_agentへの再委譲を促されるだけの1往復）が発生する
+    （issue/20260823_144320_*、issue/20260813_163000_* 参照）。本関数は
+    _guard_main_agent_tool_limit と同じ allow_entries 解釈ロジックで、
+    そもそも呼び出せないツールをあらかじめ tools リストから除外する。
+
+    呼び出し時のブロック自体（_guard_main_agent_tool_limit）はこの関数とは
+    独立して常に有効なままにする（フィルタ漏れがあっても最終防衛線として
+    機能させるため）。
+
+    Args:
+        tools: フィルタ前のツール一覧（get_all_tools() の戻り値を想定）。
+            サブエージェント側の tools リスト（_SUBAGENT_TOOLS 由来）には
+            使わない（本ガード自体がサブエージェント内部の呼び出しを
+            対象外にしているため）。
+        config: main_agent_tool_guard_enabled / main_agent_tool_guard_allow_entries
+            を持つ Config。
+
+    Returns:
+        guard 無効時は tools をそのまま返す。有効時は、名前が allow_entries に
+        max_calls≠0 で登録されているツールのみに絞ったリスト。
+        run_script/run_script_background は裸のツール名としては登録しない
+        運用（config.ini 参照）のため、[skill_name, script_filename] ペアの
+        エントリが1件でも max_calls≠0 で登録されていれば残す（個別スキルの
+        可否は _guard_main_agent_tool_limit が呼び出し時に判定する）。
+    """
+    if not config.main_agent_tool_guard_enabled:
+        return tools
+    entries_by_key = dict(config.main_agent_tool_guard_allow_entries)
+    run_script_allowed = any(isinstance(key, tuple) and max_calls != 0 for key, max_calls in entries_by_key.items())
+    filtered = []
+    for t in tools:
+        if t.name in ("run_script", "run_script_background"):
+            if run_script_allowed:
+                filtered.append(t)
+            continue
+        max_calls = entries_by_key.get(t.name)
+        if max_calls is not None and max_calls != 0:
+            filtered.append(t)
+    return filtered
 
 
 class ImageAwareToolNode(ToolNode):

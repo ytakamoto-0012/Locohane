@@ -22,8 +22,12 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
+
+if TYPE_CHECKING:
+    from .config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +228,42 @@ def render_skills_block(skills: list[Skill]) -> str:
     if skills:
         return "\n".join(f"- {s.name}: {s.description}" for s in skills)
     return "（利用可能なスキルはありません）"
+
+
+def filter_skills_for_main_agent_guard(skills: list[Skill], config: "Config") -> list[Skill]:
+    """[main_agent_tool_guard] 有効時、メインエージェントの `{{skills}}` へ
+    載せるスキルを、直接実行が許可されたものだけに絞り込む。
+
+    [main_agent_tool_guard].allow_entries に [skill_name, script_filename] の
+    ペアが1件も max_calls≠0 で登録されていないスキルは、メインエージェントが
+    run_script/run_script_background を直接呼んでも常に拒否される
+    （src/tools/tool_node.py の _guard_main_agent_tool_limit 参照）。それでも
+    `{{skills}}` へ全件載せたままだと「実行できる」と誤認して試み、拒否→
+    dispatch_agentへの再委譲を促されるだけの無駄な往復が発生する
+    （src/tools/tool_node.py の filter_main_agent_tools と同じ理由づけ）。
+
+    dispatch_agent配下のサブエージェントには本ガードと無関係にフルの
+    `{{skills}}` が渡る（app.py の agent_type_defs 差し込み参照）ため、ここで
+    絞ってもスキル自体へアクセスする手段が失われるわけではない。
+
+    Args:
+        skills: scan_skills() が返した有効な Skill のリスト。
+        config: main_agent_tool_guard_enabled / main_agent_tool_guard_allow_entries
+            を持つ Config。
+
+    Returns:
+        guard 無効時は skills をそのまま返す。有効時は、名前が allow_entries の
+        [skill_name, script_filename] ペアに max_calls≠0 で1件でも登録されている
+        スキルのみに絞ったリスト。
+    """
+    if not config.main_agent_tool_guard_enabled:
+        return skills
+    allowed = {
+        key[0]
+        for key, max_calls in config.main_agent_tool_guard_allow_entries
+        if isinstance(key, tuple) and max_calls != 0
+    }
+    return [s for s in skills if s.name in allowed]
 
 
 def build_system_prompt(skills: list[Skill], template_path: Path | str) -> str:

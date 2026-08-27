@@ -38,7 +38,7 @@ from .context_compaction import maybe_append_precompact_note_nudge
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
 from .llm import ThinkingLoopDetected, build_model, pick_loop_nudge_message
 from .main_token_guard import maybe_append_token_guard
-from .tools import ImageAwareToolNode, get_all_tools
+from .tools import ImageAwareToolNode, filter_main_agent_tools, get_all_tools
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +54,12 @@ EMPTY_RESPONSE_NUDGE = (
 async def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer, *, wait_when_busy: bool = True):
     """手書きの ReAct グラフをコンパイルして返す。
 
-    agent ノード（call_model）と tools ノード（ImageAwareToolNode(get_all_tools())）を
+    agent ノード（call_model）と tools ノード（ImageAwareToolNode(main_tools)）を
     START → agent → (条件分岐) → tools → agent → ... → END という
-    ReAct ループとして明示配線する。
+    ReAct ループとして明示配線する。main_tools は get_all_tools() を
+    filter_main_agent_tools() で絞り込んだもの（[main_agent_tool_guard] 有効時、
+    呼び出し不可なツールは docstring ごとモデルへ見せない。詳細は
+    filter_main_agent_tools のdocstring参照）。
 
     Args:
         config: アプリ設定（LLM 接続情報）。build_model 経由でモデル構築に使う。
@@ -70,7 +73,8 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
         コンパイル済みの LangGraph（CompiledStateGraph）。
         astream_events / ainvoke などで実行できる。
     """
-    model = (await build_model(config, role="main", wait_when_busy=wait_when_busy)).bind_tools(get_all_tools())
+    main_tools = filter_main_agent_tools(get_all_tools(), config)
+    model = (await build_model(config, role="main", wait_when_busy=wait_when_busy)).bind_tools(main_tools)
 
     async def call_model(state: MessagesState) -> dict:
         """agent ノード: システムプロンプトを先頭に付けてモデルを呼ぶ。
@@ -143,7 +147,7 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
     # --- 2 手書きノードを明示配線（ここがループ本体） ---
     graph = StateGraph(MessagesState)
     graph.add_node("agent", call_model)
-    graph.add_node("tools", ImageAwareToolNode(get_all_tools()))
+    graph.add_node("tools", ImageAwareToolNode(main_tools))
     graph.add_edge(START, "agent")
     graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
     graph.add_edge("tools", "agent")  # ツール結果を持って再びモデルへ（ReAct）
@@ -155,8 +159,10 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
     """LangGraph 標準の create_react_agent にそのまま委譲してグラフを作る。
 
     ノード配線・tool_calls の分岐はすべて create_react_agent 内部に隠蔽される。
-    モデルは bind_tools せずに渡す（create_react_agent が内部で get_all_tools() の
-    戻り値を bind する）。
+    モデルは bind_tools せずに渡す（create_react_agent が内部で
+    ImageAwareToolNode に渡した tools を bind する）。tools は get_all_tools() を
+    filter_main_agent_tools() で絞り込んだもの（[main_agent_tool_guard] 有効時、
+    呼び出し不可なツールは docstring ごとモデルへ見せない）。
 
     Args:
         config: アプリ設定（LLM 接続情報）。build_model 経由でモデル構築に使う。
@@ -170,6 +176,7 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
         astream_events / ainvoke などで実行できる。
     """
     model = await build_model(config, role="main", wait_when_busy=wait_when_busy)
+    main_tools = filter_main_agent_tools(get_all_tools(), config)
 
     def pre_model_hook(state: MessagesState) -> dict:
         """モデル呼び出し直前に、入力を絞り、必要なら引継ぎ促しを差し込む。
@@ -212,7 +219,7 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
 
     return create_react_agent(
         model,
-        ImageAwareToolNode(get_all_tools()),
+        ImageAwareToolNode(main_tools),
         prompt=system_prompt,
         # トリミング・トークンガード・圧縮予告ナッジのいずれかが有効なら
         # フックが必要（一部だけを見て None にすると、残りが黙って効かなく

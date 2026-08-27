@@ -170,3 +170,57 @@ def test_parse_rejects_duplicate_run_script_pair() -> None:
 def test_parse_allows_distinct_keys() -> None:
     result = _parse_main_agent_tool_guard_allow_entries('[["Glob", 1], ["Read", -1]]')
     assert result == frozenset({("Glob", 1), ("Read", -1)})
+
+
+def _make_tools(*names: str) -> list:
+    return [SimpleNamespace(name=n) for n in names]
+
+
+def _make_cfg(*, entries, enabled: bool = True):
+    return SimpleNamespace(
+        main_agent_tool_guard_enabled=enabled,
+        main_agent_tool_guard_allow_entries=frozenset(entries),
+    )
+
+
+def test_filter_main_agent_tools_guard_disabled_keeps_everything() -> None:
+    tools = _make_tools("Glob", "Read", "run_script")
+    cfg = _make_cfg(entries=[], enabled=False)
+
+    assert tool_node.filter_main_agent_tools(tools, cfg) == tools
+
+
+def test_filter_main_agent_tools_drops_unregistered_and_zero() -> None:
+    tools = _make_tools("Glob", "Read", "dispatch_agent")
+    cfg = _make_cfg(entries=[("Glob", 1), ("Read", 0)])
+
+    result = tool_node.filter_main_agent_tools(tools, cfg)
+
+    assert [t.name for t in result] == ["Glob"]
+
+
+def test_filter_main_agent_tools_keeps_unlimited_and_positive() -> None:
+    tools = _make_tools("dispatch_agent", "Glob")
+    cfg = _make_cfg(entries=[("dispatch_agent", -1), ("Glob", 3)])
+
+    result = tool_node.filter_main_agent_tools(tools, cfg)
+
+    assert {t.name for t in result} == {"dispatch_agent", "Glob"}
+
+
+def test_filter_main_agent_tools_drops_run_script_without_allowed_pair() -> None:
+    tools = _make_tools("run_script", "run_script_background", "Glob")
+    cfg = _make_cfg(entries=[("Glob", 1), (("pdf-tools", "render_pdf_pages.py"), 0)])
+
+    result = tool_node.filter_main_agent_tools(tools, cfg)
+
+    assert {t.name for t in result} == {"Glob"}
+
+
+def test_filter_main_agent_tools_keeps_run_script_with_allowed_pair() -> None:
+    tools = _make_tools("run_script", "run_script_background")
+    cfg = _make_cfg(entries=[(("pdf-tools", "render_pdf_pages.py"), -1)])
+
+    result = tool_node.filter_main_agent_tools(tools, cfg)
+
+    assert {t.name for t in result} == {"run_script", "run_script_background"}

@@ -97,7 +97,7 @@ from src.memory import render_memory_block
 from src.ask_relay import pending_asks as _pending_asks, resolve_pending_ask
 from src.plan_persist import register_plan_persist
 from src.project_instructions import render_project_instructions_block
-from src.skills import build_system_prompt, render_skills_block, scan_skills
+from src.skills import build_system_prompt, filter_skills_for_main_agent_guard, render_skills_block, scan_skills
 from src.subagent import is_truncated_result
 from src.thread_store import ChatThreadDataLayer
 from src import thread_store
@@ -1430,7 +1430,13 @@ async def _setup() -> None:
     # 第1段階 Discovery: スキルを走査して name+description をシステムプロンプトへ。
     # skills_dir と locohane_skills_dirs をマージ（同名は locohane 側優先）。
     skills = scan_skills([_config.skills_dir, *_config.locohane_skills_dirs])
-    system_prompt = build_system_prompt(skills, _config.system_prompt_path)
+    # メインエージェントの system_prompt には、main_agent_tool_guard 有効時
+    # 直接実行できないスキルを除いた一覧を差し込む（filter_skills_for_main_agent_guard
+    # 参照。dispatch_agent配下のサブエージェント用 skills_block は下記の通り
+    # 未フィルタの skills から別途組み立てるため、スキル自体は失われない）。
+    system_prompt = build_system_prompt(
+        filter_skills_for_main_agent_guard(skills, _config), _config.system_prompt_path
+    )
     # エージェント種別（agents/*.md、ClaudeCode の .claude/agents/*.md 相当）を走査し、
     # 各種別のシステムプロンプトにも {{skills}}/{{agent_types}} を差し込む
     # （planner が dispatch_agent の委譲先一覧を steps 設計に使えるようにするため）。
