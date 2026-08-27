@@ -230,16 +230,12 @@ def _format_background_job_progress(job: "_BackgroundJob", job_id: str) -> str:
     の running 分岐（フォールバック経路でのLLM向け応答）の両方から呼ぶ、
     表示フォーマット共通化のためのヘルパー（dispatch_agent の
     _format_dispatch_agent_progress と同じ役割）。
+
+    stdout/stderr の末尾は表示しない（完了時の結果には引き続き含まれる。
+    _format_job_result 参照。2026-08-27 ユーザー要望により実行中表示からのみ除去）。
     """
     elapsed = int(time.monotonic() - job.started_at)
-    parts = [f"実行中です（経過 {elapsed} 秒・job_id={job_id}）。"]
-    stdout_tail = "".join(job.stdout_chunks)[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
-    stderr_tail = "".join(job.stderr_chunks)[-_JOB_OUTPUT_TAIL_CHARS:].rstrip()
-    if stdout_tail:
-        parts.append(f"[標準出力（末尾）]\n{stdout_tail}")
-    if stderr_tail:
-        parts.append(f"[標準エラー（末尾）]\n{stderr_tail}")
-    return "\n".join(parts)
+    return f"実行中です（経過 {elapsed} 秒・job_id={job_id}）。"
 
 
 async def _push_background_job_progress(job: "_BackgroundJob", job_id: str) -> None:
