@@ -115,7 +115,8 @@ class TestGlobTool:
 
         result = json.loads(tools.glob_tool.func(pattern="**/*.py"))
 
-        assert result["total_matches"] == 2
+        # ** を書いても直下までしか探索しない仕様のため、sub/b.py は対象外。
+        assert result["total_matches"] == 1
         assert "path_memory" in result
 
     def test_empty_path_resolves_to_workdir(self, file_tools_env) -> None:
