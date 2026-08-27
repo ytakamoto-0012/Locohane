@@ -87,6 +87,45 @@ def cleanup_old_dirs(directory: Path, retention_days: int, pattern: str = "*") -
     return deleted
 
 
+def cleanup_old_files_in_subdirs(directory: Path, retention_days: int, pattern: str = "*") -> int:
+    """directory 直下の各サブディレクトリの中身に対し、ファイル単位で cleanup_old_files を適用する。
+
+    config.upload_dir/<username>/ のように、ユーザー名などキーごとの
+    サブフォルダに実ファイルがフラットに溜まる構成向け。サブフォルダ
+    自体の更新日時（＝直近のアップロード日時）で一括判定してしまうと、
+    使い続けているユーザーの古いファイルがいつまでも消えないため、
+    ファイルごとの更新日時で個別に削除する。削除の結果サブフォルダが
+    空になった場合は、そのサブフォルダも削除する。
+
+    Args:
+        directory: チェック対象の親ディレクトリ（直下にサブフォルダが並ぶ）。
+        retention_days: 保持日数。0以下を指定した場合は何もせず 0 を返す。
+        pattern: 各サブフォルダ内で対象を絞る glob パターン（既定 "*"）。
+
+    Returns:
+        削除したファイル数の合計。
+    """
+    if retention_days <= 0:
+        return 0
+
+    deleted = 0
+    for sub in directory.iterdir():
+        if not sub.is_dir():
+            continue
+        deleted += cleanup_old_files(sub, retention_days, pattern)
+        try:
+            next(sub.iterdir())
+        except StopIteration:
+            try:
+                sub.rmdir()
+                logger.info("空になったサブフォルダを削除: %s", sub)
+            except OSError:
+                logger.warning("空サブフォルダの削除に失敗: %s", sub, exc_info=True)
+        except OSError:
+            logger.warning("サブフォルダの中身確認に失敗: %s", sub, exc_info=True)
+    return deleted
+
+
 async def run_cleanup_loop(
     directory: Path, retention_days: int, interval_hours: float, pattern: str = "*"
 ) -> None:
@@ -138,3 +177,26 @@ async def run_cleanup_dirs_loop(
     while True:
         await asyncio.sleep(interval_seconds)
         cleanup_old_dirs(directory, retention_days, pattern)
+
+
+async def run_cleanup_files_in_subdirs_loop(
+    directory: Path, retention_days: int, interval_hours: float, pattern: str = "*"
+) -> None:
+    """interval_hours 間隔で cleanup_old_files_in_subdirs を回し続ける常駐タスク。
+
+    Args:
+        directory: チェック対象の親ディレクトリ（直下にサブフォルダが並ぶ）。
+        retention_days: 保持日数。0以下の場合は即座に return する。
+        interval_hours: チェック間隔（時間）。
+        pattern: cleanup_old_files_in_subdirs に渡す glob パターン（既定 "*"）。
+
+    Returns:
+        None。
+    """
+    if retention_days <= 0:
+        return
+
+    interval_seconds = interval_hours * 3600
+    while True:
+        await asyncio.sleep(interval_seconds)
+        cleanup_old_files_in_subdirs(directory, retention_days, pattern)

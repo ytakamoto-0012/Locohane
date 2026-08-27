@@ -2136,27 +2136,33 @@ async def on_pick_work_dir(action: cl.Action) -> None:
     await _apply_work_dir(raw)
 
 
-def _save_uploads(message: cl.Message) -> list[str]:
-    """アップロードファイルを upload_dir に保存し、保存先パスの一覧を返す。
+def _save_uploads(message: cl.Message, username: str) -> list[str]:
+    """アップロードファイルを upload_dir/<username>/ に保存し、保存先パスの一覧を返す。
 
     message.elements に含まれる各添付要素について、element.path
-    （Chainlit が保持する一時保存先）から config.upload_dir へコピーする。
+    （Chainlit が保持する一時保存先）から config.upload_dir 直下の
+    ログインユーザー名サブフォルダへコピーする。upload_dir 直下に
+    全ユーザー分のファイルが混在するのを避けるため。
     path を持たない要素（テキストのみの要素など）はスキップする。
 
     Args:
         message: on_message で受け取った Chainlit のメッセージオブジェクト。
             elements にアップロードファイルの情報が含まれる。
+        username: 保存先サブフォルダ名にするユーザー名（resolve_log_username()
+            で正規化済みのもの。未ログイン時は ANONYMOUS_USERNAME）。
 
     Returns:
         保存先の絶対パス文字列のリスト（保存した順）。
         アップロードが無ければ空リスト。
     """
     saved: list[str] = []
+    dest_dir = _config.upload_dir / username
     for element in message.elements or []:
         src = getattr(element, "path", None)
         if not src:
             continue
-        dest = _config.upload_dir / (element.name or Path(src).name)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / (element.name or Path(src).name)
         shutil.copyfile(src, dest)
         saved.append(str(dest))
         logging.getLogger(__name__).info("アップロード保存: %s", dest)
@@ -2805,7 +2811,9 @@ async def _on_message_impl(message: cl.Message) -> None:
 
     # アップロードがあれば保存する。画像は data URL 化してLLMに見せ、それ以外は
     # 保存先パスを本文に明示する（LLM が run_script に渡せるように）。
-    saved = _save_uploads(message)
+    upload_user_obj = cl.user_session.get("user")
+    upload_username = resolve_log_username(upload_user_obj.identifier if upload_user_obj else None)
+    saved = _save_uploads(message, upload_username)
     processed_text = register_raw_unc_paths_in_text(message.content)
     # スレッド開始時・作業ディレクトリ変更時（on_chat_start/_apply_work_dir が
     # 立てるフラグ）のみ、実際の絶対パスをLLMへ知らせる（詳細は
