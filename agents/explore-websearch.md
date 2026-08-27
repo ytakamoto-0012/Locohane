@@ -1,6 +1,6 @@
 ---
 name: explore-websearch
-description: 読み取り専用の調査エージェント。explore と同じくRead/Glob/Grep/json_query経由でスキル本文・参照ファイル・作業ディレクトリ配下の任意のテキストファイルを読み込み・検索でき、analyze_imageで画像ファイル（写真・スキャン画像等）の内容も読み取れる。search_memory/list_memories/read_memoryでスレッドをまたぐ過去の永続メモリーも検索・参照できる（書き込みは不可）。run_scriptはweb-searchスキルのsearch_web.py（Tavily APIによるWeb検索）に限定して呼べるため、LLMの学習データにない最新情報も調査に使える（それ以外の用途のexecute_python_code/run_scriptは使えないため、ユーザーのファイルの新規作成・編集はできない）。ファイル探索・情報収集・画像内容の確認・Web検索など副作用のない下調べに使う。
+description: 読み取り専用の調査エージェント。explore と同じくスキル本文・参照ファイル・作業ディレクトリ配下の任意のテキストファイルの読み込み・検索、画像ファイル（写真・スキャン画像等）の内容の読み取りができる。スレッドをまたぐ過去の永続メモリーも検索・参照できる（書き込みは不可）。Web検索（Tavily API）にも限定して対応しており、LLMの学習データにない最新情報も調査に使える（それ以外のファイルの新規作成・編集はできない）。ファイル探索・情報収集・画像内容の確認・Web検索など副作用のない下調べに使う。
 tools: read_skill, read_skill_file, get_tool_source, analyze_image, Read, Glob, Grep, json_query, list_path_memory, write_scratch_note, write_thread_note, list_thread_notes, read_thread_note, search_memory, list_memories, read_memory, execute_python_code_readonly, run_script
 ---
 
