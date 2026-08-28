@@ -73,7 +73,8 @@ def _allowed_sandbox_dirs_for(skill_name: str, script_filename: str) -> list[Pat
     入りうる。run_script/run_script_background は常に特定のスキル/スクリプト
     を実行するため、ここでは skill_name（スキル名単位の許可）と
     (skill_name, script_filename)（スクリプト単位の許可）のどちらかに
-    一致するエントリのみを対象にする。
+    一致するエントリのみを対象にする。allow_entries が空集合のエントリは
+    無制限扱いとし、対象を問わず常に許可する。
 
     Args:
         skill_name: 実行しようとしているスキルのフォルダ名。
@@ -85,7 +86,11 @@ def _allowed_sandbox_dirs_for(skill_name: str, script_filename: str) -> list[Pat
     """
     result: list[Path] = []
     for entry in _state._ALLOW_SANDBOX_DIRS:
-        if skill_name in entry.allow_entries or (skill_name, script_filename) in entry.allow_entries:
+        if (
+            not entry.allow_entries
+            or skill_name in entry.allow_entries
+            or (skill_name, script_filename) in entry.allow_entries
+        ):
             if entry.dir.is_dir():
                 result.append(entry.dir)
     return result
