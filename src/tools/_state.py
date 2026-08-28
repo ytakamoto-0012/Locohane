@@ -70,7 +70,6 @@ _SUBAGENT_AGENT_TYPE: contextvars.ContextVar[str | None] = contextvars.ContextVa
 # `_state._AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` と属性アクセスで参照すること。
 # `from ._state import _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` は再代入が反映されないため禁止）。
 _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST: dict[str, frozenset[str | tuple[str, str]]] = {
-    "explore-websearch": frozenset({"web-search"}),
     "explore": frozenset(
         {
             "docx-render",

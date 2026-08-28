@@ -54,8 +54,8 @@ create_memory, update_memory, delete_memory,
 read_memory, search_memory, list_memories
 ```
 
-- メモリー系6ツールは `_SUBAGENT_TOOLS` に含まれてはいるが、実際に各サブエージェントへ渡るかは `agents/*.md` 側の `tools:` 次第。`explore`/`explore-websearch` は読み込み系（`read_memory`/`search_memory`/`list_memories`）のみ、`worker` は全6ツール（フルアクセス）、`verifier` は含めていない。
-- **`write_scratch_note` は全サブエージェント種別に共通で付与する必須ツール**（既存5種別＝`explore`/`explore-websearch`/`worker`/`verifier`/`planner` すべてに付与済み）。`system_prompt/subagent_common.md`（4節参照）がトークン上限による打ち切り対策として `write_scratch_note` の使い方を**全エージェント共通の注意事項として無条件に**説明する構成になっているため、`tools:` に含めないエージェント種別を作ると、本文には登場するのに実際には呼べないツールについてのガイダンスだけが渡ることになる。新規に種別を追加する場合も `tools:` に必ず含めること（8節参照）。
+- メモリー系6ツールは `_SUBAGENT_TOOLS` に含まれてはいるが、実際に各サブエージェントへ渡るかは `agents/*.md` 側の `tools:` 次第。`explore` は読み込み系（`read_memory`/`search_memory`/`list_memories`）のみ、`worker` は全6ツール（フルアクセス）、`verifier` は含めていない。
+- **`write_scratch_note` は全サブエージェント種別に共通で付与する必須ツール**（既存4種別＝`explore`/`worker`/`verifier`/`planner` すべてに付与済み）。`system_prompt/subagent_common.md`（4節参照）がトークン上限による打ち切り対策として `write_scratch_note` の使い方を**全エージェント共通の注意事項として無条件に**説明する構成になっているため、`tools:` に含めないエージェント種別を作ると、本文には登場するのに実際には呼べないツールについてのガイダンスだけが渡ることになる。新規に種別を追加する場合も `tools:` に必ず含めること（8節参照）。
 
 - `Read`/`Glob`/`Grep` のように大文字始まりでfrontmatterに書く名前は、Python側の関数名（`read_tool`等）とは別に `@tool("Read")` のようにデコレータ引数で明示された `.name` 属性。frontmatterには **`.name` の方**（`Read`/`Glob`/`Grep`）を書く。
 - `_resolve_agent_types()`（378-417行）が `tool_lookup = {t.name: t for t in _SUBAGENT_TOOLS}`（395行）を作り、frontmatterの `tools:` に書かれた名前と突き合わせて解決する。**未知のツール名は例外を出さず警告してスキップ**（405-409行）— 誤字に気づきにくいので、追加・変更時はアプリ起動ログを必ず確認すること。
@@ -134,14 +134,14 @@ read_memory, search_memory, list_memories
 
 - `_prepare_script_execution()` 内、`tools.py` 1531-1539行で `cl.user_session.get("plan_approved")` を判定する（`(skill_name, script_filename)` が `_PLAN_APPROVAL_EXEMPT_SCRIPTS` に含まれる場合のみ免除）。`execute_python_code` も同様の判定が2210-2212行にある。
 - `cl.user_session` は Chainlit のセッションスコープ。メインエージェントの `create_plan`/`approve_plan`（同ファイル2563行/2607行、`plan_approved` を `cl.user_session.set`）が更新した値を、サブエージェント内から呼ばれるツールもそのまま参照する。**サブエージェント専用の特別なロジックは無く、セッション状態の共有のみで実現されている。**
-- したがって `explore`/`explore-websearch`/`verifier` のように `execute_python_code`/`run_script` を持たない（または読み取り専用スクリプトしか呼ばない前提の）エージェントはこの制約と無関係だが、`worker` のように書き込み系ツールを持つエージェントは、委譲元で計画承認が済んでいないと途中でブロックされる。ブロックされた場合、サブエージェント自身は `approve_plan` を呼ぶ手段を持たないため、`worker.md` はリトライせず「計画未承認のため書き込みができなかった」旨を最終回答に明記するよう指示している。
+- したがって `explore`/`verifier` のように `execute_python_code`/`run_script` を持たない（または読み取り専用スクリプトしか呼ばない前提の）エージェントはこの制約と無関係だが、`worker` のように書き込み系ツールを持つエージェントは、委譲元で計画承認が済んでいないと途中でブロックされる。ブロックされた場合、サブエージェント自身は `approve_plan` を呼ぶ手段を持たないため、`worker.md` はリトライせず「計画未承認のため書き込みができなかった」旨を最終回答に明記するよう指示している。
 
 ## 8. 新しいサブエージェント種別を追加する手順
 
 1. `agents/<agent-name>.md` を作成（frontmatter必須、`name` はファイル名(stem)と一致）。
 
    **名前は既存種別と接頭辞を共有させない**: 新しいagent_type名は、既存の
-   名前（`explore`/`explore-websearch`/`planner`/`verifier`/`worker`）のいずれとも
+   名前（`explore`/`planner`/`verifier`/`worker`）のいずれとも
    文字列としての接頭辞関係を持たないようにする。理由: (a)
    `_guard_main_agent_tool_limit`（`tools.py` 4199行目付近、メインエージェント
    自身が書き込み系ツールを直接呼んでブロックされた際のエラーメッセージ）は
@@ -150,9 +150,10 @@ read_memory, search_memory, list_memories
    並び、誤選択を誘発しやすい。(b) 名前自体が「既存の単純な語＋修飾語」と
    いう複合語だと、単純な方の語がより強く選ばれやすい。実際に`explore-web`
    という名前が`explore`と接頭辞を共有していたためにこの2つの要因が重なり、
-   重大な誤選択を引き起こした事例がある（2026-08-15、`explore-websearch`へ改名して対処）。
+   重大な誤選択を引き起こした事例がある（2026-08-15、`explore-websearch`へ改名して対処。
+   その後`explore-websearch`自体は廃止済み）。
 2. `tools:` に必要なツール名を `_SUBAGENT_TOOLS`（3節参照）の中から選んでカンマ区切りで列挙する（省略時は全ツール継承）。**`write_scratch_note`（run_id限定の自分用スクラッチ）と `write_thread_note`/`list_thread_notes`/`read_thread_note`（thread_id共有・他agent_typeやメインエージェントとも共有されるノート）は全種別共通の必須ツールなので、`tools:` を明示的に列挙する場合は必ず含めること**（省略して全ツール継承する場合は自動的に含まれるため対応不要）。thread note系3ツールは2026-08-20のthread note機能追加時に`agents/*.md`側への追加が漏れており、2026-08-21に全種別へ追加済み。
-3. 本文に、委譲元から見た役割・使ってよい/いけないツールの区別・手順・最終回答で書くべき内容（および書いてはいけない内容）を明記する。既存5種別（`explore`＝読み取り専用の汎用調査・オフィス文書/PDF調査、`explore-websearch`＝読み取り専用調査＋Web検索、`verifier`＝成果物の検証専用、`worker`＝計画承認後の書き込み実作業、`planner`＝計画策定）を参考にする。
+3. 本文に、委譲元から見た役割・使ってよい/いけないツールの区別・手順・最終回答で書くべき内容（および書いてはいけない内容）を明記する。既存4種別（`explore`＝読み取り専用の汎用調査・オフィス文書/PDF調査、`verifier`＝成果物の検証専用、`worker`＝計画承認後の書き込み実作業、`planner`＝計画策定）を参考にする。
 4. **アプリを再起動する**（`app.py` の `_setup()` は起動後1回しか `scan_agent_types()` を呼ばない冪等関数のため、ホットリロードは無い。新規チャットセッションを開いただけでは再スキャンされない）。起動ログの `エージェント種別発見: <name>` を確認する。
 5. 実際にチャットから、メインエージェントが `dispatch_agent(agent_type="<agent-name>", ...)` を正しく呼び出し、サブエージェントが意図した最終回答を返すことを確認する。
 

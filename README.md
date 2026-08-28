@@ -200,7 +200,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `check_script_job` / `stop_script_job` | 上記の安全上限超過フォールバック時のみ使う、ジョブの状況確認・強制終了。実行中ジョブへの連続 `check_script_job` 呼び出しは `[scripts].background_min_poll_interval_seconds` 未満の間隔だとサーバー側で拒否される |
 | `execute_python_code` | LLMが生成したPythonコードをその場で実行（要承認。`config.ini` で無効化可）。完了までブロックするため、タイムアウトに近い長時間実行が見込まれる場合は `execute_python_code_background` を使う。code内で `@N`（パスメモリ）を参照する場合は `AGENT_SRC_DIR` 環境変数経由で `path_memory.resolve()` を呼んで実パスへ展開する必要がある。実行前ガードにより `src/`・`app.py`・`config.ini`・`skills/` 等プロジェクトフォルダ配下への書き込み・削除・改名はブロックされる。書き込み先は、ユーザーが作業フォルダ（後述「作業ディレクトリの切り替え」参照）を指定していればそのフォルダ、未指定なら `default_workdir` 配下でも自セッション専用の一時領域 `_tmp_<name>` に限られる（`default_workdir` 直下への書き込みは、別セッションの誤動作を防ぐため許可しない） |
 | `execute_python_code_background` | `execute_python_code` と同じコードを起動する（要承認・`config.ini` での無効化・パスメモリ展開・プロジェクトフォルダ保護ガードは同様）。`run_script_background` と同じく完了まで進捗通知しながら待ち、状況確認・停止（安全上限超過時のみ）は共通の `check_script_job`/`stop_script_job` を使う |
-| `execute_python_code_readonly` | `execute_python_code` の読み取り専用版（ファイル書き込み不可、承認不要）。`explore`/`explore-websearch`/`planner` 等の読み取り専用サブエージェント種別（`agents/*.md` の `tools:`）にのみ付与され、メインエージェントは持たない |
+| `execute_python_code_readonly` | `execute_python_code` の読み取り専用版（ファイル書き込み不可、承認不要）。`explore`/`planner` 等の読み取り専用サブエージェント種別（`agents/*.md` の `tools:`）にのみ付与され、メインエージェントは持たない |
 | `write_scratch_note` | 調査中に分かった内容をスクラッチファイルへ追記する。計画未承認でも常に呼べ、書き込み先はツール自身が決めるため任意パスには書けない。トークン上限打ち切り時の引き継ぎ用途 |
 | `get_tool_source` | `run_script` がエラーになった際、原因調査用にスクリプトの絶対パスを返す（中身は返さない） |
 | `check_work_dir_status` | 現在の作業ディレクトリの実際のアクセス状況を確認する |
@@ -214,7 +214,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ。既定（`config.ini` の `[plan] require_planner_dispatch`）では、同一ターンで `dispatch_agent(agent_type="planner")` が完了していないと `create_plan` はエラーを返してブロックする（記憶・推測だけで steps を作らせず、専用サブエージェントに草案を作らせるため） |
 | `get_plan_status` / `lock_plan_mode` | 現在 Plan Mode（書き込み系ツールがブロックされたロック状態）か Edit Automatically（承認済み計画を実行できる状態）かを確認し、後者から前者へユーザー承認なしに手動で戻す |
 | `AskUserQuestion` / `ask_user_choice` | 会話継続に必要な追加情報をユーザーへ質問（`AskUserQuestion` は自由記述。`labels` 省略時は単一入力、指定時は複数項目をまとめて提示。`ask_user_choice` は選択肢形式で、表示される選択肢には常に「✏️ その他（自由入力）」「❌ キャンセル」が自動で追加される） |
-| `create_memory` / `update_memory` / `delete_memory` / `read_memory` / `search_memory` / `list_memories` | スレッドをまたぐ永続メモリー（`src/memory.py`）の保存・更新・削除・全文読込・検索・一覧。主エージェントは全6ツールを持つ。`dispatch_agent` のサブエージェントには種別ごとに絞って委譲し、`explore`/`explore-websearch` は読み込み系（`read_memory`/`search_memory`/`list_memories`）のみ、`worker` は全6ツール（フルアクセス）を持つ（`agents/*.md` の `tools:` 参照） |
+| `create_memory` / `update_memory` / `delete_memory` / `read_memory` / `search_memory` / `list_memories` | スレッドをまたぐ永続メモリー（`src/memory.py`）の保存・更新・削除・全文読込・検索・一覧。主エージェントは全6ツールを持つ。`dispatch_agent` のサブエージェントには種別ごとに絞って委譲し、`explore` は読み込み系（`read_memory`/`search_memory`/`list_memories`）のみ、`worker` は全6ツール（フルアクセス）を持つ（`agents/*.md` の `tools:` 参照） |
 | `help` | ユーザー向けヘルプ本文（`system_prompt/help.md`）をそのまま返す |
 
 `run_script`（`run_script_background` 含む）と `execute_python_code`（`execute_python_code_background`
@@ -327,7 +327,6 @@ Locohane/
 ├── agents/
 │   ├── README/AGENTS_README.md # エージェント種別定義（frontmatter）の書き方ガイド（*.mdスキャン時の警告を避けるためREADME/配下に退避）
 │   ├── explore.md           # 読み取り専用の汎用調査・オフィス文書/PDF調査エージェント種別
-│   ├── explore-websearch.md # explore + Web検索（web-searchスキルのsearch_web.py限定）が使える読み取り専用エージェント種別
 │   ├── planner.md           # create_planの前段で計画草案（steps候補＋detail_markdown）を作る設計専用の読み取り専用エージェント種別
 │   ├── worker.md            # 承認済み計画に沿って読取り→書込みを内部完結させる書き込み可能エージェント種別
 │   └── verifier.md          # 成果物検証用エージェント種別

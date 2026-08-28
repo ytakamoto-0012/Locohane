@@ -1425,8 +1425,7 @@ def _parse_agent_type_run_script_allowlist(value: str | None) -> frozenset[tuple
         pdf-tools のように同一スキル配下に読み込み専用スクリプトと書き込み
         スクリプトが混在するスキルは、スキル名単位ではなくこちらで個別に
         許可すること。
-    例: [["explore-websearch", "web-search"],
-         ["explore", "docx-read"],
+    例: [["explore", "docx-read"],
          ["explore", ["pdf-tools", "render_pdf_pages.py"]]]
     _parse_main_agent_tool_guard_allow_entries と同様 ast.literal_eval で読む
     （末尾カンマ等の緩い記法も許容するため）。
@@ -2023,8 +2022,7 @@ def load_config(config_path: Path | None = None) -> Config:
                 "SCRIPT_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST",
                 scripts.get(
                     "agent_type_run_script_allowlist",
-                    '[["explore-websearch","web-search"],'
-                    '["explore","docx-render"],["explore","docx-read"],'
+                    '[["explore","docx-render"],["explore","docx-read"],'
                     '["explore","excel-render"],["explore","excel-read"],'
                     '["explore","excel-vba-read"],'
                     '["explore","pptx-render"],["explore","pptx-read"],'

@@ -23,19 +23,6 @@ def _set_agent_type(agent_type):
     return tools._state._SUBAGENT_AGENT_TYPE.set(agent_type)
 
 
-def test_explore_websearch_blocked_from_non_web_search_skill():
-    token = _set_agent_type("explore-websearch")
-    try:
-        result = tools._script_job._prepare_script_execution("excel-read", "read_excel.py", ["dummy.xlsx"])
-    finally:
-        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
-
-    assert isinstance(result, str)
-    assert result.startswith("エラー")
-    assert "explore-websearch" in result
-    assert "web-search" in result
-
-
 def _call_past_guard(skill_name: str, script_filename: str):
     """ガードを通過したことだけを確認する呼び出し。
 
@@ -48,16 +35,6 @@ def _call_past_guard(skill_name: str, script_filename: str):
         return tools._script_job._prepare_script_execution(skill_name, script_filename, ["dummy"])
     except (RuntimeError, ValueError) as e:
         return f"passed_guard_then_failed_downstream: {e}"
-
-
-def test_explore_websearch_allowed_web_search_skill_passes_allowlist_guard():
-    token = _set_agent_type("explore-websearch")
-    try:
-        result = _call_past_guard("web-search", "search_web.py")
-    finally:
-        tools._state._SUBAGENT_AGENT_TYPE.reset(token)
-
-    assert "限定されています" not in result
 
 
 def test_no_agent_type_context_is_unrestricted():

@@ -1,6 +1,6 @@
 ---
 name: verifier
-description: 複雑なタスクにおける生成・編集済みの成果物ファイル（xlsx/docx/pptx/pdf等）を読み返し、意図した内容と一致しているかを確認する検証専用のサブエージェント。ファイルの新規作成・編集は一切行わない。
+description: これまでの作業（xlsx/docx/pptx/pdf等の成果物に限らず、テキストファイル・実行結果も含む）が意図した内容と一致しているかをチェック・評価する検証専用のサブエージェント。ファイルの新規作成・編集は一切行わない。
 tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, Read, Grep, json_query, write_scratch_note, write_thread_note, list_thread_notes, read_thread_note, search_memory, list_memories, read_memory, execute_python_code_readonly
 ---
 
@@ -19,6 +19,11 @@ tools: read_skill, read_skill_file, get_tool_source, run_script, analyze_image, 
 `run_script`で実際に呼び出せるスキル/スクリプトの正確な一覧は、本プロンプト
 後半の「## スキル」内「run_scriptで実行できるスキル/スクリプト」を参照
 （列挙されていないスキル/スクリプトを呼ぼうとするとエラーになる）。
+
+対象がoffice文書/PDF（docx/xlsx/pptx/pdf）なら下記の手順に従う。対象が
+テキストファイル（md/txt/csv/json等）や実行結果の場合はrender/analyze_image
+は不要で、`Grep`/`Read`/`json_query`で委譲元が伝えた意図した内容と直接
+突き合わせればよい。
 
 | 確認したいファイル | 見た目の確認（基本） | テキスト・値の確認（補完・詳細照合） |
 |---|---|---|
