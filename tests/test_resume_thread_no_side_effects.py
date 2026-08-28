@@ -56,7 +56,7 @@ async def test_resuming_a_thread_does_not_change_its_sort_position(tmp_path, mon
         items_before, _ = await thread_store.list_threads_summary(conn, "anonymous", limit=10)
         assert [i["id"] for i in items_before] == ["t2", "t1"]
 
-        layer = thread_store.ChatThreadDataLayer(conn)
+        layer = thread_store.ChatThreadDataLayer(conn, tmp_path / "elements")
         monkeypatch.setattr(app, "_thread_data_layer", layer)
         monkeypatch.setattr(app, "_thread_store_conn", conn)
         monkeypatch.setattr(cl_data, "_data_layer", layer)
@@ -139,7 +139,7 @@ async def test_patch_prevents_disconnect_from_bumping_thread_order(tmp_path, mon
         await thread_store.save_thread(conn, "t1", owner="anonymous", name="first")
         await thread_store.save_thread(conn, "t2", owner="anonymous", name="second")
 
-        layer = thread_store.ChatThreadDataLayer(conn)
+        layer = thread_store.ChatThreadDataLayer(conn, tmp_path / "elements")
         monkeypatch.setattr(app, "_thread_data_layer", layer)
         monkeypatch.setattr(app, "_thread_store_conn", conn)
         monkeypatch.setattr(cl_data, "_data_layer", layer)

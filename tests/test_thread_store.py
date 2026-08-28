@@ -225,7 +225,7 @@ async def test_cleanup_old_threads_deletes_expired_and_cascades(tmp_path) -> Non
 async def test_data_layer_create_step_creates_thread_stub_and_no_op_stubs_are_safe(tmp_path) -> None:
     conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
     try:
-        dl = thread_store.ChatThreadDataLayer(conn)
+        dl = thread_store.ChatThreadDataLayer(conn, tmp_path / "elements")
         _activate_fake_session(has_first_interaction=True)
 
         # create_step より前に update_thread が走らなくても、FK制約を満たす
@@ -270,7 +270,7 @@ async def test_create_step_before_first_user_message_is_not_persisted(tmp_path) 
     """
     conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
     try:
-        dl = thread_store.ChatThreadDataLayer(conn)
+        dl = thread_store.ChatThreadDataLayer(conn, tmp_path / "elements")
         _activate_fake_session(has_first_interaction=False)
 
         # on_chat_start 相当（ユーザーはまだ何も送信していない）。
@@ -303,7 +303,7 @@ async def test_create_step_skips_ephemeral_progress_steps(tmp_path) -> None:
     """
     conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
     try:
-        dl = thread_store.ChatThreadDataLayer(conn)
+        dl = thread_store.ChatThreadDataLayer(conn, tmp_path / "elements")
         _activate_fake_session(has_first_interaction=True)
 
         await dl.create_step({"id": "s1", "threadId": "th1", "createdAt": "2024-01-01T00:00:00"})

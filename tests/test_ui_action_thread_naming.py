@@ -128,7 +128,7 @@ async def test_real_first_message_still_names_the_thread_with_real_data_layer(tm
     app._patch_chainlit_ignore_ui_action_first_interaction()
     conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
     try:
-        layer = thread_store.ChatThreadDataLayer(conn)
+        layer = thread_store.ChatThreadDataLayer(conn, tmp_path / "elements")
         monkeypatch.setattr(cl_data, "_data_layer", layer)
         monkeypatch.setattr(cl_data, "_data_layer_initialized", True)
 
@@ -173,7 +173,7 @@ async def test_ui_action_click_then_real_first_message_still_names_thread(tmp_pa
     app._patch_chainlit_ignore_ui_action_first_interaction()
     conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
     try:
-        layer = thread_store.ChatThreadDataLayer(conn)
+        layer = thread_store.ChatThreadDataLayer(conn, tmp_path / "elements")
         monkeypatch.setattr(cl_data, "_data_layer", layer)
         monkeypatch.setattr(cl_data, "_data_layer_initialized", True)
 
