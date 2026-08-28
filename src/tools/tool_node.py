@@ -270,13 +270,21 @@ def filter_main_agent_tools(tools: list[BaseTool], config) -> list[BaseTool]:
         max_calls≠0 で登録されているツールのみに絞ったリスト。
         run_script/run_script_background は裸のツール名としては登録しない
         運用（config.ini 参照）のため、[skill_name, script_filename] ペアの
-        エントリが1件でも max_calls≠0 で登録されていれば残す（個別スキルの
-        可否は _guard_main_agent_tool_limit が呼び出し時に判定する）。
+        エントリ（script_filenameが空文字列でないもの）が1件でも max_calls≠0
+        で登録されていれば残す（個別スキルの可否は _guard_main_agent_tool_limit
+        が呼び出し時に判定する）。[skill_name, ""] は scripts/を持たないスキルを
+        {{skills}} 一覧へ表示するためだけのダミーエントリ（src/skills.py の
+        is_skill_directly_runnable 参照）で、run_script/run_script_background の
+        args.script_filename と一致することが無いため、ここではカウントしない
+        （このエントリだけしか無い場合に run_script ツール自体を無意味にbindして
+        しまわないようにするため）。
     """
     if not config.main_agent_tool_guard_enabled:
         return tools
     entries_by_key = dict(config.main_agent_tool_guard_allow_entries)
-    run_script_allowed = any(isinstance(key, tuple) and max_calls != 0 for key, max_calls in entries_by_key.items())
+    run_script_allowed = any(
+        isinstance(key, tuple) and key[1] != "" and max_calls != 0 for key, max_calls in entries_by_key.items()
+    )
     filtered = []
     for t in tools:
         if t.name in ("run_script", "run_script_background"):

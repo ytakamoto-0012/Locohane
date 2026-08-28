@@ -246,18 +246,24 @@ def render_skills_block(skills: list[Skill]) -> str:
 
 
 def is_skill_directly_runnable(skill: Skill, config: "Config") -> bool:
-    """メインエージェントがそのスキルを直接（run_script経由で）実行できるか。
+    """メインエージェントがそのスキルを{{skills}}一覧上「直接扱える」とみなすか。
 
-    skill.has_scripts が False（SKILL.md + referencesのみ等、scripts/を持たない
-    スキル）は run_script の対象自体が無いため、allow_entries の登録有無に
-    関わらず常に True を返す（read_skill/read_skill_file だけで完結し、両ツール
-    とも main_agent_tool_guard.allow_entries に常時登録されているため、
-    メインエージェントは支障なくアクセスできる）。
+    [main_agent_tool_guard].allow_entries に [skill_name, script_filename] の
+    ペアが1件も max_calls≠0 で登録されていなければ False（未登録は常に除外する
+    ホワイトリスト方式）。
 
-    has_scripts が True のスキルは、[main_agent_tool_guard].allow_entries に
-    [skill_name, script_filename] のペアが1件も max_calls≠0 で登録されて
-    いなければ False（run_script/run_script_background を直接呼んでも
-    src/tools/tool_node.py の _guard_main_agent_tool_limit に常に拒否される）。
+    scripts/にrun_script実行対象の*.pyを持つスキル（skill.has_scripts=True）は、
+    script_filename に実在のファイル名を登録する（run_script/run_script_background
+    を直接呼んでも1件も許可されていなければ src/tools/tool_node.py の
+    _guard_main_agent_tool_limit に常に拒否される）。
+
+    scripts/を持たないスキル（skill.has_scripts=False、SKILL.md + references
+    のみ等）は run_script の対象自体が無いため、script_filename に空文字列
+    "" を指定した [skill_name, ""] のダミーエントリで登録する。空文字列は
+    run_script/run_script_background の実際の args.script_filename とは
+    絶対に一致しないため、このエントリは {{skills}} 一覧への表示可否のみに
+    効き、実行許可には影響しない（filter_main_agent_tools() の
+    run_script_allowed 判定も同様に空文字列エントリを無視する）。
 
     filter_skills_for_main_agent_guard() / render_skills_block_with_hint() の
     双方が本関数の判定結果を使う。
@@ -267,10 +273,8 @@ def is_skill_directly_runnable(skill: Skill, config: "Config") -> bool:
         config: main_agent_tool_guard_allow_entries を持つ Config。
 
     Returns:
-        直接実行できるなら True。
+        {{skills}}一覧上「直接扱える」とみなすなら True。
     """
-    if not skill.has_scripts:
-        return True
     allowed = {
         key[0]
         for key, max_calls in config.main_agent_tool_guard_allow_entries
@@ -290,7 +294,8 @@ def filter_skills_for_main_agent_guard(skills: list[Skill], config: "Config") ->
     `{{skills}}` へ全件載せたままだと「実行できる」と誤認して試み、拒否→
     dispatch_agentへの再委譲を促されるだけの無駄な往復が発生する
     （src/tools/tool_node.py の filter_main_agent_tools と同じ理由づけ）。
-    scriptsを持たないスキル（is_skill_directly_runnable参照）は常に残す。
+    scriptsを持たないスキルも、allow_entries に [skill_name, ""] のダミー
+    エントリを登録していなければ同様に除外する（is_skill_directly_runnable参照）。
 
     dispatch_agent配下のサブエージェントには本ガードと無関係にフルの
     `{{skills}}` が渡る（app.py の agent_type_defs 差し込み参照）ため、ここで

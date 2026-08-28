@@ -4,10 +4,10 @@ main_agent_tool_guard 有効時、[skill_name, script_filename] ペアが
 max_calls≠0 で許可されていないスキルは、メインエージェントの {{skills}} から
 除外する（run_script/run_script_backgroundを直接呼んでも常に拒否されるため、
 見せたままだと無駄な往復が発生する。src/tools/tool_node.py の
-filter_main_agent_tools と同じ理由づけ）。ただし scripts/ を持たない
-SKILL.mdのみのスキル（has_scripts=False）は、run_script自体の対象が無く
-read_skill/read_skill_file だけで完結するため、allow_entries登録の有無に
-関わらず常に一覧へ残す。
+filter_main_agent_tools と同じ理由づけ）。scripts/ を持たない SKILL.mdのみの
+スキル（has_scripts=False）も同じホワイトリスト方式で、script_filenameを
+空文字列にした [skill_name, ""] のダミーエントリを登録しない限り一覧から
+除外される（run_script自体の対象は無いため実行許可には影響しない）。
 """
 
 from pathlib import Path
@@ -58,10 +58,20 @@ def test_skill_with_allowed_pair_is_kept() -> None:
     assert [s.name for s in result] == ["pdf-tools"]
 
 
-def test_skill_without_scripts_is_kept_even_without_allowed_pair() -> None:
-    """scripts/を持たないSKILL.mdのみのスキルは、allow_entries未登録でも一覧に残す。"""
+def test_skill_without_scripts_and_without_dummy_entry_is_dropped() -> None:
+    """scripts/を持たないSKILL.mdのみのスキルも、ダミーエントリ未登録なら他と同様に除外する。"""
     skills = [_make_skill("pdf-tools"), _make_skill("excel-knowledge", has_scripts=False)]
     cfg = _make_cfg(entries=[("Glob", 1)])
+
+    result = filter_skills_for_main_agent_guard(skills, cfg)
+
+    assert [s.name for s in result] == []
+
+
+def test_skill_without_scripts_with_dummy_entry_is_kept() -> None:
+    """[skill_name, ""] のダミーエントリを登録すれば、scripts/を持たないスキルも一覧に残る。"""
+    skills = [_make_skill("pdf-tools"), _make_skill("excel-knowledge", has_scripts=False)]
+    cfg = _make_cfg(entries=[(("excel-knowledge", ""), -1)])
 
     result = filter_skills_for_main_agent_guard(skills, cfg)
 
@@ -74,7 +84,12 @@ def test_render_skills_block_with_hint_annotates_only_blocked_skills() -> None:
         _make_skill("excel-knowledge", has_scripts=False),
         _make_skill("web-search"),
     ]
-    cfg = _make_cfg(entries=[(("pdf-tools", "render_pdf_pages.py"), -1)])
+    cfg = _make_cfg(
+        entries=[
+            (("pdf-tools", "render_pdf_pages.py"), -1),
+            (("excel-knowledge", ""), -1),
+        ]
+    )
 
     block = render_skills_block_with_hint(skills, cfg)
     lines = block.splitlines()

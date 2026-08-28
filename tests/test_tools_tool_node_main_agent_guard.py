@@ -226,6 +226,18 @@ def test_filter_main_agent_tools_keeps_run_script_with_allowed_pair() -> None:
     assert {t.name for t in result} == {"run_script", "run_script_background"}
 
 
+def test_filter_main_agent_tools_ignores_skill_visibility_dummy_entry_for_run_script() -> None:
+    """[skill_name, ""]（scriptsを持たないスキルの一覧表示専用ダミーエントリ）は
+    run_script/run_script_background 自体のbind判定にはカウントしない
+    （このエントリしか無い場合にrun_scriptを無意味にbindしないようにするため）。"""
+    tools = _make_tools("run_script", "run_script_background", "Glob")
+    cfg = _make_cfg(entries=[("Glob", 1), (("excel-knowledge", ""), -1)])
+
+    result = tool_node.filter_main_agent_tools(tools, cfg)
+
+    assert {t.name for t in result} == {"Glob"}
+
+
 def test_list_blocked_tool_names_for_hint_guard_disabled_returns_empty() -> None:
     tools = _make_tools("Glob", "Read", "run_script")
     cfg = _make_cfg(entries=[], enabled=False)
