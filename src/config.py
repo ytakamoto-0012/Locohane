@@ -311,9 +311,17 @@ class Config:
             チェック間隔（時間）。起動時にも1回チェックする。
         chainlit_files_retention_days: Chainlit自身のセッションファイル
             ディレクトリ（`.files/<セッションID>/`。show_image・回答本文への
-            画像埋め込みが使う）の保持日数。ディレクトリ単位で削除する
-            （src/cleanup.py の cleanup_old_dirs 参照）。0以下で無効化。
+            画像埋め込みのライブ表示中のみが使う）の保持日数。ディレクトリ
+            単位で削除する（src/cleanup.py の cleanup_old_dirs 参照）。
+            0以下で無効化。
         chainlit_files_cleanup_interval_hours: 上記の自動削除チェック間隔
+            （時間）。起動時にも1回チェックする。
+        elements_dir: 添付ファイル・回答本文への画像埋め込みの永続化先
+            （スレッド再開・プロセス再起動後も表示するため。
+            src/thread_store.py の create_element/get_element、
+            app.py の _embed_local_images_as_session_urls 参照）。
+        elements_retention_days: 上記の保持日数。0以下で無効化。
+        elements_cleanup_interval_hours: 上記の自動削除チェック間隔
             （時間）。起動時にも1回チェックする。
         image_max_long_side_pixels: 画像をLLMへ渡す前に縮小する際の、長辺の
             ピクセル数の上限。0以下、または画像の長辺が既にこの値以下の
@@ -735,6 +743,11 @@ class Config:
     # --- Chainlitセッションファイルディレクトリ（.files/）の自動削除 ---
     chainlit_files_retention_days: int
     chainlit_files_cleanup_interval_hours: float
+
+    # --- 添付ファイル・埋め込み画像の永続化先（data/elements/）の自動削除 ---
+    elements_dir: Path
+    elements_retention_days: int
+    elements_cleanup_interval_hours: float
 
     # --- 画像をLLMへ渡す前の縮小 ---
     image_max_long_side_pixels: int
@@ -1714,6 +1727,7 @@ def load_config(config_path: Path | None = None) -> Config:
     paths = parser["paths"] if parser.has_section("paths") else {}
     uploads = parser["uploads"] if parser.has_section("uploads") else {}
     chainlit_files = parser["chainlit_files"] if parser.has_section("chainlit_files") else {}
+    elements_section = parser["elements"] if parser.has_section("elements") else {}
     images_section = parser["images"] if parser.has_section("images") else {}
     default_workdir_section = parser["default_workdir"] if parser.has_section("default_workdir") else {}
     path_memory = parser["path_memory"] if parser.has_section("path_memory") else {}
@@ -1862,6 +1876,14 @@ def load_config(config_path: Path | None = None) -> Config:
         chainlit_files_retention_days=int(os.getenv("CHAINLIT_FILES_RETENTION_DAYS", chainlit_files.get("retention_days", 7))),
         chainlit_files_cleanup_interval_hours=float(
             os.getenv("CHAINLIT_FILES_CLEANUP_INTERVAL_HOURS", chainlit_files.get("cleanup_interval_hours", 1))
+        ),
+        elements_dir=_resolve(
+            PROJECT_ROOT,
+            _sub_common_data_dir(os.getenv("ELEMENTS_DIR", elements_section.get("dir", "${common_data_dir}/elements")), common_data_dir),
+        ),
+        elements_retention_days=int(os.getenv("ELEMENTS_RETENTION_DAYS", elements_section.get("retention_days", 7))),
+        elements_cleanup_interval_hours=float(
+            os.getenv("ELEMENTS_CLEANUP_INTERVAL_HOURS", elements_section.get("cleanup_interval_hours", 1))
         ),
         image_max_long_side_pixels=int(os.getenv("IMAGE_MAX_LONG_SIDE_PIXELS", images_section.get("max_long_side_pixels", 0))),
         image_jpeg_quality=int(os.getenv("IMAGE_JPEG_QUALITY", images_section.get("jpeg_quality", 85))),
@@ -2294,6 +2316,7 @@ def load_config(config_path: Path | None = None) -> Config:
     cfg.checkpoint_db.parent.mkdir(parents=True, exist_ok=True)
     cfg.thread_store_db.parent.mkdir(parents=True, exist_ok=True)
     cfg.upload_dir.mkdir(parents=True, exist_ok=True)
+    cfg.elements_dir.mkdir(parents=True, exist_ok=True)
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     cfg.path_memory_dir.mkdir(parents=True, exist_ok=True)
     cfg.default_workdir.mkdir(parents=True, exist_ok=True)

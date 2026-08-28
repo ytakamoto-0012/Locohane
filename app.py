@@ -63,8 +63,9 @@ from langgraph.errors import GraphRecursionError
 
 from src.agent_types import render_agent_types_block, scan_agent_types
 from src.chat_log import append_turn, build_log_path, resolve_log_username
-from src.cleanup import cleanup_old_dirs, cleanup_old_files
+from src.cleanup import cleanup_old_dirs, cleanup_old_files, cleanup_old_files_in_subdirs
 from src.cleanup import run_cleanup_dirs_loop as cleanup_run_cleanup_dirs_loop
+from src.cleanup import run_cleanup_files_in_subdirs_loop as cleanup_run_cleanup_files_in_subdirs_loop
 from src.cleanup import run_cleanup_loop as cleanup_run_cleanup_loop
 from src.config import (
     expand_config_vars,
@@ -688,6 +689,7 @@ if _config.thread_store_enabled:
     from chainlit.auth import get_current_user as _cl_get_current_user
     from chainlit.server import app as _chainlit_asgi_app
     from fastapi import Depends, HTTPException
+    from fastapi.responses import FileResponse
     from pydantic import BaseModel
 
     # chainlit/server.py はモジュール読み込み時（import chainlit の時点で確定）に
@@ -844,6 +846,29 @@ if _config.thread_store_enabled:
             raise HTTPException(status_code=404, detail="Thread not found")
         return thread
 
+    @_chainlit_asgi_app.get("/locohane/elements/{element_id}")
+    async def _locohane_get_element_file(element_id: str, current_user=Depends(_cl_get_current_user)):
+        """永続化済みの添付ファイル・埋め込み画像の実体を配信する。
+
+        Chainlit公式の /project/file/<chainlit_key>?session_id=... はプロセスメモリ上の
+        一時マッピング依存で、スレッド再開・プロセス再起動後は参照が切れる
+        （thread_store.ChatThreadDataLayer.create_element / persist_element_file 参照）。
+        こちらは data/elements/ へ永続化した実ファイルを配信する。element_id から
+        thread_id を逆引きしてからでないと所有権確認ができないため、
+        「要素なし・ファイルなし・所有者不一致」をすべて404に統一する
+        （_assert_owns_thread と同じ、存在漏洩防止の方針）。
+        """
+        if _thread_store_conn is None:
+            raise HTTPException(status_code=404, detail="Element not found")
+        row = await thread_store.get_element_row(_thread_store_conn, element_id)
+        if row is None or not row.get("file_path"):
+            raise HTTPException(status_code=404, detail="Element not found")
+        await _assert_owns_thread(row["thread_id"], current_user)
+        path = Path(row["file_path"])
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Element not found")
+        return FileResponse(path, media_type=row.get("mime") or "application/octet-stream")
+
     @_chainlit_asgi_app.post("/locohane/threads/{thread_id}/stop")
     async def _locohane_stop_thread(thread_id: str, current_user=Depends(_cl_get_current_user)):
         """他セッション（このスレッドを開いただけの閲覧側）から生成を停止する。
@@ -948,7 +973,7 @@ async def _on_app_startup() -> None:
     global _thread_store_conn, _thread_data_layer
     if _config.thread_store_enabled:
         _thread_store_conn = await thread_store.init_db(_config.thread_store_db)
-        _thread_data_layer = ChatThreadDataLayer(_thread_store_conn)
+        _thread_data_layer = ChatThreadDataLayer(_thread_store_conn, _config.elements_dir)
         # 期限切れスレッドの起動時1回削除＋以降の定期削除（retention_days<=0で無効）。
         await thread_store.cleanup_old_threads(_thread_store_conn, _config.thread_store_retention_days)
         if _config.thread_store_retention_days > 0:
@@ -1592,6 +1617,19 @@ async def _setup() -> None:
                 CHAINLIT_FILES_DIRECTORY,
                 _config.chainlit_files_retention_days,
                 _config.chainlit_files_cleanup_interval_hours,
+            )
+        )
+
+    # 添付ファイル・回答本文への画像埋め込みの永続化先（data/elements/<thread_id>/）も
+    # 同様に日数ベースで自動削除する（src/thread_store.py の persist_element_file 参照）。
+    # スレッドIDごとのサブフォルダ構成のため cleanup_old_files_in_subdirs を使う。
+    cleanup_old_files_in_subdirs(_config.elements_dir, _config.elements_retention_days)
+    if _config.elements_retention_days > 0:
+        asyncio.create_task(
+            cleanup_run_cleanup_files_in_subdirs_loop(
+                _config.elements_dir,
+                _config.elements_retention_days,
+                _config.elements_cleanup_interval_hours,
             )
         )
 
@@ -2280,17 +2318,22 @@ _MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^()]+)\)")
 
 
 async def _embed_local_images_as_session_urls(text: str) -> str:
-    """回答本文中の `![alt](絶対パス)` を、Chainlitのセッションファイル配信URLへ差し替える。
+    """回答本文中の `![alt](絶対パス)` を、ブラウザから取得できるURLへ差し替える。
 
-    `show_image`（`cl.Image` 要素）が使っているのと同じ配信経路
-    （Chainlitがファイルをセッション専用ディレクトリ `.files/<session_id>/`
-    へコピーし、ブラウザは `/project/file/<id>?session_id=...` を通常の
-    HTTP GETで取りに行く。`chainlit/session.py` の `persist_file`、
-    `chainlit/server.py` の `get_file` 参照）を、回答本文中の画像記法にも
-    使う。data URL（base64）をテキストへ直接埋め込む方式は、メッセージ
-    サイズやMarkdownパーサーとの相性で表示が壊れることが実機検証で分かった
+    `data/elements/` への永続化配信（`/locohane/elements/{id}`、
+    `src/thread_store.py` の `persist_element_file` 参照）に統一している
+    （以前は Chainlit のセッションファイル配信 `/project/file/<id>?session_id=...`
+    を使っていたが、プロセスメモリ上の一時マッピング依存でプロセス再起動後に
+    リンク切れになっていた）。`[thread_store] enabled = false` で
+    `_thread_store_conn` が無い場合のみ、従来の `session.persist_file()` 経路へ
+    フォールバックする（スレッド一覧機能自体を無効化しているユーザーの
+    既存挙動を壊さないため。この場合は元々プロセス再起動をまたぐ再開機能も
+    無いので後退にはならない）。
+
+    data URL（base64）をテキストへ直接埋め込む方式は、メッセージサイズや
+    Markdownパーサーとの相性で表示が壊れることが実機検証で分かった
     （表の直前に空行が無いと表ごと `<li>` に飲み込まれ `<img src="">` に
-    なる等）ため、実績のあるこの経路に統一した。
+    なる等）ため採用していない。
 
     `http(s)://`・`data:`・`/`（Chainlitの `/public` 配下等）で始まる href、
     相対パス、実在しないパス、画像以外の拡張子はいずれもそのまま残す
@@ -2301,6 +2344,7 @@ async def _embed_local_images_as_session_urls(text: str) -> str:
         return text
 
     session = cl.context.session
+    thread_id = session.thread_id
     replacements: dict[str, str] = {}
     for m in matches:
         raw = m.group(0)
@@ -2318,11 +2362,30 @@ async def _embed_local_images_as_session_urls(text: str) -> str:
                 max_long_side=_config.image_inline_preview_max_long_side_pixels,
                 jpeg_quality=_config.image_inline_preview_jpeg_quality,
             )
-            file_ref = await session.persist_file(name=path.name, mime=mime, content=data)
+            if _thread_store_conn is not None and thread_id:
+                element_id = str(uuid.uuid4())
+                owner = thread_store.resolve_owner(session.user)
+                await thread_store.upsert_thread_stub(_thread_store_conn, thread_id, owner)
+                await thread_store.persist_element_file(
+                    _thread_store_conn,
+                    _config.elements_dir,
+                    thread_id=thread_id,
+                    element_id=element_id,
+                    name=path.name,
+                    content=data,
+                    mime=mime,
+                    for_id=None,
+                    kind="inline",
+                    extra_data={"id": element_id, "name": path.name, "mime": mime},
+                )
+                url = f"/locohane/elements/{element_id}"
+            else:
+                file_ref = await session.persist_file(name=path.name, mime=mime, content=data)
+                url = f"/project/file/{file_ref['id']}?session_id={session.id}"
         except Exception:
-            logging.getLogger(__name__).exception("画像のセッションファイル化に失敗しました: %s", path)
+            logging.getLogger(__name__).exception("画像の永続化に失敗しました: %s", path)
             continue
-        replacements[raw] = f"![{alt}](/project/file/{file_ref['id']}?session_id={session.id})"
+        replacements[raw] = f"![{alt}]({url})"
 
     if not replacements:
         return text

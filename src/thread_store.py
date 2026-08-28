@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -62,6 +63,18 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL,
   metadata_json TEXT NOT NULL DEFAULT '{}'
 );
+
+CREATE TABLE IF NOT EXISTS elements (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  for_id TEXT,
+  kind TEXT NOT NULL DEFAULT 'chainlit',
+  file_path TEXT,
+  mime TEXT,
+  created_at TEXT,
+  data_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_elements_thread ON elements(thread_id, created_at);
 """
 
 
@@ -234,6 +247,8 @@ async def get_thread_detail(conn: aiosqlite.Connection, thread_id: str) -> Threa
     step_rows = await steps_cursor.fetchall()
     steps = [json.loads(r[0]) for r in step_rows]
 
+    elements = await get_elements_for_thread(conn, thread_id)
+
     return {
         "id": thread_id,
         "createdAt": created_at,
@@ -243,7 +258,7 @@ async def get_thread_detail(conn: aiosqlite.Connection, thread_id: str) -> Threa
         "tags": json.loads(tags_json) if tags_json else None,
         "metadata": json.loads(metadata_json or "{}"),
         "steps": steps,
-        "elements": [],
+        "elements": elements,
     }
 
 
@@ -296,6 +311,142 @@ async def upsert_step_row(conn: aiosqlite.Connection, step_dict: dict) -> None:
 async def delete_step_row(conn: aiosqlite.Connection, step_id: str) -> None:
     await conn.execute("DELETE FROM steps WHERE id = ?", (step_id,))
     await conn.commit()
+
+
+def _sanitize_filename_component(name: str) -> str:
+    """ファイル名・ディレクトリ名の1要素として安全な文字列にする（パストラバーサル対策）。
+
+    LLMやツールが渡す element.name/thread_id はディレクトリ区切りや `..` を
+    含みうる。`Path(name).name` でディレクトリ部分を剥がし、それでも空・
+    `.`/`..` になる場合は固定のフォールバック名にする。
+    """
+    candidate = Path(name).name
+    if not candidate or candidate in (".", ".."):
+        return "file"
+    return candidate
+
+
+async def _read_element_bytes(element: Any) -> bytes | None:
+    """Chainlit Element からバイト列を取り出す（path優先、次点でcontent）。
+
+    element.url のみを持つ要素（外部URL）はローカルに実体が無いため None を返す
+    （呼び出し元はファイル保存をスキップし、ElementDict のメタデータだけ保存する）。
+    """
+    path = getattr(element, "path", None)
+    if path:
+        try:
+            return await asyncio.to_thread(Path(path).read_bytes)
+        except OSError:
+            logger.exception("要素ファイルの読み込みに失敗しました: path=%s", path)
+            return None
+    content = getattr(element, "content", None)
+    if isinstance(content, (bytes, bytearray)):
+        return bytes(content)
+    if isinstance(content, str):
+        return content.encode("utf-8")
+    return None
+
+
+async def persist_element_file(
+    conn: aiosqlite.Connection,
+    elements_dir: Path,
+    *,
+    thread_id: str,
+    element_id: str,
+    name: str,
+    content: bytes,
+    mime: str | None,
+    for_id: str | None,
+    kind: str,
+    extra_data: dict,
+) -> Path:
+    """要素の実体を data/elements/<thread_id>/<element_id>_<name> へ保存し、DB行をupsertする。
+
+    show_image/provide_download の添付（kind="chainlit"、
+    ChatThreadDataLayer.create_element 経由）と、回答本文への画像埋め込み
+    （kind="inline"、app.py の _embed_local_images_as_session_urls 経由）の
+    両方がこの関数を共有する。extra_data（ElementDict相当の辞書）の "url" を
+    配信エンドポイントのURLへ書き換えてから data_json として保存する
+    （Chainlit標準の chainlitKey はプロセスメモリ上の一時配信専用で
+    スレッド再開・プロセス再起動に耐えないため使わない）。
+
+    呼び出し元は事前に upsert_thread_stub 等でスレッド行の存在を保証しておくこと
+    （steps テーブルと同じ FK 制約のため）。
+    """
+    thread_dir = elements_dir / _sanitize_filename_component(thread_id)
+    dest = thread_dir / f"{element_id}_{_sanitize_filename_component(name)}"
+    await asyncio.to_thread(thread_dir.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(dest.write_bytes, content)
+
+    data = dict(extra_data)
+    data["url"] = f"/locohane/elements/{element_id}"
+    created_at = _now()
+    await conn.execute(
+        "INSERT INTO elements (id, thread_id, for_id, kind, file_path, mime, created_at, data_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET thread_id = excluded.thread_id, for_id = excluded.for_id, "
+        "kind = excluded.kind, file_path = excluded.file_path, mime = excluded.mime, "
+        "data_json = excluded.data_json",
+        (element_id, thread_id, for_id, kind, str(dest), mime, created_at, json.dumps(data, ensure_ascii=False)),
+    )
+    await conn.commit()
+    return dest
+
+
+async def upsert_element_meta(conn: aiosqlite.Connection, element_id: str, thread_id: str, for_id: str, data: dict) -> None:
+    """実ファイルを持たない要素（url指定など）のメタデータのみをDBへ保存する。"""
+    created_at = _now()
+    await conn.execute(
+        "INSERT INTO elements (id, thread_id, for_id, kind, file_path, mime, created_at, data_json) "
+        "VALUES (?, ?, ?, 'chainlit', NULL, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET thread_id = excluded.thread_id, for_id = excluded.for_id, "
+        "file_path = NULL, mime = excluded.mime, data_json = excluded.data_json",
+        (element_id, thread_id, for_id, data.get("mime"), created_at, json.dumps(data, ensure_ascii=False)),
+    )
+    await conn.commit()
+
+
+async def get_element_row(conn: aiosqlite.Connection, element_id: str, thread_id: str | None = None) -> dict | None:
+    """要素1件のメタデータを取得する（配信エンドポイント・get_element の両方が使う）。"""
+    if thread_id is not None:
+        cursor = await conn.execute(
+            "SELECT thread_id, file_path, mime, data_json FROM elements WHERE id = ? AND thread_id = ?",
+            (element_id, thread_id),
+        )
+    else:
+        cursor = await conn.execute(
+            "SELECT thread_id, file_path, mime, data_json FROM elements WHERE id = ?", (element_id,)
+        )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return {"thread_id": row[0], "file_path": row[1], "mime": row[2], "data": json.loads(row[3])}
+
+
+async def delete_element_row(conn: aiosqlite.Connection, element_id: str, thread_id: str | None = None) -> None:
+    """要素のDB行と実ファイルを削除する（ask_user_choice/ask_user_question のフォーム後片付け等）。"""
+    row = await get_element_row(conn, element_id, thread_id)
+    if row is None:
+        return
+    if thread_id is not None:
+        await conn.execute("DELETE FROM elements WHERE id = ? AND thread_id = ?", (element_id, thread_id))
+    else:
+        await conn.execute("DELETE FROM elements WHERE id = ?", (element_id,))
+    await conn.commit()
+    if row["file_path"]:
+        try:
+            Path(row["file_path"]).unlink(missing_ok=True)
+        except OSError:
+            logger.warning("要素ファイルの削除に失敗: %s", row["file_path"], exc_info=True)
+
+
+async def get_elements_for_thread(conn: aiosqlite.Connection, thread_id: str, kind: str = "chainlit") -> list[dict]:
+    """get_thread_detail が使う、スレッドに紐づく要素一覧（ElementDictのリスト）。"""
+    cursor = await conn.execute(
+        "SELECT data_json FROM elements WHERE thread_id = ? AND kind = ? ORDER BY created_at", (thread_id, kind)
+    )
+    rows = await cursor.fetchall()
+    return [json.loads(r[0]) for r in rows]
 
 
 async def get_user_row(conn: aiosqlite.Connection, identifier: str) -> PersistedUser | None:
@@ -358,8 +509,9 @@ async def run_cleanup_loop(conn: aiosqlite.Connection, retention_days: int, inte
 class ChatThreadDataLayer(BaseDataLayer):
     """Chainlit BaseDataLayer の薄いアダプタ。実処理は上記モジュール関数へ委譲する。"""
 
-    def __init__(self, conn: aiosqlite.Connection):
+    def __init__(self, conn: aiosqlite.Connection, elements_dir: Path):
         self._conn = conn
+        self._elements_dir = elements_dir
 
     async def get_user(self, identifier: str) -> PersistedUser | None:
         return await get_user_row(self._conn, identifier)
@@ -375,17 +527,55 @@ class ChatThreadDataLayer(BaseDataLayer):
 
     @queue_until_user_message()
     async def create_element(self, element) -> None:
-        # v1では添付ファイル（cl.Image/cl.File等）の永続化は行わない（no-op）。
-        # 再開したスレッドでは本文・Step構造は再現されるが、show_image/
-        # analyze_image/provide_download等の添付そのものは欠落する。
-        return None
+        """要素（cl.Image/cl.File/cl.CustomElement等）の実体を data/elements/ へ永続化する。
+
+        Chainlit本体（chainlit/element.py の Element._create）はこれを
+        asyncio.create_task() でfire-and-forget起動するだけで、ライブ表示自体は
+        別途 session.persist_file() が担う（chainlit_key経由）。つまりここでの
+        永続化はスレッド再開・プロセス再起動後の復元にのみ効き、送信直後の
+        ライブ表示には影響しない。
+
+        for_id が無い要素（Chainlit公式のTaskList等）は永続化しない
+        （chainlit公式実装のchainlit_data_layer.create_elementと同じガード。
+        本アプリはTaskListを使っていないが将来の事故防止として踏襲する）。
+        """
+        for_id = getattr(element, "for_id", None)
+        if not for_id:
+            return
+        thread_id = element.thread_id
+        if not thread_id:
+            return
+        await upsert_thread_stub(self._conn, thread_id, _current_owner())
+
+        content = await _read_element_bytes(element)
+        element_dict = element.to_dict()
+        if content is None:
+            # url のみを持つ要素（外部URL）等。ファイルは保存せずメタデータだけ残す。
+            await upsert_element_meta(self._conn, element.id, thread_id, for_id, element_dict)
+            return
+        try:
+            await persist_element_file(
+                self._conn,
+                self._elements_dir,
+                thread_id=thread_id,
+                element_id=element.id,
+                name=element.name,
+                content=content,
+                mime=element.mime,
+                for_id=for_id,
+                kind="chainlit",
+                extra_data=element_dict,
+            )
+        except OSError:
+            logger.exception("要素ファイルの永続化に失敗しました: id=%s", element.id)
 
     async def get_element(self, thread_id: str, element_id: str):
-        return None
+        row = await get_element_row(self._conn, element_id, thread_id)
+        return row["data"] if row else None
 
     @queue_until_user_message()
     async def delete_element(self, element_id: str, thread_id: str | None = None) -> None:
-        return None
+        await delete_element_row(self._conn, element_id, thread_id)
 
     @queue_until_user_message()
     async def create_step(self, step_dict: dict) -> None:

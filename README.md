@@ -399,7 +399,7 @@ Locohane/
 
 ## データの保存場所と手動削除の手順
 
-すべて `data/` 配下（`config.ini` の `[paths]`/`[uploads]`/`[log]`/`[default_workdir]` 等の `dir` 系キーで変更可）。`data/` は `.gitignore` 済み。保存先ルートをまとめて変更したい場合は、各キーを個別に書き換える代わりに `[paths] common_data_dir`（既定 `./data`）だけを変更すればよい（対応するキーの値は `${common_data_dir}` を参照する形で書かれている）。
+すべて `data/` 配下（`config.ini` の `[paths]`/`[uploads]`/`[elements]`/`[log]`/`[default_workdir]` 等の `dir` 系キーで変更可）。`data/` は `.gitignore` 済み。保存先ルートをまとめて変更したい場合は、各キーを個別に書き換える代わりに `[paths] common_data_dir`（既定 `./data`）だけを変更すればよい（対応するキーの値は `${common_data_dir}` を参照する形で書かれている）。
 
 | パス | 中身 | 削除してよいタイミング | 削除方法 |
 |------|------|------------------------|----------|
@@ -410,13 +410,16 @@ Locohane/
 | `data/memory/` | 永続メモリー（`user`/`feedback`/`project`/`reference` サブフォルダ＋`MEMORY.md`索引） | 蓄積した記憶が不要になったとき | フォルダ内を削除（`MEMORY.md`は次回保存時に再生成される） |
 | `data/plans/` | `create_plan` が `detail_markdown` 引数を渡した場合の詳細計画Markdown（`[paths] plans_dir`） | 古い計画が不要になったとき | フォルダ内を削除 |
 | `data/temp/_tmp_<作成時刻>_<thread_id>/` | `execute_python_code`/`run_script` の中間生成物・`write_scratch_note`/`write_thread_note` の書き出し先。自セッション専用（`[default_workdir]` 参照）。フォルダ名先頭の作成時刻（ミリ秒まで）はファイラー上で作成順に並べるためのもの | セッション終了後、不要になったとき | フォルダ内を削除（`[default_workdir] retention_days`/`cleanup_interval_hours` により自動削除もされる） |
-| `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（`show_image`・回答本文への画像埋め込みが使う。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
+| `data/elements/<thread_id>/` | 添付ファイル（`show_image`/`provide_download`等）・回答本文への画像埋め込みの永続化先。スレッド再開・プロセス再起動後も表示できるようここへ実体をコピー保存する（`[elements]`参照、`src/thread_store.py`） | 添付ファイルが不要になったとき | フォルダ内を削除 |
+| `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（送信直後のライブ表示にのみ使う一時配信。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
 
 `data/uploads/` は `config.ini` の `[uploads] retention_days`（既定7日）を過ぎたファイルを
 `cleanup_interval_hours`（既定1時間）おきに自動削除する。`retention_days` を0以下にすると
-自動削除は無効化される。`.files/` も `[chainlit_files] retention_days`（既定7日）・
-`cleanup_interval_hours`（既定1時間）で同様に自動削除される（Chainlit自身のパス管理下に
-あるため `dir` キーは無い。ディレクトリ単位＝セッションIDごとに削除する点が他と異なる）。
+自動削除は無効化される。`data/elements/` も `[elements] retention_days`（既定7日）・
+`cleanup_interval_hours`（既定1時間）で同様に自動削除される。`.files/` も `[chainlit_files]
+retention_days`（既定7日）・`cleanup_interval_hours`（既定1時間）で同様に自動削除される
+（Chainlit自身のパス管理下にあるため `dir` キーは無い。ディレクトリ単位＝セッションIDごとに
+削除する点が他と異なる）。
 
 手動全削除（PowerShell / cmd、アプリ停止中に実行）:
 
@@ -801,6 +804,9 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[uploads]` | `cleanup_interval_hours` | 自動削除チェックの実行間隔（時間） | `UPLOAD_CLEANUP_INTERVAL_HOURS` |
 | `[chainlit_files]` | `retention_days` | Chainlit自身のセッションファイルディレクトリ（`.files/<セッションID>/`）の保持日数（0以下で自動削除無効）。ディレクトリ単位で削除 | `CHAINLIT_FILES_RETENTION_DAYS` |
 | `[chainlit_files]` | `cleanup_interval_hours` | 自動削除チェックの実行間隔（時間） | `CHAINLIT_FILES_CLEANUP_INTERVAL_HOURS` |
+| `[elements]` | `dir` | 添付ファイル・回答本文への画像埋め込みの永続化先（スレッド再開・プロセス再起動後も表示するため） | `ELEMENTS_DIR` |
+| `[elements]` | `retention_days` | 上記の保持日数（0以下で自動削除無効） | `ELEMENTS_RETENTION_DAYS` |
+| `[elements]` | `cleanup_interval_hours` | 自動削除チェックの実行間隔（時間） | `ELEMENTS_CLEANUP_INTERVAL_HOURS` |
 | `[images]` | `max_long_side_pixels` | LLMへ渡す前に画像を縮小する長辺ピクセル数の上限（`0`で縮小なし） | `IMAGE_MAX_LONG_SIDE_PIXELS` |
 | `[images]` | `jpeg_quality` | 縮小後に再エンコードするJPEG品質（1-95） | `IMAGE_JPEG_QUALITY` |
 | `[images]` | `inline_preview_max_long_side_pixels` | 回答本文（Markdownテーブルのセル等）へ直接埋め込む画像プレビューの長辺ピクセル数の上限。`show_image`と同じセッションファイル配信経路で渡すためVision向け設定より小さくても差し支えなく、表示帯域・ディスク使用量を抑える目的で別に小さい値を使う | `IMAGE_INLINE_PREVIEW_MAX_LONG_SIDE_PIXELS` |
@@ -965,9 +971,13 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
   `app.py` の `_patch_chainlit_anonymous_resume()` が、匿名モード時のみ
   `chainlit.socket.resume_thread` をモジュール関数単位で差し替え、再開時に
   一時的な `anonymous` ユーザーを補ってから元の実装を呼ぶ。
-- **v1のスコープ外**: 添付ファイル（`show_image`/`analyze_image`/
-  `provide_download` 等）は再開したスレッドの過去メッセージ内では表示が
-  欠落する（本文・ツール呼び出し履歴は問題なく再現される）。
+- **添付ファイル・埋め込み画像の永続化**: `show_image`/`provide_download` 等の
+  添付ファイル、および回答本文へ直接埋め込まれた画像は、`data/elements/`
+  （`[elements]`参照）へ実体をコピー保存し、再開したスレッドやプロセス再起動後も
+  表示できる（`src/thread_store.py` の `create_element`/`get_element`/
+  `delete_element`、`app.py` の `_embed_local_images_as_session_urls`）。ただし
+  `analyze_image`（LLM自身が画像を解析するだけでチャットUIへは表示しない）は
+  元々表示対象外のため、この永続化とは無関係。
 
 ---
 
