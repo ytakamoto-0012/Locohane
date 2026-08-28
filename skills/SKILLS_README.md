@@ -270,6 +270,96 @@ def _exec_tmp_dir(category: str | None = None) -> Path:
 インライン実装のまま運用されている。`path_memory.exec_tmp_dir()` と処理内容は
 同一だが、依存を持たせない意図で意図的に重複させている）。
 
+### 4-7. カスタムスキルへの path_memory（`@N`）実装方法と、`@N` が実パスへ変換される場所
+
+`path_memory` は、Read/Glob/Grep 等が返す長い絶対パスに短い数値インデックス
+`@N` を割り当てて記憶し、以降のツール呼び出しでは `@N` だけ渡せば実パスへ
+解決できるようにする仕組み（`src/path_memory.py`）。低パラメータモデルが
+長いパス文字列を複数回のツール呼び出しにまたがって正確に再生成できず
+タイプミスを頻発させる問題への対策であり、カスタムスキルが生成・更新した
+ファイルも同じ仕組みに乗せることで、LLMが以後そのファイルを扱うツール
+呼び出し（`run_script` の次回呼び出しや `analyze_image` 等）で `@N` を
+使い回せるようになる。
+
+#### 4-7-1. スクリプト側の実装: `register_output_path()`
+
+`skills/office_shared/excel_common.py` や `skills/pdf-tools/scripts/_common.py`
+に実装済みの以下のパターンを、新しいスキルの `scripts/` 配下にも**そのまま
+コピーして使う**（各スキルの共通モジュールへ意図的に重複実装されている。
+理由は4-6節の互換性の注意と同じ — `src/path_memory.py` への import
+依存を避け、Locohane以外の環境でも単体で動く可搬性を保つため）:
+
+```python
+def register_output_path(path, description: str | None = None) -> dict[str, str] | None:
+    """生成/更新したファイルをパスメモリーへ登録し、{"@N": 絶対パス} を返す。"""
+    src_dir = os.environ.get("AGENT_SRC_DIR")
+    if not src_dir:
+        return None
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+    try:
+        import path_memory
+    except ImportError:
+        return None
+    thread_id, pm_dir, max_entries = path_memory.env_params()
+    abs_path = str(Path(path).resolve())
+    idx = path_memory.register(thread_id, abs_path, pm_dir, max_entries, description=description)
+    if idx is None:
+        return None
+    return {f"@{idx}": abs_path}
+```
+
+- `AGENT_SRC_DIR`（`run_script` が常にサブプロセスへ注入する。4-2参照）経由で
+  `src/path_memory.py` を import する。未設定・import失敗時は例外を出さず
+  `None` を返す（run_script以外から直接実行された場合でもスクリプト自体を
+  失敗させないフェイルオープン）。
+- `path_memory.env_params()` が環境変数（`AGENT_THREAD_ID` /
+  `AGENT_PATH_MEMORY_DIR` / `AGENT_PATH_MEMORY_MAX_ENTRIES`。いずれも
+  `_subprocess_env()` が注入）から `(thread_id, path_memory_dir, max_entries)`
+  を読む。
+- 正常終了時のJSON出力（4-1〜4-3の規約）に、`output_path`（4-4）とは別に
+  `path_memory` キーとして戻り値をそのまま含める:
+
+  ```json
+  {"output_path": "C:\\foo\\out.xlsx", "path_memory": {"@12": "C:\\foo\\out.xlsx"}}
+  ```
+
+  `SKILL.md` の本文には、後続のツール呼び出し（次回の `run_script` や
+  `analyze_image` 等）でこのファイルを再度参照する必要がある場合、絶対パス
+  ではなく `path_memory` の `@N` を使うようLLMへ指示しておく。
+
+#### 4-7-2. `@N` が実パスへ変換される場所（呼び出し側の変換であり、スクリプト側は関与しない）
+
+**重要: `@N` はスキルの `scripts/` 配下のスクリプトに渡る前に、ツール実装側で
+既に実パスへ解決済みになる。** スクリプト自身が `@N` という文字列を受け取って
+自分でパースする必要は無い（＝解決するのはLLM自身でも `register_output_path()`
+でもなく、`run_script` 等のツール実装コード）。
+
+- **`run_script(script_args=[...])`**: `src/tools/_script_job.py` の
+  `_resolve_run_script_command()` が、サブプロセス起動前に `script_args` の
+  各要素を `_resolve_path_memory_token()`（`src/tools/_path_memory_helpers.py`）
+  に通し、`@N` 形式の要素だけを実パスへ置き換える。つまり `scripts/xxx.py`
+  が `sys.argv` で受け取る時点では既に生の絶対パス文字列になっている。
+  未登録の `@N` を渡した場合はスクリプトを起動する前にエラー文字列を返す
+  （スクリプトは実行されない）。
+- **`analyze_image(relative_path=...)`**: `src/tools/analyze_image.py` が
+  同じ `_resolve_path_memory_token()` を呼び出し内で直接使う。
+- **`dispatch_agent(task=...)` のような自由記述テキスト中の `@N`**:
+  文字列全体が `@N` 単体とは限らないため、正規表現で本文中の `@N` を検出して
+  置換する `_resolve_path_memory_tokens_in_text()` を使う（未登録分は
+  エラーにせず `@N` のまま残す）。
+- **`execute_python_code(code=...)` の `code` 文字列中の `@N` は自動解決
+  されない**（コード文字列は自由記述のPythonソースであり、どの部分が
+  パス引数かをツール側は判別できないため）。この場合はLLM自身が生成する
+  コードの中で `path_memory.resolve(thread_id, "@N", Path(pm_dir))` を
+  明示的に呼ぶ必要がある（`execute_python_code.py` のdocstring参照）。
+
+まとめると、**`run_script`/`analyze_image` に渡す引数としての `@N` は
+ツール実装側が呼び出し前に解決するため、カスタムスキルの `scripts/` 配下の
+スクリプトを書く際に `@N` の解決コードを自前で書く必要は無い**。書く必要が
+あるのは「生成したファイルを `@N` として登録する」`register_output_path()`
+（4-7-1）の方だけである。
+
 ## 5. 新しいスキルを追加する手順
 
 1. `skills/<skill-name>/SKILL.md` を作成（frontmatter必須、`name` はディレクトリ名と一致）。
