@@ -27,16 +27,21 @@
   Tool Usage Guidelines）: `Glob`/`Grep`/`Read` の結果に短い参照番号 `@N`
   を自動付与し、LLM が長い絶対パスを自分で組み立て直して失敗を繰り返すことを防ぐ。
 - **ループ検知・ガード・リトライ**（`config.ini` の `[thinking_loop_guard]`、
-  `src/llm.py` の `ChatLlamaCpp`/`ThinkingLoopDetected`）: 応答が反復ループに
+  `src/llm/chat_model.py` の `ChatLlamaCpp`、`src/llm/loop_guard.py` の
+  `ThinkingLoopDetected`）: 応答が反復ループに
   陥ったことを検知してナッジメッセージを注入・自動リトライする。上限を超えても
   フリーズしないよう、`app.py` 側で打ち切りメッセージを出して終了する。
-- **glob 機能の拡張**（`src/tools.py` の `Glob`、ロジックは `src/file_tools.py`）:
+- **glob 機能の拡張**（`src/tools/glob_tool.py` の `Glob`、共通ロジックは
+  `src/tools/_file_tools_common.py`）:
   通常の glob 結果に加え、一致件数・ディレクトリ一覧・パスメモリー参照を返し、
   LLM が探索範囲を自己修正しやすくする。
-- **read-only 権限境界と explore サブエージェントへの強制委譲**（`src/tools.py`
+- **read-only 権限境界と explore サブエージェントへの強制委譲**（`src/tools/registry.py`
   の `_SUBAGENT_TOOLS`、`agents/explore.md`、`system_prompt.md` の
   Task Delegation）: 探索作業を読み取り専用のサブエージェントへ切り出し、
-  リクエスト1回あたりのトークン使用量を分散させて安定化する。
+  リクエスト1回あたりのトークン使用量を分散させて安定化する。加えて
+  `config.ini` の `[main_agent_tool_guard]` が、メインエージェント自身による
+  `Read`/`Grep`/`analyze_image` 等トークン消費の大きい重量系ツール・スキル
+  スクリプトの直接呼び出しをホワイトリストで制限し、委譲を事実上強制する。
 - **メインエージェントのトークン量上限設計**（`agents/worker.md`、
   `src/main_token_guard.py`、`src/context_trim.py`、`config.ini` の
   `[graph] token_guard_*`）: メインエージェントは司令塔であり、不安定化すると
@@ -52,7 +57,7 @@
   ことで、打ち切り時も委譲元へファイルのパスだけ引き継げば続きを判断できる。
   加えて `context_trim` による切り詰めと `main_token_guard` による引継ぎ
   プロンプト自動生成で多重に補強している。
-- **bash/npm 相当のツールを持たせない設計**（`src/tools.py` の `run_script`
+- **bash/npm 相当のツールを持たせない設計**（`src/tools/` の `run_script`
   系ツール、`create_plan`/`approve_plan`、`_GUARD_BLOCKED_CMDS`）: 低パラメータ
   モデルに任意コマンド実行を許すと暴走・誤操作のリスクが高いため、汎用シェル・
   bash・npm に相当するツールは一切公開しない。コマンド実行はスキル配下に
@@ -101,7 +106,7 @@
                  └───┬───────────────────────────┬──────────────┘
                      │ モデル呼び出し             │ ツール実行
        ┌─────────────▼───────────┐   ┌───────────▼──────────────────────┐
-       │ ChatOpenAI              │   │ src/tools.py (36ツール)             │
+       │ ChatOpenAI              │   │ src/tools/ (39ツール)               │
        │  → llama-server /v1     │   │  read_skill / read_skill_file /    │
        │  (OpenAI 互換)          │   │  run_script / execute_python_code /│
        └─────────────────────────┘   │  get_tool_source / check_work_dir_status /│
@@ -152,8 +157,8 @@
 | 段階 | 内容 | 実装 |
 |------|------|------|
 | 1. Discovery | 起動時に各 `SKILL.md` の frontmatter（name/description）のみ注入 | `src/skills.py` |
-| 2. Read | LLM がスキルを選び、`read_skill` で本文全体を読む | `src/tools.py` の `read_skill` |
-| 3. Execute | 本文の指示に従い `read_skill_file`/`run_script` で必要時のみ読む・実行 | `src/tools.py` の `read_skill_file`/`run_script` |
+| 2. Read | LLM がスキルを選び、`read_skill` で本文全体を読む | `src/tools/read_skill.py` |
+| 3. Execute | 本文の指示に従い `read_skill_file`/`run_script` で必要時のみ読む・実行 | `src/tools/read_skill_file.py`/`src/tools/run_script.py` |
 
 スキル読み込みは **すべて LangGraph のツールコール** として実装しており、グラフのトレースに乗り
 Chainlit 側で「今このスキルを読んでいます」等のステップとして可視化される。
@@ -169,14 +174,14 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 方式（プロンプトベース）では**ない**。OpenAI 互換 API の `tools` パラメータとして
 リクエストのたびに構造化データで送信する方式を取る。
 
-1. 各ツールは `src/tools.py` で LangChain の `@tool` デコレータ付き関数として定義する。
-   関数の docstring が `description`、型ヒント付き引数が JSON Schema の `parameters` に
-   自動変換される（`langchain_core.tools.tool` の標準機能。本プロジェクト側に
-   独自の変換コードはない）。
-2. `get_all_tools()`（`src/tools.py`）がビルトインツールと MCP 由来の動的ツールを
+1. 各ツールは `src/tools/` パッケージ配下（ツール1つにつき原則1ファイル）で LangChain の
+   `@tool` デコレータ付き関数として定義する。関数の docstring が `description`、
+   型ヒント付き引数が JSON Schema の `parameters` に自動変換される
+   （`langchain_core.tools.tool` の標準機能。本プロジェクト側に独自の変換コードはない）。
+2. `get_all_tools()`（`src/tools/registry.py`）がビルトインツールと MCP 由来の動的ツールを
    合流させたリストを返す。
 3. `src/graph.py` の `build_model(config).bind_tools(get_all_tools())`（サブエージェント側は
-   `src/subagent.py`）が、このリストを `ChatOpenAI` 系クラス（`src/llm.py` の
+   `src/subagent.py`）が、このリストを `ChatOpenAI` 系クラス（`src/llm/chat_model.py` の
    `ChatLlamaCpp`）に紐付ける。
 4. 実際の HTTP リクエスト送信時、`bind_tools` で渡した関数群が OpenAI Function Calling
    形式の `tools` 配列へ変換され、`base_url`（llama-server の `/v1` エンドポイント）
@@ -189,7 +194,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 スキルの frontmatter（name/description）だけはこれとは別に、`src/skills.py` が
 起動時にシステムプロンプトへテキスト注入する（Discovery 段階、こちらはプロンプトベース）。
 
-上記3段階に加えて、スキルの読み込みとは独立したツールが以下の36個ある（いずれも `src/tools.py`）。
+上記3段階に加えて、スキルの読み込みとは独立したツールが以下の39個ある（いずれも `src/tools/` パッケージ配下、ツール1つにつき原則1ファイル）。
 
 | ツール | 役割 |
 |--------|------|
@@ -202,9 +207,10 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `execute_python_code_background` | `execute_python_code` と同じコードを起動する（要承認・`config.ini` での無効化・パスメモリ展開・プロジェクトフォルダ保護ガードは同様）。`run_script_background` と同じく完了まで進捗通知しながら待ち、状況確認・停止（安全上限超過時のみ）は共通の `check_script_job`/`stop_script_job` を使う |
 | `execute_python_code_readonly` | `execute_python_code` の読み取り専用版（ファイル書き込み不可、承認不要）。`explore`/`planner` 等の読み取り専用サブエージェント種別（`agents/*.md` の `tools:`）にのみ付与され、メインエージェントは持たない |
 | `write_scratch_note` | 調査中に分かった内容をスクラッチファイルへ追記する。計画未承認でも常に呼べ、書き込み先はツール自身が決めるため任意パスには書けない。トークン上限打ち切り時の引き継ぎ用途 |
+| `write_thread_note` / `list_thread_notes` / `read_thread_note` | 同一スレッド内に閉じたスレッド共有ノート（後述「スレッド共有ノートとの違い」参照）。委譲元・委譲先間で調査結果の詳細を引き継ぐための、`write_scratch_note`とは別系統のメモ機構。主エージェント・全サブエージェントが読み書き可能 |
 | `get_tool_source` | `run_script` がエラーになった際、原因調査用にスクリプトの絶対パスを返す（中身は返さない） |
 | `check_work_dir_status` | 現在の作業ディレクトリの実際のアクセス状況を確認する |
-| `Read` / `Glob` / `Grep` | ローカルファイルシステム上の任意の絶対パスに対する読込・ファイル名検索・全文検索（ClaudeCode の同名ツールに合わせた名前。読み取り専用のため計画未承認でも常に呼べる。ロジックは `src/file_tools.py`） |
+| `Read` / `Glob` / `Grep` | ローカルファイルシステム上の任意の絶対パスに対する読込・ファイル名検索・全文検索（ClaudeCode の同名ツールに合わせた名前。読み取り専用のため計画未承認でも常に呼べる。ロジックは `src/tools/read_tool.py`/`glob_tool.py`/`grep_tool.py`、共通処理は `_file_tools_common.py`） |
 | `json_query` | JSON/dict に対する JMESPath クエリ（読み取り専用） |
 | `list_path_memory` | 現在の会話のパスメモリー（`@N`）登録内容を一覧表示する（読み取り専用） |
 | `provide_download` | 既存のファイルをチャット画面にダウンロードボタンとして提示する |
@@ -224,6 +230,15 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 ✅承認/🚫拒否ボタンで行い、タイムアウト時は安全側（拒否）に倒す。`execute_python_code`
 （`execute_python_code_background` 含む）は `config.ini` の `[scripts] code_execution_enabled`
 でツール自体を無効化できる。
+
+上記の39ツール・スキルすべてがメインエージェントから直接呼べるわけではない。
+`config.ini` の `[main_agent_tool_guard]`（既定 `enabled = true`）が、メインエージェント
+自身によるビルトインツール・`run_script` 配下スキルスクリプトの直接呼び出しを
+`allow_entries` のホワイトリストで制限する（`dispatch_agent` 配下のサブエージェントは
+対象外）。`Read`/`Grep`/`json_query`/`analyze_image`/`execute_python_code` 系や
+大半のスキルスクリプトはこのリストに含めておらず、未登録＝呼び出し不可という
+形で事実上 `dispatch_agent` への委譲を強制する（トークン消費の大きい重量系ツールの
+連打によるトークン上限到達を防ぐ狙い。詳細は `config.ini` 内コメント参照）。
 
 ---
 
@@ -305,13 +320,21 @@ Locohane/
 │   ├── config.py            # config.ini ローダー（frozen dataclass）
 │   ├── skills.py            # スキル発見ミドルウェア（第1段階 Discovery）
 │   ├── agent_types.py       # エージェント種別発見（agents/*.md）
-│   ├── tools.py             # LangGraph ツール34種（第2・第3段階＋独立ツール）
-│   ├── file_tools.py        # Read/Glob/Grep/json_query のロジック層
+│   ├── tools/                # LangGraph ツール39種（第2・第3段階＋独立ツール）。ツール1つにつき原則1ファイル
+│   │   ├── registry.py       # get_all_tools()・MCPツール登録・_BASE_TOOLS/_SUBAGENT_TOOLS一覧
+│   │   ├── tool_node.py      # ImageAwareToolNode・メインエージェント向けツールのフィルタリング
+│   │   ├── _state.py         # モジュール共有状態（config値・セマフォ・レジストリ等）の一元管理
+│   │   ├── _file_tools_common.py # Read/Glob/Grep の共通ロジック
+│   │   └── （read_skill.py/run_script.py/dispatch_agent.py 等、ツールごとに1ファイル）
 │   ├── path_memory.py       # パスメモリー（@N）レジストリの読み書き
 │   ├── memory.py            # 永続メモリーの読み書き・索引再構築
 │   ├── project_instructions.py # .locohane/LOCOHANE.md の読込
 │   ├── graph.py             # ReAct ループ（handwritten / prebuilt を切替）
-│   ├── llm.py               # ChatOpenAI（llama-server接続）の構築
+│   ├── llm/                  # ChatOpenAI（llama-server接続）の構築
+│   │   ├── chat_model.py     # ChatLlamaCpp・build_model()
+│   │   ├── loop_guard.py     # 反復ループ検知（ThinkingLoopDetected）
+│   │   ├── routing.py        # 接続先ルーティング（round_robin/random/priority_failover）
+│   │   └── diagnostics.py    # 診断用ロギング
 │   ├── context_trim.py      # 古い ToolMessage の切り詰め
 │   ├── context_compaction.py # 会話履歴の自動要約・圧縮
 │   ├── main_token_guard.py  # メインエージェントのトークン量ガード・引継ぎプロンプト自動生成
@@ -319,6 +342,9 @@ Locohane/
 │   ├── mcp_client.py        # MCPサーバー接続（stdio）・ツール変換
 │   ├── chat_log.py          # 会話ログのテキストファイル記録
 │   ├── thread_store.py      # 会話スレッド一覧（左サイドバー）・再開用の軽量ストア
+│   ├── plan_persist.py      # plan/plan_approved変更をターン完了を待たず即座にthread_storeへ永続化
+│   ├── ask_relay.py         # approve_plan/AskUserQuestion/ask_user_choice応答待ちをスレッド切替後の別セッションへ引き継ぐ状態
+│   ├── instance_lock.py     # 同一データディレクトリへの多重起動を防ぐプロセス排他ロック
 │   ├── cleanup.py           # 不要ファイルの自動削除
 │   ├── files.py             # ファイルアップロード処理
 │   ├── images.py            # 画像処理・Data URL変換
@@ -343,15 +369,18 @@ Locohane/
 │   ├── excel-vba-read/      # xlsm/xls VBAマクロコード読込専用
 │   ├── excel-vba-edit/      # xlsm VBAマクロコード追加/上書き/削除・実行
 │   ├── excel-render/        # Excelシートの画像化
+│   ├── excel-knowledge/     # excel-edit/read/render/recalc利用時のコーディング作法・落とし穴のローカル知識ベース
+│   ├── excel-vba-knowledge/ # Excel VBAのコーディング作法・落とし穴のローカル知識ベース
 │   ├── pdf-tools/           # PDF読込・ページ画像化・PDF生成
 │   ├── pptx-read/           # pptx読込専用（テキスト・表・発表者ノート抽出）
 │   ├── pptx-create/         # pptx新規生成（16:9テンプレート方式）
 │   ├── pptx-inspect/        # 既存pptxテンプレートの構造読取（shape_index把握）
 │   ├── pptx-edit/           # 既存pptxテンプレートの部分編集（デザイン保持）
 │   ├── pptx-render/         # PowerPointスライドの画像化
+│   ├── office_shared/       # docx/excel/pptx各スキルのscripts/が共有するPython共通処理（SKILL.mdを持たずLLMには公開されない）
 │   └── web-search/          # Tavily APIによるWeb検索（要APIキー設定）
 │       # Read/Glob/Grep/json_query/list_path_memory はネイティブツール化済み
-│       # （src/file_tools.py、src/path_memory.py）。
+│       # （src/tools/read_tool.py 等、src/path_memory.py）。
 ├── tests/                   # pytestテストケース
 │   ├── conftest.py
 │   ├── fixtures/
@@ -410,6 +439,7 @@ Locohane/
 | `data/temp/_tmp_<作成時刻>_<thread_id>/` | `execute_python_code`/`run_script` の中間生成物・`write_scratch_note`/`write_thread_note` の書き出し先。自セッション専用（`[default_workdir]` 参照）。フォルダ名先頭の作成時刻（ミリ秒まで）はファイラー上で作成順に並べるためのもの | セッション終了後、不要になったとき | フォルダ内を削除（`[default_workdir] retention_days`/`cleanup_interval_hours` により自動削除もされる） |
 | `data/elements/<thread_id>/` | 添付ファイル（`provide_download`/`analyze_image`の`show_in_chat=True`等）・回答本文への画像埋め込みの永続化先。スレッド再開・プロセス再起動後も表示できるようここへ実体をコピー保存する（`[elements]`参照、`src/thread_store.py`） | 添付ファイルが不要になったとき | フォルダ内を削除 |
 | `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（送信直後のライブ表示にのみ使う一時配信。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
+| `data/app.lock` | 同一データディレクトリへの多重起動を防ぐプロセス排他ロック（`src/instance_lock.py`）。空ファイルにOSのファイルロックをかけるだけで中身は使わない | アプリ停止中、削除しても実害はない | ファイルを削除（アプリ起動中は削除不可） |
 
 `data/uploads/` は `config.ini` の `[uploads] retention_days`（既定7日）を過ぎたファイルを
 `cleanup_interval_hours`（既定1時間）おきに自動削除する。`retention_days` を0以下にすると
@@ -598,6 +628,8 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 | `excel-vba-read` | `skills/` | スクリプト実行を伴う | xlsm/xlsのVBAマクロコードの読み込み専用。 |
 | `excel-vba-edit` | `skills/` | スクリプト実行を伴う | xlsmのVBAマクロコードの追加/上書き/削除・実行。 |
 | `excel-render` | `skills/` | スクリプト実行を伴う | Excelシートの画像化（罫線・書式・グラフ・レイアウトの視覚把握）。 |
+| `excel-knowledge` | `skills/` | 参照のみ | excel-edit/excel-read/excel-render/excel-recalc利用時のコーディング作法・定石・落とし穴を蓄積したローカル知識ベース（`references/`参照）。 |
+| `excel-vba-knowledge` | `skills/` | 参照のみ | Excel VBAのコーディング作法・定石・落とし穴を蓄積したローカル知識ベース（`references/`参照）。 |
 | `pptx-read` | `skills/` | スクリプト実行を伴う | pptxの読込専用（スライドのタイトル・本文・表・発表者ノートの抽出）。 |
 | `pptx-create` | `skills/` | スクリプト実行を伴う | pptxの新規生成（16:9テンプレート方式）。 |
 | `pptx-inspect` | `skills/` | スクリプト実行を伴う | 既存pptxテンプレートの構造読取専用（`pptx-edit`前の`shape_index`把握）。 |
@@ -690,7 +722,7 @@ Anthropic公式のModel Context Protocol（[仕様](https://modelcontextprotocol
 ClaudeCode のメモリー機能相当。会話（スレッド）が変わっても引き継ぎたい事実を、
 `data/memory/`（`config.ini` の `[paths] memory_dir` で変更可）配下に
 YAML frontmatter 付き Markdown ファイルとして保存する。ロジックは `src/memory.py`
-に集約し、`src/tools.py` の6ツール（`create_memory`/`update_memory`/`delete_memory`/
+に集約し、`src/tools/memory_tools.py` の6ツール（`create_memory`/`update_memory`/`delete_memory`/
 `read_memory`/`search_memory`/`list_memories`）が薄いラッパーとして公開する。
 
 - **4種類の type**: `user`（ユーザーの役割・選好）／`feedback`（訂正・確認済みの
@@ -782,6 +814,9 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `dry_penalty_last_n` | DRYサンプラーが反復検出に遡って見るトークン数（空欄で未指定） | `LLM_DRY_PENALTY_LAST_N` |
 | `[llm]` | `dry_sequence_breakers` | DRYサンプラーの反復検出リセット区切り文字（カンマ区切り、空欄で既定値） | `LLM_DRY_SEQUENCE_BREAKERS` |
 | `[llm]` | `enable_thinking` | Qwen3系モデルのthinking（reasoning、`<think>`ブロック）モードのON/OFF（llama.cpp拡張、空欄なら未指定でモデル・llama-server既定に委ねる） | `LLM_ENABLE_THINKING` |
+| `[llm]` | `reasoning_format` | thinkingブロックの出力形式（`none`/`deepseek`/`deepseek-legacy`。llama.cpp拡張。空欄なら未指定でllama-server既定の`auto`に委ねる） | `LLM_REASONING_FORMAT` |
+| `[llm]` | `reasoning_budget` | thinkingに使えるトークン数上限（llama.cpp拡張、`-1`=無制限・`0`=即座に終了・`N>0`=上限。空欄なら未指定でllama-server既定の`-1`に委ねる） | `LLM_REASONING_BUDGET` |
+| `[llm]` | `reasoning_budget_message` | 上記`reasoning_budget`を使い切った際にthinking終了タグ直前へ挿入するメッセージ（空欄なら挿入しない） | `LLM_REASONING_BUDGET_MESSAGE` |
 | `[llm]` | `track_token_usage` | トークン使用量の取得を有効にする（Chainlit UI表示・eval結果に反映） | `LLM_TRACK_TOKEN_USAGE` |
 | `[llm]` | `request_timeout_seconds` | LLMサーバーへの応答待ちタイムアウト秒数（read/write/pool） | `LLM_REQUEST_TIMEOUT_SECONDS` |
 | `[llm]` | `stream_chunk_timeout_seconds` | ストリーミング中にチャンクが届かない場合のタイムアウト秒数 | `LLM_STREAM_CHUNK_TIMEOUT_SECONDS` |
@@ -793,6 +828,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[paths]` | `agents_dir` | エージェント種別定義フォルダ（`dispatch_agent` の `agent_type`） | `AGENTS_DIR` |
 | `[paths]` | `project_locohane_dir` | プロジェクト固有の拡張ディレクトリ（ClaudeCode の `.claude/` 相当）。配下の `skills/`（`skills_dir` にマージ走査、同名は優先）・`agents/`（`agents_dir` にマージ走査、同名は優先）・`LOCOHANE.md`（プロジェクト固有指示、存在しなくてもエラーにならない）を自動検知する。`nudge_messages` と同じリスト形式で複数ディレクトリ指定可 | `PROJECT_LOCOHANE_DIR` |
 | `[paths]` | `system_prompt_path` | メインエージェント用システムプロンプトのテンプレート | `SYSTEM_PROMPT_PATH` |
+| `[paths]` | `bin_path` | 外部バイナリ実行ファイルの配置先ディレクトリ一覧（`project_locohane_dir`と同じリスト形式）。コマンド名を素の状態で叩くスキルがOS側PATH未登録でも呼び出せるようにする（`src/tools/_subprocess_env.py`参照） | `BIN_PATH` |
 | `[paths]` | `checkpoint_db` | 会話状態 SQLite | `CHECKPOINT_DB` |
 | `[paths]` | `memory_dir` | 永続メモリーの保存先ルート | `MEMORY_DIR` |
 | `[paths]` | `plans_dir` | `create_plan` が `detail_markdown` を渡した際の詳細計画Markdownの保存先 | `PLANS_DIR` |
@@ -819,17 +855,28 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[scripts]` | `background_min_poll_message` | 上記間隔未満で呼ばれた際にLLMへ返すメッセージのテンプレート（`{wait_remaining}`/`{job_id}`/`{min_interval}` を埋め込み可）。空欄なら既定文言 | `SCRIPT_BACKGROUND_MIN_POLL_MESSAGE` |
 | `[scripts]` | `background_inline_wait_max_seconds` | `run_script_background`/`execute_python_code_background` がジョブ完了をLLMを介さずコード側で待つ上限秒数。超過時のみ `job_id` を返してLLMへ制御を戻す | `SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS` |
 | `[scripts]` | `background_progress_push_interval_seconds` | 待機中、人間向けに経過秒数・標準出力/標準エラー末尾をチャットへ直接送る間隔（秒） | `SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS` |
+| `[scripts]` | `background_job_output_tail_chars` | 進捗表示・`check_script_job`/`stop_script_job`/`read_thread_note`が末尾のみ表示する際の標準出力/標準エラー/進捗メモの最大文字数（`[subagent]`配下の同種表示も共有） | `SCRIPT_BACKGROUND_JOB_OUTPUT_TAIL_CHARS` |
+| `[scripts]` | `plan_approval_exempt_scripts` | `run_script`/`run_script_background`の計画承認（Plan Mode）を免除する読み取り専用スクリプトのホワイトリスト（`[["スキル名","スクリプトファイル名"], ...]`形式、空欄なら既定7件）。免除は承認のみで、`[main_agent_tool_guard]`によるメインエージェントからの直接呼び出し制限は別枠 | `SCRIPT_PLAN_APPROVAL_EXEMPT_SCRIPTS` |
+| `[scripts]` | `agent_type_run_script_allowlist` | `dispatch_agent`の`agent_type`ごとに`run_script`で呼べるスキル/スクリプトを絞り込むホワイトリスト（`[[agent_type, 対象], ...]`形式、対象は`"スキル名"`または`["スキル名","スクリプトファイル名"]`、空欄なら既定19件） | `SCRIPT_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` |
 | `[file_tools_duplicate_guard]` | `enabled` | Read/Glob/Grep/json_query ツールの同一引数繰り返し呼び出しを防止するガードの有効/無効 | `FILE_TOOLS_DUPLICATE_GUARD_ENABLED` |
 | `[file_tools_duplicate_guard]` | `max_calls` | 同一シグネチャの呼び出しを許可する回数（既定1回） | `FILE_TOOLS_DUPLICATE_GUARD_MAX_CALLS` |
 | `[file_tools_duplicate_guard]` | `carry_over_to_main` | サブエージェント内の呼び出し履歴をメイン判定へ持ち越すかどうか | `FILE_TOOLS_DUPLICATE_GUARD_CARRY_OVER` |
+| `[main_agent_tool_guard]` | `enabled` | メインエージェント自身がビルトインツール・`run_script`配下のスキルスクリプトを直接呼び出せる回数を制限するガードの有効/無効（`dispatch_agent`配下のサブエージェントは対象外）。トークン消費の大きい重量系ツールの連打によるトークン上限到達を防ぐ | `MAIN_AGENT_TOOL_GUARD_ENABLED` |
+| `[main_agent_tool_guard]` | `visibility_mode` | `enabled=true`時の可視化モード。`strict`（既定）は呼び出せないツール・スキルを一覧から完全除外、`hint`は一覧に出しつつ直接実行不可のものへ`dispatch_agentへ委譲`という注記を付ける | `MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODE` |
+| `[main_agent_tool_guard]` | `allow_entries` | 許可リスト（ホワイトリスト）。`["ツール名", max_calls]`または`[["スキル名","スクリプトファイル名"], max_calls]`の要素からなるリスト形式で、未登録のツール・スキルスクリプトは`enabled=true`の間メインエージェントから一切呼び出せない。`max_calls`は`0`=登録のみで完全ブロック、`-1`=無制限、`1`以上=その回数まで許可（他のガードと0/-1の意味が逆なので注意） | `MAIN_AGENT_TOOL_GUARD_ALLOW_ENTRIES` |
 | `[graph]` | `implementation` | ReAct ループの実装（`handwritten` または `prebuilt`） | `GRAPH_IMPL` |
 | `[graph]` | `recursion_limit` | メインReActループ（agent→tools遷移）の最大反復回数。超過時は打ち切りメッセージを表示 | `GRAPH_RECURSION_LIMIT` |
+| `[graph]` | `connection_error_max_retries` | LLMサーバーとの通信エラー（接続失敗・5xx等）検知時、直近接続先を一時クールダウンした上でグラフを再構築し同じ反復を自動リトライする回数（メインエージェント用。`0`でリトライせず通信エラーを通知して中断） | `GRAPH_CONNECTION_ERROR_MAX_RETRIES` |
 | `[graph]` | `max_parallel` | メインエージェントのツール呼び出し（ImageAwareToolNode）の同時実行数上限。1以上でSemaphore(N)ガード、0以下でガード無効化 | `GRAPH_TOOL_MAX_PARALLEL` |
+| `[graph]` | `token_guard_enabled` | メインエージェントのトークン量ガード（直近1回の応答が閾値到達で引継ぎプロンプトへ差し替え）の有効/無効 | `GRAPH_TOKEN_GUARD_ENABLED` |
+| `[graph]` | `token_guard_soft_threshold` | 上記ガードが発動するトークン数閾値。実測: この仕組みが無い状態では1リクエストあたり24,833→128,000まで単調増加しコンテキスト上限で停止した事例あり | `GRAPH_TOKEN_GUARD_SOFT_THRESHOLD` |
+| `[graph]` | `handoff_prompt_path` | 上記ガード発動時に差し込む、新しいチャットへの引継ぎ手順を指示するMarkdownファイルのパス | `GRAPH_HANDOFF_PROMPT_PATH` |
 | `[subagent]` | `max_iterations` | `dispatch_agent` の内部ReActループの最大反復回数 | `SUBAGENT_MAX_ITERATIONS` |
 | `[subagent]` | `max_parallel` | `dispatch_agent` の実LLM呼び出しの同時実行数上限。1以上でSemaphore(N)ガード、0以下でガード無効化 | `SUBAGENT_MAX_PARALLEL` |
 | `[subagent]` | `token_guard_enabled` | サブエージェントのトークン使用量ガードの有効/無効 | `SUBAGENT_TOKEN_GUARD_ENABLED` |
 | `[subagent]` | `token_guard_soft_threshold` | ソフト警告（注意メッセージ注入）のトークン閾値 | `SUBAGENT_TOKEN_GUARD_SOFT_THRESHOLD` |
 | `[subagent]` | `token_guard_hard_threshold` | ハード打ち切りのトークン閾値 | `SUBAGENT_TOKEN_GUARD_HARD_THRESHOLD` |
+| `[subagent]` | `token_guard_soft_warning_text` | ソフト警告到達時に注入する注意メッセージの文言（`write_thread_note`への書き出しを促しつつ、ツール呼び出し自体は禁止しない） | `SUBAGENT_TOKEN_GUARD_SOFT_WARNING_TEXT` |
 | `[subagent]` | `empty_response_max_retries` | 空応答の再試行回数 | `SUBAGENT_EMPTY_RESPONSE_MAX_RETRIES` |
 | `[subagent]` | `background_job_retention_seconds` | `dispatch_agent` のジョブが終了後、`check_dispatch_agent_job` で一度も取得されないまま残ってよい秒数 | `SUBAGENT_BACKGROUND_JOB_RETENTION_SECONDS` |
 | `[subagent]` | `background_min_poll_interval_seconds` | `check_dispatch_agent_job` を連続で呼べる最短間隔秒数。0以下で無効化 | `SUBAGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS` |
@@ -846,6 +893,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[plan]` | `reset_approval_on_new_message` | 新しいユーザーメッセージを受け取るたびに`plan_approved`を無条件でリセットしてPlan Modeへ戻すか。`false`なら承認状態をメッセージをまたいで維持する（`thinking_loop_guard`のリトライ上限到達後、ユーザーが続行メッセージを送っても再承認が不要になる） | `PLAN_RESET_APPROVAL_ON_NEW_MESSAGE` |
 | `[plan]` | `auto_approve` | `approve_plan`呼び出し時にユーザーへの承認/却下確認を一切行わず自動承認するか（`false`が既定。書き込み系ツールが人の確認なしに実行されるため、無人自動化用途以外での使用は推奨しない） | `PLAN_AUTO_APPROVE` |
 | `[default_workdir]` | `dir` | エージェントの既定の作業ディレクトリのベース。実際の書き込み・`run_script`のcwdはこの配下の自セッション専用サブディレクトリ`_tmp_<name>`に限定される（`dir`直下への書き込みは許可されない） | `DEFAULT_WORKDIR` |
+| `[default_workdir]` | `allow_sandbox_dir` | セッション分離の外側で常時書き込みを許可する追加ディレクトリのリスト（`[{"dir": "パス", "allow_entries": [["スキル名","スクリプトファイル名"], ...]}, ...]`形式）。各要素の`allow_entries`を空リストにすると、対象を問わずそのディレクトリへ無制限に書き込み可能になる。登録したディレクトリはスレッドを問わず常時書き込み可能になる点に注意（既定は空リストで無効） | `ALLOW_SANDBOX_DIR` |
 | `[default_workdir]` | `retention_days` | 上記 `dir` 配下のファイル保持日数（0以下で自動削除無効） | `DEFAULT_WORKDIR_RETENTION_DAYS` |
 | `[default_workdir]` | `cleanup_interval_hours` | default_workdir 自動削除チェック間隔（時間） | `DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS` |
 | `[log]` | `dir` | ログ出力先 | `LOG_DIR` |
@@ -861,10 +909,13 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[thinking_loop_guard]` | `max_history_chars` | 反復検知で比較対象とする過去履歴の上限文字数 | `THINKING_LOOP_GUARD_MAX_HISTORY_CHARS` |
 | `[thinking_loop_guard]` | `match_ratio_threshold` | 直近ウィンドウとの最長一致率がこの値を超えたらループ候補とみなす閾値 | `THINKING_LOOP_GUARD_MATCH_RATIO_THRESHOLD` |
 | `[thinking_loop_guard]` | `max_retries` | ループ検知後、注意メッセージを注入して再試行する最大回数 | `THINKING_LOOP_GUARD_MAX_RETRIES` |
+| `[thinking_loop_guard]` | `empty_response_max_retries` | メインエージェントの空応答（tool_callsもcontentも無い応答）を検知した際の再試行最大回数 | `THINKING_LOOP_GUARD_EMPTY_RESPONSE_MAX_RETRIES` |
 | `[thinking_loop_guard]` | `nudge_messages` | ループ検知後に注入する注意メッセージ（複数指定可） | `THINKING_LOOP_GUARD_NUDGE_MESSAGES` |
 | `[context_trim]` | `enabled` | 古い `ToolMessage` を切り詰めてプリフィル遅延を抑える機能の有効/無効 | `CONTEXT_TRIM_ENABLED` |
 | `[context_trim]` | `trigger_total_tokens` | トリムを発動させる閾値（Claude APIのcontext editing、`clear_tool_uses_20250919`のtrigger.value相当）。直近1回のLLM呼び出しのtotal_tokensがこの値未満のうちは発動しない。0以下なら常に発動 | `CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS` |
 | `[context_trim]` | `keep_recent_tool_messages` | 全文保持する直近 `ToolMessage` の件数 | `CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES` |
+| `[context_trim]` | `trim_ai_messages` | `ToolMessage`だけでなく`AIMessage`（モデル自身の思考本文・tool_calls引数）も切り詰め対象にするか。`execute_python_code`のcode引数へファイル本文を書き写す使い方をすると`ToolMessage`側だけの切り詰めでは1リクエスト入力が膨らみ続けるため既定で有効 | `CONTEXT_TRIM_AI_MESSAGES` |
+| `[context_trim]` | `keep_recent_ai_messages` | 全文保持する直近 `AIMessage` の件数（`trim_ai_messages=true`の場合のみ意味を持つ） | `CONTEXT_TRIM_KEEP_RECENT_AI_MESSAGES` |
 | `[context_trim]` | `truncated_max_chars` | 切り詰め対象 `ToolMessage` の残す最大文字数 | `CONTEXT_TRIM_TRUNCATED_MAX_CHARS` |
 | `[context_trim]` | `duplicate_guard_tool_max_chars` | Read/Glob/Grep/json_query/analyze_image（`[file_tools_duplicate_guard]`の対象ツール）の `ToolMessage` にだけ適用する切り詰め文字数（`truncated_max_chars`の代わりに使う） | `CONTEXT_TRIM_DUPLICATE_GUARD_TOOL_MAX_CHARS` |
 | `[context_compaction]` | `enabled` | 会話履歴の自動要約・圧縮機能（ClaudeCodeのcompact相当）の有効/無効 | `CONTEXT_COMPACTION_ENABLED` |
@@ -900,6 +951,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[ui]` | `max_display_side_steps` | サイドパネルに描画するツール呼び出し等のStepの最大件数（表示専用の間引き、`0`で無制限） | `UI_MAX_DISPLAY_SIDE_STEPS` |
 | `[ui]` | `token_usage_warn_threshold` | トークン使用量カードの「リクエスト1回あたり」行の合計トークン数がこの値以上でオレンジ太字表示（`0`以下で無効） | `UI_TOKEN_USAGE_WARN_THRESHOLD` |
 | `[ui]` | `token_usage_alert_threshold` | 同上、この値以上で赤太字表示（`token_usage_warn_threshold`より優先、`0`以下で無効） | `UI_TOKEN_USAGE_ALERT_THRESHOLD` |
+| `[websocket]` | `ping_interval_seconds` | ブラウザ⇔サーバー間WebSocket（Socket.IO）の生存確認ping送信間隔秒数。`[llm].stream_chunk_timeout_seconds`（LLMサーバーとの通信）とは別レイヤー | `WEBSOCKET_PING_INTERVAL_SECONDS` |
+| `[websocket]` | `ping_timeout_seconds` | 直近pingへの応答をこの秒数待っても受信できない場合に切断とみなす。LLM応答待ちでイベントループがブロッキング気味の時間帯（`dispatch_agent`の長時間実行中等）に短すぎると誤切断しやすい | `WEBSOCKET_PING_TIMEOUT_SECONDS` |
 
 環境変数が設定されていれば `config.ini` の値より優先される（詳細は `src/config.py` を参照）。
 
@@ -1000,8 +1053,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
   無効化される（送信後に作業フォルダを変えると挙動が分かりにくくなるため）。
 - **検証とフォールバック**: 設定時にサーバー側で実際にディレクトリ一覧
   取得・一時ファイルの作成/書き込み/削除を試みて読み書き可否を判定する
-  （`src/tools.py` の `probe_workdir_access`）。存在しない・読み取り不可・
-  （書き込みが必要な場面では）書き込み不可と判定された場合は、LLMが確認を
+  （`src/tools/check_work_dir_status.py` の `probe_workdir_access`）。存在しない・
+  読み取り不可・（書き込みが必要な場面では）書き込み不可と判定された場合は、LLMが確認を
   怠っても安全側に倒れるよう自動的に `default_workdir` へフォールバックする。
   判定結果は `check_work_dir_status` ツールでも確認できる。
 - **スコープ**: `cl.user_session`（会話単位）に保存されるだけで、
