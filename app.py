@@ -4,18 +4,20 @@
 - 起動時にスキルを走査（第1段階 Discovery）→ システムプロンプトへ注入 → グラフを構築。
 - @cl.on_message で LangGraph を astream_events で回し、トークンをストリーミング表示。
 - スキル読み込み(read_skill)・ファイル読み込み(read_skill_file)・スクリプト実行(run_script)・
-  画像読み込み(view_image)・サブエージェント委譲(dispatch_agent)・ユーザーへの追加質問
+  画像解析(analyze_image)・サブエージェント委譲(dispatch_agent)・ユーザーへの追加質問
   (AskUserQuestion/ask_user_choice)の各ツールコールを cl.Step として可視化
   （「今このスキルを読んでいます」が見える状態）。
-  dispatch_agent は内部で独立した ReAct ループを回すが、その内部の思考過程・
-  ツール呼び出しはグラフのトレースに乗らないため Step としては表示されない
-  （最終回答のみが1つの Step として見える。コンテキスト節約が目的）。
+  dispatch_agent は内部で独立した ReAct ループを回すが、その会話履歴は親グラフの
+  会話状態には乗らない（コンテキスト節約が目的。ただし astream_events 自体は
+  contextvar 経由で内部ツール呼び出しのイベントも流すため、ツール実行の
+  Step 表示・生成ファイルの自動添付（下記）は内部呼び出しにも実際には効く。
+  _resolve_parent_id/_is_subagent_call 参照）。
 - アップロードファイルは config.upload_dir に保存する。画像は data URL 化して
   LLMへ視覚情報として渡し、それ以外はパスをメッセージへ明示。
 - ツール結果に生成ファイルの output_path（src/files.py 参照）が含まれる場合、
   画像なら cl.Image でインラインプレビュー、それ以外は cl.File でダウンロード
   可能な添付を自動送信する（pdf-tools/pptx-create 等のファイル生成スキル、
-  provide_download・show_image ツールに共通で効く）。
+  provide_download・analyze_image の show_in_chat=True 引数に共通で効く）。
 
 会話状態は AsyncSqliteSaver（config.checkpoint_db）で永続化。thread_id はセッション毎。
 チェックポインタ（DB接続）・システムプロンプト・ツールはアプリ全体で 1 つを共有するが、
@@ -135,7 +137,6 @@ _TOOL_LABELS = {
     "read_skill_file": "ファイル読み込み",
     "run_script": "スクリプト実行",
     "analyze_image": "画像解析",
-    "show_image": "画像表示",
     "dispatch_agent": "サブエージェント実行",
     "AskUserQuestion": "ユーザーへの質問（自由記述）",
     "ask_user_choice": "ユーザーへの質問（選択式）",
@@ -1651,7 +1652,7 @@ async def _setup() -> None:
             )
         )
 
-    # show_image・回答本文への画像埋め込み（_embed_local_images_as_session_urls）が
+    # analyze_image(show_in_chat=True)・回答本文への画像埋め込み（_embed_local_images_as_session_urls）が
     # 使う Chainlit 自身のセッションファイルディレクトリ（.files/<セッションID>/）も
     # 同様に日数ベースで自動削除する。Chainlit自身にもブラウザ切断時の削除処理は
     # あるが、プロセス再起動等では確実に働くとは限らないための保険（ファイルでは
@@ -2407,6 +2408,7 @@ async def _embed_local_images_as_session_urls(text: str) -> str:
                 path,
                 max_long_side=_config.image_inline_preview_max_long_side_pixels,
                 jpeg_quality=_config.image_inline_preview_jpeg_quality,
+                min_long_side=_config.image_inline_preview_min_long_side_pixels,
             )
             if _thread_store_conn is not None and thread_id:
                 element_id = str(uuid.uuid4())

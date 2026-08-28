@@ -50,7 +50,7 @@ def is_image_file(path: str | Path) -> bool:
 
 
 def _downscale_to_jpeg(
-    data: bytes, max_long_side: int, jpeg_quality: int, *, force: bool = False
+    data: bytes, max_long_side: int, jpeg_quality: int, *, force: bool = False, min_long_side: int = 0
 ) -> bytes | None:
     """長辺が max_long_side を超える画像を縮小し、JPEGバイト列として返す。
 
@@ -65,6 +65,10 @@ def _downscale_to_jpeg(
         force: True の場合、リサイズが不要でも必ずJPEGへ再エンコードする。
             HEIC/HEIFはVision APIのdata URLとして解釈できない形式のため、
             サイズ変更の要否に関わらず変換が必須（呼び出し元が指定する）。
+        min_long_side: 拡大後の長辺のピクセル数の下限。0以下なら拡大はしない。
+            アイコンサイズの小さい画像を回答本文へそのまま埋め込むと視認できない
+            ため、`load_image_bytes` のインラインプレビュー用途でのみ使う
+            （Vision向けの `to_data_url` では指定しない）。
 
     Returns:
         変換後のJPEGバイト列。force=Falseでリサイズも不要だった場合と、
@@ -77,11 +81,16 @@ def _downscale_to_jpeg(
             # 横倒しの写真をモデルに読ませることになる。
             img = ImageOps.exif_transpose(img)
             long_side = max(img.size)
-            needs_resize = max_long_side > 0 and long_side > max_long_side
-            if not needs_resize and not force:
+            needs_shrink = max_long_side > 0 and long_side > max_long_side
+            needs_enlarge = not needs_shrink and min_long_side > 0 and long_side < min_long_side
+            if not needs_shrink and not needs_enlarge and not force:
                 return None
-            if needs_resize:
+            if needs_shrink:
                 scale = max_long_side / long_side
+                new_size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+                img = img.resize(new_size, Image.LANCZOS)
+            elif needs_enlarge:
+                scale = min_long_side / long_side
                 new_size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
                 img = img.resize(new_size, Image.LANCZOS)
             if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
@@ -107,8 +116,9 @@ def load_image_bytes(
     *,
     max_long_side: int = 0,
     jpeg_quality: int = 85,
+    min_long_side: int = 0,
 ) -> tuple[bytes, str]:
-    """画像ファイルを読み込み、必要なら縮小・JPEG変換したバイト列とMIMEを返す。
+    """画像ファイルを読み込み、必要なら縮小・拡大・JPEG変換したバイト列とMIMEを返す。
 
     `to_data_url`（Vision向けdata URL化）と、`app.py` がチャット回答本文への
     画像埋め込みで使うセッションファイル化（Chainlitの `/project/file/...`
@@ -123,9 +133,13 @@ def load_image_bytes(
             HEIC/HEIFはこの設定に関わらず必ずJPEGへ変換する（多くの
             クライアント・ブラウザがHEIC/HEIFをそのまま解釈できないため）。
         jpeg_quality: 縮小・変換時のJPEG品質。
+        min_long_side: 拡大後の長辺のピクセル数の下限。0以下、または画像の
+            長辺が既にこの値以上の場合は拡大しない。回答本文へ埋め込む
+            サムネイルが小さすぎて視認できない問題への対策
+            （`_downscale_to_jpeg` 参照。Vision向け用途では通常0のまま使う）。
 
     Returns:
-        (バイト列, MIMEタイプ) のタプル。縮小・変換した場合の mime は
+        (バイト列, MIMEタイプ) のタプル。縮小・拡大・変換した場合の mime は
         常に "image/jpeg" になる。
 
     Raises:
@@ -135,8 +149,10 @@ def load_image_bytes(
     mime = _MIME_BY_EXT[p.suffix.lower()]
     data = p.read_bytes()
     force_convert = mime in _ALWAYS_CONVERT_MIMES
-    if max_long_side > 0 or force_convert:
-        converted = _downscale_to_jpeg(data, max_long_side, jpeg_quality, force=force_convert)
+    if max_long_side > 0 or min_long_side > 0 or force_convert:
+        converted = _downscale_to_jpeg(
+            data, max_long_side, jpeg_quality, force=force_convert, min_long_side=min_long_side
+        )
         if converted is not None:
             data = converted
             mime = "image/jpeg"

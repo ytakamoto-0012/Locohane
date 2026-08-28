@@ -44,7 +44,7 @@ tools: read_skill, Read, Glob, run_script   # 任意。カンマ区切り文字�
 サブエージェントに渡せるツールの実体は、`tools.py` の `_SUBAGENT_TOOLS` リスト（4011-4037行、メモリー系ツール定義より後に置く必要があるため `_BASE_TOOLS` 直前に配置）に列挙された固定セットのみ:
 
 ```
-read_skill, read_skill_file, provide_download, show_image,
+read_skill, read_skill_file, provide_download,
 run_script, run_script_background, check_script_job, stop_script_job,
 execute_python_code, execute_python_code_background,
 get_tool_source, check_work_dir_status, analyze_image,
@@ -114,9 +114,11 @@ read_memory, search_memory, list_memories
 ```markdown
 ## 最終回答の書き方
 
-生成した画像をユーザーへ見せる場合は `show_image` を呼ばず、次の形式で
-そのまま最終回答へ書く（呼び出し元のメインエージェントがこの行をそのまま
-自分の回答へ転記して表示する）:
+生成した画像を一覧表の一部として見せる場合は、次の形式でそのまま最終回答へ
+書く（呼び出し元のメインエージェントがこの行をそのまま自分の回答へ転記して
+表示する）。個別に1枚ずつ見せるだけでよい場合は、この形式ではなく
+`analyze_image` を `show_in_chat=True` で呼ぶ方が簡潔（system_prompt/subagent_common.md
+「画像をユーザーへ見せる方法」参照）:
 
     | No. | ファイル名 | プレビュー |
     |---|---|---|

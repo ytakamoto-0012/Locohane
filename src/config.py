@@ -315,8 +315,9 @@ class Config:
         upload_cleanup_interval_hours: アップロードファイル自動削除の
             チェック間隔（時間）。起動時にも1回チェックする。
         chainlit_files_retention_days: Chainlit自身のセッションファイル
-            ディレクトリ（`.files/<セッションID>/`。show_image・回答本文への
-            画像埋め込みのライブ表示中のみが使う）の保持日数。ディレクトリ
+            ディレクトリ（`.files/<セッションID>/`。analyze_image の
+            show_in_chat=True・回答本文への画像埋め込みのライブ表示中のみが
+            使う）の保持日数。ディレクトリ
             単位で削除する（src/cleanup.py の cleanup_old_dirs 参照）。
             0以下で無効化。
         chainlit_files_cleanup_interval_hours: 上記の自動削除チェック間隔
@@ -339,6 +340,11 @@ class Config:
             app.py の _embed_local_images_as_session_urls 参照）。
         image_inline_preview_jpeg_quality: 上記プレビューの再エンコード品質
             （1-95）。
+        image_inline_preview_min_long_side_pixels: 上記プレビューの、長辺
+            ピクセル数の下限。0以下、または画像の長辺が既にこの値以上の
+            場合は拡大しない。アイコンサイズ程度の小さい画像がそのまま
+            埋め込まれ視認できなくなる問題への対策（src/images.py の
+            _downscale_to_jpeg 参照）。
         default_workdir_retention_days: default_workdir 直下に溜まり続ける
             ファイルの保持日数。この日数を過ぎた（更新日時が古い）ファイルは
             自動削除する。0以下で無効化。ユーザーが ChatSettings で指定した
@@ -761,6 +767,7 @@ class Config:
     # --- 回答本文へ埋め込む画像プレビューの縮小 ---
     image_inline_preview_max_long_side_pixels: int
     image_inline_preview_jpeg_quality: int
+    image_inline_preview_min_long_side_pixels: int
 
     # --- default_workdir 直下のファイルの自動削除 ---
     default_workdir_retention_days: int
@@ -1918,6 +1925,11 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         image_inline_preview_jpeg_quality=int(
             os.getenv("IMAGE_INLINE_PREVIEW_JPEG_QUALITY", images_section.get("inline_preview_jpeg_quality", 70))
+        ),
+        image_inline_preview_min_long_side_pixels=int(
+            os.getenv(
+                "IMAGE_INLINE_PREVIEW_MIN_LONG_SIDE_PIXELS", images_section.get("inline_preview_min_long_side_pixels", 0)
+            )
         ),
         default_workdir_retention_days=int(os.getenv("DEFAULT_WORKDIR_RETENTION_DAYS", default_workdir_section.get("retention_days", 7))),
         default_workdir_cleanup_interval_hours=float(

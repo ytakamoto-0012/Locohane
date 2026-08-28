@@ -27,7 +27,7 @@ SPAの `public/build/` とは別経路なので、フロントエンドの再ビ
 
 | 変数名 | デフォルト値 | 効果 |
 |---|---|---|
-| `--message-image-width` | `320px` | `show_image` で表示するインライン画像の幅（`height` は `auto` でアスペクト比維持。指定サイズより小さい画像は拡大され、大きい画像は縮小される） |
+| `--message-image-width` | `320px` | 生成ファイルの自動プレビュー添付（`cl.Image`。`analyze_image` の `show_in_chat=True` 引数を含む）で表示するインライン画像の幅（`height` は `auto` でアスペクト比維持。指定サイズより小さい画像は拡大され、大きい画像は縮小される） |
 | `--message-bubble-max-width` | `560px` | メッセージ吹き出し（`.message-bubble`）の最大幅 |
 | `--header-icon-size` | `22px` | ヘッダー左アイコン（`.app-header-icon`）の幅・高さ |
 | `--header-title-font-size` | `14px` | ヘッダータイトル文字列（`.app-header-title`）のフォントサイズ |

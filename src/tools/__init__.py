@@ -18,9 +18,9 @@ LangChain の @tool として定義する。read_skill/read_skill_file/run_scrip
   各ファイル内に実装、ClaudeCode の同名ツールに合わせた名前）
 - json_query      … JSON/dictへのJMESPathクエリ（ロジック本体は json_query.py 内）
 - list_path_memory … 現在の会話のパスメモリー（@N）登録内容を一覧表示する
-- analyze_image   … 第3段階(Execute): 画像ファイルをVision対応モデルへ見せ、LLM自身が内容を解析する
-- show_image      … 第3段階(Execute): 画像ファイルをチャットUIにプレビュー表示するだけ
-  （LLM自身は内容を見ない。provide_download の画像版。ユーザーへの「表示して」「見せて」はこちら）
+- analyze_image   … 第3段階(Execute): 画像ファイルをVision対応モデルへ見せ、LLM自身が内容を解析する。
+  `show_in_chat=True` を指定すると、解析と同時にチャットUIへもプレビュー表示する
+  （表示だけして中身を見ない、という呼び方はできない。ユーザーへの「表示して」「見せて」もこちら）
 - dispatch_agent  … タスクをサブエージェントへ委譲し、最終回答のみを受け取る。完了までの間、
   進捗（経過時間・反復回数）を人間向けにチャットへ直接通知する。設定した安全上限を超えても
   なお完了しない場合のみ job_id を返してターンを終える（フォールバック）
@@ -113,7 +113,6 @@ from .registry import (  # noqa: F401
     run_script_background,
     search_memory,
     show_help,
-    show_image,
     stop_dispatch_agent_job,
     stop_script_job,
     update_memory,

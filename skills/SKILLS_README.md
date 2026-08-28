@@ -132,17 +132,22 @@ Chainlit UI上に `cl.File`（または画像なら `cl.Image`）付きメッセ
 本文（LLMへの指示）にどちらを使わせたいかを明記する必要がある。
 
 1. **画像そのものを独立した1メッセージとして見せるだけでよい場合**:
-   `show_image` ツールを呼ばせる（`file_path` に絶対パスを渡す）。表や
+   `analyze_image` ツールを `show_in_chat=True` で呼ばせる（`relative_path`
+   に絶対パスを渡す）。LLM自身がその場で内容を理解するのと同時にチャットへも
+   表示される（表示だけして中身は見ない、という呼び方はできない仕様）。表や
    他のテキストと組み合わせる必要が無い、単純な「生成した画像を見せて」
    ケース向け。
 2. **回答本文の構造（一覧表など）の一部として画像を組み込みたい場合**:
-   ツールは呼ばせず、**LLM自身の回答テキストに直接** Markdown画像記法
+   `show_in_chat` は使わず、**LLM自身の回答テキストに直接** Markdown画像記法
    `![説明](絶対パス)` を書かせる。Markdownテーブルのセル内に書いても
    構わない。`app.py` の `_send_answer()`（送信直前フック）が
    `_embed_local_images_as_session_urls()` を通し、実在する画像ファイルを
    指す `![...](絶対パス)` だけを自動でブラウザから取得可能なURLへ変換して
    から送る（ローカル絶対パスのままではブラウザは画像を読み込めないため。
-   `show_image` と同じ、Chainlitのセッションファイル配信の仕組みに乗せる）。
+   `analyze_image(show_in_chat=True)` と同じ、Chainlitのセッションファイル
+   配信の仕組みに乗せる）。この方式ではLLM自身は画像の中身を見ないため、
+   内容の説明・分析が必要な場合は別途 `analyze_image`（`show_in_chat=False`）
+   で先に内容を把握させてから埋め込ませること。
 
 いずれの方式でも、`SKILL.md` の指示文には以下を明記すること:
 
@@ -152,13 +157,15 @@ Chainlit UI上に `cl.File`（または画像なら `cl.Image`）付きメッセ
   `@N` はツール引数専用の解決対象であり、回答本文（Markdown）の中に書いても
   解決されない。`Glob` 結果の `path_memory`（`{"@N": 絶対パス, ...}`）から
   対応する実パスを取り出させること。
-- 方式2で埋め込まれるのは**縮小済みのサムネイル**（既定 長辺320px・JPEG品質70、
+- 方式2で埋め込まれるのは**縮小済みのサムネイル**（既定 長辺192px・JPEG品質70、
   `config.ini` の `[images].inline_preview_max_long_side_pixels`/
-  `inline_preview_jpeg_quality`）。Vision向けの `analyze_image`/アップロード画像
-  縮小設定（`max_long_side_pixels`/`jpeg_quality`）とは別物で、意図的に小さい
-  （表示帯域・ディスク使用量を抑える目的。細部を確認させたい／高解像度で
-  見せたい場合は方式2ではなく `analyze_image`（LLM自身が解析する場合）または
-  `show_image`（独立メッセージとして原寸で見せる場合）を使わせること）。
+  `inline_preview_jpeg_quality`。逆に小さすぎる画像は
+  `inline_preview_min_long_side_pixels` まで拡大される）。Vision向けの
+  `analyze_image`/アップロード画像縮小設定（`max_long_side_pixels`/
+  `jpeg_quality`）とは別物で、意図的に小さい（表示帯域・ディスク使用量を
+  抑える目的。細部を確認させたい／高解像度で見せたい場合は方式2ではなく
+  方式1（`analyze_image` を `show_in_chat=True` で呼び、独立メッセージとして
+  原寸で見せる）を使わせること）。
 - 表の**前に同じ内容（対象パスの一覧など）を番号付きリスト等で重複して書かせない**
   こと。表の直前に別のブロックがあり間に空行が無いと、Markdownパーサーが表を
   独立ブロックと認識できず直前のブロックの続きとして飲み込んでしまい、表ごと
@@ -178,7 +185,7 @@ Chainlit UI上に `cl.File`（または画像なら `cl.Image`）付きメッセ
       {"label": "2枚目", "output_path": "C:\\...\\out2.png"}
     ]}
 
-ユーザーへは、`show_image` を呼ばず、回答本文に直接次の形式でMarkdown表を
+ユーザーへは、`analyze_image` の `show_in_chat` は使わず、回答本文に直接次の形式でMarkdown表を
 書いて画像プレビュー付きの一覧として示すこと（`output_path` は絶対パスの
 まま使う。`@N` に置き換えない）:
 

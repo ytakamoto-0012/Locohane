@@ -209,7 +209,7 @@ def _resolve_exec_workdir() -> Path:
     こともあり得るが、default_workdir はサーバー側の設定のため常に
     書き込み可能という前提が置ける）。
 
-    provide_download / show_image / _resolve_analyze_image_path は
+    provide_download / _resolve_analyze_image_path は
     ユーザーへの成果物提供に使う関数のため、意図的にこの関数を使わず
     _resolve_workdir() のまま据え置く（最終成果物はユーザー指定の work_dir
     直下に置かれる想定のため。execute_python_code の書き込みガード
@@ -233,7 +233,8 @@ def _restrict_default_workdir(path: Path) -> Path:
     素朴には default_workdir 直下になっていたため発生しえた）。
     自セッション専用の `_tmp_<thread_id>`（_resolve_exec_workdir() と同じ
     ディレクトリ）だけに縮小することで、成果物は常にセッション専用領域へ
-    閉じ込め、ユーザーへの提示は provide_download/show_image 経由に統一する。
+    閉じ込め、ユーザーへの提示は provide_download/analyze_image(show_in_chat=True)
+    経由に統一する。
 
     work_dir がユーザー指定で default_workdir と無関係な場所を指している
     場合はそのまま通す（制限対象は default_workdir そのものが渡された

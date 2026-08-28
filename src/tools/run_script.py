@@ -17,8 +17,8 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
     自セッション専用一時フォルダ（`_tmp_<thread_id>`）を使う
     （default_workdirはサーバー側の共有フォルダのため、直下に成果物を
     書くと他セッションから見えてしまう事故を避けるため。この場合の
-    成果物はユーザーへ直接見えないため、provide_download/show_image で
-    改めて提示すること）。
+    成果物はユーザーへ直接見えないため、provide_download/analyze_image
+    （show_in_chat=True）で改めて提示すること）。
     タイムアウトは設定値（既定 60 秒）。完了までこのツール呼び出し自体が
     ブロックされるため、タイムアウトに近い長時間の実行が見込まれるスクリプトは
     このツールではなく run_script_background を使うこと。

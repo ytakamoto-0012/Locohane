@@ -101,7 +101,7 @@
                  └───┬───────────────────────────┬──────────────┘
                      │ モデル呼び出し             │ ツール実行
        ┌─────────────▼───────────┐   ┌───────────▼──────────────────────┐
-       │ ChatOpenAI              │   │ src/tools.py (37ツール)             │
+       │ ChatOpenAI              │   │ src/tools.py (36ツール)             │
        │  → llama-server /v1     │   │  read_skill / read_skill_file /    │
        │  (OpenAI 互換)          │   │  run_script / execute_python_code /│
        └─────────────────────────┘   │  get_tool_source / check_work_dir_status /│
@@ -111,7 +111,7 @@
                                       │  approve_plan / update_task_progress/│
                                       │  get_plan_status / lock_plan_mode /│
                                       │  AskUserQuestion / ask_user_choice /│
-                                      │  provide_download / show_image /   │
+                                      │  provide_download /                │
                                       │  create_memory / update_memory /   │
                                       │  delete_memory / read_memory /     │
                                       │  search_memory / list_memories /   │
@@ -189,7 +189,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 スキルの frontmatter（name/description）だけはこれとは別に、`src/skills.py` が
 起動時にシステムプロンプトへテキスト注入する（Discovery 段階、こちらはプロンプトベース）。
 
-上記3段階に加えて、スキルの読み込みとは独立したツールが以下の37個ある（いずれも `src/tools.py`）。
+上記3段階に加えて、スキルの読み込みとは独立したツールが以下の36個ある（いずれも `src/tools.py`）。
 
 | ツール | 役割 |
 |--------|------|
@@ -208,8 +208,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `json_query` | JSON/dict に対する JMESPath クエリ（読み取り専用） |
 | `list_path_memory` | 現在の会話のパスメモリー（`@N`）登録内容を一覧表示する（読み取り専用） |
 | `provide_download` | 既存のファイルをチャット画面にダウンロードボタンとして提示する |
-| `show_image` | 既存の画像ファイルをチャット画面にプレビュー表示する（LLM自身は内容を見ない。「表示して」「見せて」に）。回答本文（Markdownテーブルのセル等）の中に画像を組み込みたい場合はツールを使わず、回答テキストへ直接 `![説明](絶対パス)` と書けばよい（送信直前に自動でブラウザから取得可能なURLへ変換される。`app.py` の `_embed_local_images_as_session_urls`） |
-| `analyze_image` | 画像ファイルをLLMへ視覚情報として見せ、LLM自身が内容を解析・説明・判断する（Vision対応モデル向け） |
+| `analyze_image` | 画像ファイルをLLMへ視覚情報として見せ、LLM自身が内容を解析・説明・判断する（Vision対応モデル向け）。`show_in_chat=True` を指定すると、解析と同時にチャット画面へもプレビュー表示する（「表示して」「見せて」にはこちらを使う。表示だけして中身を見ない、という呼び方はできない）。回答本文（Markdownテーブルのセル等）の中に画像を組み込みたい場合は、ツールを使わず回答テキストへ直接 `![説明](絶対パス)` と書けばよい（送信直前に自動でブラウザから取得可能なURLへ変換される。`app.py` の `_embed_local_images_as_session_urls`） |
 | `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される。完了までの間、進捗（経過時間・反復回数）をチャットへ直接通知しながら待つため、LLM自身がポーリングする必要は無い。設定した安全上限（`[subagent].background_inline_wait_max_seconds`）を超えてもなお完了しない場合のみ `job_id` を返してターンを終える |
 | `check_dispatch_agent_job` / `stop_dispatch_agent_job` | 上記の安全上限超過フォールバック時のみ使う、ジョブの状況確認・強制終了 |
 | `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ。既定（`config.ini` の `[plan] require_planner_dispatch`）では、同一ターンで `dispatch_agent(agent_type="planner")` が完了していないと `create_plan` はエラーを返してブロックする（記憶・推測だけで steps を作らせず、専用サブエージェントに草案を作らせるため） |
@@ -410,7 +409,7 @@ Locohane/
 | `data/memory/` | 永続メモリー（`user`/`feedback`/`project`/`reference` サブフォルダ＋`MEMORY.md`索引） | 蓄積した記憶が不要になったとき | フォルダ内を削除（`MEMORY.md`は次回保存時に再生成される） |
 | `data/plans/` | `create_plan` が `detail_markdown` 引数を渡した場合の詳細計画Markdown（`[paths] plans_dir`） | 古い計画が不要になったとき | フォルダ内を削除 |
 | `data/temp/_tmp_<作成時刻>_<thread_id>/` | `execute_python_code`/`run_script` の中間生成物・`write_scratch_note`/`write_thread_note` の書き出し先。自セッション専用（`[default_workdir]` 参照）。フォルダ名先頭の作成時刻（ミリ秒まで）はファイラー上で作成順に並べるためのもの | セッション終了後、不要になったとき | フォルダ内を削除（`[default_workdir] retention_days`/`cleanup_interval_hours` により自動削除もされる） |
-| `data/elements/<thread_id>/` | 添付ファイル（`show_image`/`provide_download`等）・回答本文への画像埋め込みの永続化先。スレッド再開・プロセス再起動後も表示できるようここへ実体をコピー保存する（`[elements]`参照、`src/thread_store.py`） | 添付ファイルが不要になったとき | フォルダ内を削除 |
+| `data/elements/<thread_id>/` | 添付ファイル（`provide_download`/`analyze_image`の`show_in_chat=True`等）・回答本文への画像埋め込みの永続化先。スレッド再開・プロセス再起動後も表示できるようここへ実体をコピー保存する（`[elements]`参照、`src/thread_store.py`） | 添付ファイルが不要になったとき | フォルダ内を削除 |
 | `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（送信直後のライブ表示にのみ使う一時配信。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
 
 `data/uploads/` は `config.ini` の `[uploads] retention_days`（既定7日）を過ぎたファイルを
@@ -809,8 +808,9 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[elements]` | `cleanup_interval_hours` | 自動削除チェックの実行間隔（時間） | `ELEMENTS_CLEANUP_INTERVAL_HOURS` |
 | `[images]` | `max_long_side_pixels` | LLMへ渡す前に画像を縮小する長辺ピクセル数の上限（`0`で縮小なし） | `IMAGE_MAX_LONG_SIDE_PIXELS` |
 | `[images]` | `jpeg_quality` | 縮小後に再エンコードするJPEG品質（1-95） | `IMAGE_JPEG_QUALITY` |
-| `[images]` | `inline_preview_max_long_side_pixels` | 回答本文（Markdownテーブルのセル等）へ直接埋め込む画像プレビューの長辺ピクセル数の上限。`show_image`と同じセッションファイル配信経路で渡すためVision向け設定より小さくても差し支えなく、表示帯域・ディスク使用量を抑える目的で別に小さい値を使う | `IMAGE_INLINE_PREVIEW_MAX_LONG_SIDE_PIXELS` |
+| `[images]` | `inline_preview_max_long_side_pixels` | 回答本文（Markdownテーブルのセル等）へ直接埋め込む画像プレビューの長辺ピクセル数の上限。`analyze_image`の`show_in_chat=True`と同じセッションファイル配信経路で渡すためVision向け設定より小さくても差し支えなく、表示帯域・ディスク使用量を抑える目的で別に小さい値を使う | `IMAGE_INLINE_PREVIEW_MAX_LONG_SIDE_PIXELS` |
 | `[images]` | `inline_preview_jpeg_quality` | 上記プレビューの再エンコード品質（1-95） | `IMAGE_INLINE_PREVIEW_JPEG_QUALITY` |
+| `[images]` | `inline_preview_min_long_side_pixels` | 上記プレビューの長辺ピクセル数の下限。これより小さい画像はこの値まで拡大してから埋め込む（`0`で拡大なし） | `IMAGE_INLINE_PREVIEW_MIN_LONG_SIDE_PIXELS` |
 | `[scripts]` | `timeout` | `run_script`/`execute_python_code` 共通のタイムアウト秒 | `SCRIPT_TIMEOUT` |
 | `[scripts]` | `python` | `.py` 実行に使う Python | `SCRIPT_PYTHON` |
 | `[scripts]` | `code_execution_enabled` | `execute_python_code` ツール自体の有効/無効 | `CODE_EXECUTION_ENABLED` |
@@ -971,13 +971,14 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
   `app.py` の `_patch_chainlit_anonymous_resume()` が、匿名モード時のみ
   `chainlit.socket.resume_thread` をモジュール関数単位で差し替え、再開時に
   一時的な `anonymous` ユーザーを補ってから元の実装を呼ぶ。
-- **添付ファイル・埋め込み画像の永続化**: `show_image`/`provide_download` 等の
-  添付ファイル、および回答本文へ直接埋め込まれた画像は、`data/elements/`
-  （`[elements]`参照）へ実体をコピー保存し、再開したスレッドやプロセス再起動後も
-  表示できる（`src/thread_store.py` の `create_element`/`get_element`/
-  `delete_element`、`app.py` の `_embed_local_images_as_session_urls`）。ただし
-  `analyze_image`（LLM自身が画像を解析するだけでチャットUIへは表示しない）は
-  元々表示対象外のため、この永続化とは無関係。
+- **添付ファイル・埋め込み画像の永続化**: `provide_download`/`analyze_image`の
+  `show_in_chat=True` 等の添付ファイル、および回答本文へ直接埋め込まれた画像は、
+  `data/elements/`（`[elements]`参照）へ実体をコピー保存し、再開したスレッドや
+  プロセス再起動後も表示できる（`src/thread_store.py` の `create_element`/
+  `get_element`/`delete_element`、`app.py` の
+  `_embed_local_images_as_session_urls`）。ただし `analyze_image` を
+  `show_in_chat=False`（既定）で呼んだ場合はチャットUIへ表示しないため、
+  この永続化とは無関係。
 
 ---
 

@@ -362,7 +362,7 @@ async def persist_element_file(
 ) -> Path:
     """要素の実体を data/elements/<thread_id>/<element_id>_<name> へ保存し、DB行をupsertする。
 
-    show_image/provide_download の添付（kind="chainlit"、
+    provide_download/analyze_image(show_in_chat=True) の添付（kind="chainlit"、
     ChatThreadDataLayer.create_element 経由）と、回答本文への画像埋め込み
     （kind="inline"、app.py の _embed_local_images_as_session_urls 経由）の
     両方がこの関数を共有する。extra_data（ElementDict相当の辞書）の "url" を

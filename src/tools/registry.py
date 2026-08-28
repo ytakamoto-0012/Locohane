@@ -7,7 +7,6 @@ from langchain_core.tools import BaseTool
 from .read_skill import read_skill
 from .read_skill_file import read_skill_file
 from .provide_download import provide_download
-from .show_image import show_image
 from .get_tool_source import get_tool_source
 from .check_work_dir_status import check_work_dir_status
 from .write_scratch_note import write_scratch_note
@@ -43,7 +42,6 @@ _SUBAGENT_TOOLS: list = [
     read_skill,
     read_skill_file,
     provide_download,
-    show_image,
     run_script,
     run_script_background,
     check_script_job,
@@ -79,7 +77,6 @@ _BASE_TOOLS: list[BaseTool] = [
     read_skill,
     read_skill_file,
     provide_download,
-    show_image,
     run_script,
     run_script_background,
     check_script_job,
