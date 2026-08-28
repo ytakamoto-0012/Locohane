@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from langchain_core.tools import tool
 from pathlib import Path
 import chainlit as cl
+import json
 import os
 import uuid
 
@@ -63,36 +64,42 @@ def check_work_dir_status() -> str:
     ときに使う。
 
     Returns:
-        パス・状態（読み書き可能/読み取り専用/アクセス不可/存在しない）・
-        フォールバック先をまとめた文字列。書き込みのフォールバック先は
-        既定フォルダ直下ではなく専用サブフォルダ（_tmp_<thread_id>）。
+        absolute_path・state（read_write/read_only/unreadable/not_found）・
+        read_dir・write_dir 等をキーに持つJSON文字列。パス値を他の説明文と
+        混在させると低パラメータモデルが説明文込みで1つのパスとして誤認識
+        することがあるため、パスは必ず独立したキーに分離する。書き込みの
+        フォールバック先は既定フォルダ直下ではなく専用サブフォルダ
+        （_tmp_<thread_id>）。
     """
     if _state._DEFAULT_WORKDIR is None:
-        return "エラー: init_tools() が未実行です"
+        return json.dumps({"error": "init_tools() が未実行です"}, ensure_ascii=False)
     exec_tmp_dir = _resolve_exec_workdir()
     work_dir = cl.user_session.get("work_dir")
     if not work_dir:
-        return (
-            f"作業ディレクトリ: 未設定（既定フォルダ {_state._DEFAULT_WORKDIR} を使用）\n"
-            "状態: 読み書き可能\n"
-            f"書き込み先: {exec_tmp_dir}"
-        )
+        result = {
+            "absolute_path": str(_state._DEFAULT_WORKDIR),
+            "state": "read_write",
+            "source": "default",
+            "write_dir": str(exec_tmp_dir),
+        }
+        return json.dumps(result, ensure_ascii=False)
     status = probe_workdir_access(Path(work_dir))
     cl.user_session.set("work_dir_access", status)
     if not status.exists:
-        label = "存在しません（このPCから直接アクセスできません）"
+        state = "not_found"
     elif not status.readable:
-        label = "アクセスできません（読み取り不可）"
+        state = "unreadable"
     elif not status.writable:
-        label = "読み取り専用（書き込み不可）"
+        state = "read_only"
     else:
-        label = "読み書き可能"
-    lines = [f"作業ディレクトリ: {work_dir}", f"状態: {label}"]
+        state = "read_write"
+    result = {"absolute_path": work_dir, "state": state}
     if status.error:
-        lines.append(f"詳細: {status.error}")
+        result["detail"] = status.error
     if not status.exists or not status.readable:
-        lines.append(f"読み取り先: {_state._DEFAULT_WORKDIR}")
-        lines.append(f"書き込み先: {exec_tmp_dir}")
+        result["read_dir"] = str(_state._DEFAULT_WORKDIR)
+        result["write_dir"] = str(exec_tmp_dir)
     elif not status.writable:
-        lines.append(f"書き込み先: {exec_tmp_dir}（読み取りは元の作業ディレクトリのまま）")
-    return "\n".join(lines)
+        result["write_dir"] = str(exec_tmp_dir)
+        result["note"] = "読み取りは元の作業ディレクトリのまま"
+    return json.dumps(result, ensure_ascii=False)

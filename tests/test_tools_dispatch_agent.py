@@ -14,6 +14,7 @@ LLM自身が check_dispatch_agent_job でポーリングする」方式で実装
 
 import asyncio
 import importlib
+import json
 import re
 
 import pytest
@@ -123,7 +124,8 @@ async def test_background_dispatch_injects_work_dir_hint_into_task(monkeypatch, 
     await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
 
     expected_work_dir = tmp_path / "workdir"
-    assert captured["task"] == f"作業ディレクトリ: {expected_work_dir}\n\ninvestigate"
+    expected_info = json.dumps({"absolute_path": str(expected_work_dir)}, ensure_ascii=False)
+    assert captured["task"] == f"[作業ディレクトリ]\n{expected_info}\n\ninvestigate"
 
 
 @pytest.mark.asyncio

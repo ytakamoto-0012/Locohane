@@ -5,6 +5,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 import asyncio
 import chainlit as cl
+import json
 import logging
 import time
 import uuid
@@ -34,12 +35,19 @@ def _task_with_work_dir_hint(task: str) -> str:
     _resolve_workdir() は init_tools() 未実行時のみ RuntimeError を送出するが、
     ヒント注入1つの失敗で dispatch_agent 全体を失敗させないよう、ここで
     握りつぶして task をそのまま返す。
+
+    absolute_path はラベル文字列と同じ行に連結せずJSONの独立したキーに
+    分離する。低パラメータモデルは「作業ディレクトリ: D:\\x」のような
+    ラベル+コロン+パスの自然文だと、ラベル込みで1つのパス文字列として
+    誤認識しGlob等へそのまま渡してしまう事例があったため
+    （_build_work_dir_notice と同じ理由、app.py 参照）。
     """
     try:
         work_dir = _resolve_workdir()
     except RuntimeError:
         return task
-    return f"作業ディレクトリ: {work_dir}\n\n{task}"
+    info = json.dumps({"absolute_path": str(work_dir)}, ensure_ascii=False)
+    return f"[作業ディレクトリ]\n{info}\n\n{task}"
 
 def _task_with_plan_hint(task: str) -> str:
     """dispatch_agent の task 文の先頭に、現在の実行計画を事実として付与する。

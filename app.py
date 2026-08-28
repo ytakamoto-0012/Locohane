@@ -1205,33 +1205,51 @@ def _build_work_dir_notice() -> str:
     そのため、この関数の戻り値を on_message から _build_human_message() 経由で
     HumanMessage へ差し込み、LLMが絶対パスを推測で組み立てずに済むようにする。
 
+    absolute_path 等のパス値は他の説明文と同じ文字列に混ぜず、必ずJSONの
+    独立したキーに分離する。低パラメータモデルは「絶対パス: D:\\x（読み書き
+    可能）」のような自然文だと括弧書きの説明ごと1つのパス文字列として認識し、
+    そのままGlob等のpath引数に渡してしまう事例があったため。
+
     Returns:
-        `[作業ディレクトリ]` で始まるテキストブロック。
+        `[作業ディレクトリ]` で始まり、状態を表すJSONオブジェクトを含む
+        テキストブロック。
     """
     work_dir = cl.user_session.get("work_dir")
     if work_dir:
         resolved = work_dir
         status: WorkDirAccessStatus | None = cl.user_session.get("work_dir_access")
-        source_label = "ユーザー変更値（📁アイコンで既定値から変更済み）"
+        source = "user_changed"
     else:
         resolved = str(_config.default_workdir)
         status = None
-        source_label = "既定値（default_workdir・未変更）"
+        source = "default"
+    fallback_dir = str(_config.default_workdir)
     if status is None or (status.exists and status.readable and status.writable):
-        state_label = "読み書き可能"
+        state = "read_write"
+        fallback = None
     elif not status.exists:
-        state_label = f"存在しないためアクセス不可。既定フォルダ（{_config.default_workdir}）へ自動フォールバック"
+        state = "not_found"
+        fallback = fallback_dir
     elif not status.readable:
-        state_label = f"読み取り不可。既定フォルダ（{_config.default_workdir}）へ自動フォールバック"
+        state = "unreadable"
+        fallback = fallback_dir
     else:
-        state_label = f"読み取り専用（書き込みは既定フォルダ {_config.default_workdir} へ自動フォールバック）"
+        state = "read_only"
+        fallback = fallback_dir
+    info = {
+        "absolute_path": resolved,
+        "state": state,
+        "source": source,
+        "fallback_dir": fallback,
+    }
     return (
         "[作業ディレクトリ]\n"
-        f"絶対パス: {resolved}（{state_label}）\n"
-        f"由来: {source_label}\n"
-        "Read/Glob/Grep/analyze_image でこの配下を扱う際は上記の絶対パスをそのまま使う。"
-        "サブフォルダ名しか分からない場合は Glob の path 引数を省略すれば自動的にこの"
-        "配下が検索対象になる（pattern 側にサブフォルダ名を含めてよい。例:"
+        f"{json.dumps(info, ensure_ascii=False)}\n"
+        "absolute_path をそのまま Read/Glob/Grep/analyze_image の対象パスとして使う"
+        "（他の説明文と連結せず、この値単体をパスとして扱う）。"
+        "state が read_write 以外の場合、書き込みは fallback_dir を使う。"
+        "サブフォルダ名しか分からない場合は Glob の path 引数を省略すれば自動的に"
+        "absolute_path 配下が検索対象になる（pattern 側にサブフォルダ名を含めてよい。例:"
         ' pattern="**/images/**/*"）。パスを記憶や推測で組み立てない。'
     )
 

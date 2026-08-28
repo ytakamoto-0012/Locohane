@@ -11,6 +11,7 @@ cl.user_session の ground truth を機械的に注入する」パターンを�
 """
 
 import importlib
+import json
 
 import pytest
 
@@ -116,4 +117,5 @@ async def test_dispatch_agent_task_unchanged_by_plan_hint_when_no_plan(monkeypat
     await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
 
     expected_work_dir = tmp_path / "workdir"
-    assert captured["task"] == f"作業ディレクトリ: {expected_work_dir}\n\ninvestigate"
+    expected_info = json.dumps({"absolute_path": str(expected_work_dir)}, ensure_ascii=False)
+    assert captured["task"] == f"[作業ディレクトリ]\n{expected_info}\n\ninvestigate"
