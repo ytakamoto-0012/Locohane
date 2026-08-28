@@ -37,6 +37,11 @@ LLM_PROVIDERS = frozenset({"openai_compatible", "llama_cpp"})
 # reasoning_format が取りうる値（llama-server の --reasoning-format と同じ）。
 LLM_REASONING_FORMATS = frozenset({"none", "deepseek", "deepseek-legacy"})
 
+# [main_agent_tool_guard].visibility_mode が取りうる値。
+# src/skills.py の filter_skills_for_main_agent_guard/render_skills_block_with_hint、
+# app.py のシステムプロンプト組み立てがこの文字列で分岐する。
+MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODES = frozenset({"strict", "hint"})
+
 
 @dataclass(frozen=True)
 class LLMEndpoint:
@@ -815,6 +820,7 @@ class Config:
     #     登録できる。Glob専用だった旧ガードもここへ統合済み。src/tools.py の
     #     _guard_main_agent_tool_limit） ---
     main_agent_tool_guard_enabled: bool
+    main_agent_tool_guard_visibility_mode: str
     main_agent_tool_guard_allow_entries: frozenset[tuple[str | tuple[str, str], int]]
 
     # --- グラフ実装切替 ---
@@ -1284,6 +1290,26 @@ def _as_routing_strategy(value: str | None, key_name: str) -> str:
     if text not in LLM_ROUTING_STRATEGIES:
         choices = "/".join(sorted(LLM_ROUTING_STRATEGIES))
         raise ValueError(f"[llm].{key_name} は {choices} のいずれかにしてください: {value!r}")
+    return text
+
+
+def _as_main_agent_tool_guard_visibility_mode(value: str | None) -> str:
+    """[main_agent_tool_guard].visibility_mode の値を検証する。
+
+    Args:
+        value: config.ini から得た文字列、または環境変数由来の文字列。
+            空欄・None なら既定値 "strict" を返す。
+
+    Returns:
+        前後の空白を除いた文字列（MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODES のいずれか）。
+
+    Raises:
+        ValueError: MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODES に無い値が指定された場合。
+    """
+    text = str(value or "").strip() or "strict"
+    if text not in MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODES:
+        choices = "/".join(sorted(MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODES))
+        raise ValueError(f"[main_agent_tool_guard].visibility_mode は {choices} のいずれかにしてください: {value!r}")
     return text
 
 
@@ -2024,6 +2050,12 @@ def load_config(config_path: Path | None = None) -> Config:
             os.getenv(
                 "MAIN_AGENT_TOOL_GUARD_ENABLED",
                 main_agent_tool_guard.get("enabled", True),
+            )
+        ),
+        main_agent_tool_guard_visibility_mode=_as_main_agent_tool_guard_visibility_mode(
+            os.getenv(
+                "MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODE",
+                main_agent_tool_guard.get("visibility_mode", "strict"),
             )
         ),
         main_agent_tool_guard_allow_entries=_parse_main_agent_tool_guard_allow_entries(

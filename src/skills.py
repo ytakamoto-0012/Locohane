@@ -64,6 +64,7 @@ class Skill:
     description: str
     dir_path: Path       # skills/<name>/
     skill_md_path: Path  # skills/<name>/SKILL.md
+    has_scripts: bool = False  # scripts/配下に*.pyが1つ以上あるか（run_script実行対象の有無）
 
 
 def _parse_frontmatter(text: str) -> dict | None:
@@ -132,6 +133,19 @@ def _validate(name: object, description: object, dir_name: str) -> str | None:
     return None
 
 
+def _skill_has_scripts(dir_path: Path) -> bool:
+    """スキルが run_script/run_script_background の実行対象となる *.py を持つか。
+
+    filter_skills_for_main_agent_guard() / is_skill_directly_runnable() が、
+    SKILL.md + references のみ（scriptsを持たない）のスキルを、main_agent_tool_guard
+    の allow_entries 登録有無に関わらず常に一覧へ残すために使う判定。
+    """
+    scripts_dir = dir_path / "scripts"
+    if not scripts_dir.is_dir():
+        return False
+    return any(scripts_dir.glob("*.py"))
+
+
 def _scan_one(root: Path) -> list[Skill]:
     """1つのディレクトリ直下を走査し、有効な Skill の一覧を返す（内部ヘルパー）。"""
     skills: list[Skill] = []
@@ -165,6 +179,7 @@ def _scan_one(root: Path) -> list[Skill]:
                 description=description.strip(),
                 dir_path=entry,
                 skill_md_path=skill_md,
+                has_scripts=_skill_has_scripts(entry),
             )
         )
         logger.info("スキル発見: %s", name)
@@ -230,17 +245,52 @@ def render_skills_block(skills: list[Skill]) -> str:
     return "（利用可能なスキルはありません）"
 
 
-def filter_skills_for_main_agent_guard(skills: list[Skill], config: "Config") -> list[Skill]:
-    """[main_agent_tool_guard] 有効時、メインエージェントの `{{skills}}` へ
-    載せるスキルを、直接実行が許可されたものだけに絞り込む。
+def is_skill_directly_runnable(skill: Skill, config: "Config") -> bool:
+    """メインエージェントがそのスキルを直接（run_script経由で）実行できるか。
 
-    [main_agent_tool_guard].allow_entries に [skill_name, script_filename] の
-    ペアが1件も max_calls≠0 で登録されていないスキルは、メインエージェントが
-    run_script/run_script_background を直接呼んでも常に拒否される
+    skill.has_scripts が False（SKILL.md + referencesのみ等、scripts/を持たない
+    スキル）は run_script の対象自体が無いため、allow_entries の登録有無に
+    関わらず常に True を返す（read_skill/read_skill_file だけで完結し、両ツール
+    とも main_agent_tool_guard.allow_entries に常時登録されているため、
+    メインエージェントは支障なくアクセスできる）。
+
+    has_scripts が True のスキルは、[main_agent_tool_guard].allow_entries に
+    [skill_name, script_filename] のペアが1件も max_calls≠0 で登録されて
+    いなければ False（run_script/run_script_background を直接呼んでも
+    src/tools/tool_node.py の _guard_main_agent_tool_limit に常に拒否される）。
+
+    filter_skills_for_main_agent_guard() / render_skills_block_with_hint() の
+    双方が本関数の判定結果を使う。
+
+    Args:
+        skill: 判定対象の Skill。
+        config: main_agent_tool_guard_allow_entries を持つ Config。
+
+    Returns:
+        直接実行できるなら True。
+    """
+    if not skill.has_scripts:
+        return True
+    allowed = {
+        key[0]
+        for key, max_calls in config.main_agent_tool_guard_allow_entries
+        if isinstance(key, tuple) and max_calls != 0
+    }
+    return skill.name in allowed
+
+
+def filter_skills_for_main_agent_guard(skills: list[Skill], config: "Config") -> list[Skill]:
+    """[main_agent_tool_guard] visibility_mode=strict 時、メインエージェントの
+    `{{skills}}` へ載せるスキルを、直接実行が許可されたものだけに絞り込む。
+
+    scriptsを持つのに [skill_name, script_filename] ペアが max_calls≠0 で
+    登録されていないスキルは、メインエージェントが run_script/
+    run_script_background を直接呼んでも常に拒否される
     （src/tools/tool_node.py の _guard_main_agent_tool_limit 参照）。それでも
     `{{skills}}` へ全件載せたままだと「実行できる」と誤認して試み、拒否→
     dispatch_agentへの再委譲を促されるだけの無駄な往復が発生する
     （src/tools/tool_node.py の filter_main_agent_tools と同じ理由づけ）。
+    scriptsを持たないスキル（is_skill_directly_runnable参照）は常に残す。
 
     dispatch_agent配下のサブエージェントには本ガードと無関係にフルの
     `{{skills}}` が渡る（app.py の agent_type_defs 差し込み参照）ため、ここで
@@ -252,18 +302,61 @@ def filter_skills_for_main_agent_guard(skills: list[Skill], config: "Config") ->
             を持つ Config。
 
     Returns:
-        guard 無効時は skills をそのまま返す。有効時は、名前が allow_entries の
-        [skill_name, script_filename] ペアに max_calls≠0 で1件でも登録されている
-        スキルのみに絞ったリスト。
+        guard 無効時は skills をそのまま返す。有効時は is_skill_directly_runnable()
+        が True のスキルのみに絞ったリスト。
     """
     if not config.main_agent_tool_guard_enabled:
         return skills
-    allowed = {
-        key[0]
-        for key, max_calls in config.main_agent_tool_guard_allow_entries
-        if isinstance(key, tuple) and max_calls != 0
-    }
-    return [s for s in skills if s.name in allowed]
+    return [s for s in skills if is_skill_directly_runnable(s, config)]
+
+
+def render_skills_block_with_hint(skills: list[Skill], config: "Config") -> str:
+    """[main_agent_tool_guard] visibility_mode=hint 用のスキル一覧を組み立てる。
+
+    render_skills_block() と異なり絞り込みは行わず全スキルを列挙するが、
+    is_skill_directly_runnable() が False のスキルには行末に注記を付け、
+    直接実行できないこと・dispatch_agentへの委譲が必要なことを示す。
+
+    Args:
+        skills: scan_skills() が返した有効な Skill のリスト（フィルタ前）。
+        config: is_skill_directly_runnable() が必要とする Config。
+
+    Returns:
+        "- name: description" 形式の箇条書き（実行不可分は注記付き）。
+        skills が空リストの場合は「利用可能なスキルはありません」という
+        旨の文言を返す。
+    """
+    if not skills:
+        return "（利用可能なスキルはありません）"
+    lines = []
+    for s in skills:
+        if is_skill_directly_runnable(s, config):
+            lines.append(f"- {s.name}: {s.description}")
+        else:
+            lines.append(f"- {s.name}: {s.description}（直接実行不可。詳細確認・実行は dispatch_agent へ委譲）")
+    return "\n".join(lines)
+
+
+def build_system_prompt_from_block(skills_block: str, template_path: Path | str) -> str:
+    """テンプレートファイルの `{{skills}}` を、組み立て済みのスキル一覧文字列で置換する。
+
+    render_skills_block() / render_skills_block_with_hint() のどちらで
+    組み立てたブロックでも渡せるよう、build_system_prompt() から
+    ブロック組み立て部分を分離したもの。
+
+    Args:
+        skills_block: render_skills_block() 等で組み立て済みのスキル一覧文字列。
+        template_path: `{{skills}}` プレースホルダーを含むシステムプロンプトの
+            テンプレートファイルのパス。
+
+    Returns:
+        LLM に渡すシステムプロンプト全文（複数行の文字列）。
+
+    Raises:
+        FileNotFoundError: template_path が存在しない場合。
+    """
+    template = Path(template_path).read_text(encoding="utf-8")
+    return template.replace("{{skills}}", skills_block)
 
 
 def build_system_prompt(skills: list[Skill], template_path: Path | str) -> str:
@@ -287,5 +380,4 @@ def build_system_prompt(skills: list[Skill], template_path: Path | str) -> str:
     Raises:
         FileNotFoundError: template_path が存在しない場合。
     """
-    template = Path(template_path).read_text(encoding="utf-8")
-    return template.replace("{{skills}}", render_skills_block(skills))
+    return build_system_prompt_from_block(render_skills_block(skills), template_path)

@@ -73,7 +73,7 @@ from ._path_memory_helpers import register_raw_unc_paths_in_text
 from ._plan_render import current_plan_status_text
 from ._state import _resolve_agent_types, forget_session_tool_semaphores
 from .thread_notes import thread_note_status_text
-from .tool_node import ImageAwareToolNode, filter_main_agent_tools
+from .tool_node import ImageAwareToolNode, filter_main_agent_tools, list_blocked_tool_names_for_hint
 from .registry import get_all_tools, register_mcp_tools
 
 # 個々の @tool オブジェクトも、分割前と同じく `tools.<ツール名>` で直接参照できる
@@ -132,6 +132,7 @@ __all__ = [
     "forget_session_tool_semaphores",
     "get_all_tools",
     "init_tools",
+    "list_blocked_tool_names_for_hint",
     "probe_workdir_access",
     "register_mcp_tools",
     "register_raw_unc_paths_in_text",

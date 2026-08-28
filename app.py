@@ -98,7 +98,13 @@ from src.memory import render_memory_block
 from src.ask_relay import pending_asks as _pending_asks, resolve_pending_ask
 from src.plan_persist import register_plan_persist
 from src.project_instructions import render_project_instructions_block
-from src.skills import build_system_prompt, filter_skills_for_main_agent_guard, render_skills_block, scan_skills
+from src.skills import (
+    build_system_prompt_from_block,
+    filter_skills_for_main_agent_guard,
+    render_skills_block,
+    render_skills_block_with_hint,
+    scan_skills,
+)
 from src.subagent import is_truncated_result
 from src.thread_store import ChatThreadDataLayer
 from src import thread_store
@@ -107,7 +113,9 @@ from src.tools import (
     cancel_background_script_jobs_for_thread,
     cancel_dispatch_agent_jobs_for_thread,
     forget_session_tool_semaphores,
+    get_all_tools,
     init_tools,
+    list_blocked_tool_names_for_hint,
     probe_workdir_access,
     register_raw_unc_paths_in_text,
     reset_call_history_guards_after_compaction,
@@ -1384,7 +1392,7 @@ async def _setup() -> None:
 
     実行内容:
     1. ログ出力先を設定する（_config はモジュール読み込み時に読み込み済み）。
-    2. scan_skills() でスキルを走査し、build_system_prompt() で
+    2. scan_skills() でスキルを走査し、build_system_prompt_from_block() で
        システムプロンプトを組み立てる（第1段階 Discovery）。
     3. init_tools() でツール（read_skill/read_skill_file/run_script/
        execute_python_code/dispatch_agent/メモリー系ツール）に skills ルート・
@@ -1487,12 +1495,32 @@ async def _setup() -> None:
     # 第1段階 Discovery: スキルを走査して name+description をシステムプロンプトへ。
     # skills_dir と locohane_skills_dirs をマージ（同名は locohane 側優先）。
     skills = scan_skills([_config.skills_dir, *_config.locohane_skills_dirs])
-    # メインエージェントの system_prompt には、main_agent_tool_guard 有効時
-    # 直接実行できないスキルを除いた一覧を差し込む（filter_skills_for_main_agent_guard
-    # 参照。dispatch_agent配下のサブエージェント用 skills_block は下記の通り
-    # 未フィルタの skills から別途組み立てるため、スキル自体は失われない）。
-    system_prompt = build_system_prompt(
-        filter_skills_for_main_agent_guard(skills, _config), _config.system_prompt_path
+    # メインエージェントの system_prompt に差し込む {{skills}}/{{main_agent_blocked_tools_hint}}
+    # は [main_agent_tool_guard] の enabled/visibility_mode で組み立て方が変わる
+    # （dispatch_agent配下のサブエージェント用 skills_block は下記の通り未フィルタの
+    # skills から別途組み立てるため、いずれのモードでもスキル自体は失われない）。
+    #   enabled=false        : 全スキルをそのまま列挙、ツールのhintも出さない。
+    #   visibility_mode=hint  : 全スキルを列挙しつつ直接実行不可な分に注記を付け、
+    #                          呼べないビルトインツール名一覧もテキストで案内する
+    #                          （bindはしない。無駄な往復を避けるため）。
+    #   visibility_mode=strict: 直接実行できないスキルは一覧から除外する（従来の挙動）。
+    if not _config.main_agent_tool_guard_enabled:
+        main_skills_block = render_skills_block(skills)
+        blocked_tools_hint = ""
+    elif _config.main_agent_tool_guard_visibility_mode == "hint":
+        main_skills_block = render_skills_block_with_hint(skills, _config)
+        blocked_names = list_blocked_tool_names_for_hint(get_all_tools(), _config)
+        blocked_tools_hint = (
+            "以下のビルトインツールは直接呼び出せません（詳細確認・実行が必要な場合は"
+            "dispatch_agentへ委譲してください）: " + "、".join(blocked_names)
+            if blocked_names
+            else ""
+        )
+    else:
+        main_skills_block = render_skills_block(filter_skills_for_main_agent_guard(skills, _config))
+        blocked_tools_hint = ""
+    system_prompt = build_system_prompt_from_block(main_skills_block, _config.system_prompt_path).replace(
+        "{{main_agent_blocked_tools_hint}}", blocked_tools_hint
     )
     # エージェント種別（agents/*.md、ClaudeCode の .claude/agents/*.md 相当）を走査し、
     # 各種別のシステムプロンプトにも {{skills}}/{{agent_types}} を差し込む

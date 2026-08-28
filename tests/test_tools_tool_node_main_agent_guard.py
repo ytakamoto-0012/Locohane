@@ -224,3 +224,35 @@ def test_filter_main_agent_tools_keeps_run_script_with_allowed_pair() -> None:
     result = tool_node.filter_main_agent_tools(tools, cfg)
 
     assert {t.name for t in result} == {"run_script", "run_script_background"}
+
+
+def test_list_blocked_tool_names_for_hint_guard_disabled_returns_empty() -> None:
+    tools = _make_tools("Glob", "Read", "run_script")
+    cfg = _make_cfg(entries=[], enabled=False)
+
+    assert tool_node.list_blocked_tool_names_for_hint(tools, cfg) == []
+
+
+def test_list_blocked_tool_names_for_hint_includes_unregistered_and_zero() -> None:
+    tools = _make_tools("Glob", "Read", "dispatch_agent")
+    cfg = _make_cfg(entries=[("Glob", 1), ("Read", 0)])
+
+    result = tool_node.list_blocked_tool_names_for_hint(tools, cfg)
+
+    assert result == ["Read", "dispatch_agent"]
+
+
+def test_list_blocked_tool_names_for_hint_excludes_unlimited_and_positive() -> None:
+    tools = _make_tools("dispatch_agent", "Glob")
+    cfg = _make_cfg(entries=[("dispatch_agent", -1), ("Glob", 3)])
+
+    assert tool_node.list_blocked_tool_names_for_hint(tools, cfg) == []
+
+
+def test_list_blocked_tool_names_for_hint_excludes_run_script_names() -> None:
+    tools = _make_tools("run_script", "run_script_background", "Glob")
+    cfg = _make_cfg(entries=[("Glob", 1), (("pdf-tools", "render_pdf_pages.py"), 0)])
+
+    result = tool_node.list_blocked_tool_names_for_hint(tools, cfg)
+
+    assert result == []

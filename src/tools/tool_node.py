@@ -289,6 +289,44 @@ def filter_main_agent_tools(tools: list[BaseTool], config) -> list[BaseTool]:
     return filtered
 
 
+def list_blocked_tool_names_for_hint(tools: list[BaseTool], config) -> list[str]:
+    """[main_agent_tool_guard] visibility_mode=hint 用に、メインエージェントが
+    直接呼び出せないビルトインツール名の一覧を返す。
+
+    filter_main_agent_tools() と対になる関数で、同じ許可判定ロジックのうち
+    「除外される側」の名前だけを返す。hintモードではツール自体をbindせず
+    （bindすると「呼べそうに見えて拒否される」無駄な往復が発生するため）、
+    この名前一覧をシステムプロンプトへテキストとして差し込むだけに留める
+    （app.py 参照）。
+
+    run_script/run_script_background はスキル単位の可否が {{skills}} 側の
+    render_skills_block_with_hint() で個別に示されるため、ここでは対象外
+    （一括で「呼べない」と案内すると、許可されたスキルスクリプトがあっても
+    誤解を招くため）。
+
+    Args:
+        tools: フィルタ前のツール一覧（get_all_tools() の戻り値を想定）。
+        config: main_agent_tool_guard_enabled / main_agent_tool_guard_allow_entries
+            を持つ Config。
+
+    Returns:
+        guard 無効時は空リスト。有効時は、allow_entries に未登録、または
+        max_calls=0 で登録されているツール名をソートしたリスト
+        （run_script/run_script_background は含まない）。
+    """
+    if not config.main_agent_tool_guard_enabled:
+        return []
+    entries_by_key = dict(config.main_agent_tool_guard_allow_entries)
+    blocked = []
+    for t in tools:
+        if t.name in ("run_script", "run_script_background"):
+            continue
+        max_calls = entries_by_key.get(t.name)
+        if max_calls is None or max_calls == 0:
+            blocked.append(t.name)
+    return sorted(blocked)
+
+
 class ImageAwareToolNode(ToolNode):
     """analyze_image の実行結果（画像）を、後続の HumanMessage として自動追加する ToolNode。
 

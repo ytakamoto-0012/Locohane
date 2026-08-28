@@ -55,6 +55,7 @@ xlsx/docx/pptx/pdf作成（`worker`委譲・`planner`設計依頼含む）では
 
 {{skills}}
 （各スキルはname/descriptionのみ提示＝progressive disclosure第1段階）
+{{main_agent_blocked_tools_hint}}
 
 **基本3ステップ**: ①`read_skill`でSKILL.md全文を読む→②実行は`worker`等へ委譲し`run_script`で専用スクリプトを実行させる→③呼び方が不明な時のみ`read_skill_file`でreferences/assets配下を読む（skillsディレクトリ配下限定）。「見つかりません」なら`explore`へ委譲し`Read`＋`Glob`の`@N`で作業ディレクトリ側を確認させる。
 
