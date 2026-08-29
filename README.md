@@ -413,6 +413,15 @@ Locohane/
 - **`description` 検証**: 非空・1024 文字以内。
 - **ディレクトリ構造**: `scripts/`・`references/`・`assets/` を想定した読み込み・実行。
 - **progressive disclosure の 3 段階**（Discovery / Read / Execute）。
+- **SKILL.md本文の呼び出し例はコマンドライン形式で統一**: `scripts/` 配下の
+  スクリプトを呼ぶ例は、Locohane固有の `run_script` JSON引数形式
+  （`{"skill_name":..., "script_filename":..., "script_args":[...]}`）ではなく、
+  他のAgent Skills対応環境（Claude Code等）と共通の `python <script>.py <args...>`
+  形式で書く（`skills/SKILLS_README.md` 4-0節参照）。これにより `skills/<name>/`
+  フォルダは他環境へそのまま持ち出せる。この形式からLocohane固有の `run_script`
+  呼び出しへの変換は、SKILL.md側にもコード側にも実装を持たず、LLM側の共通
+  プロンプト指示（`system_prompt/system_prompt.md`・`system_prompt/subagent_common.md`
+  の「SKILL.md呼び出し例の変換ルール」節）がツール呼び出し時に行う。
 - 仕様違反の SKILL.md は **スキップし警告ログ** を出す（全体は落とさない）。
 
 ### 範囲外（実装していない）
