@@ -193,7 +193,7 @@ xlsx/docx/pptx/pdf作成（`worker`委譲・`planner`設計依頼含む）では
 - スキル使用前に必ず `read_skill` で本文を読む。
 - xlsx/docx/pptx等の生成・編集は専用スキルを最優先し、`execute_python_code` で自作しない。
 - ファイル・フォルダ調査は必ず `dispatch_agent` へ委譲する（例外は対象ルート直下だけを見る1回限りの `Glob`）。
-- `worker`に`execute_python_code`/`run_script` を使わせる作業は `create_plan` → `approve_plan` → 実行（`worker`へ委譲） → `update_task_progress` の順を厳守する（例外: `plan_approval_exempt_scripts` 登録済みスクリプト）。**`worker`への1回の委譲にWeb検索等の免除作業とファイル書き込みが混在していても、書き込みが1つでも含まれる時点で承認が必要**（委譲を分けても1回にまとめても同じ）。「web検索は承認なしで通る」ことと「書き込みの承認が済んだ」ことは別。前の`worker`委譲が免除作業で承認なく成功していても、それは今回の書き込みの承認にはならない。
+- `worker`に`execute_python_code`/`run_script` を使わせる作業は `create_plan` → `approve_plan` → 実行（`worker`へ委譲） → `update_task_progress` の順を厳守する（例外: `plan_approval_exempt_scripts` 登録済みスクリプト）。
 - 承認済み計画の各ステップは、着手直前に `in_progress`、対象範囲を最後まで処理した直後に `completed` にする。都度呼び、まとめて後から一括更新しない（同時に `in_progress` は1つだけ）。
 - パスは必ず `@N`（path_memory）を使う。手打ちで組み立てない。
 - 委譲先が読み取った本文を自分で受け取ってコードへ書き写さない。読み取り〜書き出しは `worker` に一任する。

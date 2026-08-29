@@ -4378,3 +4378,103 @@ iter54で006ケースがタイムアウトすることを確認した際に見�
 **新たに発覚した別問題（今回は未対応、issueとして記録）**: 検証実行で、`worker`が最後の書き込みステップで`execute_python_code`を一度も呼ばずにコード実行結果を丸ごとテキストで捏造し、メインエージェントもverifier検証を省略して「修正しました」と完了報告する事象を発見した。書き込みサンドボックスの迷走とは別種の問題（ハルシネーション＋検証義務の未履行）のため、ユーザー指示により今回は修正せず`issue/20260829_163000_worker_fabricates_tool_execution_and_skips_verifier.md`に記録するに留めた。
 
 **まとめ**: iter54で発見した001・002の回帰は修正・検証済み（system_prompt.md単体の文言修正）。006は書き込み先の設計不整合が根本原因と判明し、コード側の修正で解消した。003は判定基準側の陳腐化と判断し対応不要。005は既にPASS。ただし006の検証中に新たな捏造問題を発見し、これは別issueとして記録した。今回のセッションはここで区切る。
+
+## system_prompt_scale: 全7ケース一括実行（ユーザー指示、2026-08-29）
+
+**ユーザー指示**: `evals/cases/system_prompt_scale` 配下の全ケース（001, 002, 003, 004, 006, 007, 008）を対象に `/tune-prompt` を実行すること。前提条件確認でlocalhost:8080のllama-serverが応答せず、config.ini実際の接続先は`http://localhost:12430/v1`（200応答確認済み）だった。
+
+`python evals/run_all.py system_prompt_scale` で7件を一括実行（結果: `evals/results/system_prompt_scale/20260829_222746/`）。所要時間は約4時間20分（17:04開始〜21:29終了、各ケース直列実行）。
+
+### 判定結果サマリ
+
+| ケース | ルール | judge判定 | 備考 |
+|---|---|---|---|
+| 001 xlsx | - | ERROR | 3600秒タイムアウト。新規発見の問題（詳細後述） |
+| 002 pptx | PASS | PASS | 問題なし |
+| 003 docx | PASS | PASS | ThinkingLoopDetected 1回発生→正常回復（不合格理由にはしない） |
+| 004 pdf | PASS | **FAIL** | pdf-tools不使用（詳細後述） |
+| 006 recipe画像→md | PASS | PASS | 軽微な逡巡あり（後述、不合格閾値には未達） |
+| 007 recipe栄養検索 | PASS | **FAIL** | 計画未承認のまま書き込み委譲（詳細後述） |
+| 008 英検単語帳PDF | **FAIL** | PASS | ルール側が陳腐化と判断（詳細後述） |
+
+turn_cutoffs・token_usage_max_per_callはいずれのケースも異常なし（`calls_over_ceiling`は006のみ2件、ceiling64000に対し多少の超過、コンテキスト上限128000への張り付きなし）。
+
+### 001（xlsx）: ERROR、新規発見の問題（未修正、方針要相談）
+
+evals.log（17:04:59〜18:05:02の区間）を確認したところ、`excel-edit`の`edit_excel.py`は正しく使われており（openpyxl自作バイパスではない）、run3として想定していた「plannerのopenpyxl自作誘導」問題は再発していなかった。
+
+しかし新たに、生成後の`annual_schedule.xlsx`をexecute_python_codeで検証した際に7月データの一部が欠落していることに気づき、原因究明のデバッグを18:00頃から18:34頃（タイムアウトまで）延々と続ける動きが発生した。ログの`src.llm.loop_guard`のmatch_ratioは0.01〜0.15程度で推移し、`ThinkingLoopDetected`の閾値に達しないまま（＝機械的な文字列一致ベースのループ検知をすり抜けたまま）、表現を変えながら意味的に同じ堂々巡りの推論（「row0[2]にm7_Cを設定したはず→でも読み込み結果がおかしい→ops.jsonの中身を確認→edit_excel.pyのset_range実装を確認→…」を延々ループ）を繰り返し、1時間のタイムアウトに達した。
+
+**評価**: これはsystem_prompt.mdの文言修正だけでは解決が難しい可能性が高い問題。表現を変え続ける「意味的ループ」は現行の`loop_guard`（テキスト類似度ベース）の検知対象外であり、コード側（loop_guard的検知の別軸、またはデバッグ試行回数の上限とverifierへの委譲を促す設計）の対応が必要かもしれない。今回は修正を保留し、ユーザーに報告する。
+
+### 004（pdf）: FAIL、pdf-tools不使用（専用スクリプト優先ルール違反）
+
+judge指示は「pdf-toolsのcreate_pdf.py（run_script経由、セマンティックHTMLからPDF生成）を使うことを期待し、execute_python_codeでの自作は不合格」としている。
+
+実際のtranscriptでは、plannerが計画段階で「docx-createスキルで月間カレンダーを生成」「docx-createスキルで週間カレンダーを生成」「docxファイルをPDFに変換し、annual_schedule.pdfとして保存する」という3ステップ計画を起草し、メインエージェントもこれをそのまま採用した。結果、workerはdocx-createで2つのdocxを作成した後、`read_skill(pdf-tools)`を読んだ上で「pdf-toolsにはdocx→PDF変換機能がない」と判断し、Word COM自動化（`win32com.client`、実行経路の詳細はworker内部のためtranscriptには残らないが、execute_python_code経由の可能性が高い）でdocxをPDFへ変換、pypdfで結合するという迂回策を取った。
+
+**根本原因**: pdf-toolsは「新規にセマンティックHTMLからPDFを生成する」機能であり「既存docxをPDF変換する」機能ではないため、この判断自体は誤りではない。問題は、plannerが計画段階でそもそも`create_pdf.py`（HTML→PDF直接生成）を検討せず、「docx-createで作ってからPDF変換」という遠回りな設計を最初から選んでしまったこと。ユーザーがPDFを直接要求しているケースで、なぜdocx経由になったのか、plannerがpdf-toolsスキルの存在・用途をこの時点でまだ把握していなかった可能性が高い（read_skill(pdf-tools)を読んだのはworkerであり、planner起票時点ではpdf-tools未参照）。
+
+**評価**: 修正が必要。plannerがOffice/PDF成果物の設計時に、出力形式に対応する専用スクリールを事前に確認する（例: PDF成果物ならpdf-toolsのcreate_pdf.pyを第一候補として検討する）ようagents/planner.mdまたはsystem_prompt.mdへの追記を検討する。
+
+### 007（recipe栄養検索）: FAIL、計画未承認のまま書き込み委譲（006既知パターンの再発）
+
+judge項目3「dispatch_agent(worker)への最初の委譲より前にcreate_plan→approve_planを経由しているか」に違反。
+
+実際の流れ: 画像読み取り（explore）→栄養情報Web検索（worker、読み取り専用なので問題なし）→**計画承認前にdispatch_agent(worker)でmdファイル書き込みを委譲**→workerの`execute_python_code`が「計画が未承認のため実行できません」でブロックされ、その委譲が丸ごと無駄になった→その後ようやくcreate_plan→approve_planを実行→再度workerへ委譲して成功。
+
+**評価**: これは`annual_schedule_week_fix_ambiguous_calendar`（system_promptターゲット006）で過去に確認された退行と同種のパターン（「調査系の委譲が連続して成功した流れの延長で、書き込み系の委譲もそのまま計画未承認のまま実行してしまう」）。実害（データ破損等）はなく自己修正で完走しているが、無駄な1往復が発生している。system_prompt.mdの「書き込み系操作の前に必ずcreate_plan→approve_planを経由する」ルールの強調・具体例追加を検討する。
+
+### 006（recipe画像→md、290枚）: PASS、軽微な逡巡あり（要観察）
+
+judge項目3（分割方法の同じ計算・言い直しの繰り返し）に近い軽微な逡巡が1箇所あった。「まずmdフォルダの既存ファイル名を取得しておく必要があるが…」という文言が1つのAIMessage内で3回程度繰り返されている。ただし判定基準が指す「分割方法（グループ数・件数）の再計算の繰り返し」とは対象が異なり（今回はmdフォルダ確認の必要性についての逡巡）、深刻な退行（ツール呼び出しをまたいだ繰り返し）でもないため今回は不合格としない。同種の逡巡が今後拡大しないか要観察。
+
+### 008（英検単語帳PDF）: ルールFAIL、判定基準側の陳腐化と判断
+
+`expect.tool_call_args_containsrun_script: {skill_name: "pdf-tools"}}`がFAILしたが、これはメインエージェントが直接run_scriptを呼ぶ設計を前提にした古い判定基準であり、現行のdispatch_agent委譲必須アーキテクチャ（`main_agent_tool_guard`でメインエージェントはrun_scriptを直接呼べない設計）とは矛盾する。実際にはdispatch_agent(worker)への委譲経由でpdf-tools/create_pdf.pyが使われたと推測される（read_skill(pdf-tools)を読んだ直後にworkerへcreate_pdf.py使用を明示した委譲を実施、生成物もPDF）。
+
+judge観点1〜5（捏造チェック・計画承認順序・複数ファイル対応・PDF読み取り方法・対象40語の過不足）はすべて確認でき問題なし（hotel.pdf 0001-0016 + fruit.pdf 0017-0032 + vacation.pdf 0033-0040で過不足なく40語をカバー、他3ファイルも実際に画像として読んで対象外と判定）。turn_cutoffsなし。これはiter54の003ケースと同種の「ケースYAML側の陳腐化」であり、system_prompt.md側の修正は不要と判断。ケースYAMLの`expect`をdispatch_agent経由でも判定できる形に更新するかはユーザー判断を仰ぐ（`tune-prompt`の対象外ファイルのため）。
+
+### 今回のセッションでの対応
+
+上記の通り3件（001のデバッグループ、004のpdf-tools不使用、007の計画未承認委譲）は実質的な問題だが、性質が異なり原因も別々のため、SKILL.mdの「1イテレーションで複数箇所を一度に書き換えない」原則に従い、今回は状況の報告に留め、修正着手前にユーザーに優先順位・対応方針を確認する。
+
+### iter04: 004（pdf-tools不使用）・007（計画未承認委譲）を修正、001は保留
+
+ユーザー判断: 001（デバッグの意味的無限ループ、コード側調査が必要）は今回保留、004・007の2件を先に修正する。
+
+**編集前スナップショット**: `evals/history/system_prompt_scale/iter04_before_system_prompt.md`（system_prompt.md）、`evals/history/system_prompt_scale/iter04_before_planner.md`（agents/planner.md）。
+
+**004対応**: `agents/planner.md`の「xlsx/docx/pptxが成果物に含まれる場合...」節を「xlsx/docx/pptx/pdf」に拡張し、pdf=`pdf-tools`の`create_pdf.py`を専用スクリプト対応表へ追加。加えて「成果物の出力形式がPDFの場合、docx/pptxを先に作ってから変換するという迂回策を選ばず、`create_pdf.py`を第一候補として検討する」を明記した。根本原因は、plannerが計画起草時点でpdf-toolsスキルをまだ確認しておらず（`read_skill(pdf-tools)`を呼んだのはworker側）、PDF成果物なのにdocx-create経由の変換ルートを選んでしまったこと。
+
+**007対応**: `system_prompt/system_prompt.md`の必須ルール（`worker`に`execute_python_code`/`run_script`を使わせる作業は`create_plan`→`approve_plan`→実行の順を厳守、の行）に「直前の`worker`委譲がWeb検索等の免除スクリプトで承認なく成功していても、次に書き込み系を委譲するときは改めて`create_plan`→`approve_plan`が必要」を追記した。根本原因は、直前のworker委譲（web-search、`plan_approval_exempt_scripts`により承認不要で成功）の成功体験に引きずられ、続く書き込み系委譲（mdファイル生成）でも計画承認が必要という認識が抜け落ちたこと。
+
+### iter04 検証結果（004単体再実行）
+
+`004_annual_schedule_pdf_end_to_end_large.yaml`を単体再実行し、修正の効果を確認した。`planner`への2回目委譲（起草）の時点から`docx-create`への言及が一切なく、`worker`への委譲では明示的に「pdf-toolsスキルのcreate_pdf.pyを使って」と指示している。`verifier`も`read_pdf.py`/`render_pdf_pages.py`でPDFを直接検証する方法を使っている。1回目生成で曜日のずれをverifierが検出→NGを受けてworkerへ再委譲→修正→再検証でOK、という正しい不備対応フローも機能した。`rules_pass: true`、`turn_cutoffs: None`。**PASS**。004の修正は効果を確認できた。
+
+### iter04 検証結果（007単体再実行）: 修正不十分、追加修正が必要
+
+`007_recipe_nutrition_web_search.yaml`を単体再実行したところ、依然として`judge`項目3（最初のworker委譲より前にcreate_plan→approve_planを経由しているか）に違反した。
+
+今回のパターンは修正前と微妙に異なる: 前回は「web検索の委譲→成功→書き込み委譲→ブロック」の2段階だったのに対し、今回はexplore（画像読み取り）の直後、`dispatch_agent(worker)`への**1回の委譲**に「web-searchで栄養情報を検索」と「mdファイル作成」の両方を混在させて送っており、その委譲自体が計画未承認のままだった（`execute_python_code`がブロックされ「書き出したファイル件数: 0件」で返ってきた）。追記した文言（「直前のworker委譲が免除スクリプトで承認なく**成功していても**」）は「2段階の委譲」を前提にしていたため、「1回の委譲に両方混在」という今回のパターンには効かなかったと判断できる。
+
+その後は`create_plan`前にplannerへの委譲が必要という既存ガードでエラーを受け、正しく`planner`→`create_plan`→`approve_plan`→`worker`再委譲の順に回復し、最終的に完走している（`rules_pass: true`、`turn_cutoffs: None`）。実害はないが、judge観点では依然として不合格。
+
+**振動検知の判断**: 「合格→不合格」の繰り返しではなく「不合格→(1回目の修正)→依然不合格」であり、SKILL.mdの振動検知（同一ケースが同一理由で合格・不合格を繰り返す）には直ちに該当しないと判断し、文言をより一般化する形でもう1段階の修正を試みる。
+
+次: `system_prompt.md`の該当追記を「直前の委譲が成功していても」という2段階前提から、「1回の委譲に書き込みが1つでも混在する場合」を含む形へ一般化して再修正し、`007`を再検証する。
+
+### iter04 再修正: 必須ルールの文言を一般化
+
+`system_prompt/system_prompt.md`の該当行を「直前の`worker`委譲が...成功していても」（2段階の委譲を前提にした書き方）から、「`worker`への1回の委譲にWeb検索等の免除作業とファイル書き込みが混在していても、書き込みが1つでも含まれる時点で承認が必要（委譲を分けても1回にまとめても同じ）」という、委譲の回数に依存しない一般化した書き方へ修正した。
+
+### iter04 再検証結果（007再修正後の単体再実行）: PASS
+
+再修正後に`007_recipe_nutrition_web_search.yaml`を単体再実行したところ、`explore`（画像解析）→`create_plan`（planner未経由でエラー）→`planner`委譲→`create_plan`成功（3ステップ: ①mdファイル生成→②栄養情報WEB検索追記→③検証）→`approve_plan`→**その後に初めて`worker`への書き込み委譲**という正しい順序になった。plannerが計画段階で「mdファイル生成」と「栄養情報WEB検索追記」を明確に別ステップへ分離したことで、1回の委譲に読み取り・書き込みが混在する状況自体が起きなくなった。judge項目1（worker task文に栄養情報WEB検索の指示が明確に含まれるか）・項目3（最初のworker委譲より前にcreate_plan→approve_planを経由）とも問題なし。`rules_pass: true`、`turn_cutoffs: None`。**PASS**。
+
+**最終スナップショット**: 変更後の`system_prompt.md`・`agents/planner.md`を`evals/history/system_prompt_scale/iter04_final_system_prompt.md`・`iter04_final_planner.md`として退避する。
+
+### iter04 まとめ
+
+004（pdf-tools不使用）・007（計画未承認のまま書き込み委譲）とも修正・再検証済みでPASSを確認した。007は1回目の修正（2段階の委譲を前提にした文言）では不十分で、2回目の修正（委譲回数に依存しない一般化）で解決した。001（デバッグの意味的無限ループ）は今回未対応、別セッションでコード側の対応を検討する。

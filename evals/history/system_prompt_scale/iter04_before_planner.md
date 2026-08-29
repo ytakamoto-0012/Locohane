@@ -21,15 +21,12 @@ detail_markdownに明記することが、`worker`等へスキル名を伝える
 です。対応する既存スキルがある作業は、Office文書に限らずすべて明記して
 ください。
 
-xlsx/docx/pptx/pdfが成果物に含まれる場合、`worker`への指示となる
+xlsx/docx/pptxが成果物に含まれる場合、`worker`への指示となる
 detail_markdown草案・steps候補に「`execute_python_code`で`openpyxl`等を
 使って自作する」という実装方法を**書かない**。必ず対応するスキルの専用
 スクリプト（xlsx=`excel-edit`の`edit_excel.py`、docx=`docx-create`/
-`docx-edit`、pptx=`pptx-create`/`pptx-edit`、pdf=`pdf-tools`の
-`create_pdf.py`、いずれも`run_script`）を使うよう明記する。**成果物の
-出力形式がPDFの場合、docx/pptxを先に作ってから変換するという迂回策を
-選ばず、`pdf-tools`の`create_pdf.py`（セマンティックHTMLから直接PDFを
-生成する）を第一候補として検討する。**
+`docx-edit`、pptx=`pptx-create`/`pptx-edit`、いずれも`run_script`）を使う
+よう明記する。
 
 ## 出力
 
