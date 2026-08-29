@@ -4354,3 +4354,27 @@ transcriptを確認したところ、モデルは1ターン目で空応答（無
 ### 残課題（006）: ユーザー判断待ちのため今回のループはここで一時停止
 
 `annual_schedule_week_fix_ambiguous_calendar`は前述の通り、system_prompt.mdの文言修正だけでは解けない設計ギャップ（work_dirが未設定＝共有default_workdir使用時、`worker`は書き込み対象を`_tmp_<thread_id>`に強制されるが`provide_download`はメインエージェント専用のため、既存ファイルの直接編集結果をユーザーに渡す手段が無い）が原因のタイムアウトのため、修正を保留してユーザーに報告する。003（判定基準の陳腐化）・005（PASS維持）は今回対応不要と判断。イテレーション上限（10回）には遠く達していないが、006の対応方針が確定するまでは003/006がある限り「全ケース合格」に到達できないため、ここで一旦ユーザーに報告する。
+
+## iter55: コード側対策セッション（作業ディレクトリのスレッド分離、system_prompt.md/agents/worker.mdは補助的な追記のみ）（2026-08-29）
+
+iter54で006ケースがタイムアウトすることを確認した際に見つけた「書き込み先の迷走」の根本原因を、ユーザーとの対話で深掘りした結果、system_prompt.mdの文言修正だけでは解けない設計不整合であることが判明した。
+
+**根本原因**: `work_dir`（ユーザーがツールバーで指定する作業フォルダ）が未設定の場合、実際に使われる値は`default_workdir`になる。この仕組みの本来の狙いは「会話スレッドごとにデータを分離し、無関係なスレッドのデータを拾ってタスクが壊れる事故を防ぐこと」だが、この分離が**書き込み側（`run_script`/`execute_python_code`、`_restrict_default_workdir()`経由）にしか実装されておらず、読み取り側（`Glob`/`Read`/`Grep`のパス省略時、`analyze_image`の相対パス解決、`dispatch_agent`の作業ディレクトリヒント、`provide_download`の相対パス解決）には実装されていなかった**。さらに、LLMへ状態を伝える2箇所（`check_work_dir_status`ツールと`app.py`の`_build_work_dir_notice()`）がそれぞれ独自に重複したロジックを実装しており、`state: "read_write"`という同じ値が「absolute_pathへ直接書ける」と「書けずwrite_dir経由のみ」という矛盾する2つの意味で使われていた。
+
+**修正内容**（詳細は`C:\Users\ytkmt\.claude\plans\rosy-dazzling-naur.md`のユーザー承認済み計画参照）:
+1. `src/tools/_workdir.py`: `_resolve_workdir()`のwork_dir未設定時のフォールバック先を、`_state._DEFAULT_WORKDIR`（全スレッド共通の共有フォルダ）から`_resolve_exec_workdir()`（スレッド専用の`_tmp_<thread_id>`）へ変更。これにより読み取り側も書き込み側と同様にスレッド分離される。
+2. 同ファイル: `_resolve_exec_workdir()`が、スレッド専用フォルダを初めて作成する瞬間に`default_workdir`直下の既存の中身をコピーする（`_seed_exec_workdir()`新設）。これにより「ツールバーで作業フォルダを指定せず、既定フォルダに直接ファイルを置いて質問する」という素朴な使い方も引き続き成立する。
+3. 同ファイル: `state`の意味を「absolute_pathへ直接書き込めるか」だけを表す一貫した値にするため、`_build_workdir_status_info()`を新設し、`check_work_dir_status.py`と`app.py`の`_build_work_dir_notice()`の両方がこの共通ヘルパーに委譲するよう書き換え（重複ロジックの一本化）。各分岐に状況別の`description`キーを追加（JSON自体に状況説明を埋め込み、低パラメータモデルが直前のJSON内の文言を優先しやすいようにする）。
+4. 同ファイル: `_foreign_tmp_dir_error`/`_foreign_tmp_dir_names`が`_resolve_workdir()`（副作用でスレッド専用フォルダを新規作成・シードしうる）ではなく`_state._DEFAULT_WORKDIR`を直接参照するよう修正（単なる除外判定のためだけに無関係な場所でフォルダ作成の副作用を起こさないため。既存テスト`test_glob_over_workdir_excludes_foreign_tmp_but_keeps_siblings`が失敗して発覚）。
+5. `_restrict_default_workdir()`を削除（`_resolve_workdir()`が二度と素の`default_workdir`を返さなくなり到達不能コードになったため）。呼び出し元2箇所（`_python_fs_guard.py`/`_script_job.py`）を追随修正。
+6. `src/tools/run_script.py`: docstringの「書き込みがリダイレクトされた場合はprovide_download等で提示する」という指示を、呼び出し元エージェントが`provide_download`を持つとは限らない（`worker`は持たない）ことを踏まえて修正。
+7. `agents/worker.md`: 「既存ファイルをその場で上書きできない場合」の対処手順（write_dirへ出力→絶対パスを最終回答で報告→provide_downloadは呼べない→迂回策を試みない）を新規節として追記。
+8. `system_prompt/system_prompt.md`: 「Tool Usage Guidelines」節に、workerからのwrite_dir報告をメインエージェントがprovide_downloadで提示する旨を1文追加。
+
+**テスト**: 新規`tests/test_tools_workdir.py`（12件、`_resolve_workdir`のフォールバック・`_resolve_exec_workdir`のシード処理・`_build_workdir_status_info`の4パターン・check_work_dir_statusとの整合性）を追加。既存テストのうち、work_dir未設定時の既定パス解決がdefault_workdir直下からスレッド専用フォルダへ変わったことに伴い、`tests/test_tools_dispatch_agent.py`・`tests/test_tools_dispatch_agent_concurrency.py`・`tests/test_tools_dispatch_agent_plan_hint.py`・`tests/test_tools_file_tools_wrappers.py`（3件）の期待値・前提を更新。`pytest tests/`全534件通過を確認。
+
+**検証結果**: `evals/cases/system_prompt/006_annual_schedule_week_fix_ambiguous_calendar.yaml`を単体再実行し、`ThinkingLoopDetected`0件・書き込みサンドボックスガードのエラー0件・タイムアウトなしで完走することを確認（元の不具合は解消）。
+
+**新たに発覚した別問題（今回は未対応、issueとして記録）**: 検証実行で、`worker`が最後の書き込みステップで`execute_python_code`を一度も呼ばずにコード実行結果を丸ごとテキストで捏造し、メインエージェントもverifier検証を省略して「修正しました」と完了報告する事象を発見した。書き込みサンドボックスの迷走とは別種の問題（ハルシネーション＋検証義務の未履行）のため、ユーザー指示により今回は修正せず`issue/20260829_163000_worker_fabricates_tool_execution_and_skips_verifier.md`に記録するに留めた。
+
+**まとめ**: iter54で発見した001・002の回帰は修正・検証済み（system_prompt.md単体の文言修正）。006は書き込み先の設計不整合が根本原因と判明し、コード側の修正で解消した。003は判定基準側の陳腐化と判断し対応不要。005は既にPASS。ただし006の検証中に新たな捏造問題を発見し、これは別issueとして記録した。今回のセッションはここで区切る。

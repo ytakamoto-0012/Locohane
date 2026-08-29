@@ -30,7 +30,7 @@ def _subprocess_env() -> dict[str, str]:
     （run_script の cwd が指すユーザー指定 work_dir は保持日数ベースの自動削除
     対象外のため、cwd 基準にすると中間生成物が消えずに溜まり続ける。常に
     default_workdir 基準に固定することで自動削除の対象に含める。
-    `_restrict_default_workdir` 参照）。
+    `_resolve_exec_workdir` 参照）。
     AGENT_EXEC_TMP_NAME は `_tmp_<name>/` の `<name>` 部分（`_exec_tmp_name()`
     が生成する、作成時刻プレフィックス付きthread_id）。サブプロセス側
     （skills配下の各スクリプト・`path_memory.exec_tmp_dir()`）はこの値を使って
@@ -110,9 +110,9 @@ def _run_script_guard_env(workdir: Path, skill_name: str, script_filename: str) 
     一切変更せずに書き込み・削除系呼び出しへガードを差し込む。
 
     許可されるのは workdir（run_script の cwd = 作業ディレクトリ。呼び出し元の
-    _prepare_script_execution が _restrict_default_workdir() 済みのため、
-    work_dir未設定等でdefault_workdirへフォールバックした場合はここで
-    既に `_tmp_<thread_id>` になっている）・`_tmp_<thread_id>`（念のため
+    _prepare_script_execution が _resolve_workdir() を使うため、
+    work_dir未設定等の場合はここで既に `_tmp_<thread_id>` になっている）・
+    `_tmp_<thread_id>`（念のため
     ここでも明示的に加える。default_workdirはサーバー側の共有ディレクトリの
     ため、直下やその他のサブディレクトリへの書き込みは許可せず、常に
     自セッション専用の`_tmp_<thread_id>`のみに限定する。他セッションが

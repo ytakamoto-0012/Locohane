@@ -68,7 +68,11 @@ class TestReadTool:
         assert result["path_memory"] == {"@1": str(f.resolve())}
 
     def test_relative_path_resolves_against_workdir_not_process_cwd(self, file_tools_env) -> None:
-        f = file_tools_env / "notes.txt"
+        # work_dir未設定時、相対パスは default_workdir 直下ではなくスレッド
+        # 専用フォルダ（_resolve_exec_workdir()）基準で解決される（2026-08-29
+        # 修正、別スレッドのデータを拾わないための分離）。
+        resolved_workdir = tools._workdir._resolve_exec_workdir()
+        f = resolved_workdir / "notes.txt"
         f.write_text("hello\n", encoding="utf-8")
 
         result = json.loads(tools.read_tool.func(file_path="notes.txt"))
@@ -120,11 +124,15 @@ class TestGlobTool:
         assert "path_memory" in result
 
     def test_empty_path_resolves_to_workdir(self, file_tools_env) -> None:
-        (file_tools_env / "a.py").write_text("a", encoding="utf-8")
+        # work_dir未設定時、パス省略時の既定検索先はdefault_workdir直下では
+        # なくスレッド専用フォルダ（_resolve_exec_workdir()）になる
+        # （2026-08-29修正、別スレッドのデータを拾わないための分離）。
+        resolved_workdir = tools._workdir._resolve_exec_workdir()
+        (resolved_workdir / "a.py").write_text("a", encoding="utf-8")
 
         result = json.loads(tools.glob_tool.func(pattern="*.py", path=""))
 
-        assert result["base"] == str(file_tools_env)
+        assert result["base"] == str(resolved_workdir)
 
     def test_missing_base_returns_error(self, file_tools_env) -> None:
         result = tools.glob_tool.func(pattern="*.py", path=str(file_tools_env / "nope"))
@@ -227,12 +235,15 @@ class TestForeignTmpDirGuard:
         assert result["content"].endswith("[]")
 
     def test_glob_over_workdir_excludes_foreign_tmp_but_keeps_siblings(self, file_tools_env) -> None:
+        # work_dir未設定時のパス省略はスレッド専用フォルダを見るため（上記
+        # test_empty_path_resolves_to_workdir参照）、ここでは検証したい
+        # default_workdir直下を明示的にpathへ指定する。
         (file_tools_env / "notes.txt").write_text("hello", encoding="utf-8")
         foreign = file_tools_env / "_tmp_thread-2"
         foreign.mkdir()
         (foreign / "leaked.txt").write_text("secret", encoding="utf-8")
 
-        result = json.loads(tools.glob_tool.func(pattern="**/*", path=""))
+        result = json.loads(tools.glob_tool.func(pattern="**/*", path=str(file_tools_env)))
 
         registered_paths = set(result.get("path_memory", {}).values())
         assert not any("leaked.txt" in p for p in registered_paths)

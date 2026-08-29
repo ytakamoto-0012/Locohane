@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+import shutil
 
 import chainlit as cl
 
@@ -37,6 +38,14 @@ def _foreign_tmp_dir_error(path: Path) -> str | None:
     「他セッションの一時ディレクトリ」として読み取り拒否してしまう回帰が
     あった（2026-08-22 発見・修正）。
 
+    `_tmp_<thread_id>` は常に `_state._DEFAULT_WORKDIR` 直下にのみ作られる
+    （`_resolve_exec_workdir()` docstring参照）ため、ここでは `primary` に
+    `_resolve_workdir()` を使わない（work_dir未設定時、`_resolve_workdir()`
+    自体が `_resolve_exec_workdir()` を返すようになった＝呼ぶだけで自分の
+    `_tmp_<thread_id>` を新規作成・シードする副作用があり、単なる除外判定の
+    ためだけに無関係な場所でこの副作用を起こしてしまうため。2026-08-29発見・
+    修正）。
+
     Args:
         path: 解決済みの絶対パス（未解決でも内部で resolve() する）。
 
@@ -49,7 +58,7 @@ def _foreign_tmp_dir_error(path: Path) -> str | None:
         resolved = path.resolve()
     except OSError:
         return None
-    for parent in _tmp_dir_parents(_resolve_workdir()):
+    for parent in _tmp_dir_parents(_state._DEFAULT_WORKDIR):
         try:
             rel = resolved.relative_to(parent)
         except ValueError:
@@ -74,10 +83,14 @@ def _foreign_tmp_dir_names() -> frozenset[str]:
     他セッションの `_tmp_<X>` サブツリーだけを走査・結果から除外するために
     glob_tool.py の `glob_search`/grep_tool.py の `grep_search` の
     `exclude_names` へ渡す。
+
+    `_foreign_tmp_dir_error()` と同じ理由で、`primary` に `_resolve_workdir()`
+    ではなく `_state._DEFAULT_WORKDIR` を直接使う（副作用のあるフォルダ
+    新規作成を、単なる除外判定のためだけに起こさないため）。
     """
     own_name = f"_tmp_{_exec_tmp_name()}"
     names: set[str] = set()
-    for parent in _tmp_dir_parents(_resolve_workdir()):
+    for parent in _tmp_dir_parents(_state._DEFAULT_WORKDIR):
         try:
             entries = list(parent.iterdir())
         except OSError:
@@ -88,23 +101,29 @@ def _foreign_tmp_dir_names() -> frozenset[str]:
     return frozenset(names)
 
 def _resolve_workdir(need_write: bool = False) -> Path:
-    """run_script が subprocess.run に渡す cwd を決定する。
+    """run_script/Glob/Read等が使う「現在の作業ディレクトリ」を決定する。
 
     Chainlit の ChatSettings（独自フロントエンドには表示されないが
     on_settings_update の経路自体は残っている）でユーザーがセッションに
-    作業ディレクトリを設定していればそれを使い（app.py の
+    作業ディレクトリを設定していればそれを使う（app.py の
     on_settings_update が cl.user_session["work_dir"] に絶対パス文字列を
-    保存する）、未設定なら config.ini の [default_workdir].dir
-    （init_tools() で注入された _state._DEFAULT_WORKDIR）にフォールバックする。
+    保存する）。
 
-    サーバー/クライアントでファイルシステムが分離している環境（別PCから
-    利用する場合）では、ユーザー指定の work_dir がサーバー側から見て
-    アクセス不可・書き込み不可なことがある。app.py の _apply_work_dir が
-    設定時に cl.user_session["work_dir_access"]（WorkDirAccessStatus）へ
-    実測結果をキャッシュしており、ここではそれを参照して機械的に
-    default_workdir へフォールバックする（LLMが確認を怠っても安全側に
-    倒れる）。読み取り専用共有から既存ファイルを読ませたいだけのケースを
-    妨げないよう、need_write=False（既定）では読み取り可否のみを見る。
+    **未設定、またはユーザー指定のwork_dirが使えない（存在しない・読めない・
+    ［need_write時は］書き込めない）場合は、常にこのスレッド専用フォルダ
+    `_resolve_exec_workdir()`（`_tmp_<thread_id>`）へフォールバックする。**
+    以前はここで config.ini の [default_workdir].dir（_state._DEFAULT_WORKDIR、
+    全スレッド共通の共有フォルダ）を直接返していたが、これだと無関係な
+    別スレッド（や外部から直接置かれたファイル）を、パス省略時の既定検索先
+    としてそのまま拾ってしまい、意図しないデータでタスクが壊れる事故が
+    起こりうる。`_tmp_<thread_id>` はスレッドごとに独立しており、初回作成時に
+    その時点の default_workdir 直下の中身がコピーされる（`_resolve_exec_workdir()`
+    docstring参照）ため、ツールバーで作業フォルダを指定しない素朴な使い方
+    （default_workdir 直下に直接ファイルを置いて質問する）も引き続き成立する。
+
+    default_workdir 直下そのものへ明示的に絶対パスを指定してのアクセス
+    （Read/Glob等の path 引数に直接渡す）は制限しない。ここで変えるのは
+    「パス省略時に自動的にどこを見るか」という既定値だけである。
 
     read_skill / read_skill_file / スクリプト本体の場所解決には影響しない
     （それらは常に _safe_path 経由で skills ルート配下に固定される）。
@@ -116,7 +135,8 @@ def _resolve_workdir(need_write: bool = False) -> Path:
 
     Returns:
         呼び出し元が使う絶対パス。work_dir が未設定、またはアクセス不可・
-        （need_write時は）書き込み不可と判定されていれば default_workdir。
+        （need_write時は）書き込み不可と判定されていれば
+        `_resolve_exec_workdir()`（`_tmp_<thread_id>`）。
 
     Raises:
         RuntimeError: init_tools() が未実行で _state._DEFAULT_WORKDIR が None の場合。
@@ -125,14 +145,82 @@ def _resolve_workdir(need_write: bool = False) -> Path:
         raise RuntimeError("init_tools() が未実行です")
     work_dir = cl.user_session.get("work_dir")
     if not work_dir:
-        return _state._DEFAULT_WORKDIR
+        return _resolve_exec_workdir()
     status: WorkDirAccessStatus | None = cl.user_session.get("work_dir_access")
     if status is not None:
         if not status.exists or not status.readable:
-            return _state._DEFAULT_WORKDIR
+            return _resolve_exec_workdir()
         if need_write and not status.writable:
-            return _state._DEFAULT_WORKDIR
+            return _resolve_exec_workdir()
     return Path(work_dir)
+
+
+def _build_workdir_status_info(work_dir: str | None, status: "WorkDirAccessStatus | None") -> dict:
+    """作業ディレクトリの状態を表す辞書を組み立てる（LLMへ状態を伝える共通の元データ）。
+
+    `check_work_dir_status`ツールと、会話スレッド開始時に自動注入される
+    `app.py`の`_build_work_dir_notice()`の両方がこの関数を呼ぶ。以前は
+    この2箇所が独自にほぼ同じ判定ロジックを別々に重複実装しており、
+    食い違った（かつ両方とも`state`の意味が矛盾する誤った）情報をLLMへ
+    伝えていた（2026-08-29 発見）。ロジックを1箇所に集約することで、
+    今後どちらか一方だけを直して食い違う事故を防ぐ。
+
+    `state`は常に「`absolute_path`へ直接読み書きできるか」だけを表す
+    （`"read_write"`ならできる、それ以外（`"read_only"`/`"unreadable"`/
+    `"not_found"`）はできない）。`write_dir`は常に存在し、直接書き込み
+    できる場合は`absolute_path`と同じ値、できない場合はスレッド専用の
+    `_resolve_exec_workdir()`の絶対パスになる。書き込み判断には常に
+    `write_dir`だけを見ればよく、`state`の値を書き込み可否の判断に使う
+    必要はない。
+
+    Args:
+        work_dir: `cl.user_session.get("work_dir")`の値（未設定なら
+            `None`または空文字）。
+        status: `work_dir`設定済みの場合の実測アクセス結果
+            （`probe_workdir_access()`の戻り値）。未設定、または実測が
+            まだ済んでいない場合は`None`（`None`の場合は楽観的に
+            `read_write`とみなす。既存の呼び出し元の挙動を維持）。
+
+    Returns:
+        `absolute_path`/`state`/`source`/`write_dir`/`description`を持つ
+        辞書。`work_dir`設定済みでアクセス不可（`not_found`/`unreadable`）
+        の場合のみ、読み取りフォールバック先を示す`read_dir`も追加する。
+    """
+    if not work_dir:
+        resolved = str(_resolve_exec_workdir())
+        return {
+            "absolute_path": resolved,
+            "state": "read_write",
+            "source": "default",
+            "write_dir": resolved,
+            "description": "absolute_pathへ直接読み書きできる。write_dirはabsolute_pathと同じ値。",
+        }
+    if status is None or (status.exists and status.readable and status.writable):
+        return {
+            "absolute_path": work_dir,
+            "state": "read_write",
+            "source": "user_changed",
+            "write_dir": work_dir,
+            "description": "absolute_pathへ直接読み書きできる。write_dirはabsolute_pathと同じ値。",
+        }
+    write_dir = str(_resolve_exec_workdir())
+    info = {"absolute_path": work_dir, "source": "user_changed", "write_dir": write_dir}
+    if not status.exists:
+        info["state"] = "not_found"
+        info["read_dir"] = str(_state._DEFAULT_WORKDIR)
+        info["description"] = "absolute_pathが存在しない。読み取りはread_dir、書き込みはwrite_dirを使うこと。"
+    elif not status.readable:
+        info["state"] = "unreadable"
+        info["read_dir"] = str(_state._DEFAULT_WORKDIR)
+        info["description"] = "absolute_pathへアクセスできない。読み取りはread_dir、書き込みはwrite_dirを使うこと。"
+    else:
+        info["state"] = "read_only"
+        info["description"] = (
+            "absolute_pathは読み取り専用。書き込みはwrite_dirへ行うこと。読み取りはabsolute_pathのまま。"
+            "既存ファイルを編集する場合はwrite_dirへ出力し、その絶対パスを報告する。"
+        )
+    return info
+
 
 def _exec_tmp_name() -> str:
     """`_tmp_<name>` の `<name>` 部分を返す（作成時刻プレフィックス付きthread_id）。
@@ -189,16 +277,58 @@ def _exec_tmp_name() -> str:
     return name
 
 
+def _seed_exec_workdir(dest: Path) -> None:
+    """新規作成したスレッド専用フォルダへ、default_workdir直下の既存の中身をコピーする。
+
+    ツールバーで作業フォルダを指定していないユーザーが、default_workdir
+    直下に直接置いた既存ファイル（アプリを経由しない外部からの配置、
+    以前のセッションでの生成物等）を、最初のメッセージから参照できる
+    ようにするため。コピーは `_resolve_exec_workdir()` がこのフォルダを
+    初めて作成する瞬間にのみ行われ、以降このフォルダ内で完結するため、
+    他スレッドの後続の変更が漏れてくることも、このスレッドの変更が他
+    スレッドへ漏れることもない（コピー元・コピー先のどちらも他スレッドの
+    `_tmp_*` フォルダは対象外）。
+
+    Args:
+        dest: コピー先（作成直後の自スレッド専用フォルダ）。
+    """
+    if _state._DEFAULT_WORKDIR is None:
+        return
+    try:
+        entries = list(_state._DEFAULT_WORKDIR.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.name.startswith("_tmp_"):
+            continue
+        target = dest / entry.name
+        try:
+            if entry.is_dir():
+                shutil.copytree(entry, target)
+            else:
+                shutil.copy2(entry, target)
+        except OSError:
+            continue
+
+
 def _resolve_exec_workdir() -> Path:
     """execute_python_code / run_script が中間生成物を書く実行用ディレクトリ。
 
     常に default_workdir 配下に `_tmp_<thread_id>` を作って返す（無ければ
-    作成する）。LLMがコード内で相対パスで書き出すファイル（ops.json 等の
-    中間生成物）が作業ディレクトリ直下に散らからないようにするため。
-    `_tmp/<thread_id>` のような親子階層ではなく `_tmp_<thread_id>` という
-    単一のディレクトリ名にしているのは、日数ベースの自動削除（cleanup_old_dirs、
-    app.py）が丸ごと rmtree した際、親ディレクトリ（`_tmp`）が空のまま
-    残り続ける問題を避けるため。
+    作成する）。`_resolve_workdir()` がwork_dir未設定・アクセス不可時の
+    フォールバック先としても使う（このディレクトリが「今の作業ディレクトリ」
+    そのものになる）ため、LLMがコード内で相対パスで書き出すファイル
+    （ops.json 等の中間生成物）も、Glob/Read等の既定検索先も、ここに
+    一本化される。`_tmp/<thread_id>` のような親子階層ではなく
+    `_tmp_<thread_id>` という単一のディレクトリ名にしているのは、
+    日数ベースの自動削除（cleanup_old_dirs、app.py）が丸ごと rmtree した際、
+    親ディレクトリ（`_tmp`）が空のまま残り続ける問題を避けるため。
+
+    このスレッドで初めてこのフォルダを作成する場合（`d.exists()`が
+    `False`だった場合）、`_seed_exec_workdir()` で default_workdir 直下の
+    既存の中身をコピーする。スレッド再開時に既存フォルダを再利用する
+    場合は再コピーしない（そのスレッドがそれまでに行った変更を上書き
+    しないため）。
 
     以前はユーザー指定の work_dir 直下に作っていたが、生成中に別スレッドへ
     切り替えるとソケット切断（on_chat_end）で即座に rmtree され、裏で
@@ -209,48 +339,15 @@ def _resolve_exec_workdir() -> Path:
     こともあり得るが、default_workdir はサーバー側の設定のため常に
     書き込み可能という前提が置ける）。
 
-    provide_download / _resolve_analyze_image_path は
-    ユーザーへの成果物提供に使う関数のため、意図的にこの関数を使わず
-    _resolve_workdir() のまま据え置く（最終成果物はユーザー指定の work_dir
-    直下に置かれる想定のため。execute_python_code の書き込みガード
-    （_exec_guard_roots）は _tmp_<thread_id> の実体とは独立に、実際の
-    work_dir も allowed_roots へ含めている）。
-
     Returns:
         `_tmp_<thread_id>` ディレクトリの絶対パス。
     """
     d = _state._DEFAULT_WORKDIR / f"_tmp_{_exec_tmp_name()}"
+    is_new = not d.exists()
     d.mkdir(parents=True, exist_ok=True)
+    if is_new:
+        _seed_exec_workdir(d)
     return d
-
-def _restrict_default_workdir(path: Path) -> Path:
-    """書き込み先/cwd候補が default_workdir そのものなら `_tmp_<thread_id>` へ縮小する。
-
-    default_workdir はサーバー側の共有ディレクトリで全セッションから同じ
-    パスが見えるため、直下やその他のサブディレクトリへ書き込みを許すと、
-    別セッションがそのファイルを参照して誤動作する事故につながる
-    （work_dir 未設定時は run_script/execute_python_code の書き込み先が
-    素朴には default_workdir 直下になっていたため発生しえた）。
-    自セッション専用の `_tmp_<thread_id>`（_resolve_exec_workdir() と同じ
-    ディレクトリ）だけに縮小することで、成果物は常にセッション専用領域へ
-    閉じ込め、ユーザーへの提示は provide_download/analyze_image(show_in_chat=True)
-    経由に統一する。
-
-    work_dir がユーザー指定で default_workdir と無関係な場所を指している
-    場合はそのまま通す（制限対象は default_workdir そのものが渡された
-    ケースのみ）。
-
-    Args:
-        path: 書き込み許可ルート、または cwd の候補（_resolve_workdir() の
-            戻り値など）。
-
-    Returns:
-        path が default_workdir と同一なら `_tmp_<thread_id>`、それ以外は
-        path をそのまま返す。
-    """
-    if _state._DEFAULT_WORKDIR is not None and path.resolve() == _state._DEFAULT_WORKDIR:
-        return _resolve_exec_workdir()
-    return path
 
 def _tmp_dir_parents(primary: Path) -> list[Path]:
     """`_tmp_<thread_id>` が実際に作られうる親ディレクトリの一覧を返す。

@@ -8,7 +8,7 @@ from pathlib import Path
 from .. import path_memory
 
 from . import _state
-from ._workdir import _resolve_exec_workdir, _resolve_workdir, _restrict_default_workdir
+from ._workdir import _resolve_exec_workdir, _resolve_workdir
 
 
 def _register_exec_output_files(workdir: Path, before_snapshot: dict[Path, float], thread_id: str) -> str:
@@ -76,11 +76,11 @@ def _exec_guard_roots() -> tuple[list[Path], list[Path]]:
     """execute_python_code系（execute_python_code/execute_python_code_background）
     のガードに渡す (allowed_roots, display_roots) を組み立てる。
 
-    実際の作業ディレクトリ（_resolve_workdir(need_write=True)。書き込み
-    不可と判定されていれば default_workdir へ自動的に倒れる。倒れた場合は
-    _restrict_default_workdir() により `_tmp_<thread_id>` へさらに縮小
-    される）・`_tmp_<thread_id>`（_resolve_exec_workdir()。work_dir が
-    default_workdir以外を指している場合でも常に念のため加える）に加え、
+    実際の作業ディレクトリ（_resolve_workdir(need_write=True)。work_dir未設定・
+    書き込み不可等の場合は自動的に `_tmp_<thread_id>` へ倒れる。
+    _resolve_workdir()自体がこのフォールバックを行うため、ここで二重に
+    縮小する必要はない）・`_tmp_<thread_id>`（_resolve_exec_workdir()。
+    work_dir が有効な場合でも常に念のため加える）に加え、
     path_memory_dir（LLM生成コードが path_memory.register()/resolve() を
     直接呼ぶ場合にロックファイル書き込みが必要になるLocohane内部の
     状態ディレクトリ）を allowed_roots に含める。
@@ -92,7 +92,7 @@ def _exec_guard_roots() -> tuple[list[Path], list[Path]]:
     （`_tmp_<thread_id>` 以外のサブディレクトリや直下）は意図的に含めない
     （default_workdirはサーバー側の共有ディレクトリのため、他セッションが
     誤参照する事故を避けるため常に自セッション専用の`_tmp_<thread_id>`
-    だけに書き込みを限定する。_restrict_default_workdir参照）。
+    だけに書き込みを限定する。_resolve_workdir()参照）。
     4箇所の呼び出し元での重複を避けるための共通ヘルパー。
 
     display_roots は allowed_roots から path_memory_dir を除いたもの。
@@ -107,7 +107,7 @@ def _exec_guard_roots() -> tuple[list[Path], list[Path]]:
     execute_python_code がユーザー指定の作業ディレクトリへ書き込めなく
     なってしまう）。
     """
-    roots = [_restrict_default_workdir(_resolve_workdir(need_write=True)), _resolve_exec_workdir()]
+    roots = [_resolve_workdir(need_write=True), _resolve_exec_workdir()]
     display_roots = list(roots)
     if _state._PATH_MEMORY_DIR is not None:
         roots.append(_state._PATH_MEMORY_DIR)
@@ -164,9 +164,10 @@ def _python_fs_guard_preamble(
     Args:
         allowed_roots: 書き込み・削除を許可するディレクトリの一覧
             （実行用ディレクトリと `_tmp_<thread_id>`。呼び出し元
-            （_exec_guard_roots/_run_script_guard_env）が
-            _restrict_default_workdir() によって default_workdir自体を
-            渡さないよう既に縮小済み）。
+            （_exec_guard_roots/_run_script_guard_env）が使う
+            _resolve_workdir() 自体が、work_dir未設定・書き込み不可等の
+            場合にdefault_workdir自体ではなく`_tmp_<thread_id>`を返すため、
+            ここに素のdefault_workdirが渡ることはない）。
         tmp_dir_roots: `_tmp_<thread_id>` が実際に作られうる親ディレクトリの
             一覧（`_tmp_dir_parents()` の戻り値）。他セッション判定にのみ
             使い、allowed_roots とは独立（execute_python_code_readonly は

@@ -123,7 +123,7 @@ from src.tools import (
     reset_call_history_guards_after_compaction,
     toggle_plan_mode_from_ui,
 )
-from src.tools._workdir import _resolve_exec_workdir
+from src.tools._workdir import _build_workdir_status_info
 from src.uploads import cleanup_old_uploads, run_cleanup_loop
 
 # dispatch_agent（サブエージェント）由来のメッセージに付与する author 名。
@@ -1216,49 +1216,25 @@ def _build_work_dir_notice() -> str:
     可能）」のような自然文だと括弧書きの説明ごと1つのパス文字列として認識し、
     そのままGlob等のpath引数に渡してしまう事例があったため。
 
+    状態の判定自体は `check_work_dir_status` ツールと共通の
+    `_build_workdir_status_info()`（src/tools/_workdir.py）に委譲する。
+    以前はこの2箇所が独自に重複したロジックを実装しており、食い違う
+    （かつ両方とも誤った）情報をLLMへ伝えていた（2026-08-29 発見・修正）。
+
     Returns:
         `[作業ディレクトリ]` で始まり、状態を表すJSONオブジェクトを含む
         テキストブロック。
     """
     work_dir = cl.user_session.get("work_dir")
-    if work_dir:
-        resolved = work_dir
-        status: WorkDirAccessStatus | None = cl.user_session.get("work_dir_access")
-        source = "user_changed"
-    else:
-        resolved = str(_config.default_workdir)
-        status = None
-        source = "default"
-    if status is None or (status.exists and status.readable and status.writable):
-        state = "read_write"
-        fallback = None
-    else:
-        # 書き込み不可時のフォールバック先は default_workdir 直下ではなく、
-        # check_work_dir_status ツールと同じ _resolve_exec_workdir()
-        # （セッション専用の _tmp_<thread_id>）にする。ここが default_workdir
-        # 直下のままだと、実際に書き込まれる場所と通知内容が食い違い、
-        # 後続のRead/Globで見つからない事故になる。実際に必要な場合のみ
-        # 呼ぶ（ディレクトリ作成の副作用があるため）。
-        fallback_dir = str(_resolve_exec_workdir())
-        if not status.exists:
-            state = "not_found"
-        elif not status.readable:
-            state = "unreadable"
-        else:
-            state = "read_only"
-        fallback = fallback_dir
-    info = {
-        "absolute_path": resolved,
-        "state": state,
-        "source": source,
-        "fallback_dir": fallback,
-    }
+    status: WorkDirAccessStatus | None = cl.user_session.get("work_dir_access") if work_dir else None
+    info = _build_workdir_status_info(work_dir, status)
     return (
         "[作業ディレクトリ]\n"
         f"{json.dumps(info, ensure_ascii=False)}\n"
         "absolute_path をそのまま Read/Glob/Grep/analyze_image の対象パスとして使う"
         "（他の説明文と連結せず、この値単体をパスとして扱う）。"
-        "state が read_write 以外の場合、書き込みは fallback_dir を使う。"
+        "書き込みは常に write_dir へ行う。state は書き込み先の判断に使わない"
+        "（write_dir が absolute_path と同じ値なら直接書ける、異なる値ならリダイレクトされている）。"
         "サブフォルダ名しか分からない場合は Glob の path 引数を省略すれば自動的に"
         "absolute_path 配下が検索対象になる（pattern 側にサブフォルダ名を含めてよい。例:"
         ' pattern="**/images/**/*"）。パスを記憶や推測で組み立てない。'

@@ -57,6 +57,17 @@ tools: read_skill, read_skill_file, get_tool_source, check_work_dir_status, anal
    `read_pdf.py`）でテキストを補完する。戻り値の `result_path`（`@N`）を
    `Grep`/`Read`/`json_query` で詳細を確認できる。
 
+## 既存ファイルをその場で上書きできない場合
+
+`check_work_dir_status`の`write_dir`が`absolute_path`と異なる値の場合、
+既存ファイルへの直接上書きはできない（書き込みは常に`write_dir`のみ許可）。
+このとき:
+1. 編集後のファイルはスキルスクリプトの`--output`等で`write_dir`配下へ出力する。
+2. 出力した絶対パスを最終回答に明記する（委譲元がユーザーへ提示する）。
+3. `provide_download`は呼べない（メインエージェント専用）。呼ぼうとしない。
+4. スキルスクリプトの改変、`os.system`/`os.rename`でのコピー、バックアップ処理の
+   無効化など、書き込みガードを迂回する方法を試さない。
+
 ## 書き込み時の注意点（PDF/office系スキル）
 
 ### ピボットテーブルやテーブルの埋め込み、編集に関して

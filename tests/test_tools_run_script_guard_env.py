@@ -102,8 +102,8 @@ def test_subprocess_write_inside_workdir_succeeds(tmp_path):
 
 def test_subprocess_write_directly_inside_default_workdir_is_blocked(tmp_path):
     """default_workdirはサーバー側の共有ディレクトリのため、直下への書き込みは
-    他セッションが誤参照する事故を防ぐため許可しない（_restrict_default_workdir
-    により allowed_roots には `_tmp_<thread_id>` のみが渡る）。
+    他セッションが誤参照する事故を防ぐため許可しない（_run_script_guard_env の
+    allowed_roots には workdir と `_tmp_<thread_id>` のみが渡る）。
     """
     workdir = tmp_path / "workdir"
     workdir.mkdir()

@@ -13,12 +13,14 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
 
     作業ディレクトリは、作業フォルダアイコンでユーザーが
     セッションに設定していればそのディレクトリを使う。未設定・アクセス不可・
-    書き込み不可の場合は既定の作業フォルダ（default_workdir）配下の
-    自セッション専用一時フォルダ（`_tmp_<thread_id>`）を使う
-    （default_workdirはサーバー側の共有フォルダのため、直下に成果物を
-    書くと他セッションから見えてしまう事故を避けるため。この場合の
-    成果物はユーザーへ直接見えないため、provide_download/analyze_image
-    （show_in_chat=True）で改めて提示すること）。
+    書き込み不可の場合は自セッション専用の一時フォルダ（`_tmp_<thread_id>`）を
+    使う（`check_work_dir_status`の`write_dir`と同じ場所。作業ディレクトリが
+    複数セッションから同じパスで見える共有フォルダの場合、直下に成果物を
+    書くと他セッションから見えてしまう事故を避けるため）。**この場合、
+    生成物はユーザーへ直接見えない。`provide_download`を持つ場合は
+    それで提示する。持たない場合（`worker`等のサブエージェント）は、
+    生成物の絶対パスを最終回答で報告し、提示は委譲元（`provide_download`を
+    持つメインエージェント）に委ねる。自分で迂回策を試みない。**
     タイムアウトは設定値（既定 60 秒）。完了までこのツール呼び出し自体が
     ブロックされるため、タイムアウトに近い長時間の実行が見込まれるスクリプトは
     このツールではなく run_script_background を使うこと。
@@ -33,10 +35,8 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
     起動するサブプロセスへ書き込みガードを注入しており、open()の書き込み
     モードや os.remove/os.rename/shutil.move 等の呼び出し先が作業
     ディレクトリ・`_tmp_<thread_id>` 配下以外（他ドライブ・Locohaneプロジェクト
-    本体、default_workdir直下の他ディレクトリを含む）の場合は
-    PermissionError で失敗する。出力先パス（output_path/--output 等）は
-    必ず作業ディレクトリ配下を指定すること。default_workdirへ絶対パスで
-    直接書き込もうとしても（`_tmp_<thread_id>`以外は）ブロックされる。
+    本体を含む）の場合は PermissionError で失敗する。出力先パス
+    （output_path/--output 等）は必ず作業ディレクトリ配下を指定すること。
     既存ファイルの読み取りはこのガードの対象外で制限されない。
 
     Args:

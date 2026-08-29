@@ -11,7 +11,7 @@ import os
 import uuid
 
 from . import _state
-from ._workdir import _resolve_exec_workdir
+from ._workdir import _build_workdir_status_info
 
 
 @dataclass
@@ -56,6 +56,7 @@ def probe_workdir_access(path: Path) -> WorkDirAccessStatus:
         return WorkDirAccessStatus(str(path), exists=True, readable=True, writable=False, error=str(e))
     return WorkDirAccessStatus(str(path), exists=True, readable=True, writable=True)
 
+
 @tool
 def check_work_dir_status() -> str:
     """作業ディレクトリのアクセス状況を確認する。
@@ -65,41 +66,22 @@ def check_work_dir_status() -> str:
 
     Returns:
         absolute_path・state（read_write/read_only/unreadable/not_found）・
-        read_dir・write_dir 等をキーに持つJSON文字列。パス値を他の説明文と
-        混在させると低パラメータモデルが説明文込みで1つのパスとして誤認識
-        することがあるため、パスは必ず独立したキーに分離する。書き込みの
-        フォールバック先は既定フォルダ直下ではなく専用サブフォルダ
-        （_tmp_<thread_id>）。
+        write_dir・description をキーに持つJSON文字列（アクセス不可時は
+        read_dir も追加）。パス値を他の説明文と混在させると低パラメータ
+        モデルが説明文込みで1つのパスとして誤認識することがあるため、
+        パスは必ず独立したキーに分離する。**書き込みは常に write_dir へ
+        行う。state は書き込み先の判断に使わない**（write_dir が
+        absolute_path と同じ値なら直接書ける、異なる値ならリダイレクト
+        されている）。
     """
     if _state._DEFAULT_WORKDIR is None:
         return json.dumps({"error": "init_tools() が未実行です"}, ensure_ascii=False)
-    exec_tmp_dir = _resolve_exec_workdir()
     work_dir = cl.user_session.get("work_dir")
-    if not work_dir:
-        result = {
-            "absolute_path": str(_state._DEFAULT_WORKDIR),
-            "state": "read_write",
-            "source": "default",
-            "write_dir": str(exec_tmp_dir),
-        }
-        return json.dumps(result, ensure_ascii=False)
-    status = probe_workdir_access(Path(work_dir))
-    cl.user_session.set("work_dir_access", status)
-    if not status.exists:
-        state = "not_found"
-    elif not status.readable:
-        state = "unreadable"
-    elif not status.writable:
-        state = "read_only"
-    else:
-        state = "read_write"
-    result = {"absolute_path": work_dir, "state": state}
-    if status.error:
+    status = None
+    if work_dir:
+        status = probe_workdir_access(Path(work_dir))
+        cl.user_session.set("work_dir_access", status)
+    result = _build_workdir_status_info(work_dir, status)
+    if status is not None and status.error:
         result["detail"] = status.error
-    if not status.exists or not status.readable:
-        result["read_dir"] = str(_state._DEFAULT_WORKDIR)
-        result["write_dir"] = str(exec_tmp_dir)
-    elif not status.writable:
-        result["write_dir"] = str(exec_tmp_dir)
-        result["note"] = "読み取りは元の作業ディレクトリのまま"
     return json.dumps(result, ensure_ascii=False)

@@ -20,7 +20,7 @@ from ._python_fs_guard import _register_exec_output_files
 from ._safe_path import _resolve_script_filename
 from ._state import _SUBAGENT_AGENT_TYPE
 from ._subprocess_env import _run_script_guard_env
-from ._workdir import _resolve_workdir, _restrict_default_workdir
+from ._workdir import _resolve_workdir
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +90,11 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
     if isinstance(cmd, str):
         return cmd
 
-    # work_dir未設定・書き込み不可等でdefault_workdirへフォールバックする
-    # 場合、cwdをdefault_workdir直下ではなく`_tmp_<thread_id>`にする
-    # （_restrict_default_workdir参照。サーバー側共有ディレクトリである
-    # default_workdir直下に、相対パス書き込みの既定の置き場として
+    # work_dir未設定・書き込み不可等の場合、_resolve_workdir()自体が
+    # cwdを`_tmp_<thread_id>`へフォールバックする（サーバー側共有ディレクトリ
+    # である default_workdir 直下に、相対パス書き込みの既定の置き場として
     # 全セッション共通で成果物が積まれるのを防ぐ）。
-    workdir = _restrict_default_workdir(_resolve_workdir(need_write=True))
+    workdir = _resolve_workdir(need_write=True)
 
     is_plan_exempt = (skill_name, script_filename) in _state._PLAN_APPROVAL_EXEMPT_SCRIPTS
     if not is_plan_exempt and not cl.user_session.get("plan_approved"):
