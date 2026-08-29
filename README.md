@@ -418,10 +418,14 @@ Locohane/
   （`{"skill_name":..., "script_filename":..., "script_args":[...]}`）ではなく、
   他のAgent Skills対応環境（Claude Code等）と共通の `python <script>.py <args...>`
   形式で書く（`skills/SKILLS_README.md` 4-0節参照）。これにより `skills/<name>/`
-  フォルダは他環境へそのまま持ち出せる。この形式からLocohane固有の `run_script`
-  呼び出しへの変換は、SKILL.md側にもコード側にも実装を持たず、LLM側の共通
-  プロンプト指示（`system_prompt/system_prompt.md`・`system_prompt/subagent_common.md`
-  の「SKILL.md呼び出し例の変換ルール」節）がツール呼び出し時に行う。
+  フォルダは他環境へそのまま持ち出せるだけでなく、逆にGitHub等で公開されている
+  `python <script>.py <args...>` 形式のサードパーティ製Agent Skills（他環境向けに
+  書かれたSKILL.md）も、呼び出し記法の差異という障壁なくLocohaneへ導入できる
+  （依存ライブラリの導入等、環境固有の準備は別途必要）。この形式からLocohane
+  固有の `run_script` 呼び出しへの変換は、SKILL.md側にもコード側にも実装を持たず、
+  LLM側の共通プロンプト指示（`system_prompt/system_prompt.md`・
+  `system_prompt/subagent_common.md` の「SKILL.md呼び出し例の変換ルール」節）が
+  ツール呼び出し時に行う。
 - 仕様違反の SKILL.md は **スキップし警告ログ** を出す（全体は落とさない）。
 
 ### 範囲外（実装していない）
