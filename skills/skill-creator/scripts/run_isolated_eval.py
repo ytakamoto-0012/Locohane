@@ -16,7 +16,7 @@ skill-creator スキルの実行スクリプト（progressive disclosure 第3段
 
 --skill-root の既定値は locohane（`.locohane/skills/`）。skill-creator が
 新規作成するスキルは常にそちらへ置く運用のため。プロジェクトルート直下の
-`skills/`（word-counter 等の既存スキルの置き場）を評価対象にしたい場合の
+`skills/`（excel-edit 等の既存スキルの置き場）を評価対象にしたい場合の
 み `--skill-root skills` を明示する。
 
 with_skill:    本番の skills_dir / locohane_skills_dirs をそのまま使う。
@@ -25,7 +25,7 @@ without_skill: 対象スキルの有無以外は本番と同じ状態にした�
 old_skill:     --replacement-dir に指定した旧バージョンのスキル一式で
                対象スキルフォルダを差し替えて評価する（改善前後の比較用）。
 
-いずれのモードでも他の既存スキル（word-counter等）は変更しないため、
+いずれのモードでも他の既存スキル（excel-edit等）は変更しないため、
 「対象スキルの有無・新旧」だけを分離した公平な比較ができる。
 
 自己完結（標準ライブラリのみ）。依存なし。

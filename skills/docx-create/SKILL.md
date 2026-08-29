@@ -10,26 +10,21 @@ metadata:
 # docx-create
 
 JSON仕様からWord文書（`.docx`）を新規生成するスキルです。`create_docx.py` を
-`run_script` ツールで実行して結果を得ます。
+実行して結果を得ます。
 
-このプロジェクトには汎用のファイル書き込みツールが無いため、文書の内容は
-LLM自身が組み立てたJSON文字列を **`--data` 引数にそのまま渡す**ことで
-生成します（ユーザーがあらかじめJSONファイルを用意している場合のみ
+文書の内容はLLM自身が組み立てたJSON文字列を **`--data` 引数にそのまま渡す**
+ことで生成します（ユーザーがあらかじめJSONファイルを用意している場合のみ
 `--data-file` でパス指定も可）。`pptx-create` の `create_pptx.py` と同じ設計です。
 
 正常系なら終了コード0でJSON1行を標準出力へ、異常系なら終了コード非0で
 エラーメッセージを標準エラーへ出力します。
 
 呼び出し例:
-```json
-{
-    "skill_name": "docx-create",
-    "script_filename": "create_docx.py",
-    "script_args": ["C:\\Users\\me\\report.docx", "--data", "{\"blocks\": [{\"type\": \"heading\", \"text\": \"1. 概要\", \"level\": 1}, {\"type\": \"paragraph\", \"text\": \"本文です。\"}]}"]
-}
+```bash
+python create_docx.py "C:\Users\me\report.docx" --data '{"blocks": [{"type": "heading", "text": "1. 概要", "level": 1}, {"type": "paragraph", "text": "本文です。"}]}'
 ```
 `--data` の値は下記「JSON仕様の形式」に従うJSON文字列です。JSONが長くなる
-場合は `--data` の代わりに `["<出力先パス.docx>", "--data-file", "<JSON仕様ファイルの絶対パス>"]`
+場合は `--data` の代わりに `<出力先パス.docx> --data-file <JSON仕様ファイルの絶対パス>`
 を使う（`--data`/`--data-file` はどちらか一方を必ず指定。両方指定・両方省略はエラー）。
 
 ## JSON仕様の形式
@@ -119,7 +114,7 @@ Anthropic公式pptxスキルのDesign Ideas（配色パレット）に準拠し�
 ## 手順
 
 1. ユーザーの依頼内容から上記JSON仕様を組み立てる。
-2. `run_script` を上記引数で呼び出す。
+2. 上記コマンドを実行する。
 3. 出力先が既に存在する場合は確認なく上書きされるため、既存ファイルの
    上書きになる可能性があるときは実行前にユーザーへ確認すること。
 4. 成功時は `output_path` をユーザーへ伝える。`warnings` が空でなければ
@@ -128,10 +123,8 @@ Anthropic公式pptxスキルのDesign Ideas（配色パレット）に準拠し�
 ## 出力例
 
 ```json
-{"output_path": "C:\\foo\\report.docx", "blocks_written": 8, "warnings": [],
- "path_memory": {"@12": "C:\\foo\\report.docx"}}
+{"output_path": "C:\\foo\\report.docx", "blocks_written": 8, "warnings": []}
 ```
-`path_memory`は生成のたびに自動登録される（下記「パスメモリー」節参照）。常に付くとは限らない（`AGENT_SRC_DIR`未設定時は付かない）ため、無くてもエラーではない。
 
 ## エッジケース
 
@@ -157,10 +150,3 @@ Anthropic公式pptxスキルのDesign Ideas（配色パレット）に準拠し�
 `render_docx.py` + `analyze_image` を使ってください。既存のdocxファイルを
 部分的に編集したい場合はこのスキルではなく `docx-edit` を使ってください
 （このスキルは新規作成専用で `--new` のような追記モードは持ちません）。
-
-## パスメモリー（`@N`）
-
-`create_docx.py` が生成したファイルは、出力JSONに `path_memory`
-（例: `{"@12": "C:\\foo\\report.docx"}`）として自動登録されます。続けて
-`run_script` を呼ぶ場合、絶対パスの代わりにその `@N` を `script_args` に
-そのまま渡せます（自動的に実パスへ解決されます）。

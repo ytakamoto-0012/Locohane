@@ -10,7 +10,7 @@ metadata:
 # excel-vba-edit
 
 xlsm のVBAマクロコードを追加・上書き・削除し、マクロを実行するスキル。
-`edit_vba.py` を `run_script` で実行する。
+`edit_vba.py` を実行する。
 
 ## VBAコード生成時の制約（絶対厳守）
 
@@ -37,15 +37,19 @@ End Sub
 
 ## 呼び出しと前提条件
 
-```json
-{"skill_name": "excel-vba-edit", "script_filename": "edit_vba.py",
- "script_args": ["C:\\Users\\me\\book.xlsm", "--ops-json", "[{\"op\": \"set_code\", \"name\": \"Module1\", \"code\": \"Sub Foo()\\nEnd Sub\"}]"]}
+```bash
+python edit_vba.py "C:\Users\me\book.xlsm" --ops-json '[{"op": "set_code", "name": "Module1", "code": "Sub Foo()\nEnd Sub"}]'
 ```
-- 新規作成: 末尾に`"--new"`（既存ファイルがあれば`"--overwrite"`も必須）。Excel COM経由で真のマクロ有効ブックを作るため、表データ・書式も入れたい場合は**このスキルの`--new`を先に実行してから**、excel-editスキルを`--new`なしで使ってシート・データを追記する（excel-editの`--new`を先に使うと中身がxlsx相当のマクロ無効ファイルになり、このスキルで開けなくなる）。VBAコードはまだ書かず器（マクロ有効ブック）だけ先に作りたい場合は`--ops-json`/`--ops-file`を省略してよい（`--new`指定時のみ省略可、省略時は`ops=[]`扱い）。
+- 新規作成: 末尾に`--new`を追加（既存ファイルがあれば`--overwrite`も必須）。Excel COM経由で真のマクロ有効ブックを作るため、表データ・書式も入れたい場合は**このスキルの`--new`を先に実行してから**、excel-editスキルを`--new`なしで使ってシート・データを追記する（excel-editの`--new`を先に使うと中身がxlsx相当のマクロ無効ファイルになり、このスキルで開けなくなる）。VBAコードはまだ書かず器（マクロ有効ブック）だけ先に作りたい場合は`--ops-json`/`--ops-file`を省略してよい（`--new`指定時のみ省略可、省略時は`ops=[]`扱い）。
 - `--new`なしは対象パスを開いて編集（不在ならエラー）。
 - `--new`直後のシート構成は**「Sheet1」1枚のみ**（Excel COMの`Workbooks.Add()`が作る既定）。「Sheet1〜Sheet3の3枚」を前提にexcel-editスキルの`rename_sheet`等を組むと存在しないシート名でエラーになる。2枚目以降が必要なら先にexcel-editスキルの`add_sheet`で追加してからリネームすること。
 - `--output`省略で対象パスへ上書き保存（出力先拡張子は必ず`.xlsm`）。
-- VBAコードは複数行文字列になりやすいため、`--ops-json`直埋め込みより最初から`--ops-file <絶対パス>`（`execute_python_code`でops配列を組み立て`json.dump`で一時ファイルへ書き出し、そのパスを渡す）を基本とする。**`execute_python_code`のcwdは`run_script`の作業ディレクトリとは別（セッション専用の`_tmp_<name>`）**なので、ユーザーの作業ディレクトリを狙わず単純に相対パス（`open("ops.json", "w", ...)`）で書き、`os.path.abspath("ops.json")`で得た絶対パスをそのまま`--ops-file`に渡せばよい（excel-editスキルSKILL.mdの同記述も参照）。
+- VBAコードは複数行文字列になりやすいため、`--ops-json`直埋め込みより最初から`--ops-file <絶対パス>`（opsをJSON配列としてファイルへ書き出し、そのパスを渡す）を基本とする。
+
+```bash
+python -c "import json; json.dump([{'op': 'set_code', 'name': 'Module1', 'code': 'Sub Foo()\nEnd Sub'}], open('ops.json', 'w', encoding='utf-8'), ensure_ascii=False)"
+python edit_vba.py "C:\Users\me\book.xlsm" --ops-file "C:\Users\me\ops.json"
+```
 
 ### 引数一覧
 
@@ -77,12 +81,12 @@ End Sub
 | `delete_module` | `name` | - | モジュール削除（ドキュメントモジュールは削除不可でエラー） |
 | `run_macro` | `name` | `args`(配列) | 指定マクロを実行。戻り値があれば`results`配列に入る |
 
-**`run_macro`で実行するマクロに`MsgBox`/`InputBox`を含めない。** 対話セッションが無い自動化実行のためダイアログを誰も閉じられず、`run_script`のスクリプトタイムアウト（既定300秒）まで丸ごとハングし、その後Excelプロセスが残留する（2026-08-22に同一セッション内で3回実機確認）。**`run_macro`は`Application.Run`を呼ぶ前に対象プロシージャのコードを静的チェックし、`MsgBox`/`InputBox`が含まれていれば実行前にエラーで拒否する**（ハングそのものは起きない設計になった）。エラーが出たら`MsgBox`/`InputBox`を削除するか`Debug.Print`/戻り値に置き換えて再送する（対症療法で同じコードを送り直さない）。進捗表示は最初から`MsgBox`ではなく`Debug.Print`か戻り値で行うこと。`Buttons.Add`等の図形・フォームコントロール操作は上記の静的チェック対象外だがハングしやすい報告があるため避ける（ボタン配置が必要な場合は、`run_macro`を使わずマクロのコードだけ書いて実行はユーザーに委ねる）。
+**`run_macro`で実行するマクロに`MsgBox`/`InputBox`を含めない。** 対話セッションが無い自動化実行のためダイアログを誰も閉じられず、スクリプトタイムアウト（既定300秒）まで丸ごとハングし、その後Excelプロセスが残留する（2026-08-22に同一セッション内で3回実機確認）。**`run_macro`は`Application.Run`を呼ぶ前に対象プロシージャのコードを静的チェックし、`MsgBox`/`InputBox`が含まれていれば実行前にエラーで拒否する**（ハングそのものは起きない設計になった）。エラーが出たら`MsgBox`/`InputBox`を削除するか`Debug.Print`/戻り値に置き換えて再送する（対症療法で同じコードを送り直さない）。進捗表示は最初から`MsgBox`ではなく`Debug.Print`か戻り値で行うこと。`Buttons.Add`等の図形・フォームコントロール操作は上記の静的チェック対象外だがハングしやすい報告があるため避ける（ボタン配置が必要な場合は、`run_macro`を使わずマクロのコードだけ書いて実行はユーザーに委ねる）。
 
-**それでも`run_macro`が300秒でタイムアウトした場合、または`保存処理は例外を出さずに完了しましたが、ファイルの更新時刻が変化していません`というエラーが出た場合、Excelプロセスの残留が疑われる。** このときは`execute_python_code`で`taskkill`や`psutil`を自分で組み立てて実行しない（PID番号やイメージ名フィルタを自分で判断させると、無関係なExcelウィンドウを巻き込む事故につながるため技術的に禁止されている操作。2026-08-23にこの事故が実際に発生した）。代わりに次を実行する:
+**それでも`run_macro`が300秒でタイムアウトした場合、または`保存処理は例外を出さずに完了しましたが、ファイルの更新時刻が変化していません`というエラーが出た場合、Excelプロセスの残留が疑われる。** このときは`taskkill`や`psutil`を自分で組み立てて実行しない（PID番号やイメージ名フィルタを自分で判断させると、無関係なExcelウィンドウを巻き込む事故につながるため技術的に禁止されている操作。2026-08-23にこの事故が実際に発生した）。代わりに次を実行する:
 
-```json
-{"skill_name": "excel-vba-edit", "script_filename": "edit_vba.py", "script_args": ["--recover-locks"]}
+```bash
+python edit_vba.py --recover-locks
 ```
 
 `path`もopsも不要（指定しても無視される）。このコマンドは、自セッションが`edit_vba.py`/`recalc_excel.py`/excel-render・pptx-render・docx-renderで起動して残留したCOMプロセスのうち、まだ生存しているものだけを内部で直接終了する（PID番号を引数に取らない設計のため、無関係なプロセスを誤って終了する余地が無い）。実行後の`{"recovered": [...]}`に終了したPID一覧が入る。終了後は`MsgBox`等ハングの原因を修正してから再実行すること。
@@ -95,14 +99,14 @@ End Sub
 | 1つのSub/Function/Propertyの中身丸ごと | `replace_procedure`（プロシージャ外の他コードは渡さなくてよい） |
 | 既存コードは変えず新規Sub/Functionを追加 | `insert_code`（既存コードのやり取り不要） |
 
-出力: `{"path":..., "backup_path": null, "applied_ops": 2, "results": [3]}`。`results`は戻り値ありop（`run_macro`でFunction実行時等）の結果のみ発生順に入る。`backup_path`は保存先に既にファイルがあった場合、上書き直前にタイムスタンプ付きでコピーした先の絶対パス（無ければ`null`）。生成・更新したファイルは`path_memory`に自動登録される。
+出力: `{"path":..., "backup_path": null, "applied_ops": 2, "results": [3]}`。`results`は戻り値ありop（`run_macro`でFunction実行時等）の結果のみ発生順に入る。`backup_path`は保存先に既にファイルがあった場合、上書き直前にタイムスタンプ付きでコピーした先の絶対パス（無ければ`null`）。
 
 ## 手順とエッジケース
 
 1. コードを書く前にexcel-vba-readスキルの`read_vba.py`でモジュール一覧・既存コードを確認する。
 2. 既存モジュールへの変更は基本`find_replace`/`replace_procedure`/`insert_code`のいずれか（`set_code`は全体書き直し時のみ）。
 3. 別名で保存したい場合のみ`--output`を追加する（省略時は`path`へ上書き保存）。
-4. `run_script`を呼ぶ。
+4. 上記コマンドを実行する。
 5. `--new`使用時に保存先（`--output`指定時はそちら、省略時は`path`）が既存で上書き可否不明なら`--overwrite`なしで一度実行しエラーからユーザーに確認する。
 
 エッジケース: 拡張子が`.xlsm`でない／保存先拡張子が`.xlsm`でない／opsがJSON配列でない／opに`op`キーなし／存在しないモジュール指定／UserFormを`add_module`の`type`や`set_code`等の対象に指定／ドキュメントモジュールを`delete_module`／`add_module`で既存モジュール名指定／`find_replace`の`old_code`が0件・複数件一致／`replace_procedure`の`procedure`未検出、はいずれもエラー＋終了コード1（何番目のどのopが失敗したかメッセージに含まれる）。危険API（`Kill`等）検出時は「危険なVBA API（...）が含まれているため、このコードは書き込めません」＋終了コード1（コード修正で再送せずまずユーザーに目的確認）。構文チェック失敗時は「VBAコードの構文が不正な可能性があります（...）」＋終了コード1（`#If`等の条件付きコンパイルやコロン複文、意味的エラーは取りこぼすが誤って正しいコードを拒否するリスクは低い設計。メッセージに従い修正して再送。**このチェックを通っても意味的コンパイルエラーが残っている可能性はこのスキルでは検出不可**）。トラストセンター未設定エラーは上記の設定手順をそのまま案内する。`pywin32`未導入は`ImportError`（該当する`pip install pywin32`をユーザーに促す）。ExcelのCOMエラーは「VBAの編集に失敗しました: ...」＋終了コード1。強制終了時はEXCEL.EXE残留の可能性あり（タスクマネージャーでの手動終了が必要）。`run_macro`対象のプロシージャに`MsgBox`/`InputBox`検出時は「マクロ'...'に(MsgBox|InputBox)が含まれているため実行を中止しました」＋終了コード1（`Application.Run`呼び出し自体をスキップするためハングしない。ファイルは変更されないまま正常終了処理に入る。コード修正して再送）。

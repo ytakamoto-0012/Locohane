@@ -11,7 +11,7 @@ metadata:
 
 既存テンプレートを編集する前に**必ず**このスキルでスライド構造を確認し、
 `shape_index` を把握してから `pptx-edit` を呼んでください。`inspect_pptx.py` を
-`run_script` ツールで実行して結果を得ます。`pptx-read` の `read_pptx.py` は
+実行して結果を得ます。`pptx-read` の `read_pptx.py` は
 人間向けの要約（title/texts/tables/notes）を返すのに対し、こちらは編集に
 必要なshape単位の構造情報を返します。
 
@@ -19,18 +19,14 @@ metadata:
 エラーメッセージを標準エラーへ出力します。
 
 スライドごとの本文データは直接標準出力へは返さず、一時JSONファイルへ書き出して
-そのパス（`result_path`）を返します。中身を確認するには `Read` ツールで
-`result_path`（または `path_memory` の `@N`）を読んでください。
+そのパス（`result_path`）を返します。中身を確認するには `result_path` を
+読んでください。
 
 ## inspect_pptx.py — 編集対象を特定するための構造読み取り
 
 呼び出し例:
-```json
-{
-    "skill_name": "pptx-inspect",
-    "script_filename": "inspect_pptx.py",
-    "script_args": ["C:\\Users\\me\\template.pptx", "--start-slide", "1", "--max-slides", "20"]
-}
+```bash
+python inspect_pptx.py "C:\Users\me\template.pptx" --start-slide 1 --max-slides 20
 ```
 `--start-slide`（整数、既定`1`）/`--max-slides`（整数、既定`20`）は省略可。
 どちらも1未満を指定すると1にクランプされる（例`--max-slides 0`は`1`扱い）。
@@ -39,7 +35,7 @@ metadata:
 ```json
 {"path": "C:\\foo\\template.pptx", "total_slides": 4, "start_slide": 1, "end_slide": 4,
  "slides_count": 4, "slide_width_cm": 25.4, "slide_height_cm": 19.05,
- "result_path": "C:\\...\\_tmp_<name>\\pptx_inspect\\1a2b3c4d_20260805_153012_123456.json"}
+ "result_path": "C:\\...\\pptx_inspect\\1a2b3c4d_20260805_153012_123456.json"}
 ```
 スライド単位のshape構造（`slides`、各要素は
 `{"index", "layout_name", "layout_index", "shapes", "notes_present"}`。
@@ -47,7 +43,7 @@ metadata:
 "placeholder_idx", "placeholder_type", "has_text_frame", "text_preview",
 "has_table", "table_dims", "has_picture", "left_cm", "top_cm", "width_cm",
 "height_cm", "fill_color", "border_color", "text_style", "crop"}`）は標準出力
-からは省かれ、`result_path` が指すJSONファイルにのみ含まれます。`Read` ツールで
+からは省かれ、`result_path` が指すJSONファイルにのみ含まれます。これを
 読んで `shape_index` を確認してから `pptx-edit` を呼んでください。
 
 トップレベルに以下のフィールドも追加されます：
@@ -82,10 +78,3 @@ metadata:
   （`read_pptx.py` と同じ挙動）。
 - 依存パッケージ `python-pptx` が実行環境に入っていないと `ModuleNotFoundError` で
   終了コード非0になります。その場合は導入者へ `pip install python-pptx` の実施を促してください。
-
-## パスメモリー（`@N`）
-
-`inspect_pptx.py` が書き出す結果JSON（`result_path`）は、出力JSONに
-`path_memory`（例: `{"@7": "C:\\...\\1a2b3c4d.json"}`）として自動登録されます。
-続けて `run_script`/`Read` を呼ぶ場合、絶対パスの代わりにその `@N` を
-そのまま渡せます（自動的に実パスへ解決されます）。

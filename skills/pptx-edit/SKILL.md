@@ -11,7 +11,7 @@ metadata:
 
 既存のpptx（社内テンプレート等）のテーマ・マスター・レイアウトのデザインを保ったまま、
 指定したスライドの中身だけを書き換える／スライドを複製・削除・並び替えるスキルです。
-`edit_pptx.py` を `run_script` ツールで実行して結果を得ます。**必ず `template_path`
+`edit_pptx.py` を実行して結果を得ます。**必ず `template_path`
 とは別の `output_path` に保存され**、テンプレート自体は変更されません（同じパスを
 指定した場合は後述の通りエラーになります）。
 
@@ -22,17 +22,13 @@ metadata:
 エラーメッセージを標準エラーへ出力します。
 
 呼び出し例:
-```json
-{
-    "skill_name": "pptx-edit",
-    "script_filename": "edit_pptx.py",
-    "script_args": ["C:\\Users\\me\\template.pptx", "C:\\Users\\me\\edited.pptx", "--data", "{\"operations\": [{\"op\": \"set_title\", \"slide\": 2, \"text\": \"更新後サマリ\"}]}"]
-}
+```bash
+python edit_pptx.py "C:\Users\me\template.pptx" "C:\Users\me\edited.pptx" --data '{"operations": [{"op": "set_title", "slide": 2, "text": "更新後サマリ"}]}'
 ```
 `--data` の値は下記「JSON操作列スキーマ」に従うJSON文字列です。JSONが長い
-場合は `--data` の代わりに `["<テンプレート>", "<出力先>", "--data-file", "<操作列JSONを書いたUTF-8ファイルの絶対パス>"]`
+場合は `--data` の代わりに `<テンプレート> <出力先> --data-file <操作列JSONを書いたUTF-8ファイルの絶対パス>`
 を使う（`--data`/`--data-file` はどちらか一方を必ず指定。両方指定・両方省略はエラー）。
-テンプレートと同じパスへ保存したい場合のみ `script_args` に `"--overwrite"` を追加する
+テンプレートと同じパスへ保存したい場合のみ `--overwrite` を追加する
 （**ユーザーに上書きしてよいか確認してから**付けること）。
 
 ## JSON操作列スキーマ
@@ -211,10 +207,3 @@ metadata:
 
 編集結果のレイアウトを画像で確認したい場合は `pptx-render` スキルの
 `render_pptx.py` + `analyze_image` を使ってください。
-
-## パスメモリー（`@N`）
-
-`edit_pptx.py` が生成したファイルは、出力JSONに `path_memory`
-（例: `{"@12": "C:\\foo\\edited.pptx"}`）として自動登録されます。続けて
-`run_script` を呼ぶ場合、絶対パスの代わりにその `@N` を `script_args` に
-そのまま渡せます（自動的に実パスへ解決されます）。

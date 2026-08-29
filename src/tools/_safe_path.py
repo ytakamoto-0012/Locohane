@@ -51,7 +51,7 @@ def _safe_path(relative: str) -> Path:
     「見つかりません」エラーへ自然に流すため）。
 
     Args:
-        relative: skills ルートからの相対パス（例: "word-counter/SKILL.md"）。
+        relative: skills ルートからの相対パス（例: "excel-vba-read/SKILL.md"）。
 
     Returns:
         skills ルート配下に解決された絶対パス（Path）。
@@ -80,7 +80,7 @@ def _missing_skill_prefix_hint(relative_path: str) -> str:
 
     read_skill(skill_name) を呼んだ直後のサブエージェントが、以後のパスを
     「そのスキルフォルダの中にいる」前提で書いてしまい、relative_path の
-    先頭にスキルフォルダ名を付け忘れる（例: "word-counter/references/notes.md"
+    先頭にスキルフォルダ名を付け忘れる（例: "excel-knowledge/references/notes.md"
     のつもりで "references/notes.md" とだけ渡す）誤りが疑われるため追加した
     ヒント。relative_path の先頭セグメントがどの skills ルートにも
     ディレクトリとして存在しない場合にのみヒントを返す。
@@ -102,7 +102,7 @@ def _missing_skill_prefix_hint(relative_path: str) -> str:
         f"（先頭 '{first_segment}' がスキルフォルダ名になっていない可能性があります。"
         "read_skill_file の relative_path は常にスキルルートからの相対パスで、"
         "スキルフォルダ名自体を先頭に含める必要があります。"
-        "例: word-counter/references/notes.md）"
+        "例: excel-knowledge/references/notes.md）"
     )
 
 def _resolve_script_filename(skill_name: str, script_filename: str) -> Path:

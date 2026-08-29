@@ -10,7 +10,7 @@ metadata:
 # pdf-tools
 
 PDFの読み込み（テキスト抽出／ページの画像化）とPDFの生成を行うスキルです。3つの
-スクリプトを `run_script` ツールで実行して結果を得ます。日本語のPDF読み書きに
+スクリプトを実行して結果を得ます。日本語のPDF読み書きに
 対応しています。
 
 各スクリプトは正常系なら終了コード0でJSON1行を標準出力へ、異常系なら
@@ -18,18 +18,13 @@ PDFの読み込み（テキスト抽出／ページの画像化）とPDFの生�
 
 `read_pdf.py` は抽出したページ本文を直接標準出力へは返さず、一時JSON
 ファイルへ書き出してそのパス（`result_path`）を返します。中身を確認するには
-`Read` ツールで `result_path`（または `path_memory` の `@N`）を読んでください
-（内容は複数行に整形されているため `offset`/`limit` で部分読み込みできます）。
+`result_path` を読んでください（内容は複数行に整形されているため部分読み込みできます）。
 
 ## 1. read_pdf.py — PDFからテキスト抽出
 
 呼び出し例:
-```json
-{
-    "skill_name": "pdf-tools",
-    "script_filename": "read_pdf.py",
-    "script_args": ["C:\\Users\\me\\report.pdf", "--start-page", "1", "--max-pages", "20"]
-}
+```bash
+python read_pdf.py "C:\Users\me\report.pdf" --start-page 1 --max-pages 20
 ```
 `--start-page`/`--max-pages` は省略可（既定 start-page=1, max-pages=20）。
 
@@ -38,13 +33,11 @@ PDFの読み込み（テキスト抽出／ページの画像化）とPDFの生�
 {"path": "C:\\foo\\report.pdf", "total_pages": 42, "start_page": 1, "end_page": 20,
  "metadata": {"title": "資料タイトル", "author": null, "subject": null},
  "pages_count": 20,
- "result_path": "C:\\...\\_tmp_<name>\\pdf_read\\1a2b3c4d_20260805_153012_123456.json",
- "path_memory": {"@7": "C:\\...\\_tmp_<name>\\pdf_read\\1a2b3c4d_20260805_153012_123456.json"}}
+ "result_path": "C:\\...\\pdf_read\\1a2b3c4d_20260805_153012_123456.json"}
 ```
 ページ本文（`pages`、各要素は `{"page", "text", "width_pt", "height_pt"}`）は標準出力からは省かれ、
-`result_path` が指すJSONファイルにのみ含まれます。`Read` ツールで
-`result_path`（または `path_memory` の `@N`）を読み、各要素の `text` を
-つなげてユーザーに内容を報告するか、要約して伝えてください。
+`result_path` が指すJSONファイルにのみ含まれます。`result_path` を
+読み、各要素の `text` をつなげてユーザーに内容を報告するか、要約して伝えてください。
 `width_pt`/`height_pt`（pt単位）はページサイズであり、レイアウト検証時に参考になります。
 `total_pages` が `max_pages` より多い場合は、続きを読みたければ `--start-page` を
 `end_page + 1` に指定して再度呼び出すことを案内してください（`read_file.py` の
@@ -72,12 +65,8 @@ offset/limitと同じ考え方のページ版です）。
 こちらを使って画像として内容を確認します。
 
 呼び出し例:
-```json
-{
-    "skill_name": "pdf-tools",
-    "script_filename": "render_pdf_pages.py",
-    "script_args": ["C:\\Users\\me\\report.pdf"]
-}
+```bash
+python render_pdf_pages.py "C:\Users\me\report.pdf"
 ```
 全ページを一度に画像化します（範囲の指定はできません）。解像度は既定150DPI固定。
 
@@ -85,9 +74,9 @@ offset/limitと同じ考え方のページ版です）。
 ```json
 {"path": "C:\\foo\\report.pdf", "total_pages": 3, "start_page": 1, "end_page": 3, "dpi": 150,
  "images": [
-   {"page": 1, "image_path": "C:\\...\\_tmp_<name>\\pdf_rendered\\1a2b3c4d_p1.png"},
-   {"page": 2, "image_path": "C:\\...\\_tmp_<name>\\pdf_rendered\\1a2b3c4d_p2.png"},
-   {"page": 3, "image_path": "C:\\...\\_tmp_<name>\\pdf_rendered\\1a2b3c4d_p3.png"}
+   {"page": 1, "image_path": "C:\\...\\pdf_rendered\\1a2b3c4d_p1.png"},
+   {"page": 2, "image_path": "C:\\...\\pdf_rendered\\1a2b3c4d_p2.png"},
+   {"page": 3, "image_path": "C:\\...\\pdf_rendered\\1a2b3c4d_p3.png"}
  ]}
 ```
 `images`には`total_pages`件全てが含まれる。
@@ -101,9 +90,8 @@ offset/limitと同じ考え方のページ版です）。
 
 エッジケース:
 - ファイル不在・ディレクトリ指定・壊れたPDF/暗号化PDFはエラー終了します。
-- 生成されるPNGはセッション専用一時フォルダ（ユーザーが設定した作業ディレクトリとは別で、`default_workdir`配下）
-  （`_tmp_<name>/pdf_rendered/`）に保存されます。同一PDF・同一ページの
-  再実行時は上書きされ、会話終了時に自動的に削除されます。
+- 生成されるPNGは一時フォルダ（`pdf_rendered/`配下）に保存されます。同一PDF・
+  同一ページの再実行時は上書きされます。
 - 一部のページのみ内部的に破損している場合、そのページの要素は
   `image_path` の代わりに `error`（失敗理由）を持ち、他のページは通常通り
   画像化されます（1ページの破損で全体が失敗することはありません）。
@@ -115,18 +103,12 @@ offset/limitと同じ考え方のページ版です）。
 （表・強調ボックス・ヘッダーフッター・ページ番号）が1回のスクリプト実行で作れます。
 
 呼び出し例:
-```json
-{
-    "skill_name": "pdf-tools",
-    "script_filename": "create_pdf.py",
-    "script_args": ["C:\\Users\\me\\out.pdf", "--title", "報告書",
-        "--header-text", "社外秘", "--footer-text", "株式会社サンプル", "--page-number",
-        "--html", "<h1>四半期報告</h1><p>本文です。<b>重要な部分</b>は太字にできます。</p><div class=\"callout\">補足事項はこのように強調できます。</div><table><tr><th>月</th><th>売上</th></tr><tr><td>4月</td><td>120</td></tr></table>"]
-}
+```bash
+python create_pdf.py "C:\Users\me\out.pdf" --title 報告書 --header-text 社外秘 --footer-text 株式会社サンプル --page-number --html '<h1>四半期報告</h1><p>本文です。<b>重要な部分</b>は太字にできます。</p><div class="callout">補足事項はこのように強調できます。</div><table><tr><th>月</th><th>売上</th></tr><tr><td>4月</td><td>120</td></tr></table>'
 ```
 `--html` の値は下記「使えるHTMLタグ」に従うHTML断片（`<body>`の中身のみ、
 `<html>`/`<body>`は不要）です。長くなる場合は `--html` の代わりに
-`["<出力先PDFの絶対パス>", "--html-file", "<本文HTMLを書いたUTF-8ファイルの絶対パス>"]`
+`<出力先PDFの絶対パス> --html-file <本文HTMLを書いたUTF-8ファイルの絶対パス>`
 を使う（`--html`/`--html-file` はどちらか一方を必ず指定。両方指定・両方省略はエラー）。
 `--html-file` はUTF-8として読み込みますが、UTF-8としてデコードできない場合は
 cp932（Shift-JIS系）として読み込みを試みます（判別不能な文字化けを防ぐため、
@@ -194,13 +176,4 @@ cp932（Shift-JIS系）として読み込みを試みます（判別不能な文
   実行環境に無いと `ModuleNotFoundError` で終了コード非0になります。その場合は導入者へ
   `pip install pypdf pypdfium2 reportlab` の実施を促してください。
 - いずれのスクリプトも例外を投げず、エラーはstderr+終了コード非0で返します。
-  `run_script` の戻り値テキストの `[標準エラー]` セクションを確認してください。
-
-## パスメモリー（`@N`）
-
-`create_pdf.py` が生成したPDF、`render_pdf_pages.py` が生成した画像、
-`read_pdf.py` が書き出す結果JSON（`result_path`）は、出力JSONに
-`path_memory`（例: `{"@12": "C:\\foo\\report.pdf"}`）として
-自動登録されます。続けて `run_script` を呼ぶ場合、絶対パスの代わりに
-その `@N` を `script_args` にそのまま渡せます（自動的に実パスへ解決
-されます）。
+  標準エラー出力を確認してください。

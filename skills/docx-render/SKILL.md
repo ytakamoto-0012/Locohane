@@ -9,8 +9,8 @@ metadata:
 
 # docx-render
 
-DOCXページを画像化してLLMに見せるスキルです。`render_docx.py` を `run_script`
-ツールで実行して結果を得ます。`docx-read` の `read_docx.py` でテキストは取得
+DOCXページを画像化してLLMに見せるスキルです。`render_docx.py` を実行して
+結果を得ます。`docx-read` の `read_docx.py` でテキストは取得
 できても、レイアウト・表・画像の配置・強調表現などテキストだけでは読み取れない
 情報があるため、文書の意図をより高精度に汲み取りたいときはこちらを使って
 画像として内容を確認します。
@@ -19,12 +19,8 @@ DOCXページを画像化してLLMに見せるスキルです。`render_docx.py`
 エラーメッセージを標準エラーへ出力します。
 
 呼び出し例:
-```json
-{
-    "skill_name": "docx-render",
-    "script_filename": "render_docx.py",
-    "script_args": ["C:\\Users\\me\\report.docx"]
-}
+```bash
+python render_docx.py "C:\Users\me\report.docx"
 ```
 ## 引数一覧
 
@@ -38,9 +34,9 @@ DOCXページを画像化してLLMに見せるスキルです。`render_docx.py`
 ```json
 {"path": "C:\\foo\\report.docx", "tool": "docx", "total_pages": 3, "start_page": 1, "end_page": 3, "dpi": 300, "target_dpi": 150, "crop_applied": false,
  "images": [
-   {"page": 1, "image_path": "C:\\...\\_tmp_<name>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300},
-   {"page": 2, "image_path": "C:\\...\\_tmp_<name>\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300},
-   {"page": 3, "image_path": "C:\\...\\_tmp_<name>\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300}
+   {"page": 1, "image_path": "C:\\...\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300},
+   {"page": 2, "image_path": "C:\\...\\rendered\\1a2b3c4d_p2.png", "original_dpi": 300},
+   {"page": 3, "image_path": "C:\\...\\rendered\\1a2b3c4d_p3.png", "original_dpi": 300}
  ]}
 ```
 `images`には`total_pages`件全てが含まれる。
@@ -58,8 +54,7 @@ DOCXページを画像化してLLMに見せるスキルです。`render_docx.py`
 - PDF化後のページ数が0になった場合はエラーにはならず終了コード0で返りますが、
   返るJSONの形が通常時と異なる点に注意（`images: []`に加えて`start_page`/`end_page`が
   `null`になり、**`target_dpi`キー自体が無くなる**）。
-- 生成されるPNGはセッション専用一時フォルダ（ユーザーが設定した作業ディレクトリとは別で、`default_workdir`配下）
-  （`_tmp_<name>/rendered/`）に保存されます。同一ファイルの再実行時は
-  上書きされ、会話終了時に自動的に削除されます。
+- 生成されるPNGは一時フォルダ（`rendered/`配下）に保存されます。同一ファイルの
+  再実行時は上書きされます。
 - 依存パッケージ `pywin32`・`pypdfium2`・`pillow` が実行環境に無い場合は
   `ImportError` で終了コード非0になります。

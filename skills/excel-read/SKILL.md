@@ -10,16 +10,15 @@ metadata:
 # excel-read
 
 xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得するスキル。
-`read_excel.py` を `run_script` で実行する。
+`read_excel.py` を実行する。
 
 ## 呼び出し
 
-```json
-{"skill_name": "excel-read", "script_filename": "read_excel.py",
- "script_args": ["C:\\Users\\me\\book.xlsx", "--sheet", "Sheet1", "--offset", "0", "--limit", "200"]}
+```bash
+python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --offset 0 --limit 200
 ```
 
-`script_args`は`[file_path, ...フラグ]`の順で1つの配列に並べる（`file_path`は必ず先頭、フラグの前後関係は自由）。
+`file_path`は必ず先頭の位置引数として渡す（フラグの前後関係は自由）。
 
 ## 引数一覧
 
@@ -38,7 +37,7 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 
 成功=終了コード0＋JSON1行を標準出力。失敗=終了コード非0＋エラーメッセージを標準エラー。エラー文はそのままユーザーへ伝える。未導入ライブラリは`ImportError`終了コード1（原因: `openpyxl`/`xlrd`）→該当する`pip install <パッケージ名>`をユーザーに促す。
 
-このスクリプトは本文（シート一覧/rows）を標準出力に出さず、一時JSONへ書き出して`result_path`を返す。`Read`ツールで`result_path`（または`path_memory`の`@N`）を読む（`offset`/`limit`で分割読み込み可）。`@N`は出力JSONの`path_memory`に自動登録され、以降`run_script`の`script_args`には絶対パスの代わりに`@N`をそのまま渡せる。
+このスクリプトは本文（シート一覧/rows）を標準出力に出さず、一時JSONへ書き出して`result_path`を返す。`result_path`を読む（分割読み込み可）。
 
 ## 手順
 
@@ -77,9 +76,8 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 
 **`insert_rows`/`merge_cells`後の検証や、グルーピングされた列（月・区分など、結合セル化される列）の範囲確認では、生の`rows`を目で数えて行範囲を手計算しない。** 代わりに`--query-json`でクエリを渡すと、列の値ごとに連続する行範囲へグルーピングした結果を1回の呼び出しで返す。
 
-```json
-{"skill_name": "excel-read", "script_filename": "read_excel.py",
- "script_args": ["C:\\Users\\me\\book.xlsx", "--sheet", "月間予定表", "--query-json", "[{\"op\": \"group_by\", \"column\": \"A\"}]"]}
+```bash
+python read_excel.py "C:\Users\me\book.xlsx" --sheet 月間予定表 --query-json '[{"op": "group_by", "column": "A"}]'
 ```
 出力（`result_path`内、`query_results`キー）:
 ```json
@@ -98,9 +96,8 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 
 ### `list_images`（画像一覧）
 
-```json
-{"skill_name": "excel-read", "script_filename": "read_excel.py",
- "script_args": ["C:\\Users\\me\\book.xlsx", "--sheet", "Sheet1", "--query-json", "[{\"op\": \"list_images\"}]"]}
+```bash
+python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --query-json '[{"op": "list_images"}]'
 ```
 出力（`result_path`内、`query_results`キー）:
 ```json
@@ -120,9 +117,8 @@ xlsx/xlsm/xls のシート一覧・セルデータを読み込み専用で取得
 
 グラフの存在・タイトル・種類・位置を、画像化せず一覧確認できる。
 
-```json
-{"skill_name": "excel-read", "script_filename": "read_excel.py",
- "script_args": ["C:\\Users\\me\\book.xlsx", "--sheet", "Sheet1", "--query-json", "[{\"op\": \"list_charts\"}]"]}
+```bash
+python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --query-json '[{"op": "list_charts"}]'
 ```
 出力（`result_path`内、`query_results`キー）:
 ```json

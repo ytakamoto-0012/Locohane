@@ -642,13 +642,16 @@ C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 スキル開発の詳細な手順・規約は [`skills/SKILLS_README.md`](skills/SKILLS_README.md) を参照。
 
 処理時間が `[scripts].timeout`（既定300秒）に近づく、または超えうるスクリプトを持つスキルは、
-SKILL.md 側で `run_script` ではなく `run_script_background` を使うよう指示する。
-`run_script_background` は（`[scripts].background_inline_wait_max_seconds` の安全上限に
-達しない限り）完了まで自動的に待ち、`run_script` と同じ最終結果を直接返す
-（進捗は人間向けにチャットへ自動で通知されるため、SKILL.md 側でポーリング手順を
-指示する必要は無い）。安全上限を超えるごく長時間のスクリプトに限り `job_id` を
-含む案内が返るので、その場合のみ `check_script_job`/`stop_script_job` の使い方を
-SKILL.md に明記すればよい。
+SKILL.md 側にその旨（実行に時間がかかりうる）を明記する（`run_script`/`run_script_background`
+といったLocohane固有のツール名はSKILL.md本文には書かない。4-0節参照）。長時間化しうる
+スクリプトかどうかを踏まえて `run_script` と `run_script_background` のどちらを使うかは、
+LLM側の共通変換ルール（`system_prompt/system_prompt.md`・`system_prompt/subagent_common.md`
+の「SKILL.md呼び出し例の変換ルール」節）が判断する。`run_script_background` は
+（`[scripts].background_inline_wait_max_seconds` の安全上限に達しない限り）完了まで
+自動的に待ち、`run_script` と同じ最終結果を直接返す（進捗は人間向けにチャットへ自動で
+通知されるため、SKILL.md 側でポーリング手順を指示する必要は無い）。安全上限を超える
+ごく長時間のスクリプトに限り `job_id` を含む案内が返るので、その場合のみ
+`check_script_job`/`stop_script_job` の使い方をSKILL.md に明記すればよい。
 
 ### 新しいスキルの追加方法
 
@@ -667,6 +670,11 @@ description: 何をするスキルか、いつ使うかを具体的に書く。
 
 ここに手順を書く。必要なら scripts/ references/ assets/ を追加する。
 ```
+
+`scripts/` 配下のスクリプトを呼び出す例を本文に書く場合は、Locohane固有の
+`run_script` JSON引数形式ではなく `python <script>.py <args...>` というコマンド
+ライン形式で書く（詳細は [`skills/SKILLS_README.md`](skills/SKILLS_README.md) 4-0節参照）。
+実際の`run_script`呼び出しへの変換はLLM側の共通指示が行う。
 
 アプリを再起動すると起動時走査で自動的に発見される（動的リロードはしない）。
 

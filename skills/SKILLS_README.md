@@ -28,7 +28,7 @@ skills/
 
 ```markdown
 ---
-name: word-counter          # 必須。1〜64文字、小文字英数字・ハイフン・アンダースコアのみ、先頭末尾は区切り文字不可、区切り文字の連続不可、ディレクトリ名と一致
+name: my-skill              # 必須。1〜64文字、小文字英数字・ハイフン・アンダースコアのみ、先頭末尾は区切り文字不可、区切り文字の連続不可、ディレクトリ名と一致
 description: ...            # 必須。1〜1024文字。「何をするか」+「いつ使うか」を書く
 license: MIT                # 任意
 metadata:                   # 任意
@@ -57,6 +57,30 @@ LLMがどのスキルを読むか・どのスクリプトを叩くかは**すべ
 
 **ここがコードに明文化された仕様がなく、今回追記した部分。**
 
+### 4-0. SKILL.md本文の呼び出し例は Python コマンドライン形式で書く
+
+**SKILL.md本文でLLMへ提示する呼び出し例は、`run_script`のJSON引数形式
+（`{"skill_name":..., "script_filename":..., "script_args":[...]}`）を直接
+書かない。** 代わりに、他の Agent Skills 環境（Claude Code 等）と共通の
+`python <script>.py <args...>` というコマンドライン形式で書く（`skills/`配下の
+全SKILL.mdは実際にこの形式で統一済み）。
+
+理由: SKILL.md本文はAgent Skills仕様に準拠しており（6節参照）、フォーマット
+自体は他環境でもそのまま通用する設計になっている。呼び出し例だけLocohane
+固有のJSON形式で書いてしまうと、SKILL.mdフォルダを他環境へ持ち出したときに
+そのままでは使えなくなり、可搬性を損なう。
+
+`python <script>.py <args...>` 形式から実際の`run_script`呼び出しへの変換は、
+LLM側の共通指示（`system_prompt/system_prompt.md`・`system_prompt/subagent_common.md`
+の「SKILL.md呼び出し例の変換ルール」節）が担う。コード側（`_script_job.py`等）には
+この変換ロジックは実装されておらず、あくまでプロンプトによる変換である点に注意
+（SKILL.mdを新規追加・編集する際は、この変換ルールの存在を前提に、Locohane固有の
+呼び出し形式をSKILL.md本文へ書かないようにする）。
+
+`@N`（path_memory、4-7節参照）についても同様にSKILL.md本文には原則書かない
+（呼び出し変換ルールの一部としてLLM側が理解する）。例外的に、スクリプトの出力
+JSONスキーマの説明として`path_memory`キー自体の存在に触れる場合はこの限りではない。
+
 ### 4-1. 受け渡しの実体
 
 `run_script` は `subprocess.run(..., capture_output=True, text=True)` でスクリプトを実行し、その結果を次の固定フォーマットの**1本のテキスト**に整形して返す（`tools.py` の `run_script` 末尾）:
@@ -81,7 +105,7 @@ LLMがどのスキルを読むか・どのスクリプトを叩くかは**すべ
 
 ### 4-3. 推奨する値渡しの規約（コード非強制・慣例）
 
-既存スキル `word-counter` に倣い、以下を推奨する:
+既存スキル `excel-vba-read` に倣い、以下を推奨する:
 
 1. スクリプトは**構造化データを1行のJSONとしてstdoutへ**出力する（`print(json.dumps(result, ensure_ascii=False))`）。
 2. **正常系は終了コード0**、stdoutにJSON。
@@ -98,7 +122,7 @@ LLMがどのスキルを読むか・どのスクリプトを叩くかは**すべ
 5. `SKILL.md` の本文に、**JSONのどのキーをどう解釈してユーザーに報告すべきか**を明記する（例: 「その `lines`/`words`/`chars` をユーザーへ日本語で分かりやすく報告する」）。LLMはコードを実行するのではなく**テキストとして返ってきたJSONを読んで解釈するだけ**なので、キーの意味をSKILL.md側で説明しておかないと誤読・幻覚のもとになる。
 6. エッジケース（ファイル不在、空入力等）の挙動と、その際にLLMがユーザーに何を伝えるべきかも `SKILL.md` に明記する。
 
-JSON化は必須ではない（`git-commit-style` のように知識のみでスクリプトを持たないスキルもある）が、構造化データを返す場合はこの規約に従うと `SKILL.md` の手順が書きやすい。
+JSON化は必須ではない（`excel-knowledge` のように知識のみでスクリプトを持たないスキルもある）が、構造化データを返す場合はこの規約に従うと `SKILL.md` の手順が書きやすい。
 
 ### 4-4. ファイルを生成するスキルの追加規約: `output_path` / `output_paths`
 
@@ -370,7 +394,7 @@ def register_output_path(path, description: str | None = None) -> dict[str, str]
    接頭辞を持つスキルが並ぶと、より短い/単純な方の名前へ誤って吸い寄せ
    られるリスクがある（agent_type名での実例は`AGENTS_README.md` 8節参照）。
 2. 必要なら `skills/<skill-name>/scripts/` にスクリプトを置く（`.py` 推奨、Windows実行環境のため）。
-3. `SKILL.md` 本文に、いつ使うか・手順・`run_script` の呼び出し引数・出力の解釈方法・エッジケースを書く。
+3. `SKILL.md` 本文に、いつ使うか・手順・呼び出しコマンド（`python <script>.py <args...>` 形式。4-0節参照）・出力の解釈方法・エッジケースを書く。
 4. アプリを再起動して `scan_skills()` に発見させる（ホットリロードなし。起動ログの `スキル発見: <name>` を確認）。
 5. 実際にチャットから使ってみて、`read_skill` → （必要なら `read_skill_file` / `view_image`）→ `run_script` の順にツールが呼ばれることを確認する。
 
@@ -385,3 +409,8 @@ def register_output_path(path, description: str | None = None) -> dict[str, str]
 - 仕様のうち本プロジェクトが実装しているのは frontmatter検証・3段階progressive disclosureのみ。仕様に存在しうるその他の付随機能（あれば）は未実装。
 
 つまり「**SKILL.mdのフォーマット・設計思想はAnthropic仕様準拠だが、実行系（LLM・ツール実装）はAnthropicのものではなく完全に自前**」というのが正確な位置づけ。
+
+この方針を徹底するため、SKILL.md本文の呼び出し例もLocohane固有のJSON形式ではなく
+`python <script>.py <args...>` 形式で統一している（4-0節参照）。実行時のLLMが
+この記法を`run_script`呼び出しへ変換する規則を`system_prompt/`側に持つことで、
+SKILL.mdフォルダ自体は他のAgent Skills対応環境へそのまま持ち出せる状態を保っている。

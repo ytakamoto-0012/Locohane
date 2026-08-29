@@ -10,7 +10,7 @@ metadata:
 # docx-edit
 
 既存の `.docx` ファイルを読み込み、`ops`（操作の配列）を順番に適用して保存する
-スキルです。`edit_docx.py` を `run_script` ツールで実行して結果を得ます。
+スキルです。`edit_docx.py` を実行して結果を得ます。
 新規作成はこのスキルではなく `docx-create` を使ってください（`edit_docx.py`
 は既存ファイル専用で `--new` は持ちません）。
 
@@ -18,17 +18,13 @@ metadata:
 エラーメッセージを標準エラーへ出力します。
 
 呼び出し例:
-```json
-{
-    "skill_name": "docx-edit",
-    "script_filename": "edit_docx.py",
-    "script_args": ["C:\\Users\\me\\report.docx", "--ops-json", "[{\"op\": \"find_replace\", \"old_text\": \"株式会社A\", \"new_text\": \"株式会社B\"}]"]
-}
+```bash
+python edit_docx.py "C:\Users\me\report.docx" --ops-json '[{"op": "find_replace", "old_text": "株式会社A", "new_text": "株式会社B"}]'
 ```
 `--ops-json` の値は下記「ops の形式」に従うJSON配列を1行の文字列にしたものです。
-JSONが長くなる場合は `--ops-json` の代わりに `["<編集対象.docxの絶対パス>", "--ops-file", "<JSON配列を書いたファイルの絶対パス>"]`
+JSONが長くなる場合は `--ops-json` の代わりに `<編集対象.docxの絶対パス> --ops-file <JSON配列を書いたファイルの絶対パス>`
 を使う（`--ops-json`/`--ops-file` はどちらか一方を必ず指定）。別名保存したい
-場合は `script_args` に `"--output", "<保存先パス>"` を追加する（省略時は編集対象へ上書き）。
+場合は `--output <保存先パス>` を追加する（省略時は編集対象へ上書き）。
 
 ## 手順（推奨フロー）
 
@@ -252,10 +248,3 @@ docx-readが見せていた状態）の段落番号」を指します。複数�
 
 編集結果のレイアウトを画像で確認したい場合は `docx-render` スキルの
 `render_docx.py` + `analyze_image` を使ってください。
-
-## パスメモリー（`@N`）
-
-`edit_docx.py` が更新したファイルは、出力JSONに `path_memory`
-（例: `{"@12": "C:\\foo\\report.docx"}`）として自動登録されます。続けて
-`run_script` を呼ぶ場合、絶対パスの代わりにその `@N` を `script_args` に
-そのまま渡せます（自動的に実パスへ解決されます）。

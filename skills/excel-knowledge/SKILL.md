@@ -11,7 +11,7 @@ metadata:
 
 xlsx/xlsm を扱う `excel-edit`/`excel-read`/`excel-render`/`excel-recalc` スキルの
 呼び出しでハマりやすい点をまとめたローカル知識ベース。
-スクリプトは持たず（`run_script` は使わない）、`read_skill_file` で
+スクリプトは持たず、`read_skill_file` で
 `references/` 配下のノートを読むだけのスキル。
 
 ## 使い方
@@ -44,7 +44,7 @@ xlsx/xlsm を扱う `excel-edit`/`excel-read`/`excel-render`/`excel-recalc` ス�
 | excel-editのopで表現できない要求 | `excel-knowledge/references/beyond-excel-edit-capabilities.md` | 積み上げグラフ等、`add_chart`が対応しない種類指定に当たったときの対処。生openpyxlへ無断でバイパスしてxlsmを破損させた実例、`keep_vba`、推奨する対処の順序 |
 | フォント名変更でraw openpyxlに頼るとき | `excel-knowledge/references/raw-openpyxl-xlsm-fallback.md` | excel-editにフォント名指定が無い、Fontはcopy()してから.nameだけ変更する（新規Font代入だとbold/size/colorが消える）、render_excel失敗=破損とは限らない、同じ仮説を実行せず繰り返す迷走への対処 |
 | エラーメッセージを読んでからの再試行 | `excel-knowledge/references/error-message-first-retry.md` | エラーメッセージの型ごとの読み方、再試行前に変更点とエラー原因が対応しているか確認する、2回連続で同種エラーが出たらread_skillでSKILL.mdを読み直す |
-| ツール権限の境界 | `excel-knowledge/references/tool-permission-boundaries.md` | readonly系サブエージェント等、権限外のツール（`run_script`等）をコードでシミュレートしようとしない |
+| ツール権限の境界 | `excel-knowledge/references/tool-permission-boundaries.md` | readonly系サブエージェント等、権限外の書き込み系スクリプト実行をコードでシミュレートしようとしない |
 
 ## ノートの追加・更新について（開発者向け）
 
@@ -52,10 +52,9 @@ xlsx/xlsm を扱う `excel-edit`/`excel-read`/`excel-render`/`excel-recalc` ス�
 Web調査で得た知見を**開発者（人間、またはこのプロジェクトを保守するClaude Code）が
 事前に**書き足していく運用を想定している。
 
-Locohaneの実行時LLM（このスキルを使う本体）は `run_script`/`execute_python_code`
-の書き込み先がセッションの作業ディレクトリ/`default_workdir`配下に限定される
-サンドボックス制約があり、`skills/` 配下（このスキル自身のフォルダ）へは
-チャット実行中に書き込めない。そのため、**チャット中に得た新しい知見をこの
+Locohaneの実行時LLM（このスキルを使う本体）は、スクリプト実行系ツールの
+書き込み先が作業ディレクトリ配下に限定されるサンドボックス制約があり、
+`skills/` 配下（このスキル自身のフォルダ）へはチャット実行中に書き込めない。そのため、**チャット中に得た新しい知見をこの
 知識ベースへ自動で書き戻す機能は無い**。会話の中で有用な新知見が得られた場合は、
 ユーザーまたは開発者に「このノウハウを`excel-knowledge`に追記してよいか」を
 確認し、後日（アプリの外から）ファイルを追加する運用にすること。

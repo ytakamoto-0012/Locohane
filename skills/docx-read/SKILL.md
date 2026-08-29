@@ -10,7 +10,7 @@ metadata:
 # docx-read
 
 Word文書（`.docx`）を読み込み、段落・表・文書プロパティ・Track Changes（変更履歴）の
-有無を取得するスキルです。`read_docx.py` を `run_script` ツールで実行して結果を得ます。
+有無を取得するスキルです。`read_docx.py` を実行して結果を得ます。
 
 このスキルは `.docx`（Word 2007以降のXML形式）のみを扱います。**`.doc`
 （レガシーのバイナリ形式）は読み込みに対応していません。** ユーザーが `.doc`
@@ -21,19 +21,14 @@ Word文書（`.docx`）を読み込み、段落・表・文書プロパティ・
 エラーメッセージを標準エラーへ出力します。
 
 本文データ（段落・表）は直接標準出力へは返さず、一時JSONファイルへ書き出して
-そのパス（`result_path`）を返します。中身を確認するには `Read` ツールで
-`result_path`（または `path_memory` の `@N`）を読んでください（内容は複数行に
-整形されているため `offset`/`limit` で部分読み込みできます）。
+そのパス（`result_path`）を返します。中身を確認するには `result_path` を
+読んでください（内容は複数行に整形されているため部分読み込みできます）。
 
 ## read_docx.py — docxの読み込み（段落・表・プロパティ取得）
 
 呼び出し例:
-```json
-{
-    "skill_name": "docx-read",
-    "script_filename": "read_docx.py",
-    "script_args": ["C:\\Users\\me\\report.docx", "--offset", "0", "--limit", "300"]
-}
+```bash
+python read_docx.py "C:\Users\me\report.docx" --offset 0 --limit 300
 ```
 `--offset`/`--limit` は省略可（既定 offset=0, limit=300）。段落単位のページングです
 （`read_file.py` の行番号版と同じ考え方）。表（`tables`）は既定ですべて返します。
@@ -51,15 +46,14 @@ Word文書（`.docx`）を読み込み、段落・表・文書プロパティ・
   "body_order_count": 452,
   "core_properties": {"title": "報告書", "author": "山田太郎", "created": "2026-01-10T09:00:00", "modified": null},
   "track_changes": {"has_pending_revisions": false, "insertion_count": 0, "deletion_count": 0},
-  "result_path": "C:\\...\\_tmp_<name>\\docx_read\\1a2b3c4d_20260805_153012_123456.json",
-  "path_memory": {"@7": "C:\\...\\_tmp_<name>\\docx_read\\1a2b3c4d_20260805_153012_123456.json"}
+  "result_path": "C:\\...\\docx_read\\1a2b3c4d_20260805_153012_123456.json"
 }
 ```
 
 段落本文（`paragraphs`、各要素は `{"index", "style", "text"}`）と表本体
 （`tables`、「表1つ＝行の配列（各行はセル文字列の配列）」）は上記のように
 標準出力からは省かれ、`result_path` が指すJSONファイルにのみ含まれます。
-`Read` ツールで `result_path` を読んで内容を確認してください。
+`result_path` を読んで内容を確認してください。
 
 トップレベルに以下のフィールドも返されます（構造的な不備検知用）：
 - `sections`: 文書内の各セクション（ページ設定）の寸法・余白情報。
@@ -107,10 +101,3 @@ Word文書（`.docx`）を読み込み、段落・表・文書プロパティ・
 
 テキスト抽出だけでは読み取れないレイアウト・表・画像の配置・強調表現が
 知りたい場合は `docx-render` スキルの `render_docx.py` + `analyze_image` を使ってください。
-
-## パスメモリー（`@N`）
-
-`read_docx.py` が書き出す結果JSON（`result_path`）は、出力JSONに
-`path_memory`（例: `{"@7": "C:\\...\\1a2b3c4d.json"}`）として自動登録されます。
-続けて `run_script`/`Read` を呼ぶ場合、絶対パスの代わりにその `@N` を
-そのまま渡せます（自動的に実パスへ解決されます）。

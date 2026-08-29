@@ -10,12 +10,12 @@ metadata:
 # excel-vba-read
 
 xlsm/xls のVBAマクロコードを読み込み専用で取得するスキル。
-`read_vba.py` を `run_script` で実行する。
+`read_vba.py` を実行する。
 
 ## 呼び出し
 
-```json
-{"skill_name": "excel-vba-read", "script_filename": "read_vba.py", "script_args": ["C:\\Users\\me\\book.xlsm", "--module", "Module1"]}
+```bash
+python read_vba.py "C:\Users\me\book.xlsm" --module Module1
 ```
 `--module`省略でモジュール一覧モード。`oletools`（`olevba`）でバイト列から直接抽出するため**Excel本体・COM不要**（excel-vba-editスキルとは対照的に前提条件が緩い）。
 
@@ -23,7 +23,7 @@ xlsm/xls のVBAマクロコードを読み込み専用で取得するスキル�
 
 成功=終了コード0＋JSON1行を標準出力。失敗=終了コード非0＋エラーメッセージを標準エラー。エラー文はそのままユーザーへ伝える。未導入ライブラリは`ImportError`終了コード1（原因: `oletools`）→該当する`pip install oletools`をユーザーに促す。
 
-このスクリプトは本文（modules一覧/コード全文）を標準出力に出さず、一時JSONへ書き出して`result_path`を返す。`Read`ツールで`result_path`（または`path_memory`の`@N`）を読む。一覧モードは`modules_count`と`result_path`（中身は`modules`＝各要素`{"name","type","line_count"}`）。`--module`指定時は`code_length`と`result_path`（中身`code`＝ソース全文）。
+このスクリプトは本文（modules一覧/コード全文）を標準出力に出さず、一時JSONへ書き出して`result_path`を返す。`result_path`を読む。一覧モードは`modules_count`と`result_path`（中身は`modules`＝各要素`{"name","type","line_count"}`）。`--module`指定時は`code_length`と`result_path`（中身`code`＝ソース全文）。
 
 ## 手順
 
@@ -33,4 +33,4 @@ xlsm/xls のVBAマクロコードを読み込み専用で取得するスキル�
 
 ## エッジケース
 
-対象はxlsm/xls（`.xlsx`は即エラー）。VBAプロジェクト無しのファイルはエラーにせず正常終了する。標準出力は他の場合と同じ形（`modules`は`modules_count: 0`に変換され、`result_path`/`path_memory`も付く）で`{"path":..., "has_vba": false, "modules_count": 0, "result_path": "...", "path_memory": {...}}`。`result_path`の中身（生JSON）は`modules: []`のまま。モジュール種別（`standard`/`class`/`document`/`form`）は名前パターン・コード内容からの**簡易推測**であり保証はない（正確な種別が要る場合はExcelのVBE(Alt+F11)確認をユーザーに案内）。存在しないモジュール名指定はエラー（存在する一覧付き）。UserFormは`type:"form"`として一覧表示され読込は可能だがexcel-vba-editスキルの編集対象外。
+対象はxlsm/xls（`.xlsx`は即エラー）。VBAプロジェクト無しのファイルはエラーにせず正常終了する。標準出力は他の場合と同じ形（`modules`は`modules_count: 0`に変換され、`result_path`も付く）で`{"path":..., "has_vba": false, "modules_count": 0, "result_path": "..."}`。`result_path`の中身（生JSON）は`modules: []`のまま。モジュール種別（`standard`/`class`/`document`/`form`）は名前パターン・コード内容からの**簡易推測**であり保証はない（正確な種別が要る場合はExcelのVBE(Alt+F11)確認をユーザーに案内）。存在しないモジュール名指定はエラー（存在する一覧付き）。UserFormは`type:"form"`として一覧表示され読込は可能だがexcel-vba-editスキルの編集対象外。

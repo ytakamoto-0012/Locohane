@@ -22,7 +22,7 @@ def read_skill_file(relative_path: str) -> str:
         relative_path: skills ルートからの相対パス。read_skill(skill_name) で
             そのスキルを読んだ後でも、先頭に必ずスキルフォルダ名を含めること
             （例: "references/notes.md" ではなく
-            "word-counter/references/notes.md"）。
+            "excel-knowledge/references/notes.md"）。
 
     Returns:
         ファイル内容（UTF-8、デコード不能なバイト列は errors="replace" で置換）。

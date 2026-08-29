@@ -82,7 +82,7 @@ def analyze_image(relative_path: str, show_in_chat: bool = False) -> tuple[str, 
 
     Args:
         relative_path: 相対パスを渡すと skills ルートからの相対パスとして
-            解決する（例: word-counter/references/example.png）。それ以外の
+            解決する（例: excel-vba-read/references/example.png）。それ以外の
             場所の画像を見る場合は絶対パス（例:
             C:\\Users\\foo\\data\\2019\\img1.png）で指定すること。
             Glob/Grep/Read の結果に付与されたパスメモリー参照（`@N` 形式）を

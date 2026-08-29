@@ -9,30 +9,30 @@ metadata:
 
 # excel-edit
 
-xlsx/xlsm の新規作成・既存編集を行うスキル。`edit_excel.py` を `run_script` で実行する。
+xlsx/xlsm の新規作成・既存編集を行うスキル。`edit_excel.py` を実行する。
 
 ## 呼び出し
 
-```json
-{"skill_name": "excel-edit", "script_filename": "edit_excel.py",
- "script_args": ["C:\\Users\\me\\book.xlsx", "--ops-json", "[{\"op\": \"set_cell\", \"sheet\": \"Sheet1\", \"cell\": \"A1\", \"value\": \"合計\"}]"]}
+```bash
+python edit_excel.py "C:\Users\me\book.xlsx" --ops-json '[{"op": "set_cell", "sheet": "Sheet1", "cell": "A1", "value": "合計"}]'
 ```
-- 新規作成: `script_args`末尾に`"--new"`（既存ファイルがあれば`"--overwrite"`も必須、無いとエラー）。
+- 新規作成: 末尾に`--new`を追加（既存ファイルがあれば`--overwrite`も必須、無いとエラー）。
 - `--new`なし: 対象パスを読み込んで編集（不在ならエラー）。触れなかった既存セル・書式・シートはそのまま保持。
-- `--output`省略で対象パスへ上書き保存。別ファイル保存時のみ`"--output", "<絶対パス>"`を追加。
+- `--output`省略で対象パスへ上書き保存。別ファイル保存時のみ`--output <絶対パス>`を追加。
 - `.xlsm`はマクロを保持したまま編集可（`--new`なし時のみ。既存ファイルを`keep_vba=True`で読み込むため）。マクロ自体の読み書きはexcel-vba-read/excel-vba-editスキル。
 - **`--new`かつ`.xlsm`は「マクロ有効ブック」にならない**（openpyxlの`Workbook()`はvbaProjectを持たないため、拡張子が`.xlsm`でも中身はxlsx相当になり、Excelで開けない/マクロを追加できないファイルができる）。表データ・書式とVBAマクロの両方を持つ新規`.xlsm`を作りたい場合は、**先にexcel-vba-editスキルの`--new`で空のマクロ有効ブックを作成し、その後このスキルを`--new`なしで使って同じパスにシート・データを追記する**（逆順不可）。
-- **既存の`.xlsm`を`execute_python_code`の生openpyxlで直接編集しない**（`keep_vba=True`を忘れるとVBAマクロが消える）。タブ色は`set_tab_color`、表示シートは`set_active_sheet`、グラフ調整は`update_chart`を使う。該当opが無ければユーザーに相談する。
+- **既存の`.xlsm`を生のopenpyxlコードで直接編集しない**（`keep_vba=True`を忘れるとVBAマクロが消える）。タブ色は`set_tab_color`、表示シートは`set_active_sheet`、グラフ調整は`update_chart`を使う。該当opが無ければユーザーに相談する。
 
 ## 入出力の型とopsの渡し方
 
 成功=終了コード0＋JSON1行を標準出力。失敗=終了コード非0＋エラーメッセージを標準エラー。エラー文はそのままユーザーへ伝える。未導入ライブラリは`ImportError`終了コード1（原因: `openpyxl`）→該当する`pip install <パッケージ名>`をユーザーに促す。
 
-opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す（`run_script`はシェルを介さず引数をそのまま子プロセスへ渡すため引用符エスケープは不要）。次のいずれかに該当する場合は、最初から（構文エラーを待たず）`execute_python_code`でopsをlist/dictとして組み立て`json.dump`で一時ファイルへ書き出し、`--ops-file <絶対パス>`で渡す：①ops要素数が5個超、②1つの文字列値に日本語10文字超を含む。`--ops-json`で構文エラー（引用符の閉じ忘れ等）が1回でも出たら、直そうとせず即座に`--ops-file`方式へ切り替える。
+opsは通常`--ops-json '<ops配列を1行JSON化した文字列>'`で渡す。次のいずれかに該当する場合は、最初から（構文エラーを待たず）opsをJSON配列としてファイルへ書き出し、`--ops-file <絶対パス>`で渡す：①ops要素数が5個超、②1つの文字列値に日本語10文字超を含む（長いJSON文字列をコマンドライン引数へ直接埋め込むとクォート・エスケープでミスしやすいため）。`--ops-json`で構文エラー（引用符の閉じ忘れ等）が1回でも出たら、直そうとせず即座に`--ops-file`方式へ切り替える。
 
-**`execute_python_code`の`cwd`は`run_script`の作業ディレクトリ（＝ユーザーが設定した作業ディレクトリ）とは別物**（`execute_python_code`はセッション専用の一時フォルダ`_tmp_<name>`をcwdとして実行される）。opsファイルはユーザーの作業ディレクトリを狙わず、単純に相対パス（例:`open("ops.json", "w", ...)`）で書けばよい。`run_script`側は自セッションの`_tmp_<name>`配下を読み取れるので、`os.path.abspath("ops.json")`で得た絶対パスをそのまま`--ops-file`に渡せば動く。ユーザーの作業ディレクトリ直下に`_tmp_`で始まる名前のファイルを自分で作ろうとしない（無関係な安全ガードに引っかかる）。
-
-生成・更新したファイルは出力JSONの`path_memory`（例`{"@12": "C:\\foo\\book.xlsx"}`）に自動登録される。以降`run_script`の`script_args`には絶対パスの代わりに`@N`をそのまま渡せる。
+```bash
+python -c "import json; json.dump([{'op': 'set_cell', 'sheet': 'Sheet1', 'cell': 'A1', 'value': '合計'}], open('ops.json', 'w', encoding='utf-8'), ensure_ascii=False)"
+python edit_excel.py "C:\Users\me\book.xlsx" --ops-file "C:\Users\me\ops.json"
+```
 
 ## opsの一覧
 
@@ -227,8 +227,8 @@ xlsxとpptxを同じ資料セットとして作るときに見た目を揃えや
 - **`data_range`/`categories_range`は単一シート内の矩形範囲しか指定できない。**
   「1月〜12月シートそれぞれのB11セル」のように複数シートに散らばった値を
   1つのグラフの系列にまとめたい場合、`add_chart`に直接そのような範囲は渡せない
-  （openpyxl・Excelとも1系列は連続範囲が前提のため）。生のopenpyxlコードを
-  `execute_python_code`で書いて`Series`/`Reference`を手組みしようとすると、
+  （openpyxl・Excelとも1系列は連続範囲が前提のため）。生のopenpyxlコードで
+  `Series`/`Reference`を手組みしようとすると、
   内部APIの誤用でハマりやすい（非推奨）。代わりに、まず`add_sheet`で集計用の
   1シートを作り、`set_range`の各セルに他シートを参照する数式文字列
   （例:`"='1月'!B11"`）を書き込んで12ヶ月分を1シートに集約してから、その集計
@@ -269,7 +269,7 @@ xlsxとpptxを同じ資料セットとして作るときに見た目を揃えや
 ## 手順とエッジケース
 
 1. 依頼内容からopsを組み立てる（データ投入=`set_range`、既存表への追記=`insert_rows`+`set_range`、見た目仕上げ=`format_table`、個別セル調整=`set_style`、グラフ=`add_chart`、を組合せる）。
-2. `run_script`を呼ぶ。
+2. 上記コマンドを実行する。
 3. `--new`使用時に対象が既存で上書き可否不明なら、`--overwrite`なしで一度実行しエラーからユーザーに確認する。
 4. 成功時`{"path":...,"sheets":[...],"applied_ops":N}`が返るので保存先パスを伝える。
 

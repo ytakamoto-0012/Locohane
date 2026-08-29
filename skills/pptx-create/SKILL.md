@@ -9,8 +9,8 @@ metadata:
 
 # pptx-create
 
-JSON定義から新規pptxを生成するスキルです。`create_pptx.py` を `run_script`
-ツールで実行して結果を得ます。`python-pptx` を使っており、LibreOffice等の
+JSON定義から新規pptxを生成するスキルです。`create_pptx.py` を実行して結果を
+得ます。`python-pptx` を使っており、LibreOffice等の
 外部アプリやサムネイル画像化には対応しません。土台は同梱の16:9テンプレート
 （`assets/template_16x9.pptx`、python-pptx既定テーマ準拠）で、その上に
 `theme`（配色テーマ）で見出し・表見出し行・stat数値の色を指定します。
@@ -21,16 +21,12 @@ JSON定義から新規pptxを生成するスキルです。`create_pptx.py` を 
 エラーメッセージを標準エラーへ出力します。
 
 呼び出し例:
-```json
-{
-    "skill_name": "pptx-create",
-    "script_filename": "create_pptx.py",
-    "script_args": ["C:\\Users\\me\\out.pptx", "--data", "{\"slides\": [{\"layout\": \"title\", \"title\": \"四半期報告\", \"subtitle\": \"2026年度 第2四半期\"}]}"]
-}
+```bash
+python create_pptx.py "C:\Users\me\out.pptx" --data '{"slides": [{"layout": "title", "title": "四半期報告", "subtitle": "2026年度 第2四半期"}]}'
 ```
 `--data` の値は下記「JSON定義スキーマ」に従うJSON文字列です。スライド数が
 多くJSONが長大になる場合は `--data` の代わりに
-`["<出力先pptxの絶対パス>", "--data-file", "<スライド定義JSONを書いたUTF-8ファイルの絶対パス>"]`
+`<出力先pptxの絶対パス> --data-file <スライド定義JSONを書いたUTF-8ファイルの絶対パス>`
 を使う（`--data`/`--data-file` はどちらか一方を必ず指定。両方指定・両方省略はエラー）。
 
 ## 引数一覧
@@ -41,13 +37,7 @@ JSON定義から新規pptxを生成するスキルです。`create_pptx.py` を 
 | `--data` | `--data-file`と排他で必須 | 文字列（JSON） | - | スライド定義JSONをそのまま1行の文字列で渡す |
 | `--data-file` | `--data`と排他で必須 | 文字列（絶対パス） | - | スライド定義JSONを書いたUTF-8ファイルのパス |
 
-`output_path`は絶対パスですが、`run_script`が実際に書き込みを許可するのは
-ユーザーが設定した作業ディレクトリ配下、またはユーザーが作業ディレクトリを
-設定していない場合はセッション専用の一時フォルダ（`_tmp_<name>`）配下
-のみです。`default_workdir`（既定フォルダ）そのものの直下パスを組み立てて
-指定すると書き込みサンドボックスガードに拒否されます。出力先が不明な場合は
-`check_work_dir_status`で作業ディレクトリを確認するか、委譲元のtask文で
-指示された出力先パスをそのまま使ってください。
+`output_path`は書き込み可能なディレクトリ配下の絶対パスを指定してください。
 
 ## JSON定義スキーマ
 
@@ -151,10 +141,3 @@ Anthropic公式pptxスキルのDesign Ideas（配色パレット）に準拠し�
 `render_pptx.py` + `analyze_image` を使ってください。既存のPowerPointテンプレート
 （社内フォーマット等）のデザインを保ったまま一部だけ差し替えたい場合は、
 このスキルではなく `pptx-inspect`→`pptx-edit` を使ってください。
-
-## パスメモリー（`@N`）
-
-`create_pptx.py` が生成したファイルは、出力JSONに `path_memory`
-（例: `{"@12": "C:\\foo\\out.pptx"}`）として自動登録されます。続けて
-`run_script` を呼ぶ場合、絶対パスの代わりにその `@N` を `script_args` に
-そのまま渡せます（自動的に実パスへ解決されます）。

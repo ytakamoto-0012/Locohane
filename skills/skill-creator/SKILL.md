@@ -47,7 +47,7 @@ metadata:
   本番での動作確認にはアプリの再起動が必要になる旨をユーザーに伝えること
   （evalによる実機テスト自体はアプリ再起動なしで行える）。
 - **新規スキルは必ず `.locohane/skills/<name>/` に作成する。** プロジェクト
-  ルート直下の `skills/`（本スキルや word-counter 等の置き場）には書き込ま
+  ルート直下の `skills/`（本スキルや excel-edit 等の置き場）には書き込ま
   ない。`scaffold_skill.py` は常に `.locohane/skills/` へ生成する。既存の
   `skills/` 側スキルを評価・改善する場合のみ、`run_isolated_eval.py` の
   `--skill-root skills` で対象を切り替える。
@@ -73,7 +73,7 @@ metadata:
 ```
 
 `--with-script` を付けると `scripts/run.py` のサンプルも生成される。
-スクリプト不要（知識のみ）のスキルなら付けない（`skills/git-commit-style`
+スクリプト不要（知識のみ）のスキルなら付けない（`skills/excel-knowledge`
 のような形）。
 
 雛形ができたら、以下を踏まえて SKILL.md 本文を書き直す:
@@ -84,9 +84,13 @@ metadata:
   ため、description の質が最終的なUXを決める。
 - SKILL.md本文は500行を目安に収める。長くなりそうなら `references/` に
   分割し、本文からポインタを張る。
-- `scripts/` を持つ場合、本文に**呼び出しJSON例・出力キーの意味・
-  エッジケース**を明記する（`skills/word-counter/SKILL.md` を参考にする）。
-  スクリプトの出力は構造化JSON（1行、`print(json.dumps(result,
+- `scripts/` を持つ場合、本文に**呼び出しコマンド例・出力キーの意味・
+  エッジケース**を明記する。呼び出し例は`run_script`のJSON引数形式
+  （`{"skill_name":..., "script_filename":..., "script_args":[...]}`）を
+  直接書かず、他のAgent Skills環境と共通の`python <script>.py <args...>`
+  形式で書く（実際の`run_script`変換はLLM側の共通指示が行う。詳細・実例は
+  `skills/SKILLS_README.md` 4-0節、`skills/excel-read/SKILL.md`等の既存
+  スキルを参考にする）。スクリプトの出力は構造化JSON（1行、`print(json.dumps(result,
   ensure_ascii=False))`）を推奨。ファイルを生成するスキルなら
   `output_path`（絶対パス文字列）キーを必ず含める。
 - name/description の検証ルールに違反すると起動時に**黙ってスキップ**
@@ -202,5 +206,6 @@ metadata:
 - `references/schemas.md`: 各スクリプトの引数・出力JSONの詳細スキーマ。
 - `skills/SKILLS_README.md`: SKILL.mdのフォーマット仕様・run_scriptの
   値渡し規約（このスキル自体もこの仕様に従っている）。
-- `skills/word-counter/SKILL.md` / `skills/git-commit-style/SKILL.md`:
+- `skills/excel-vba-read/SKILL.md`（スクリプトを持つシンプルな例） /
+  `skills/excel-knowledge/SKILL.md`（知識のみでスクリプトを持たない例）:
   シンプルなスキルの実例。

@@ -10,26 +10,21 @@ metadata:
 # pptx-read
 
 pptxの読み込み（テキスト・表・発表者ノートの抽出）を行うスキルです。
-`read_pptx.py` を `run_script` ツールで実行して結果を得ます。
+`read_pptx.py` を実行して結果を得ます。
 `python-pptx` を使っており、LibreOffice等の外部アプリは不要です。
 
 正常系なら終了コード0でJSON1行を標準出力へ、異常系なら終了コード非0で
 エラーメッセージを標準エラーへ出力します。
 
 スライドごとの本文データは直接標準出力へは返さず、一時JSONファイルへ書き出して
-そのパス（`result_path`）を返します。中身を確認するには `Read` ツールで
-`result_path`（または `path_memory` の `@N`）を読んでください（内容は複数行に
-整形されているため `offset`/`limit` で部分読み込みできます）。
+そのパス（`result_path`）を返します。中身を確認するには `result_path` を
+読んでください（内容は複数行に整形されているため部分読み込みできます）。
 
 ## read_pptx.py — pptxからテキスト・表・ノート抽出
 
 呼び出し例:
-```json
-{
-    "skill_name": "pptx-read",
-    "script_filename": "read_pptx.py",
-    "script_args": ["C:\\Users\\me\\sample.pptx", "--start-slide", "1", "--max-slides", "20"]
-}
+```bash
+python read_pptx.py "C:\Users\me\sample.pptx" --start-slide 1 --max-slides 20
 ```
 `--start-slide`/`--max-slides` は省略可（既定 start-slide=1, max-slides=20）。
 
@@ -37,11 +32,11 @@ pptxの読み込み（テキスト・表・発表者ノートの抽出）を行�
 ```json
 {"path": "C:\\foo\\sample.pptx", "total_slides": 12, "start_slide": 1, "end_slide": 12,
  "slides_count": 12,
- "result_path": "C:\\...\\_tmp_<name>\\pptx_read\\1a2b3c4d_20260805_153012_123456.json"}
+ "result_path": "C:\\...\\pptx_read\\1a2b3c4d_20260805_153012_123456.json"}
 ```
 スライドごとの本文（`slides`、各要素は `{"index", "title", "texts", "tables", "notes"}`）は
 標準出力からは省かれ、`result_path` が指すJSONファイルにのみ含まれます。
-`Read` ツールで読んで内容を確認してください。各要素のキーの意味は以下の通りです。
+これを読んで内容を確認してください。各要素のキーの意味は以下の通りです。
 
 - `title`: そのスライドのタイトルプレースホルダのテキスト（無ければ `null`）。
 - `texts`: タイトル以外のテキストを持つ図形のテキスト一覧（1図形＝1要素、複数行はそのまま`\n`区切り）。
@@ -64,10 +59,3 @@ start-page/max-pageと同じ考え方のスライド版です）。
 
 既存テンプレートを編集する目的でshape単位の構造（`shape_index`等）を知りたい
 場合は、このスキルではなく `pptx-inspect` を使ってください。
-
-## パスメモリー（`@N`）
-
-`read_pptx.py` が書き出す結果JSON（`result_path`）は、出力JSONに
-`path_memory`（例: `{"@7": "C:\\...\\1a2b3c4d.json"}`）として自動登録されます。
-続けて `run_script`/`Read` を呼ぶ場合、絶対パスの代わりにその `@N` を
-そのまま渡せます（自動的に実パスへ解決されます）。

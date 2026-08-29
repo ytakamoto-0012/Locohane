@@ -9,7 +9,7 @@ metadata:
 
 # excel-render
 
-Excelシートを画像化してLLMに見せるスキル。`render_excel.py` を `run_script` で実行する。
+Excelシートを画像化してLLMに見せるスキル。`render_excel.py` を実行する。
 
 excel-readスキルは数値・テキストは取れても罫線・書式・グラフ・レイアウトは読み取れないため、シートの意図をより正確に把握したいときに画像で確認する。
 
@@ -17,9 +17,8 @@ PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フ�
 
 ## 呼び出し
 
-```json
-{"skill_name": "excel-render", "script_filename": "render_excel.py",
- "script_args": ["C:\\Users\\me\\book.xlsx"]}
+```bash
+python render_excel.py "C:\Users\me\book.xlsx"
 ```
 ## 引数一覧
 
@@ -29,14 +28,14 @@ PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フ�
 
 ## 入出力の型
 
-成功=終了コード0＋JSON1行を標準出力。失敗=終了コード非0＋エラーメッセージを標準エラー。エラー文はそのままユーザーへ伝える。生成した画像は`path_memory`に自動登録される。
+成功=終了コード0＋JSON1行を標準出力。失敗=終了コード非0＋エラーメッセージを標準エラー。エラー文はそのままユーザーへ伝える。
 
 ## 出力
 
 ```json
 {"path": "C:\\foo\\book.xlsx", "tool": "excel", "total_pages": 5, "start_page": 1, "end_page": 5,
  "dpi": 300, "target_dpi": 300, "crop_applied": true,
- "images": [{"page": 1, "image_path": "C:\\...\\_tmp_<name>\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300, "cropped": true}, ...]}
+ "images": [{"page": 1, "image_path": "C:\\...\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300, "cropped": true}, ...]}
 ```
 `images`には全ページ（=全シート、通常は`total_pages`件）が含まれる。
 `images`の各要素は常に`original_dpi`（クロップ前の実解像度）を持つ。`cropped`（bbox検出に
@@ -54,8 +53,8 @@ PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フ�
 
 ## エッジケース
 
-ファイル不在／ディレクトリ指定／拡張子が`.xlsx`・`.xlsm`・`.xls`以外／壊れたファイル／Excel未インストールはエラー終了。シートが1枚も無い等でPDFが0ページになった場合は終了コード0で返るが、通常時とJSONの形が異なる点に注意（`images: []`に加え`start_page`/`end_page`が`null`になり、**`target_dpi`キー自体が無くなる**）。生成PNGは`_tmp_<name>/rendered/`に保存され同一ファイル再実行時は上書き、会話終了時に自動削除。`pywin32`/`pypdfium2`/`pillow`未導入は`ImportError`（該当する`pip install <パッケージ名>`をユーザーに促す）。
+ファイル不在／ディレクトリ指定／拡張子が`.xlsx`・`.xlsm`・`.xls`以外／壊れたファイル／Excel未インストールはエラー終了。シートが1枚も無い等でPDFが0ページになった場合は終了コード0で返るが、通常時とJSONの形が異なる点に注意（`images: []`に加え`start_page`/`end_page`が`null`になり、**`target_dpi`キー自体が無くなる**）。生成PNGは`rendered/`配下に保存され同一ファイル再実行時は上書きされる。`pywin32`/`pypdfium2`/`pillow`未導入は`ImportError`（該当する`pip install <パッケージ名>`をユーザーに促す）。
 
-内部でEXCEL.EXEを一時起動する。処理完了時は必ず終了させるが、`run_script`のタイムアウト等でスクリプトが強制終了された場合は残留する可能性がある。この場合はタスクマネージャーでの手動終了ではなく、`excel-recalc`スキルの`recalc_excel.py`または`excel-vba-edit`スキルの`edit_vba.py`を`script_args`を`["--recover-locks"]`だけにして実行する（自セッションがexcel-render等で起動して残留したCOMプロセスのうち、まだ生存しているものだけを内部で終了する）。
+内部でEXCEL.EXEを一時起動する。処理完了時は必ず終了させるが、実行タイムアウト等でスクリプトが強制終了された場合は残留する可能性がある。この場合はタスクマネージャーでの手動終了ではなく、`excel-recalc`スキルの`recalc_excel.py`または`excel-vba-edit`スキルの`edit_vba.py`を`--recover-locks`だけ付けて実行する（自セッションがexcel-render等で起動して残留したCOMプロセスのうち、まだ生存しているものだけを内部で終了する）。
 
 シートの列幅・行高さの合計が用紙1ページに収めるための下限スケール（10%）を下回ると、複数ページに分割された上で出力JSONに`warnings`配列（stderrにも同内容を出力）が付与される。終了コードは0のまま。`excel-edit`の`set_column_width`（単位は文字幅、目安1〜60）で列幅を見直してください。

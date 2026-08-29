@@ -74,7 +74,7 @@ python run_isolated_eval.py status --job-id <job_id> --skill-name my-new-skill \
 
 `--skill-root` の既定値は `locohane`（`.locohane/skills/`、skill-creator が
 新規作成するスキルの置き場）。プロジェクトルート直下の `skills/` にある
-既存スキル（word-counter等）を対象にする場合のみ `--skill-root skills` を
+既存スキル（excel-edit等）を対象にする場合のみ `--skill-root skills` を
 明示する。
 
 - `with_skill`: 本番の skills_dir をそのまま使う。

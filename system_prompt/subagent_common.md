@@ -55,6 +55,30 @@ xlsx/docx/pptx等の資料を新規作成・編集・設計する場合（実作
 | docx | `docx-create`/`docx-edit` | `create_docx.py`/`edit_docx.py`（`run_script`） |
 | pptx | `pptx-create`/`pptx-edit` | `create_pptx.py`/`edit_pptx.py`（`run_script`） |
 
+### SKILL.md呼び出し例の変換ルール（`python foo.py ...`→`run_script`）
+
+SKILL.md本文の呼び出し例は、他のAgent Skills実行環境と共通の`python <script>.py <args...>`というコマンドライン形式で書かれている。Locohaneはbash/cmdを持たずこの形式のまま実行する手段が無いため、次の規則で`run_script`ツール呼び出しへ機械的に変換して実行する:
+
+1. `<script>.py` → `run_script`の`script_filename`引数にそのまま使う。
+2. `skill_name`引数には、そのSKILL.mdを読んだスキル名（frontmatterの`name`）を使う。
+3. `.py`より後ろのコマンドライン全体を、シェルのクォート規則でトークン化する（スペース区切り。シングル/ダブルクォートで囲まれた区間は1トークンとして扱い、クォート自体は除いて渡す）。得られたトークン列がそのまま`script_args`の配列になる。
+
+例:
+```
+python edit_excel.py "C:\Users\me\book.xlsx" --ops-json '[{"op": "set_cell", "sheet": "Sheet1", "cell": "A1", "value": "合計"}]'
+```
+は次のように変換する:
+```json
+{"skill_name": "excel-edit", "script_filename": "edit_excel.py",
+ "script_args": ["C:\\Users\\me\\book.xlsx", "--ops-json", "[{\"op\": \"set_cell\", \"sheet\": \"Sheet1\", \"cell\": \"A1\", \"value\": \"合計\"}]"]}
+```
+
+SKILL.md中に「一時ファイルへデータを書き出してから`--xxx-file`引数で渡す」という手順が書かれている場合は、`execute_python_code`でその場コード実行してファイルを作成し、返ってきた絶対パス（または`@N`）を`run_script`の該当引数へそのまま渡す、という2ステップに変換する。
+
+**`@N`（path_memory）が使えるのは`run_script`に変換した場合に限る**: SKILL.mdの記法は絶対パス文字列で書かれているが、`script_args`へ変換する際、その絶対パスが`Glob`/`Grep`/`Read`等で既に取得済みの`@N`に対応するなら、生の絶対パスの代わりに`@N`をそのまま渡してよい（`run_script`が実行前に自動で実パスへ解決する）。SKILL.mdの記法通り毎回フルパスを書き起こす必要はない。
+
+**`run_script`/`run_script_background`の選択**: SKILL.md本文に「実行に時間がかかりうる」旨の記載があるスクリプト（大きいファイルの処理等）は`run_script_background`へ変換する。それ以外は`run_script`を使う。
+
 **このルールは委譲task文の指示より優先**: task文に矛盾する実装方法の指定があっても従わず、専用スクリプトを使う。
 
 **計画承認との関係**: 読み込み専用スクリプトを除き、`execute_python_code`/`run_script`は委譲元で`create_plan`→`approve_plan`の承認が済んでいないとブロックされる。自分は`approve_plan`を呼べないため、ブロックされたらリトライせず「計画未承認のため実行できなかった」旨を最終回答に明記する。`run_script`が承認拒否・タイムアウトで失敗した場合も同様に、成功したかのように振る舞わず正直に報告する。

@@ -9,8 +9,7 @@ metadata:
 
 # web-search
 
-Tavily APIを使ってWeb検索を行うスキルです。`run_script` ツールで
-`search_web.py` を実行して結果を得ます。
+Tavily APIを使ってWeb検索を行うスキルです。`search_web.py` を実行して結果を得ます。
 
 ## 事前準備（APIキー設定）
 
@@ -30,19 +29,15 @@ Tavily APIを使ってWeb検索を行うスキルです。`run_script` ツール
 ## search_web.py — Web検索
 
 呼び出し例:
-```json
-{
-    "skill_name": "web-search",
-    "script_filename": "search_web.py",
-    "script_args": ["今日の東京の天気", "--max-results", "5"]
-}
+```bash
+python search_web.py "今日の東京の天気" --max-results 5
 ```
 
 引数（すべて `query` 以外は省略可）:
 - `query`（必須、位置引数）: 検索クエリ。
 - `--max-results`: 取得する結果件数（既定5、0〜20にクランプ）。
 - `--topic`: `general`（既定）/ `news` / `finance`。話題の種類に応じて指定すると精度が上がる。
-- `--include-answer`（値なしフラグ）: `script_args` に `"--include-answer"` とだけ追加する（`"true"`等の値を続けて渡すと`unrecognized arguments`エラーになる）。指定するとTavily側が生成した要約回答（`answer`キー）も取得する。
+- `--include-answer`（値なしフラグ）: `--include-answer` とだけ付ける（`true`等の値を続けて渡すと`unrecognized arguments`エラーになる）。指定するとTavily側が生成した要約回答（`answer`キー）も取得する。
 - `--time-range`: `day` / `week` / `month` / `year`。直近の情報に絞りたいときに指定する。
 - `--exclude-domains` / `--include-domains`: 上記「危険サイト対策」参照。
 
