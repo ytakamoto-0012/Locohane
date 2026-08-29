@@ -4296,3 +4296,61 @@ annual_schedule.xlsxを新規作成した（07:07:46、`excel-edit`の
 
 修正後、run3として再実行し、この修正で実際にopenpyxl自作が再発しないか
 確認する。
+
+## iter54: system_promptループ再開（2026-08-29、iter53以来約2週間ぶり）
+
+**背景**: iter53以降system_prompt_scaleターゲットの作業に移行しループが中断していた。この間`system_prompt.md`は「3層構成へ再構成」(コミット`7e9fe2a`)を含む複数の変更を経ている。今回`/tune-prompt`で再開し、`evals/cases/system_prompt/`全6件を実行（結果: `evals/results/system_prompt/20260829_104740/`）。
+
+- ✗ `annual_schedule_investigation_before_plan`: ERROR（1800秒タイムアウト）。
+- ✗ `concise_response_no_preamble`: judge FAIL（「はい、11は素数です。」の後に不要な背景説明「11は1と11自身以外に…」を追加。iter45時点は「はい。」の一言で合格していた回帰）。
+- ✗ `concise_response_no_tool_preamble`: ルールFAIL（`tool_called_any: [analyze_image, Glob]`）だが実質は判定基準側の陳腐化（後述）。
+- ? `concise_report_by_scale`: ルールPASS、judge観点でも簡潔・許容範囲（合格扱いとする）。
+- ? `glob_single_call_then_delegate`: ルールPASS。Glob1回→dispatch_agent委譲の正しい流れ、turn_cutoffsなし（合格扱いとする）。
+- ✗ `annual_schedule_week_fix_ambiguous_calendar`: ERROR（1800秒タイムアウト）。
+
+### 根本原因1（002の回帰）: 簡潔性ルールが3層構成化で欠落
+
+`git log -S "Important Reminders"`で追跡した結果、コミット`7e9fe2a`（system_promptを3層構成へ再構成）で旧`# Important Reminders`セクション全体が削除され、その項目2（レスポンス簡潔性: 前置き・後置き禁止、Yes/No一言回答、ツール呼び出し前後の説明文禁止、規模別の報告分量目安）が新構成のどこにも移植されていなかった。項目1（無言終了禁止）は「必須ルール」に残っていたが、項目2は完全に消失していた。iter45で20/20相当の効果を確認済みだった内容が、無関係なリファクタリングの副作用でサイレントに失われていた。
+
+**修正**: `system_prompt.md`「作業原則」節（詳細ルール冒頭）に、旧Important Reminders項目2の内容をほぼそのまま復元する箇条書きを追加。
+
+### 根本原因2（001のタイムアウト）: 全件監査ルールが新規設計調査にまで過剰適用
+
+`evals/fixtures/annual_schedule_large100`（10年×10件=100件の子供会写真）に対し、「調査」ステップの記述「対象が表・繰返し構造の場合、調査結果が代表例だけになっていないか確認する（…全リストが揃っているか）」が、既存ファイルの修正・検証（このルールが本来意図していたシナリオ）だけでなく、新規Excel設計のための過去実績調査にも適用されてしまい、`worker`へ100件全部の画像を1件ずつ`analyze_image`させ、詳細な`thread_note`を延々と書き続けて`create_plan`に到達できないまま1800秒のタイムアウトに達していた（evals.log 09:4x-10:12、`by worker`で年ごとのイベント一覧を精査・記録し続けている挙動を確認）。
+
+**修正**: 同箇所に「既存ファイルの修正・検証が目的の場合」という限定を追加し、「新規成果物を設計するための過去実績調査では全件を個別に読み直す必要はなく、年ごとの件数・傾向が分かる代表サンプルで十分」という対比を明記した。
+
+### 003のルールFAILは判定基準側の陳腐化（system_prompt.md側の修正は不要と判断）
+
+transcriptを確認したところ、モデルは1ターン目で空応答（無言）を返し自動リマインダーで回復した後、`check_work_dir_status`→`dispatch_agent(agent_type="explore")`に単一画像の内容確認を委譲し、`explore`内部で`analyze_image`が呼ばれて結果を取得、前置き・後置きなしで結果だけを最終回答にしていた。ケースの`expect.tool_called_any: [analyze_image, Glob]`はメインエージェントが直接どちらかを呼ぶことを想定しているが、現行ルール（005で検証しているGlobガード等と同じ「ファイル調査は必ずdispatch_agentへ委譲」原則）ではこの1枚の画像確認も委譲対象であり、メインエージェントが`analyze_image`/`Glob`を直接呼ばないのが正しい挙動。判定基準（ケースYAML）が現行アーキテクチャに追従できていない陳腐化であり、system_prompt.md側の問題ではないため今回は対象ファイルの修正を行わない（ケースYAML自体は`tune-prompt`の対象外ファイルのため、更新するかはユーザー判断を仰ぐ）。
+
+なお、1ターン目の空応答（無言→自動リマインダーで回復）は最終的な合否には影響しなかったが、iter09で一般則化したはずの「ツール不要なターンの最後は必ずテキストで回答する」が完全 には安定していない兆候として記録に留める（今回は実害なし、追加修正は見送り）。
+
+### 006のタイムアウト: 新規に発見した重大な設計ギャップ（要ユーザー判断、今回は未修正）
+
+`annual_schedule_week_fix`（既存xlsxの週データ修正、work_dirはeval側が`DEFAULT_WORKDIR`環境変数経由で直接フィクスチャに向けている＝本番でいう「ユーザーが作業フォルダを未選択、共有default_workdirをそのまま使っている」状態を再現）で、worker委譲後に以下の2段階の問題が連鎖しているのをevals.logで確認した。
+
+1. **想定通りの部分**: `explore`委譲での週番号の暗算repetitionによるThinkingLoopDetectedは今回も複数回（confirm_count到達で強制打ち切り）発生したが、いずれも正常にリトライ・回復し、最終的に`worker`が実際のA列結合セル範囲・B列不整合を正確に把握したthread_noteを作成できていた（iter53までの修正が効いている部分）。
+2. **新規発見の問題**: `worker`が`edit_excel.py`で修正版を書き込もうとした際、`check_work_dir_status`が返す`write_dir`（`_tmp_<thread_id>`）と`absolute_path`（フィクスチャの実パス）の不一致に気づき、「書き込みサンドボックスガードが作業ディレクトリへの上書きをブロックしている」という状況をどう解決すべきか分からず、`edit_excel.py`のパッチ・`os.system`でのコピー・`execute_python_code`での`os.rename`など次々と迂回策を試しては全て書き込みサンドボックスガードに阻まれ、`ThinkingLoopDetected`による強制打ち切り→再試行を6回以上繰り返した末に1800秒のタイムアウトに達した。最終的に`worker`自身が「`_tmp_`内に保存し`provide_download`で提示する」という正しい方向性に辿り着いたが、`provide_download`は`worker`（サブエージェント）から呼べずメインエージェント専用のため、そこでも行き詰まっていた。
+
+`src/tools/_workdir.py`の`_restrict_default_workdir()`のコメントによれば、これは意図された設計（`default_workdir`はサーバー側共有ディレクトリのため、直接の上書きを許すとセッション間で事故るので`_tmp_<thread_id>`に強制的に閉じ込める）であり、コードのバグではない。つまり「ユーザーが作業フォルダをUIで明示的に選択していない状態で、その場に置かれた既存ファイルの直接編集を頼まれる」というシナリオは、現在の設計では**worker単独では解決不可能**（書き込み先を`_tmp_`に倒すしかないが、`provide_download`をworkerが呼べないため成果物をユーザーに渡す手段がない）。
+
+これはsystem_prompt.mdの文言だけでは解決できない、以下のいずれかの設計判断を要する問題のため、今回のイテレーションでは修正を保留しユーザーに報告する:
+- (a) `worker`にも`provide_download`相当の手段を与える
+- (b) `worker`はこの状況を検知したら`_tmp_`のパスをメインエージェントへ報告して引き渡し、メインエージェント側で`provide_download`する、という手順をsystem_prompt.md/agents/worker.mdに明記する
+- (c) evalケース側（`work_dir:`指定）が実際のユーザー運用（作業フォルダをツールバーで明示的に選択する運用）とズレている可能性があるため、ケース設計を見直す
+
+振動検知には該当しない（006はiter53以降未修正のまま今回初めて再現を確認した状態であり、同一原因での修正→再発の繰り返しではない）が、修正の見積もりが「system_prompt.md 1箇所の文言調整」を明確に超えるため、次のアクションはユーザーに確認する。
+
+### iter54 検証結果（修正後の単体再実行）
+
+- ✓ `annual_schedule_investigation_before_plan`: 修正後は`check_work_dir_status`→`Glob`（1回）→`dispatch_agent(explore)`で10年分の実データ（行事名・日付・参加者数）を取得→`planner`へ過不足なく引き渡し→`create_plan`のsteps/detail_markdownに実データに基づく2026年版行事表（月別配置・週別準備/段取り/片付け/打ち合わせ）を具体的に記述→`approve_plan`却下後は余計なツールを呼ばず終了、という理想的な流れで完了。所要時間は1800秒タイムアウトから大幅短縮（LLM呼び出し合計約10分）。turn_cutoffsなし。PASS。
+- ✓ `concise_response_no_preamble`: 最終回答が「はい、11は素数です。」の1文のみ、ツール呼び出しなし。iter45時点の合格挙動に復帰。PASS。
+
+`system_prompt.md`修正2箇所（作業原則へのレスポンス簡潔性ルール復元、調査ステップの全件監査ルールに「新規設計調査は代表サンプルで十分」の限定を追加）を確認。両修正とも、ユーザー指示によりtune-prompt自体のSKILL.mdへ追記した「低パラメータモデルを意識し一文を長くしすぎない・箇条書きに分ける」方針に沿って、単一の長大な文から複数の短い箇条書きへ整形し直した上で最終確定した。
+
+最終スナップショット: `evals/history/system_prompt/iter54_final.md`（`iter54_before.md`との差分が今回の修正内容）。
+
+### 残課題（006）: ユーザー判断待ちのため今回のループはここで一時停止
+
+`annual_schedule_week_fix_ambiguous_calendar`は前述の通り、system_prompt.mdの文言修正だけでは解けない設計ギャップ（work_dirが未設定＝共有default_workdir使用時、`worker`は書き込み対象を`_tmp_<thread_id>`に強制されるが`provide_download`はメインエージェント専用のため、既存ファイルの直接編集結果をユーザーに渡す手段が無い）が原因のタイムアウトのため、修正を保留してユーザーに報告する。003（判定基準の陳腐化）・005（PASS維持）は今回対応不要と判断。イテレーション上限（10回）には遠く達していないが、006の対応方針が確定するまでは003/006がある限り「全ケース合格」に到達できないため、ここで一旦ユーザーに報告する。
