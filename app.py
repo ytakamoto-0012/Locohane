@@ -3160,6 +3160,9 @@ async def _on_message_impl(message: cl.Message) -> None:
                         # （チャット画面でメインの回答がサブエージェント名義に
                         # 見える不具合の原因）。on_tool_startの冒頭と同じ
                         # flush/resetをここでも行い、ツール境界を必ず区切る。
+                        # 将来この確定処理をツール名で除外する改修をする場合、
+                        # dispatch_agent は対象に含めないこと（上記のサブ
+                        # エージェント名義混同バグが再発する）。
                         thinking = await _close_thinking(thinking)
                         if answer is not None:
                             await _send_answer(answer)
