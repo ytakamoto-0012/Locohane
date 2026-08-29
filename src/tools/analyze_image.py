@@ -113,19 +113,29 @@ def analyze_image(relative_path: str, show_in_chat: bool = False) -> tuple[str, 
             f"エラー: 対応していない画像形式です（png/jpg/jpeg/gif/webp/bmpのみ）: {relative_path}",
             None,
         )
-    # 同一画像の重複表示を検知する（tune-prompt調査で同じ画像を14回重複して
+    # 同一画像の重複解析を検知する（tune-prompt調査で同じ画像を14回重複して
     # 呼ぶ実例あり。画像artifactはトークン消費が大きく、繰り返し会話へ積むと
-    # コンテキストを大きく圧迫するため、2回目以降はテキストのみ返し
-    # artifactを積まない）。解決済みの絶対パスをキーにするため、`@N`や相対/絶対
-    # パスなど表記が違っても同一ファイルなら重複として検知できる。
-    if _record_and_check_duplicate(_duplicate_guard_session_key("analyze_image_call_signatures"), str(path)):
+    # コンテキストを大きく圧迫するため、2回目以降はartifactを積まない）。
+    # 解決済みの絶対パスをキーにするため、`@N`や相対/絶対パスなど表記が違っても
+    # 同一ファイルなら重複として検知できる。ただし show_in_chat=True による
+    # チャットUIへの表示要求はartifact再生成とは独立した操作のため、重複判定
+    # 済みでも表示自体は必ず行う（表示だけ拒否すると、既に一度analyze_imageで
+    # 内容を確認した画像を後から「表示して」と頼まれた際に何も表示されなくなる）。
+    is_duplicate = _record_and_check_duplicate(
+        _duplicate_guard_session_key("analyze_image_call_signatures"), str(path)
+    )
+    if is_duplicate and not show_in_chat:
         return (
             f"エラー: この画像は既に一度確認済みです: {relative_path}。"
             "同一画像の再表示は省略しました。会話履歴にある前回の説明を参照するか、"
             "他の画像・他の手段に進んでください。",
             None,
         )
-    logger.info("analyze_image: %s show_in_chat=%s", relative_path, show_in_chat)
+    logger.info("analyze_image: %s show_in_chat=%s duplicate=%s", relative_path, show_in_chat, is_duplicate)
+    if is_duplicate:
+        # 表示のみ行い、トークン消費の大きいartifact（画像データURL）は
+        # 再生成しない。
+        return json.dumps({"output_path": str(path)}, ensure_ascii=False), None
     # 4032x3024 のような高解像度写真をそのまま渡すと数枚でトークン上限に達するため、
     # config.ini [images] の設定に従って縮小してから渡す（既定は縮小なし）。
     cfg = _state._LLM_CONFIG

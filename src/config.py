@@ -1913,7 +1913,7 @@ def load_config(config_path: Path | None = None) -> Config:
             PROJECT_ROOT,
             _sub_common_data_dir(os.getenv("ELEMENTS_DIR", elements_section.get("dir", "${common_data_dir}/elements")), common_data_dir),
         ),
-        elements_retention_days=int(os.getenv("ELEMENTS_RETENTION_DAYS", elements_section.get("retention_days", 7))),
+        elements_retention_days=int(os.getenv("ELEMENTS_RETENTION_DAYS", elements_section.get("retention_days", 0))),
         elements_cleanup_interval_hours=float(
             os.getenv("ELEMENTS_CLEANUP_INTERVAL_HOURS", elements_section.get("cleanup_interval_hours", 1))
         ),

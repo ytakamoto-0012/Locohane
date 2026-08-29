@@ -44,9 +44,9 @@ def _resolve_run_script_command(skill_name: str, script_filename: str, script_ar
             f"エラー: agent_type=\"{current_agent_type}\" から呼び出せる run_script のスキル/スクリプトは "
             f"{sorted(str(a) for a in allowed)} に限定されています"
             f"（skill={skill_name}, script={script_filename} は対象外）。"
-            "ファイルの内容確認が必要な場合は、委譲元に対応するサブエージェント"
-            "（office文書/PDFなら explore、書き込みが要るなら worker）へ"
-            "改めて委譲するよう伝えてください。"
+            "対応するサブエージェント（office文書/PDFの読み取りなら explore、"
+            "書き込みやWeb検索等その他のスキル実行が要るなら worker）へ"
+            "改めて委譲するよう、委譲元に伝えてください。"
         )
 
     args = script_args or []

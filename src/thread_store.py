@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -208,14 +210,30 @@ async def rename_thread(conn: aiosqlite.Connection, thread_id: str, name: str) -
     await conn.commit()
 
 
-async def delete_thread_row(conn: aiosqlite.Connection, thread_id: str) -> None:
-    """スレッド行を削除する（ON DELETE CASCADE で紐づく steps も消える）。
+def _remove_thread_elements_dir(elements_dir: Path, thread_id: str) -> None:
+    """data/elements/<thread_id>/ を丸ごと削除する（要素ファイルの孤児化防止）。
+
+    ON DELETE CASCADE は elements テーブルの行を消すだけで、
+    persist_element_file が書いた実ファイルには触れないため、
+    スレッド削除の都度ここで明示的に削除する。
+    """
+    thread_dir = elements_dir / thread_id
+    try:
+        shutil.rmtree(thread_dir, ignore_errors=True)
+    except OSError:
+        logger.warning("要素ディレクトリの削除に失敗: %s", thread_dir, exc_info=True)
+
+
+async def delete_thread_row(conn: aiosqlite.Connection, thread_id: str, elements_dir: Path | None = None) -> None:
+    """スレッド行を削除する（ON DELETE CASCADE で紐づく steps/elements も消える）。
 
     LangGraph 側の checkpoints.sqlite には触れない（一覧に出なくなるだけで、
     チェックポイント自体は孤立データとして残る。意図したトレードオフ）。
     """
     await conn.execute("DELETE FROM threads WHERE id = ?", (thread_id,))
     await conn.commit()
+    if elements_dir is not None:
+        _remove_thread_elements_dir(elements_dir, thread_id)
 
 
 async def get_thread_owner(conn: aiosqlite.Connection, thread_id: str) -> str | None:
@@ -313,16 +331,32 @@ async def delete_step_row(conn: aiosqlite.Connection, step_id: str) -> None:
     await conn.commit()
 
 
+_WINDOWS_RESERVED_CHARS_RE = re.compile(r'[\\/:*?"<>|]')
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
 def _sanitize_filename_component(name: str) -> str:
     """ファイル名・ディレクトリ名の1要素として安全な文字列にする（パストラバーサル対策）。
 
     LLMやツールが渡す element.name/thread_id はディレクトリ区切りや `..` を
     含みうる。`Path(name).name` でディレクトリ部分を剥がし、それでも空・
-    `.`/`..` になる場合は固定のフォールバック名にする。
+    `.`/`..` になる場合は固定のフォールバック名にする。さらにWindowsで
+    ファイル名に使えない文字（`: * ? " < > |` 等）・予約デバイス名
+    （CON/NUL/COM1 等）も無害な文字へ置き換える（本アプリはWindows環境で
+    運用されるため、これを怠ると dest.write_bytes() が OSError で失敗し、
+    要素の永続化が静かにスキップされる）。
     """
     candidate = Path(name).name
     if not candidate or candidate in (".", ".."):
         return "file"
+    candidate = _WINDOWS_RESERVED_CHARS_RE.sub("_", candidate)
+    stem = candidate.split(".", 1)[0].upper()
+    if stem in _WINDOWS_RESERVED_NAMES:
+        candidate = f"_{candidate}"
     return candidate
 
 
@@ -471,11 +505,15 @@ async def create_user_row(conn: aiosqlite.Connection, user: User) -> PersistedUs
     return persisted
 
 
-async def cleanup_old_threads(conn: aiosqlite.Connection, retention_days: int) -> int:
-    """updated_at が retention_days より古いスレッド行を削除する（steps はCASCADE）。
+async def cleanup_old_threads(
+    conn: aiosqlite.Connection, retention_days: int, elements_dir: Path | None = None
+) -> int:
+    """updated_at が retention_days より古いスレッド行を削除する（steps/elementsはCASCADE）。
 
     src/cleanup.py の cleanup_old_files と同じ「0以下で無効化」の約束を守る。
-    LangGraph 側の checkpoints.sqlite は削除しない。
+    LangGraph 側の checkpoints.sqlite は削除しない。elements_dir を渡した場合、
+    削除した各スレッドの data/elements/<thread_id>/ も合わせて削除する
+    （delete_thread_row と同じ孤児化防止）。
 
     Returns:
         削除したスレッド数。
@@ -484,17 +522,22 @@ async def cleanup_old_threads(conn: aiosqlite.Connection, retention_days: int) -
         return 0
     cutoff = datetime.now(timezone.utc).timestamp() - retention_days * 86400
     cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
-    cursor = await conn.execute("SELECT COUNT(*) FROM threads WHERE updated_at < ?", (cutoff_iso,))
-    row = await cursor.fetchone()
-    count = row[0] if row else 0
-    if count:
+    cursor = await conn.execute("SELECT id FROM threads WHERE updated_at < ?", (cutoff_iso,))
+    rows = await cursor.fetchall()
+    thread_ids = [row[0] for row in rows]
+    if thread_ids:
         await conn.execute("DELETE FROM threads WHERE updated_at < ?", (cutoff_iso,))
         await conn.commit()
-        logger.info("期限切れのスレッドを削除: %d件", count)
-    return count
+        logger.info("期限切れのスレッドを削除: %d件", len(thread_ids))
+        if elements_dir is not None:
+            for thread_id in thread_ids:
+                _remove_thread_elements_dir(elements_dir, thread_id)
+    return len(thread_ids)
 
 
-async def run_cleanup_loop(conn: aiosqlite.Connection, retention_days: int, interval_hours: float) -> None:
+async def run_cleanup_loop(
+    conn: aiosqlite.Connection, retention_days: int, interval_hours: float, elements_dir: Path | None = None
+) -> None:
     """src/cleanup.py の run_cleanup_loop と同じ形の常駐タスク。0以下なら即return。"""
     import asyncio
 
@@ -503,7 +546,7 @@ async def run_cleanup_loop(conn: aiosqlite.Connection, retention_days: int, inte
     interval_seconds = interval_hours * 3600
     while True:
         await asyncio.sleep(interval_seconds)
-        await cleanup_old_threads(conn, retention_days)
+        await cleanup_old_threads(conn, retention_days, elements_dir)
 
 
 class ChatThreadDataLayer(BaseDataLayer):
@@ -566,7 +609,11 @@ class ChatThreadDataLayer(BaseDataLayer):
                 kind="chainlit",
                 extra_data=element_dict,
             )
-        except OSError:
+        except Exception:
+            # Chainlit側がasyncio.create_task()でfire-and-forget呼び出しするため、
+            # ここで捕捉し損ねると診断ログが一切残らないまま要素が消失する。
+            # OSError（ファイルI/O）以外にaiosqlite.Error（DB書き込み）等も
+            # 起こりうるため、ファイル/DBを問わず全例外を対象にする。
             logger.exception("要素ファイルの永続化に失敗しました: id=%s", element.id)
 
     async def get_element(self, thread_id: str, element_id: str):
@@ -631,7 +678,7 @@ class ChatThreadDataLayer(BaseDataLayer):
         return owner
 
     async def delete_thread(self, thread_id: str) -> None:
-        await delete_thread_row(self._conn, thread_id)
+        await delete_thread_row(self._conn, thread_id, self._elements_dir)
 
     async def list_threads(self, pagination: Pagination, filters: ThreadFilter) -> PaginatedResponse[ThreadDict]:
         owner = filters.userId or ANONYMOUS_OWNER

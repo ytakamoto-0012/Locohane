@@ -123,6 +123,7 @@ from src.tools import (
     reset_call_history_guards_after_compaction,
     toggle_plan_mode_from_ui,
 )
+from src.tools._workdir import _resolve_exec_workdir
 from src.uploads import cleanup_old_uploads, run_cleanup_loop
 
 # dispatch_agent（サブエージェント）由来のメッセージに付与する author 名。
@@ -799,7 +800,7 @@ if _config.thread_store_enabled:
     @_chainlit_asgi_app.delete("/locohane/threads/{thread_id}")
     async def _locohane_delete_thread(thread_id: str, current_user=Depends(_cl_get_current_user)):
         await _assert_owns_thread(thread_id, current_user)
-        await thread_store.delete_thread_row(_thread_store_conn, thread_id)
+        await thread_store.delete_thread_row(_thread_store_conn, thread_id, _config.elements_dir)
         return {"success": True}
 
     @_chainlit_asgi_app.get("/locohane/threads/{thread_id}/status")
@@ -984,13 +985,17 @@ async def _on_app_startup() -> None:
         _thread_store_conn = await thread_store.init_db(_config.thread_store_db)
         _thread_data_layer = ChatThreadDataLayer(_thread_store_conn, _config.elements_dir)
         # 期限切れスレッドの起動時1回削除＋以降の定期削除（retention_days<=0で無効）。
-        await thread_store.cleanup_old_threads(_thread_store_conn, _config.thread_store_retention_days)
+        # elements_dirも渡し、削除したスレッドの添付・画像ファイルを孤児化させない。
+        await thread_store.cleanup_old_threads(
+            _thread_store_conn, _config.thread_store_retention_days, _config.elements_dir
+        )
         if _config.thread_store_retention_days > 0:
             asyncio.create_task(
                 thread_store.run_cleanup_loop(
                     _thread_store_conn,
                     _config.thread_store_retention_days,
                     _config.thread_store_cleanup_interval_hours,
+                    _config.elements_dir,
                 )
             )
         # 匿名モードではこのパッチが無いとスレッド再開が発火しない（関数docstring参照）。
@@ -1224,18 +1229,23 @@ def _build_work_dir_notice() -> str:
         resolved = str(_config.default_workdir)
         status = None
         source = "default"
-    fallback_dir = str(_config.default_workdir)
     if status is None or (status.exists and status.readable and status.writable):
         state = "read_write"
         fallback = None
-    elif not status.exists:
-        state = "not_found"
-        fallback = fallback_dir
-    elif not status.readable:
-        state = "unreadable"
-        fallback = fallback_dir
     else:
-        state = "read_only"
+        # 書き込み不可時のフォールバック先は default_workdir 直下ではなく、
+        # check_work_dir_status ツールと同じ _resolve_exec_workdir()
+        # （セッション専用の _tmp_<thread_id>）にする。ここが default_workdir
+        # 直下のままだと、実際に書き込まれる場所と通知内容が食い違い、
+        # 後続のRead/Globで見つからない事故になる。実際に必要な場合のみ
+        # 呼ぶ（ディレクトリ作成の副作用があるため）。
+        fallback_dir = str(_resolve_exec_workdir())
+        if not status.exists:
+            state = "not_found"
+        elif not status.readable:
+            state = "unreadable"
+        else:
+            state = "read_only"
         fallback = fallback_dir
     info = {
         "absolute_path": resolved,
@@ -2392,6 +2402,12 @@ async def _embed_local_images_as_session_urls(text: str) -> str:
 
     session = cl.context.session
     thread_id = session.thread_id
+    use_thread_store = _thread_store_conn is not None and thread_id
+    if use_thread_store:
+        # thread_id/owner はこの関数の呼び出し中不変なため、ループの外で1回だけ
+        # 呼ぶ（画像N枚を含む回答でN回の冗長なUPSERTを避ける）。
+        owner = thread_store.resolve_owner(session.user)
+        await thread_store.upsert_thread_stub(_thread_store_conn, thread_id, owner)
     replacements: dict[str, str] = {}
     for m in matches:
         raw = m.group(0)
@@ -2410,10 +2426,8 @@ async def _embed_local_images_as_session_urls(text: str) -> str:
                 jpeg_quality=_config.image_inline_preview_jpeg_quality,
                 min_long_side=_config.image_inline_preview_min_long_side_pixels,
             )
-            if _thread_store_conn is not None and thread_id:
+            if use_thread_store:
                 element_id = str(uuid.uuid4())
-                owner = thread_store.resolve_owner(session.user)
-                await thread_store.upsert_thread_stub(_thread_store_conn, thread_id, owner)
                 await thread_store.persist_element_file(
                     _thread_store_conn,
                     _config.elements_dir,
