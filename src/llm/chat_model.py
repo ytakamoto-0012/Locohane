@@ -102,6 +102,7 @@ class ChatLlamaCpp(ChatOpenAI):
             yield from super()._stream(*args, **kwargs)
             return
         detector = self._make_loop_detector()
+        stream_started_at = time.time()
         inner = super()._stream(*args, **kwargs)
         first_chunk_seen = False
         try:
@@ -115,7 +116,7 @@ class ChatLlamaCpp(ChatOpenAI):
                     raise ThinkingLoopDetected("LLM応答が反復ループに陥ったため打ち切りました", snippet=snippet)
                 if not first_chunk_seen:
                     first_chunk_seen = True
-                    _log_first_chunk_latency(time.time(), sync=True)
+                    _log_first_chunk_latency(time.time() - stream_started_at, sync=True)
                 yield chunk
         finally:
             try:
@@ -123,7 +124,7 @@ class ChatLlamaCpp(ChatOpenAI):
             except Exception:  # noqa: BLE001 - 過剰ログを避ける
                 logger.debug("ストリームの後始末(close)中に例外が発生しました", exc_info=True)
             if not first_chunk_seen:
-                _log_first_chunk_latency(time.time(), sync=True, never_received=True)
+                _log_first_chunk_latency(time.time() - stream_started_at, sync=True, never_received=True)
 
     async def _astream(self, *args: Any, **kwargs: Any) -> Any:
         """llama-server への HTTP リクエストを _LLM_REQUEST_SEMAPHORE でガードする。
@@ -152,6 +153,7 @@ class ChatLlamaCpp(ChatOpenAI):
                 yield chunk
             return
         detector = self._make_loop_detector()
+        stream_started_at = time.time()
         agen = super()._astream(*args, **kwargs)
         # finally節でaclose失敗時にclient_brokenを立てるため、raiseした
         # ThinkingLoopDetectedへの参照をローカル変数として保持しておく
@@ -160,7 +162,6 @@ class ChatLlamaCpp(ChatOpenAI):
         loop_exc: ThinkingLoopDetected | None = None
         diag_start = None
         first_chunk_seen = False
-        first_chunk_at: float | None = None
         try:
             async for chunk in agen:
                 if detector.feed(_chunk_delta_text(chunk)):
@@ -175,7 +176,11 @@ class ChatLlamaCpp(ChatOpenAI):
                     raise loop_exc
                 if not first_chunk_seen:
                     first_chunk_seen = True
-                    first_chunk_at = time.time()
+                    # ストリーム開始からこの最初のチャンク受信までの経過時間
+                    # （TTFT）をこの場で記録する。finally節まで遅延させると
+                    # 「ストリーム終了時刻 - 最初のチャンク受信時刻」という
+                    # 別の値（実質的な生成時間）を記録してしまうバグになる。
+                    _log_first_chunk_latency(time.time() - stream_started_at, sync=False)
                 yield chunk
                 # detector.feed()は同期的でCPUバウンドな処理（difflibでの
                 # 文字列比較）を含む。Chainlitは単一プロセス・単一イベント
@@ -184,11 +189,8 @@ class ChatLlamaCpp(ChatOpenAI):
                 # クリック等）の処理が後回しにされ得る。
                 await asyncio.sleep(0)
         finally:
-            # 初回チャンク受信までの待ち時間を記録（acloseより前）。
-            if first_chunk_at is not None:
-                _log_first_chunk_latency(time.time() - first_chunk_at, sync=False)
-            elif not first_chunk_seen:
-                _log_first_chunk_latency(0.0, sync=False, never_received=True)
+            if not first_chunk_seen:
+                _log_first_chunk_latency(time.time() - stream_started_at, sync=False, never_received=True)
             try:
                 # 停止ボタン等でこの _astream 自体が既にキャンセル済みの
                 # タスク内にいる場合、ここでの await も即座に再キャンセル
