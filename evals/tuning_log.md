@@ -4478,3 +4478,102 @@ judge観点1〜5（捏造チェック・計画承認順序・複数ファイル�
 ### iter04 まとめ
 
 004（pdf-tools不使用）・007（計画未承認のまま書き込み委譲）とも修正・再検証済みでPASSを確認した。007は1回目の修正（2段階の委譲を前提にした文言）では不十分で、2回目の修正（委譲回数に依存しない一般化）で解決した。001（デバッグの意味的無限ループ）は今回未対応、別セッションでコード側の対応を検討する。
+
+## iter56: 5回連続全件成功を完了条件として再開（2026-08-30、ユーザー指示）
+
+analyze_image show_in_chat二重表示バグ（実運用ログapp_20260830_015918.log）を
+system_prompt.md L96で修正し、回帰確認用に007（analyze_image二重表示）・008
+（provide_download順序）を新規追加。ユーザーから今回の完了条件を「1回全件合格
+ではなく5回連続全件成功」と指定された。
+
+### iter56 1回目実行結果
+
+`python evals/run_all.py system_prompt`（20260830_031857）: pass=4 fail=1
+judge待ち=7（うち007・008はrules_pass: true）。
+
+- 003 concise_response_no_tool_preamble: `rules_pass: false`
+  （tool_called_any: expected [analyze_image, Glob], called=[dispatch_agent]）。
+  transcriptを確認したところ、モデルは`dispatch_agent(agent_type="explore")`
+  経由で画像内容を読み取っており、system_prompt.mdの必須ルール
+  「Read/Grep/analyze_imageは...これらもexplore等への委譲でのみ使い、自分では
+  呼べない」に正しく従っている。system_prompt.md側の記述は正しく、evalケース
+  003のexpect.tool_called_anyが（メインエージェントが直接analyze_image/Globを
+  呼べた）古い想定のままだったのが原因。system_prompt.mdは変更せず、
+  `evals/cases/system_prompt/003_concise_response_no_tool_preamble.yaml`の
+  `tool_called_any`に`dispatch_agent`を追加して実態に合わせた。
+
+- 007 analyze_image_show_in_chat_no_duplicate_markdown: `rules_pass: true`。
+  transcriptを確認したところ、`dispatch_agent(explore)`経由で
+  `analyze_image(show_in_chat=True)`相当の処理が行われ、最終回答は
+  「画像 `photo_03.png` を表示しました。（チャット画面に画像が表示されている
+  はずです）」で、Markdown`![...]()`の重複埋込は無かった。**judge観点でも合格**。
+  ただし2ターン目で「直前の会話は同じ内容を繰り返すループに陥ったため
+  打ち切りました」という自動リマインダーが挿入されており、thinking_loop起因の
+  turn_cutoffが1回発生していた（不合格理由にはしないが記録）。
+
+- 008 provide_download_before_final_answer: `rules_pass: true`。transcriptは
+  Glob→dispatch_agent(explore、存在確認)→`provide_download`→テキストのみの
+  最終回答、の順で1ターン完結しており、ループ・重複とも無し。**judge観点でも合格**。
+
+**カウント**: 003を修正したため、この1回目は「全件成功」とカウントしない
+（連続成功カウンターは0のまま）。003修正後の次回実行を1回目としてカウントする。
+
+### iter56 2回目実行結果
+
+003修正後に再実行（20260830_040257）: pass=3 fail=1 judge待ち=7。003は
+`rules_pass: true`に回復し、judge観点でも「これから」等の前置きなしで合格。
+
+新たに004 concise_report_by_scale が`rules_pass: false`
+（tool_called_any: expected [Glob], called=[check_work_dir_status,
+dispatch_agent]）。003と同じ構造の陳腐化: モデルは`check_work_dir_status`→
+`dispatch_agent(explore)`という正しい委譲経路で画像ファイル一覧を取得して
+おり、system_prompt.mdの「ファイル・フォルダ調査は必ずdispatch_agentへ委譲
+する（例外は対象ルート直下だけを見る1回だけのGlob）」ルールに従っている
+（例外のGlobを使わず最初から委譲する判断も許容される）。system_prompt.md
+側は正しく、004のexpectが「メインエージェントが直接Globを呼ぶ」古い想定
+のままだった。`tool_called_any`に`dispatch_agent`を追加。
+
+念のため全system_promptケースのexpectを棚卸しし、他に同様の陳腐化が無いか
+確認した。001・006はjudgeのみ、002は`tool_called_any: []`（ルールスキップ）、
+005・007・008は元々`dispatch_agent`/`provide_download`ベースで問題なし。
+003・004以外の追加修正は不要と判断。
+
+### iter56 3回目実行結果: rules_pass全件true、しかし007でjudge観点の重大問題を発見
+
+`python evals/run_all.py system_prompt`（20260830_044900）: pass=0 fail=0
+judge待ち=8（機械ルールは全件PASS）。003・004とも修正が効き安定。
+
+ただし007 analyze_image_show_in_chat_no_duplicate_markdown のtranscriptを
+精査したところ、2ターン目「その画像を表示してください」で thinking_loop に
+よる強制打ち切りが**4回**発生し（1回目実行時は1回だった）、最終的にメイン
+エージェントが `analyze_image` を**委譲せず直接呼び出して**いた。これは
+当時のsystem_prompt.md「analyze_imageは自分では呼べない、必ずdispatch_agent
+へ委譲する」というルールに反する。
+
+根本原因を調査した結果、`d04f8d2`（2026-08-30 01:42、実運用バグ発生の直前）で
+「analyze_imageとshow_image統合により」という理由により config.ini の
+`[main_agent_tool_guard].allow_entries` に `["analyze_image", -1]`
+（メインエージェントの直接呼び出しを無制限許可）が追加されていたが、
+system_prompt.md側の「委譲必須」記述（統合前の古いルール）が更新されないまま
+残っていたことが判明。ユーザーに確認の上、system_prompt.md側をconfig.iniの
+最新の意図（analyze_imageは1〜2枚程度なら直接呼び出し可、大量ページは
+worker/exploreへ委譲）に合わせて更新した:
+
+- L96（画像の扱い）: 「analyze_imageは自分では呼べない」を削除し、「自分で
+  直接呼べる（1〜2枚程度が目安、大量ページはworker/exploreへ委譲）」に変更。
+- L186（ツール可否一覧）: `Read`/`Grep`/`analyze_image`のグループから
+  `analyze_image`を除外（例外として直接呼べる旨を注記）。
+- L223（禁止事項）: `Read`/`analyze_image`から`analyze_image`を除外。
+
+あわせてconfig.ini側のコメント（669-673行目）も「analyze_imageはallow_entries
+未登録で完全ブロック」という古い説明のままだったため実態に合わせて修正した。
+
+007ケースのjudge指示・expect（1番の観点、tool_called_any）・notesも、
+「direct呼び出しも正しい挙動」という前提に合わせて更新した。
+
+これは2つの陳腐化とは異なり、system_prompt.md自体に実質的なバグ（コード側の
+最新設定との不整合）があったケース。iter57として区別して記録する。
+
+**カウント**: この回はrules_pass全件trueだが、system_prompt.mdに実質的な
+不整合を発見・修正したため「全件成功」とはカウントしない。修正後の次回実行
+から連続成功カウントを開始する。

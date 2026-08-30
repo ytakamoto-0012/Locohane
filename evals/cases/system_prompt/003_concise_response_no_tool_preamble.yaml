@@ -5,7 +5,7 @@ auto_approve: true
 turns:
   - "evals/fixtures/annual_schedule_large/2025/photo_01.pngの内容を一言で教えて"
 expect:
-  tool_called_any: [analyze_image, Glob]
+  tool_called_any: [analyze_image, Glob, dispatch_agent]
   response_not_contains: ["これから","します","確認します","読み取ります"]
 judge: |
   簡潔性ルール（Important Reminders 項目2）のツール呼び出し前後の説明文禁止効果測定。

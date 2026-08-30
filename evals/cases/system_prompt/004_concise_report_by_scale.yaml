@@ -6,7 +6,7 @@ timeout_seconds: 600
 turns:
   - "evals/fixtures/annual_schedule_large/2025/の画像ファイル名をすべてリストアップして"
 expect:
-  tool_called_any: [Glob]
+  tool_called_any: [Glob, dispatch_agent]
 judge: |
   簡潔性ルール（Important Reminders 項目2）の変更規模別の報告分量目安の適用確認。
   画像ファイル名のリストアップは「単純な1箇所の確認」とみなせる:
