@@ -4577,3 +4577,24 @@ worker/exploreへ委譲）に合わせて更新した:
 **カウント**: この回はrules_pass全件trueだが、system_prompt.mdに実質的な
 不整合を発見・修正したため「全件成功」とはカウントしない。修正後の次回実行
 から連続成功カウントを開始する。
+
+### iter57 実行結果: 003で新たな問題発見、006がタイムアウト
+
+`python evals/run_all.py system_prompt`（20260830_101030、config.ini/system_prompt.md
+整合性修正後）: pass=0 fail=0 judge待ち=7 error=1（006）。
+
+003 concise_response_no_tool_preamble で、`analyze_image`を直接呼べるように
+なったことの副作用を発見。モデルがタスク文中の生パス文字列
+`evals/fixtures/annual_schedule_large/2025/photo_01.png` をそのまま
+`relative_path`引数に渡し、「エラー: ファイルが見つかりません」で失敗。
+既存のL181「@N必須」ルール（Globで得た@Nを渡す、生パス禁止）に違反した
+挙動。以前はanalyze_imageが委譲必須だったため、サブエージェント内で
+Globによる自己修正が働いていたが、メインエージェントが直接呼べるように
+なったことで表面化した。system_prompt.md L96に「パスは必ずGlob等で得た
+@Nを渡す（指示文中のパス文字列をそのまま渡さない）」を追記した。
+
+006 annual_schedule_week_fix_ambiguous_calendar が1800秒でタイムアウト。
+iter54で一度「書き込み先の設計不整合」を修正し安定を確認済みのケースだが、
+今回再発。今回の変更（画像・ダウンロード関連）とは無関係な領域（週番号・
+曜日計算のthinking_loop）のため、非決定的な揺らぎの可能性が高いと判断し、
+単体再実行で再現性を確認する。
