@@ -1302,7 +1302,28 @@ def _patch_chainlit_connection_successful_task_end() -> None:
     （StepItem.tsx側が「実行中」のまま固まる）。_resync_live_steps() は
     冪等（既に届いている場合は同じ状態で上書きするだけ）なので、
     task完了後に呼んでも害はない。
+
+    _resync_live_steps() では救えないケースがもう一つある: 切断ウィンドウ
+    中に「新規作成」されたStep（例: create_plan/approve_planのツール呼び出し）
+    そのもの。_resync_live_steps() は cl.Step.update() を呼ぶだけで、これは
+    フロント（@chainlit/react-client）の update_message ハンドラ側で「既存
+    messages配列内でid一致するものを探して書き換える」実装になっており、
+    まだ一度も受け取っていない未知のIDに対しては何もしない（新規追加＝upsert
+    はしない）。つまり作成イベント自体が切断済みソケットへ送られて消えた場合、
+    その後どれだけ update() を再送してもフロントには永久に復元されない
+    （2026-08-30 ユーザー報告。verifier完了直後の320秒経過表示で画面が固まり、
+    その後のcreate_plan/approve_planのStepが一度も表示されなかった実例で確認。
+    ログ上はバックエンドが正常に進行し続けていたにもかかわらず、フロントは
+    停止ボタン押下時の最終メッセージ以外一切更新されなかった）。
+
+    これを解消するため、chainlit標準の resume_thread イベント（フロントの
+    メッセージ配列を丸ごとDBの最新状態で置き換える。thread.get_thread_detail
+    の docstring 参照）を、進行中セッションへの再接続時にも明示的に送る。
+    chainlit標準の connection_successful は context.session.thread_id_to_resume
+    が立っている場合（＝/thread/{id}ページを新規に開いた場合）にしかこれを
+    送らないため、単なる裏側での切断→再接続ではこの経路を通らない。
     """
+    from chainlit.data import get_data_layer
     from chainlit.socket import connection_successful as _original_connection_successful
     from chainlit.socket import init_ws_context as _init_ws_context
     from chainlit.socket import sio as _sio
@@ -1314,6 +1335,27 @@ def _patch_chainlit_connection_successful_task_end() -> None:
         task = getattr(context.session, "current_task", None)
         if task is not None and not task.done():
             await context.emitter.task_start()
+
+        # context.session.restored は WebsocketSession.restore()（既存セッションへの
+        # 再接続時のみ）で立つフラグ。thread_id_to_resume が立っていれば
+        # _original_connection_successful 側で既に resume_thread 送信済みなので、
+        # ここでは進行中セッションへの「裏側の」再接続（＝標準経路が発火しない
+        # ケース）に限定してフル再同期を行う。
+        if (
+            context.session.restored
+            and not context.session.thread_id_to_resume
+            and context.session.thread_id
+        ):
+            data_layer = get_data_layer()
+            if data_layer:
+                thread = await data_layer.get_thread(thread_id=context.session.thread_id)
+                if thread:
+                    logging.getLogger(__name__).info(
+                        "WebSocket再接続: 進行中セッションのフル再同期(resume_thread)を送信しました thread_id=%s",
+                        context.session.thread_id,
+                    )
+                    await context.emitter.resume_thread(thread)
+
         await _resync_live_steps()
 
     logging.getLogger(__name__).info(
