@@ -4,7 +4,7 @@ work_dir: evals/fixtures/annual_schedule_large
 auto_approve: true
 timeout_seconds: 600
 turns:
-  - "evals/fixtures/annual_schedule_large/2025/の画像ファイル名をすべてリストアップして"
+  - "2025/の画像ファイル名をすべてリストアップして"
 expect:
   tool_called_any: [Glob, dispatch_agent]
 judge: |
