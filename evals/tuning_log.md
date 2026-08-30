@@ -4598,3 +4598,14 @@ iter54で一度「書き込み先の設計不整合」を修正し安定を確�
 今回再発。今回の変更（画像・ダウンロード関連）とは無関係な領域（週番号・
 曜日計算のthinking_loop）のため、非決定的な揺らぎの可能性が高いと判断し、
 単体再実行で再現性を確認する。
+
+### iter57 006単体再実行: 再現せず、正常完了
+
+`python -m evals.run_case evals/cases/system_prompt/006_annual_schedule_week_fix_ambiguous_calendar.yaml`
+を単体実行したところ、thinking_loopは発生せず、read_skill(excel-read)→
+check_work_dir_status→Glob→dispatch_agent(explore、内容調査)→
+read_skill(excel-edit)→read_thread_noteという正常な調査フローを経て、
+「週間予定表」シートの月・週不一致23箇所を修正し「全3条件OK」の検証まで
+完走した。全体実行（run_all.py）でのタイムアウトは、複数ケース直列実行時の
+非決定的な遅延（サーバー負荷等）と判断し、system_prompt.mdの追加修正は
+行わない。次回のフル実行で再発するか引き続き様子を見る。
