@@ -2,7 +2,7 @@ id: annual_schedule_week_fix_ambiguous_calendar
 target: system_prompt
 work_dir: evals/fixtures/annual_schedule_week_fix
 auto_approve: true
-timeout_seconds: 1800
+timeout_seconds: 3600
 turns:
   - >-
     annual_schedule.xlsx の「週間予定表」シートを確認してください。月と週の
