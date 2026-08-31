@@ -315,19 +315,19 @@ def filter_skills_for_main_agent_guard(skills: list[Skill], config: "Config") ->
     return [s for s in skills if is_skill_directly_runnable(s, config)]
 
 
-def render_skills_block_with_hint(skills: list[Skill], config: "Config") -> str:
-    """[main_agent_tool_guard] visibility_mode=hint 用のスキル一覧を組み立てる。
+def render_skills_block_with_guard_annotation(skills: list[Skill], config: "Config") -> str:
+    """[main_agent_tool_guard] visibility_mode=all 用のスキル一覧を組み立てる。
 
-    render_skills_block() と異なり絞り込みは行わず全スキルを列挙するが、
-    is_skill_directly_runnable() が False のスキルには行末に注記を付け、
-    直接実行できないこと・dispatch_agentへの委譲が必要なことを示す。
+    render_skills_block_with_hint() と異なり description は書き換えず、
+    is_skill_directly_runnable() が False のスキルのみ description の末尾に
+    「（直接実行不可。実行はdispatch_agent へ委譲。）」を追記する。
 
     Args:
         skills: scan_skills() が返した有効な Skill のリスト（フィルタ前）。
         config: is_skill_directly_runnable() が必要とする Config。
 
     Returns:
-        "- name: description" 形式の箇条書き（実行不可分は注記付き）。
+        "- name: description" 形式の箇条書き（実行不可分は末尾に注記を追加）。
         skills が空リストの場合は「利用可能なスキルはありません」という
         旨の文言を返す。
     """
@@ -338,7 +338,35 @@ def render_skills_block_with_hint(skills: list[Skill], config: "Config") -> str:
         if is_skill_directly_runnable(s, config):
             lines.append(f"- {s.name}: {s.description}")
         else:
-            lines.append(f"- {s.name}: {s.description}（直接実行不可。詳細確認・実行は dispatch_agent へ委譲）")
+            lines.append(f"- {s.name}: {s.description}（直接実行不可。実行はdispatch_agent へ委譲。）")
+    return "\n".join(lines)
+
+
+def render_skills_block_with_hint(skills: list[Skill], config: "Config") -> str:
+    """[main_agent_tool_guard] visibility_mode=hint 用のスキル一覧を組み立てる。
+
+    render_skills_block() と異なり絞り込みは行わず全スキル名を列挙するが、
+    is_skill_directly_runnable() が False のスキルは description を
+    固定文言に差し替え、直接実行できないこと・dispatch_agentへの委譲が
+    必要なことを示す。
+
+    Args:
+        skills: scan_skills() が返した有効な Skill のリスト（フィルタ前）。
+        config: is_skill_directly_runnable() が必要とする Config。
+
+    Returns:
+        "- name: description" 形式の箇条書き（実行不可分は description を
+        固定文言に差し替え）。skills が空リストの場合は「利用可能なスキルは
+        ありません」という旨の文言を返す。
+    """
+    if not skills:
+        return "（利用可能なスキルはありません）"
+    lines = []
+    for s in skills:
+        if is_skill_directly_runnable(s, config):
+            lines.append(f"- {s.name}: {s.description}")
+        else:
+            lines.append(f"- {s.name}: 直接実行不可。このスキルの詳細確認・実行は dispatch_agent へ委譲")
     return "\n".join(lines)
 
 

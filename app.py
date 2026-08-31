@@ -104,6 +104,7 @@ from src.skills import (
     build_system_prompt_from_block,
     filter_skills_for_main_agent_guard,
     render_skills_block,
+    render_skills_block_with_guard_annotation,
     render_skills_block_with_hint,
     scan_skills,
 )
@@ -1543,19 +1544,25 @@ async def _setup() -> None:
     # skills_dir と locohane_skills_dirs をマージ（同名は locohane 側優先）。
     skills = scan_skills([_config.skills_dir, *_config.locohane_skills_dirs])
     # メインエージェントの system_prompt に差し込む {{skills}}/{{main_agent_blocked_tools_hint}}
-    # は [main_agent_tool_guard] の enabled/visibility_mode で組み立て方が変わる
+    # は [main_agent_tool_guard].visibility_mode の値だけで組み立て方が変わる
     # （dispatch_agent配下のサブエージェント用 skills_block は下記の通り未フィルタの
     # skills から別途組み立てるため、いずれのモードでもスキル自体は失われない）。
-    #   enabled=false        : 全スキルをそのまま列挙、ツールのhintも出さない。
-    #   visibility_mode=hint  : 全スキルを列挙しつつ直接実行不可な分に注記を付け、
-    #                          呼べないビルトインツール名一覧もテキストで案内する
-    #                          （bindはしない。無駄な往復を避けるため）。
+    # main_agent_tool_guard_enabled（呼び出し制限そのもののON/OFF）とは独立した軸で、
+    # enabled=false の場合は filter_skills_for_main_agent_guard 等が内部で
+    # 絞り込み・ブロックを行わなくなるため、strict/hint を選んでも自然に
+    # 「全部見せる」として振る舞う。
+    #   visibility_mode=all   : 全スキル名・descriptionを一覧に表示するが、直接実行不可な
+    #                          分は description の末尾に注記を追記し、呼べないビルトイン
+    #                          ツール名一覧もテキストで案内する（bindはしない）。
+    #   visibility_mode=hint  : 全スキル名を列挙しつつ直接実行不可な分は description を
+    #                          固定文言に差し替え、呼べないビルトインツール名一覧も
+    #                          テキストで案内する（bindはしない。無駄な往復を避けるため）。
     #   visibility_mode=strict: 直接実行できないスキルは一覧から除外する（従来の挙動）。
-    if not _config.main_agent_tool_guard_enabled:
-        main_skills_block = render_skills_block(skills)
-        blocked_tools_hint = ""
-    elif _config.main_agent_tool_guard_visibility_mode == "hint":
-        main_skills_block = render_skills_block_with_hint(skills, _config)
+    if _config.main_agent_tool_guard_visibility_mode in ("all", "hint"):
+        if _config.main_agent_tool_guard_visibility_mode == "all":
+            main_skills_block = render_skills_block_with_guard_annotation(skills, _config)
+        else:
+            main_skills_block = render_skills_block_with_hint(skills, _config)
         blocked_names = list_blocked_tool_names_for_hint(get_all_tools(), _config)
         blocked_tools_hint = (
             "以下のビルトインツールは直接呼び出せません（詳細確認・実行が必要な場合は"

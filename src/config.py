@@ -37,10 +37,18 @@ LLM_PROVIDERS = frozenset({"openai_compatible", "llama_cpp"})
 # reasoning_format が取りうる値（llama-server の --reasoning-format と同じ）。
 LLM_REASONING_FORMATS = frozenset({"none", "deepseek", "deepseek-legacy"})
 
-# [main_agent_tool_guard].visibility_mode が取りうる値。
-# src/skills.py の filter_skills_for_main_agent_guard/render_skills_block_with_hint、
-# app.py のシステムプロンプト組み立てがこの文字列で分岐する。
-MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODES = frozenset({"strict", "hint"})
+# [main_agent_tool_guard].visibility_mode が取りうる値。main_agent_tool_guard_enabled
+# （呼び出し制限そのもののON/OFF）とは独立した「一覧の見せ方」の軸であり、
+# enabledの値に関わらずこの値だけで表示が決まる。
+#   all   : 全スキル名・ツール名・descriptionを一覧に表示するが、直接実行できない
+#           ものは description の末尾に注記を追記する。
+#   strict: 呼び出せないスキル・ツールは一覧から完全に除外する。
+#   hint  : 全スキル名は一覧に出すが、直接実行できないものは description を
+#           固定文言に差し替える。
+# src/skills.py の filter_skills_for_main_agent_guard/render_skills_block_with_hint/
+# render_skills_block_with_guard_annotation、app.py のシステムプロンプト組み立てが
+# この文字列で分岐する。
+MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODES = frozenset({"strict", "hint", "all"})
 
 
 @dataclass(frozen=True)
@@ -1302,6 +1310,10 @@ def _as_routing_strategy(value: str | None, key_name: str) -> str:
 
 def _as_main_agent_tool_guard_visibility_mode(value: str | None) -> str:
     """[main_agent_tool_guard].visibility_mode の値を検証する。
+
+    strict/hint/false の3値。main_agent_tool_guard_enabled（呼び出し制限の
+    ON/OFF）とは独立した設定で、enabledの値に関わらずこの値だけで一覧の
+    見せ方が決まる。
 
     Args:
         value: config.ini から得た文字列、または環境変数由来の文字列。

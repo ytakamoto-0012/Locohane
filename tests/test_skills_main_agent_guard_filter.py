@@ -13,7 +13,12 @@ filter_main_agent_tools と同じ理由づけ）。scripts/ を持たない SKIL
 from pathlib import Path
 from types import SimpleNamespace
 
-from src.skills import Skill, filter_skills_for_main_agent_guard, render_skills_block_with_hint
+from src.skills import (
+    Skill,
+    filter_skills_for_main_agent_guard,
+    render_skills_block_with_guard_annotation,
+    render_skills_block_with_hint,
+)
 
 
 def _make_skill(name: str, *, has_scripts: bool = True) -> Skill:
@@ -96,10 +101,37 @@ def test_render_skills_block_with_hint_annotates_only_blocked_skills() -> None:
 
     assert lines[0] == "- pdf-tools: test skill"
     assert lines[1] == "- excel-knowledge: test skill"
-    assert lines[2] == "- web-search: test skill（直接実行不可。詳細確認・実行は dispatch_agent へ委譲）"
+    assert lines[2] == "- web-search: 直接実行不可。このスキルの詳細確認・実行は dispatch_agent へ委譲"
 
 
 def test_render_skills_block_with_hint_empty_list() -> None:
     cfg = _make_cfg(entries=[])
 
     assert render_skills_block_with_hint([], cfg) == "（利用可能なスキルはありません）"
+
+
+def test_render_skills_block_with_guard_annotation_appends_note_to_blocked_skills() -> None:
+    skills = [
+        _make_skill("pdf-tools"),
+        _make_skill("excel-knowledge", has_scripts=False),
+        _make_skill("web-search"),
+    ]
+    cfg = _make_cfg(
+        entries=[
+            (("pdf-tools", "render_pdf_pages.py"), -1),
+            (("excel-knowledge", ""), -1),
+        ]
+    )
+
+    block = render_skills_block_with_guard_annotation(skills, cfg)
+    lines = block.splitlines()
+
+    assert lines[0] == "- pdf-tools: test skill"
+    assert lines[1] == "- excel-knowledge: test skill"
+    assert lines[2] == "- web-search: test skill（直接実行不可。実行はdispatch_agent へ委譲。）"
+
+
+def test_render_skills_block_with_guard_annotation_empty_list() -> None:
+    cfg = _make_cfg(entries=[])
+
+    assert render_skills_block_with_guard_annotation([], cfg) == "（利用可能なスキルはありません）"
