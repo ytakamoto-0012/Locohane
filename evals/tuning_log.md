@@ -4668,3 +4668,202 @@ task文で委譲→実際の画像内容（2025年3月12日午後2時の旅行�
 
 いずれもturn_cutoffsなし。両ケースともタスク文修正でハルシネーションが
 解消されたことを確認した。全体実行に戻る。
+
+## system_prompt_scale iter05: 全7ケース一括実行（ユーザー指示、2026-08-31）
+
+**ユーザー指示**: `evals/cases/system_prompt_scale` 配下の全ケース（001, 002,
+003, 004, 006, 007, 008）を対象に `/tune-prompt system_prompt_scale` を実行。
+llama-server疎通確認後、`python evals/run_all.py system_prompt_scale`で7件を
+一括実行（結果: `evals/results/system_prompt_scale/20260831_023803/`）。
+
+各ケースのtranscriptをサブエージェント（7並列）に読ませ、judge指示に基づき
+判定させた。
+
+### 判定結果サマリ
+
+| ケース | ルール | judge判定 | 備考 |
+|---|---|---|---|
+| 001 xlsx | PASS | PASS | 前回iter04で保留した「デバッグの意味的無限ループ」は今回再発せず |
+| 002 pptx | PASS | PASS | explore委譲結果受領直後にthinking_loop打ち切りが2連続発生（後述） |
+| 003 docx | PASS | PASS | 問題なし |
+| 004 pdf | PASS | PASS | approve_plan直後にthinking_loop打ち切りが1回発生（後述） |
+| 006 recipe画像→md(297枚) | PASS | **FAIL** | thinking_loop打ち切り2回＋worker側トークン上限超過クラッシュ（詳細後述） |
+| 007 recipe栄養検索 | FAIL | PASS | ルール側の陳腐化（詳細後述） |
+| 008 英検単語帳PDF | PASS | PASS | 作業開始前にthinking_loop打ち切り1回、捏造なし |
+
+turn_cutoffs相当（thinking_loopによる強制打ち切りメッセージ）は002・004・006・
+008の4ケースで観測されたが、006以外は打ち切り後に正常回復し完走している。
+
+### 001・004・007（iter04で修正済みの問題）: 再発なし
+
+前回iter04で修正した004（pdf-tools不使用→planner側の専用スクリプト優先誘導）・
+007（計画未承認のまま書き込み委譲→委譲回数に依存しない一般化文言）は、今回
+いずれも問題なく完走した。001（デバッグの意味的無限ループ）も今回は発生せず、
+7月データ欠落は起きていない。ただし非決定的な事象だった可能性があり、
+今回発生しなかったことをもって「解消済み」と断定はしない。
+
+### 007: ルールFAILはテストケース側の陳腐化（system_prompt.md起因ではない）
+
+`expect.tool_not_called`に`analyze_image`が含まれておりFAILしたが、これは
+`d04f8d2`（2026-08-30、analyze_imageのメインエージェント直接呼び出し許可化）
+より前に作られた期待値がそのまま残っていたため。judge観点1〜3（worker task
+文への栄養検索指示、憶測数値の不記載、計画承認順序）はいずれも問題なし。
+system_prompt.md側の修正は不要。ケースYAMLの`expect`更新は`tune-prompt`の
+対象外ファイルのためユーザー判断を仰ぐ。
+
+### 006: FAIL、根本原因はsystem_prompt.mdの文言ではなくconfig側のバッチサイズ設計
+
+judge不合格の直接理由は以下の複合:
+1. thinking_loopによる強制打ち切りが2回（ステップ0完了直後、ステップ2処理中）。
+2. `token_usage_max_per_call.calls_over_ceiling=11/26`（ceiling=64000に対し
+   maxは98,507）。
+3. **worker サブエージェント内部で実測128,785トークンとなり、モデルの物理
+   コンテキスト上限（128,000）を実際に超過してBadRequestErrorでクラッシュ**
+   （201〜297件目のグループ処理中）。
+4. worker最終回答（メインへの報告）が生成mdファイル名の全件一覧を含み、
+   要約に収まっていない。
+
+原因を`config.ini`で調査したところ、`[subagent].max_iterations=100`が
+`system_prompt.md`から`${subagent_max_iterations}`として「1回の`dispatch_agent`
+に渡すファイル件数の目安（バッチサイズ）」に転用されている（config.ini
+815-828行目のコメントに明記: 「本来の意味（反復回数）とは別用途、実測では
+反復回数は2回程度で頭打ちになりこの値が反復側の制約になることはほぼ無い、
+実質的な上限はtoken_guard_*側」）。この結果、モデルは`system_prompt.md`の
+「1回のdispatch_agentは${subagent_max_iterations}件を目安」という記述に
+文字通り従い、297件を100+100+97の3グループに分割した（judge指示が想定して
+いた既定値30件とは異なる、config側の値100に忠実だった）。
+
+さらに`[subagent].token_guard_hard_threshold=128000`はモデルの物理上限と
+同値であり、「直近1回の応答」を監視する仕組みのため、1回前の応答時点では
+閾値未満でも次の1回の呼び出しで会話履歴＋新規プロンプトの合計が物理上限を
+超えてBadRequestErrorになる余地が残っている（バッファがゼロ）。
+
+**評価**: これは`system_prompt.md`の文言修正では解決しない、config側の
+設計問題（バッチサイズ100件が画像処理のような1件あたりトークン消費が
+大きいタスクには過大、かつhard_thresholdにバッファが無い）である可能性が
+高い。前回iter04で保留した001の「意味的無限ループ」と同種の、プロンプト
+資産の範囲外の問題として扱う。`tune-prompt`はsystem_prompt.md以外を編集
+しない安全策があるため、今回は修正を保留しユーザーへ報告する。
+
+4番目（worker最終回答が全件ファイル名一覧を含む）のみは`system_prompt.md`
+L122「読み取った内容を自分で受け取らない」節に「要約に留める（全件一覧を
+含めない）」旨を明記すれば改善できる可能性があるが、1・2・3の方が根本的
+かつ優先度が高いため、今回はまとめてユーザーに状況報告し、対応方針
+（config.ini側のバッチサイズ・hard_threshold調整を検討するか、
+system_prompt.md側で画像等トークン消費の大きいタスクは目安件数を割り引く
+旨を追記するか）を確認してから着手する。
+
+**イテレーション終了**: 7ケース中6件PASS、1件（006）はconfig側要因の
+可能性が高いFAILのため、SKILL.mdの安全策（対象ファイル以外は編集しない）
+に従い今回は`system_prompt.md`の変更を行わずユーザーに報告する。
+
+## config.ini調整: 006（recipe画像297枚）のトークン上限超過対策（ユーザー指示、2026-08-31）
+
+ユーザー指示「値を少しずつ下げて調整してみて」を受け、`system_prompt.md`
+ではなく`config.ini`の`[subagent]`セクションの数値を段階的に下げながら
+006を単体再実行するチューニングを実施（`tune-prompt`本体のsystem_prompt.md
+限定ループとは別の、ユーザー明示指示によるconfig値調整）。
+
+### 調整1回目: max_iterations 100→50、hard_threshold 128000→110000
+
+`python -m evals.run_case evals/cases/system_prompt_scale/006_....yaml`を
+単体実行。結果: `rules_pass: false`（`tool_not_called`失敗、main agentが
+`analyze_image`を直接呼んだ）。turn_cutoffsなし。main agent側
+`token_usage_max_per_call`は max=71,525（前回98,507からは減少）だが
+`calls_over_ceiling=10/63`は依然発生。最終回答は「トークン上限に達したため
+144/290件のみ処理、239mdファイル生成、残り146件は新セッションで再実行を」
+という途中終了。
+
+transcriptを詳しく見ると、workerへの委譲は当初10件単位で始まったが、
+途中でモデル自身が「効率的に進めるため、残りの画像を大きなグループに
+分割して処理します」と判断し、Group3-6（172件）をまとめて1回のworker
+委譲にしようとした（`max_iterations=50`の目安を自己判断で無視）。この
+大きな委譲でworker内部のリクエストが**163,528トークン**（`n_ctx=128000`
+を大幅に超過）に達し、`exceed_context_size_error`でBadRequestError発生
+（transcript index131）。`token_guard_hard_threshold=110000`は「直近1回の
+応答」を監視する仕組みのため、応答自体が急激に大きくなるケース（1回の
+worker応答で大量画像の解析結果を一気に生成する）には間に合わなかったと
+判明。バッチサイズを下げるだけでなく、モデルがバッチサイズ目安を守らず
+独自に「効率化」で束ねてしまう挙動そのものが問題であることが分かった。
+
+### 調整2回目: max_iterations 50→30、soft_threshold 90000→70000、hard_threshold 110000→90000
+
+1回目の結果を受け、バッチサイズをjudgeの想定既定値に近い30まで下げ、
+token_guardのsoft/hard両方を70000/90000へ引き下げてより早期に警告・
+打ち切りが働くようにした上で006を再実行。
+
+**結果**: `rules_pass: false`。今回はworker委譲が20枚単位（14〜15グループ）
+という妥当な粒度になり、1回目で見られたworker内部の`exceed_context_size_error`
+（163,528トークン）は発生しなかった＝`max_iterations=30`への引き下げで
+「モデルが独自に大きなグループへ束ねる」挙動は解消された。
+
+しかし今度は**main agent自身**の`token_usage_max_per_call`がmax=112,985
+（`calls_over_ceiling=18/49`）まで積み上がり、最終回答は「トークン量上限に
+達したため120/290件のみmdファイル生成、残りは新セッションで」という途中
+終了になった（`response_not_contains`の「できません」もこれに起因しFAIL）。
+turn_cutoffsはなし。
+
+**根本原因の分析**: バッチサイズを下げるほどグループ数が増え（290÷30≒10、
+290÷20≒15）、main agent自身が1ユーザーターン内で発行する`dispatch_agent`
+呼び出し回数が増える。各呼び出しのtask文自体が長い（画像ファイル名リスト・
+出力フォーマットの詳細説明をグループごとにフルで書いている）ため、
+main agent側の会話履歴が線形に膨張する。
+
+`[context_compaction].single_request_token_threshold=90000`（直近1回の
+LLM呼び出しがこれを超えたら古い履歴を要約・圧縮）は本来この膨張を抑える
+はずだが、`keep_recent_turns=3`（圧縮時に丸ごと保持する直近ユーザーターン
+数）の設計上、1ユーザーターン内に大量のdispatch_agent往復が集中する
+このケースでは、直近3ターン分だけでも90000を超える量になり、圧縮の
+効果が薄かった可能性がある。また`[context_compaction].token_threshold`
+（累積トークンによる圧縮条件）は`99999999999`で実質無効化されている
+（`09f4862`、2026-08-18。過去のインシデント調査でユーザーから「累積
+トークンは問題の指標ではない、1リクエストあたりのトークン数を見るべき」
+という明確なフィードバックを受け、この設計になった経緯があるため軽々に
+は戻さない）。
+
+### 調整3回目: single_request_token_threshold 90000→70000
+
+圧縮をより早期に発火させ、直近ターンへの積み上がりを抑える狙いで
+`[context_compaction].single_request_token_threshold`を70000へ引き下げた
+上で006を再実行。
+
+**結果**: `error: mid_turn_exception`（2回目の途中終了より悪化し、
+クラッシュに至った）。`BadRequestError: request (130216 tokens) exceeds
+the available context size (128000 tokens)`。
+
+重要な矛盾を確認: この時点の`token_usage_max_per_call`はmax=47,688
+（`calls_over_ceiling=0/39`、64000未満に収まっている）にもかかわらず、
+実際にllama-serverへ送信されたプロンプトは130,216トークンで物理上限
+（128,000）を超えてクラッシュした。つまり`token_usage_max_per_call`
+（`usage_metadata.total_tokens`ベースの事後計測値）と、実際にサーバーへ
+送信されるリクエストサイズ（`n_prompt_tokens`）が大きく乖離している。
+`single_request_token_threshold`を下げてもこのクラッシュを防げなかった
+ことから、圧縮判定自体が「実際に次に送信するプロンプトサイズ」を見て
+いない（直近のLLM応答のusage_metadataという事後値だけを見ており、
+圧縮後に新たに積まれる大量のツール結果・dispatch_agent task文を
+勘定に入れられていない）という、コード側（`src/context_compaction.py`
+の判定タイミング）の構造的な問題である可能性が高いと判断した。
+
+**評価**: 3回の調整（1回目: worker内部クラッシュ→バッチサイズ引き下げで
+解消、2回目: main agent側で正常に途中終了、3回目: single_request_
+token_threshold引き下げでむしろクラッシュに悪化）を通じて、
+「config.iniの数値を下げる」というアプローチでは限界があることが
+明らかになった。これ以上の値の引き下げを繰り返すのは非効率かつ
+状態を悪化させるリスクがあるため、ここで一旦停止し、状況をユーザーへ
+報告して方針を相談する（`src/context_compaction.py`の圧縮判定タイミング
+自体の見直しが必要な可能性が高い）。
+
+**現在のconfig.ini設定値（3回試行後の最終状態）**: クラッシュを招いた
+3回目の`single_request_token_threshold=70000`のみ2回目の値（90000）へ
+戻し、安全側（クラッシュせず途中終了で済む状態）に倒した。他は2回目の
+調整のまま据え置き:
+- `[subagent].max_iterations`: 100 → **30**
+- `[subagent].token_guard_soft_threshold`: 90000 → **70000**
+- `[subagent].token_guard_hard_threshold`: 128000 → **90000**
+- `[context_compaction].single_request_token_threshold`: 90000（据え置き、
+  70000への引き下げは3回目でクラッシュを招いたため元に戻した）
+
+ベースライン（調整前、既定値100/90000/128000/90000）との比較・最終的な
+採否はユーザー判断待ち。`evals/history/system_prompt_scale/`への
+スナップショット退避・`system_prompt.md`自体の変更は今回未実施
+（対象がconfig.iniの数値のため）。
