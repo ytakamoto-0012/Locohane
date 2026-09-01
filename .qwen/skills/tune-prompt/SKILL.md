@@ -18,14 +18,24 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
 - `system_prompt_scale` → `system_prompt/system_prompt.md`（`system_prompt`と
   同じファイルが対象だが、実データ規模のフィクスチャを使う重量級ケース専用。
   このループの自動対象には**含めない**。ユーザーから明示指定された場合、
-  または`system_prompt`ループ完了後の最終確認として使う）
+  または`system_prompt`ループ完了後の最終確認として使う。
+  `python evals/run_all.py system_prompt_scale` で手動実行する）
+- `config_timeouts` → **このスキルの対象外**。`config.ini`のtimeout系
+  数値パラメータを実測ベンチマークで調整する別系統のターゲットで、
+  `.claude/skills/tune-config-timeouts/SKILL.md` が担当する。
+  `args`に`config_timeouts`が指定されたら、このスキルではなく
+  `tune-config-timeouts`を使うようユーザーに伝えて終了する。
 - （将来）`skill:<skill名>` → `skills/<skill名>/SKILL.md`
 - （将来）`tool_docstring` → `src/tools.py`
+
+新しい評価ケースを追加したい場合は `create-eval-case` スキルを使う
+（このスキルはケースの実行・チューニングのみを担当し、ケース作成は対象外）。
 
 ## 前提条件の確認
 
 1. llama.cpp server が起動しているか確認する
-   （`config.ini` の `[llm].base_url`、既定 `http://localhost:8080/v1`）。
+   （`config.ini` の `[llm].main_url`。複数接続先・時間帯切替の設定もあり得るため
+   既定値を仮定せず、実際に使われる `base_url` は都度 `config.ini` を直接見て確認する）。
    起動していない場合、評価結果は `error: llm_unreachable` になる。
    このエラーが出た場合はループを進めず、ユーザーに server 起動を促して終了する。
 2. `evals/README.md` を一読し、ケース形式・実行方法を把握する。
@@ -78,6 +88,10 @@ python evals/run_all.py <target>
    （NN は今回のイテレーション番号）としてコピーする。
 3. 特定した原因に対して**最小限**の修正を加える（Edit ツール）。
    合格しているケースの挙動を壊さないよう、変更範囲を絞ること。
+   修正対象は低パラメータモデル（ローカルLLM）が読む前提であることを
+   常に意識する：一文を長くしすぎない、経緯説明や複数の具体例を並べない、
+   抽象語だけで終わらせず「ルール＋代替行動」の形で書く、複雑な条件分岐は
+   箇条書きで分ける。
 4. `evals/tuning_log.md` に「### iterNN」の見出しで、対象ケース・失敗内容・
    原因・変更箇所・変更理由を簡潔に追記する。
 5. **振動検知**: 直近2〜3イテレーションで同じケースが同じ理由で
@@ -92,5 +106,11 @@ python evals/run_all.py <target>
   （スナップショット退避と `tuning_log.md` のみで変更履歴を追える）。
 - 対象カテゴリに対応するファイル以外は編集しない
   （`system_prompt` 実行中に `skills/*/SKILL.md` や `src/tools.py` を触らない）。
+  FAILの根本原因が対象ファイルの記述ではなく `config.ini` 側の数値
+  （token上限・timeout等）にあると判明した場合も同様に、対象ファイルは
+  変更せず状況をユーザーに報告して終了する（ユーザーから明示指示があれば
+  `config.ini` 調整に切り替えてよいが、その場合は本ループの自動修正とは
+  別扱いとして `tuning_log.md` に「ユーザー指示によるconfig値調整」と
+  明記する）。
 - 1イテレーションで複数箇所を一度に書き換えない
   （原因の切り分けが難しくなり、振動検知も効かなくなるため）。
