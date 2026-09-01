@@ -85,6 +85,34 @@ def _log_tool_results_debug(result: dict, call_args: dict | None = None) -> None
             logger.debug("tool_result: name=%s content=%r", name, content)
 
 
+# MCPサーバー由来の動的ツール名のプレフィックス。命名規則の実体は
+# src/mcp_client.py の _sanitize_tool_name() だが、mcp_client.py が起動時に
+# src/tools/__init__.py（本モジュールを含むパッケージ）を import する依存
+# 方向のため、逆方向の import による循環を避けてこちらに定義し、
+# mcp_client.py 側がこの定数を import して使う。
+MCP_TOOL_NAME_PREFIX = "mcp__"
+
+
+def _is_mcp_tool_name(name: str) -> bool:
+    """MCPサーバー由来の動的ツール名かどうかを判定する。
+
+    src/mcp_client.py の _sanitize_tool_name() が "mcp__<server>__<tool>"
+    形式で命名する（先頭5文字は64文字切り詰め後も必ず残る）ため、この
+    プレフィックスの有無で判定する。
+    """
+    return name.startswith(MCP_TOOL_NAME_PREFIX)
+
+
+def _mcp_tool_always_allowed(name: str, guard_mode: str) -> bool:
+    """[main_agent_tool_guard].mode="tools_skills_only" 時、そのツール名を
+    常に許可（ガード対象外）とみなすか。
+
+    _guard_main_agent_tool_limit・filter_main_agent_tools・
+    list_blocked_tool_names_for_hint の3箇所が同じ判定を使う共通ゲート。
+    """
+    return guard_mode == "tools_skills_only" and _is_mcp_tool_name(name)
+
+
 _ALLOWED_WHILE_AWAITING_APPROVAL = {"approve_plan", "get_plan_status", "lock_plan_mode"}
 # このうち呼ばれたらガードのフラグ自体を解除するもの（それ以外
 # （get_plan_status）は読み取り専用の確認だけなので、フラグは維持したまま
@@ -180,6 +208,11 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
     サブエージェント（dispatch_agent経由）内部での呼び出しは対象外
     （_IN_SUBAGENT が True の間はガードしない。調査そのものが役目のため）。
 
+    [main_agent_tool_guard].mode="tools_skills_only" のときは、MCP動的
+    ツール（_mcp_tool_always_allowed参照）を常に許可し、それ以外（ビルトイン
+    ツール・run_script経由のスキル）は mode="all" と同じ許可リスト判定を
+    行う。mode="false" ならこのガード自体を素通りする。
+
     Args:
         input: ImageAwareToolNode.invoke/ainvoke がそのまま受け取った入力
             （_extract_tool_call_from_node_input 参照）。
@@ -189,8 +222,8 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
         呼び出してよい場合は None（呼び出し側は通常通りツールを実行してよい）。
     """
     cfg = _state._LLM_CONFIG
-    guard_enabled = cfg.main_agent_tool_guard_enabled if cfg else False
-    if not guard_enabled:
+    guard_mode = cfg.main_agent_tool_guard_mode if cfg else "false"
+    if guard_mode == "false":
         return None
     if _IN_SUBAGENT.get():
         return None
@@ -200,6 +233,8 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
     if not call:
         return None
     name = call.get("name")
+    if _mcp_tool_always_allowed(name, guard_mode):
+        return None
     args = call.get("args") or {}
     signature: str | None = None
     guard_max_calls: int | None = None
@@ -262,12 +297,14 @@ def filter_main_agent_tools(tools: list[BaseTool], config) -> list[BaseTool]:
             サブエージェント側の tools リスト（_SUBAGENT_TOOLS 由来）には
             使わない（本ガード自体がサブエージェント内部の呼び出しを
             対象外にしているため）。
-        config: main_agent_tool_guard_enabled / main_agent_tool_guard_allow_entries
+        config: main_agent_tool_guard_mode / main_agent_tool_guard_allow_entries
             を持つ Config。
 
     Returns:
-        guard 無効時は tools をそのまま返す。有効時は、名前が allow_entries に
-        max_calls≠0 で登録されているツールのみに絞ったリスト。
+        mode="false" 時は tools をそのまま返す。mode="tools_skills_only" 時は
+        MCP動的ツール（_mcp_tool_always_allowed参照）を無条件で残し、それ以外は
+        mode="all" と同じ判定（名前が allow_entries に max_calls≠0 で
+        登録されているツールのみ）を行う。
         run_script/run_script_background は裸のツール名としては登録しない
         運用（config.ini 参照）のため、[skill_name, script_filename] ペアの
         エントリ（script_filenameが空文字列でないもの）が1件でも max_calls≠0
@@ -279,7 +316,8 @@ def filter_main_agent_tools(tools: list[BaseTool], config) -> list[BaseTool]:
         （このエントリだけしか無い場合に run_script ツール自体を無意味にbindして
         しまわないようにするため）。
     """
-    if not config.main_agent_tool_guard_enabled:
+    guard_mode = config.main_agent_tool_guard_mode
+    if guard_mode == "false":
         return tools
     entries_by_key = dict(config.main_agent_tool_guard_allow_entries)
     run_script_allowed = any(
@@ -287,6 +325,9 @@ def filter_main_agent_tools(tools: list[BaseTool], config) -> list[BaseTool]:
     )
     filtered = []
     for t in tools:
+        if _mcp_tool_always_allowed(t.name, guard_mode):
+            filtered.append(t)
+            continue
         if t.name in ("run_script", "run_script_background"):
             if run_script_allowed:
                 filtered.append(t)
@@ -312,21 +353,30 @@ def list_blocked_tool_names_for_hint(tools: list[BaseTool], config) -> list[str]
     （一括で「呼べない」と案内すると、許可されたスキルスクリプトがあっても
     誤解を招くため）。
 
+    mode="tools_skills_only" のときはMCP動的ツール（_mcp_tool_always_allowed参照）
+    を常に許可扱いとし、blocked一覧に含めない。mode="all" のときは
+    tools（get_all_tools()の戻り値＝ビルトイン+MCP）全体を対象に判定する
+    ため、allow_entries未登録のMCP動的ツール名もblocked一覧に混ざりうる。
+
     Args:
         tools: フィルタ前のツール一覧（get_all_tools() の戻り値を想定）。
-        config: main_agent_tool_guard_enabled / main_agent_tool_guard_allow_entries
+        config: main_agent_tool_guard_mode / main_agent_tool_guard_allow_entries
             を持つ Config。
 
     Returns:
-        guard 無効時は空リスト。有効時は、allow_entries に未登録、または
+        mode="false" 時は空リスト。それ以外は、allow_entries に未登録、または
         max_calls=0 で登録されているツール名をソートしたリスト
-        （run_script/run_script_background は含まない）。
+        （run_script/run_script_background、mode="tools_skills_only"時の
+        MCP動的ツールは含まない）。
     """
-    if not config.main_agent_tool_guard_enabled:
+    guard_mode = config.main_agent_tool_guard_mode
+    if guard_mode == "false":
         return []
     entries_by_key = dict(config.main_agent_tool_guard_allow_entries)
     blocked = []
     for t in tools:
+        if _mcp_tool_always_allowed(t.name, guard_mode):
+            continue
         if t.name in ("run_script", "run_script_background"):
             continue
         max_calls = entries_by_key.get(t.name)

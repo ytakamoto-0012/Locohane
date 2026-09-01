@@ -284,8 +284,9 @@ def is_skill_directly_runnable(skill: Skill, config: "Config") -> bool:
 
 
 def filter_skills_for_main_agent_guard(skills: list[Skill], config: "Config") -> list[Skill]:
-    """[main_agent_tool_guard] visibility_mode=strict 時、メインエージェントの
-    `{{skills}}` へ載せるスキルを、直接実行が許可されたものだけに絞り込む。
+    """[main_agent_tool_guard] mode!="false" かつ visibility_mode=strict 時、
+    メインエージェントの `{{skills}}` へ載せるスキルを、直接実行が許可された
+    ものだけに絞り込む。
 
     scriptsを持つのに [skill_name, script_filename] ペアが max_calls≠0 で
     登録されていないスキルは、メインエージェントが run_script/
@@ -303,14 +304,16 @@ def filter_skills_for_main_agent_guard(skills: list[Skill], config: "Config") ->
 
     Args:
         skills: scan_skills() が返した有効な Skill のリスト。
-        config: main_agent_tool_guard_enabled / main_agent_tool_guard_allow_entries
+        config: main_agent_tool_guard_mode / main_agent_tool_guard_allow_entries
             を持つ Config。
 
     Returns:
-        guard 無効時は skills をそのまま返す。有効時は is_skill_directly_runnable()
-        が True のスキルのみに絞ったリスト。
+        mode="false" 時は skills をそのまま返す。それ以外は
+        is_skill_directly_runnable() が True のスキルのみに絞ったリスト
+        （tools_skills_only はMCP動的ツールのみに関わる設定でスキル自体の
+        許可判定には影響しないため、"all" と同じ扱いになる）。
     """
-    if not config.main_agent_tool_guard_enabled:
+    if config.main_agent_tool_guard_mode == "false":
         return skills
     return [s for s in skills if is_skill_directly_runnable(s, config)]
 

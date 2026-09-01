@@ -44,6 +44,7 @@ from mcp.shared.exceptions import McpError
 
 from . import tools as tools_module
 from .config import Config
+from .tools.tool_node import MCP_TOOL_NAME_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -224,8 +225,11 @@ def _sanitize_tool_name(server_name: str, tool_name: str) -> str:
     既存の組み込みツールおよびサーバー間でのツール名衝突を防ぐための
     命名規則（Claude CodeのMCPツール命名慣習を踏襲）。OpenAI互換APIの
     ツール名制約（英数字・アンダースコア・ハイフンのみ、64文字以内）に収める。
+    プレフィックス（MCP_TOOL_NAME_PREFIX）は src/tools/tool_node.py の
+    _is_mcp_tool_name() が同じ値を参照し、[main_agent_tool_guard].mode=
+    "tools_skills_only" の判定に使う。
     """
-    raw = f"mcp__{server_name}__{tool_name}"
+    raw = f"{MCP_TOOL_NAME_PREFIX}{server_name}__{tool_name}"
     sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", raw)
     return sanitized[:_TOOL_NAME_MAX_CHARS]
 

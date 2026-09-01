@@ -31,18 +31,29 @@ def _make_skill(name: str, *, has_scripts: bool = True) -> Skill:
     )
 
 
-def _make_cfg(*, entries, enabled: bool = True):
+def _make_cfg(*, entries, mode: str = "all"):
     return SimpleNamespace(
-        main_agent_tool_guard_enabled=enabled,
+        main_agent_tool_guard_mode=mode,
         main_agent_tool_guard_allow_entries=frozenset(entries),
     )
 
 
 def test_guard_disabled_keeps_all_skills() -> None:
     skills = [_make_skill("pdf-tools"), _make_skill("web-search")]
-    cfg = _make_cfg(entries=[], enabled=False)
+    cfg = _make_cfg(entries=[], mode="false")
 
     assert filter_skills_for_main_agent_guard(skills, cfg) == skills
+
+
+def test_guard_tools_skills_only_mode_filters_same_as_all() -> None:
+    """mode=tools_skills_only はMCP動的ツールのみに関わる設定で、スキル自体の
+    フィルタ判定は mode=all と同じになる。"""
+    skills = [_make_skill("pdf-tools"), _make_skill("web-search")]
+    cfg = _make_cfg(entries=[(("pdf-tools", "render_pdf_pages.py"), -1)], mode="tools_skills_only")
+
+    result = filter_skills_for_main_agent_guard(skills, cfg)
+
+    assert [s.name for s in result] == ["pdf-tools"]
 
 
 def test_skill_without_allowed_pair_is_dropped() -> None:

@@ -37,9 +37,15 @@ LLM_PROVIDERS = frozenset({"openai_compatible", "llama_cpp"})
 # reasoning_format が取りうる値（llama-server の --reasoning-format と同じ）。
 LLM_REASONING_FORMATS = frozenset({"none", "deepseek", "deepseek-legacy"})
 
-# [main_agent_tool_guard].visibility_mode が取りうる値。main_agent_tool_guard_enabled
-# （呼び出し制限そのもののON/OFF）とは独立した「一覧の見せ方」の軸であり、
-# enabledの値に関わらずこの値だけで表示が決まる。
+# [main_agent_tool_guard].visibility_mode が取りうる値。main_agent_tool_guard_mode
+# （呼び出し制限そのもののON/OFF/範囲）とは独立した「一覧の見せ方」の軸であり、
+# modeの値に関わらずこの値だけで表示が決まる。対象はスキル一覧（{{skills}}）と
+# ビルトインツールの呼び出し可否ヒント（blocked_tools_hint）で、MCP動的ツール
+# （mcp__<server>__<tool>形式、src/mcp_client.py）はこの一覧・ヒントの対象として
+# 想定されていない。ただし blocked_tools_hint は get_all_tools()（ビルトイン+MCP）
+# 全体を対象に組み立てるため、main_agent_tool_guard_mode="all" のときは実際には
+# MCP動的ツール名もヒントに混ざりうる（mode="tools_skills_only" のときはMCPが
+# 常に許可されるため混ざらない）。
 #   all   : 全スキル名・ツール名・descriptionを一覧に表示するが、直接実行できない
 #           ものは description の末尾に注記を追記する。
 #   strict: 呼び出せないスキル・ツールは一覧から完全に除外する。
@@ -49,6 +55,16 @@ LLM_REASONING_FORMATS = frozenset({"none", "deepseek", "deepseek-legacy"})
 # render_skills_block_with_guard_annotation、app.py のシステムプロンプト組み立てが
 # この文字列で分岐する。
 MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODES = frozenset({"strict", "hint", "all"})
+
+# [main_agent_tool_guard].mode が取りうる値。
+#   false             : ガード無効（メインエージェントは全ツールを制限なく呼べる）。
+#   tools_skills_only : MCP動的ツール（mcp__<server>__<tool>形式）のみ常に許可
+#                       （ガード対象外）。ビルトインツール・skills/配下のスキル
+#                       （run_script/run_script_background経由）は従来通り
+#                       main_agent_tool_guard_allow_entries の許可リストで制限する。
+#   all               : ビルトインツール・スキル・MCP動的ツールの全てをガード対象
+#                       にする（allow_entries未登録＝呼び出し不可）。
+MAIN_AGENT_TOOL_GUARD_MODES = frozenset({"false", "tools_skills_only", "all"})
 
 
 @dataclass(frozen=True)
@@ -429,19 +445,22 @@ class Config:
             （dispatch_agent）内での呼び出し履歴を、メインエージェントの重複
             判定へ持ち越すかどうか。True なら両者で呼び出し集合を共有し、
             False なら別々に管理する（src/tools.py の _IN_SUBAGENT 参照）。
-        main_agent_tool_guard_enabled: メインエージェント自身が呼び出せる
-            ツールを main_agent_tool_guard_allow_entries の許可リストへ限定する
-            ガード機能の有効/無効。plan_approval_exempt_scripts は計画承認を
-            免除するだけで直接呼び出し自体は妨げないため、
+        main_agent_tool_guard_mode: メインエージェント自身が呼び出せるツールを
+            main_agent_tool_guard_allow_entries の許可リストへ限定するガード
+            機能のモード（"false"/"tools_skills_only"/"all"、
+            MAIN_AGENT_TOOL_GUARD_MODES参照）。plan_approval_exempt_scripts は
+            計画承認を免除するだけで直接呼び出し自体は妨げないため、
             render_pdf_pages.py→analyze_image のような「1件の重い調査」を
             メインエージェントが委譲せず自分で最後まで実行し続けてトークン
             上限に達する事例（src/tools.py の _guard_main_agent_tool_limit
             参照）を防ぐための汎用ガード。ビルトインツール名（Glob・
             analyze_image 等）も run_script 配下のスキルスクリプトも同じ
             リストへ登録できる（旧・Glob専用ガード main_agent_glob_guard は
-            本ガードへ統合済み）。true にする場合、メインエージェントに
+            本ガードへ統合済み）。"all" にする場合、メインエージェントに
             必要な全ツールを main_agent_tool_guard_allow_entries へ登録すること
-            （未登録＝呼び出し不可のため）。
+            （未登録＝呼び出し不可のため）。"tools_skills_only" はMCP動的
+            ツール（mcp__<server>__<tool>形式）のみ常に許可し、それ以外は
+            "all" と同じ許可リスト判定を行う。
         main_agent_tool_guard_allow_entries: 本ガードの許可リストの集合
             （frozenset[tuple[str | tuple[str, str], int]]）。各要素は
             (対象, max_calls) のペア。対象が文字列1件（例: "Glob",
@@ -456,9 +475,11 @@ class Config:
             「無制限」として扱うが、本ガードは0と-1の意味が逆になる点に
             注意）。plan_approval_exempt_scripts とは独立したリストで、
             **ここに登録されていないツール・スクリプトは main_agent_tool_guard_
-            enabled=true の間、メインエージェントから一切呼び出せない**
-            （許可リスト方式）。空集合なら main_agent_tool_guard_enabled=true
-            の間メインエージェントはいかなるツールも呼び出せなくなる。
+            mode="all"（または"tools_skills_only"時のMCP以外）の間、
+            メインエージェントから一切呼び出せない**（許可リスト方式）。
+            空集合なら main_agent_tool_guard_mode!="false" の間メインエージェント
+            はMCP動的ツール（tools_skills_only時）以外いかなるツールも呼び出せ
+            なくなる。
         graph_impl: ReAct ループの実装切替。"handwritten"（手書き
             StateGraph）または "prebuilt"（LangGraph の
             create_react_agent）。build_graph() が参照する。
@@ -834,7 +855,7 @@ class Config:
     #     run_script配下のスキルスクリプトの両方を、エントリごとの max_calls 付きで
     #     登録できる。Glob専用だった旧ガードもここへ統合済み。src/tools.py の
     #     _guard_main_agent_tool_limit） ---
-    main_agent_tool_guard_enabled: bool
+    main_agent_tool_guard_mode: str
     main_agent_tool_guard_visibility_mode: str
     main_agent_tool_guard_allow_entries: frozenset[tuple[str | tuple[str, str], int]]
 
@@ -1311,8 +1332,8 @@ def _as_routing_strategy(value: str | None, key_name: str) -> str:
 def _as_main_agent_tool_guard_visibility_mode(value: str | None) -> str:
     """[main_agent_tool_guard].visibility_mode の値を検証する。
 
-    strict/hint/false の3値。main_agent_tool_guard_enabled（呼び出し制限の
-    ON/OFF）とは独立した設定で、enabledの値に関わらずこの値だけで一覧の
+    strict/hint/all の3値。main_agent_tool_guard_mode（呼び出し制限の
+    ON/OFF/範囲）とは独立した設定で、modeの値に関わらずこの値だけで一覧の
     見せ方が決まる。
 
     Args:
@@ -1329,6 +1350,32 @@ def _as_main_agent_tool_guard_visibility_mode(value: str | None) -> str:
     if text not in MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODES:
         choices = "/".join(sorted(MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODES))
         raise ValueError(f"[main_agent_tool_guard].visibility_mode は {choices} のいずれかにしてください: {value!r}")
+    return text
+
+
+def _as_main_agent_tool_guard_mode(value: str | None) -> str:
+    """[main_agent_tool_guard].mode の値を検証する。
+
+    false/tools_skills_only/all の3値。大文字小文字は区別しない（evals
+    ケースyamlの `env:` セクションで `MAIN_AGENT_TOOL_GUARD_MODE: false` の
+    ように書くと、YAMLがPythonのbool Falseとしてパースし、
+    evals/case_schema.py の str(v) で "False"（先頭大文字）になるため、
+    _as_bool() 同様に大文字小文字を吸収する）。
+
+    Args:
+        value: config.ini から得た文字列、または環境変数由来の文字列。
+            空欄・None なら既定値 "all" を返す。
+
+    Returns:
+        前後の空白を除き小文字化した文字列（MAIN_AGENT_TOOL_GUARD_MODES のいずれか）。
+
+    Raises:
+        ValueError: MAIN_AGENT_TOOL_GUARD_MODES に無い値が指定された場合。
+    """
+    text = str(value or "").strip().lower() or "all"
+    if text not in MAIN_AGENT_TOOL_GUARD_MODES:
+        choices = "/".join(sorted(MAIN_AGENT_TOOL_GUARD_MODES))
+        raise ValueError(f"[main_agent_tool_guard].mode は {choices} のいずれかにしてください: {value!r}")
     return text
 
 
@@ -1493,8 +1540,9 @@ def _parse_main_agent_tool_guard_allow_entries(value: str | None) -> frozenset[t
     本ガードは許可リスト（ホワイトリスト）方式であり、ここに登録されて
     いないツール名・run_scriptスキルスクリプトはメインエージェントから
     一切呼び出せない（src/tools/tool_node.py の _guard_main_agent_tool_limit
-    参照）。そのため main_agent_tool_guard_enabled=true で運用する場合、
-    メインエージェントに必要な全ツールをここへ登録する必要がある。
+    参照）。そのため main_agent_tool_guard_mode="all" で運用する場合、
+    メインエージェントに必要な全ツールをここへ登録する必要がある
+    （"tools_skills_only" ならMCP動的ツールは登録不要で常に許可される）。
 
     各要素は [対象, max_calls] の2要素配列。max_calls をエントリごとに
     個別指定できるようにするため、plan_approval_exempt_scripts のような
@@ -1521,8 +1569,9 @@ def _parse_main_agent_tool_guard_allow_entries(value: str | None) -> frozenset[t
     Args:
         value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
             空欄・None なら空集合を返す（許可リスト方式のため、この場合
-            main_agent_tool_guard_enabled=true だとメインエージェントは
-            いかなるツールも呼び出せなくなる点に注意）。
+            main_agent_tool_guard_mode="all" だとメインエージェントは
+            いかなるツールも呼び出せなくなる点に注意。"tools_skills_only"
+            ならMCP動的ツールのみ引き続き呼び出せる）。
 
     Returns:
         {(対象, max_calls), ...} の frozenset。対象はツール名の文字列、または
@@ -2068,10 +2117,10 @@ def load_config(config_path: Path | None = None) -> Config:
                 file_tools_duplicate_guard.get("carry_over_to_main", True),
             )
         ),
-        main_agent_tool_guard_enabled=_as_bool(
+        main_agent_tool_guard_mode=_as_main_agent_tool_guard_mode(
             os.getenv(
-                "MAIN_AGENT_TOOL_GUARD_ENABLED",
-                main_agent_tool_guard.get("enabled", True),
+                "MAIN_AGENT_TOOL_GUARD_MODE",
+                main_agent_tool_guard.get("mode", "all"),
             )
         ),
         main_agent_tool_guard_visibility_mode=_as_main_agent_tool_guard_visibility_mode(

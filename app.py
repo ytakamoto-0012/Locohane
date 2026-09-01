@@ -1547,10 +1547,13 @@ async def _setup() -> None:
     # は [main_agent_tool_guard].visibility_mode の値だけで組み立て方が変わる
     # （dispatch_agent配下のサブエージェント用 skills_block は下記の通り未フィルタの
     # skills から別途組み立てるため、いずれのモードでもスキル自体は失われない）。
-    # main_agent_tool_guard_enabled（呼び出し制限そのもののON/OFF）とは独立した軸で、
-    # enabled=false の場合は filter_skills_for_main_agent_guard 等が内部で
+    # main_agent_tool_guard_mode（呼び出し制限そのもののON/OFF/範囲）とは独立した軸で、
+    # mode=false の場合は filter_skills_for_main_agent_guard 等が内部で
     # 絞り込み・ブロックを行わなくなるため、strict/hint を選んでも自然に
-    # 「全部見せる」として振る舞う。
+    # 「全部見せる」として振る舞う。visibility_modeの対象はスキル一覧＋ビルトイン
+    # ツールのヒント表示だが、blocked_tools_hint は get_all_tools()（ビルトイン+MCP）
+    # 全体が対象のため、mode=all の場合はMCP動的ツール名もヒントに混ざりうる
+    # （mode=tools_skills_only ならMCPは常に許可されるため混ざらない）。
     #   visibility_mode=all   : 全スキル名・descriptionを一覧に表示するが、直接実行不可な
     #                          分は description の末尾に注記を追記し、呼べないビルトイン
     #                          ツール名一覧もテキストで案内する（bindはしない）。

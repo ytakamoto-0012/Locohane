@@ -232,7 +232,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 でツール自体を無効化できる。
 
 上記の39ツール・スキルすべてがメインエージェントから直接呼べるわけではない。
-`config.ini` の `[main_agent_tool_guard]`（既定 `enabled = true`）が、メインエージェント
+`config.ini` の `[main_agent_tool_guard]`（既定 `mode = all`）が、メインエージェント
 自身によるビルトインツール・`run_script` 配下スキルスクリプトの直接呼び出しを
 `allow_entries` のホワイトリストで制限する（`dispatch_agent` 配下のサブエージェントは
 対象外）。`Read`/`Grep`/`json_query`/`analyze_image`/`execute_python_code` 系や
@@ -733,6 +733,10 @@ Anthropic公式のModel Context Protocol（[仕様](https://modelcontextprotocol
   失敗も例外を送出せず `"エラー: ..."` 形式の文字列として返す。
 - **既知の限界**: 接続後にサーバープロセスがクラッシュした場合の自動再接続は
   行わない。応答はテキストブロックのみ抽出する（画像等のリソースは未対応）。
+- **`[main_agent_tool_guard]`との関係**: MCP動的ツールは名前が実行時にしか
+  分からず`allow_entries`へ事前登録できないため、既定の`mode=all`のままだと
+  メインエージェントから一切呼び出せない。事前登録なしで常に許可したい場合は
+  `mode=tools_skills_only`を使う（詳細は`config.ini`内コメント参照）。
 
 **MCPサーバー接続は、実装のみで動作テストしていないのでまともに動くか保証できません**
 
@@ -882,9 +886,9 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[file_tools_duplicate_guard]` | `enabled` | Read/Glob/Grep/json_query ツールの同一引数繰り返し呼び出しを防止するガードの有効/無効 | `FILE_TOOLS_DUPLICATE_GUARD_ENABLED` |
 | `[file_tools_duplicate_guard]` | `max_calls` | 同一シグネチャの呼び出しを許可する回数（既定1回） | `FILE_TOOLS_DUPLICATE_GUARD_MAX_CALLS` |
 | `[file_tools_duplicate_guard]` | `carry_over_to_main` | サブエージェント内の呼び出し履歴をメイン判定へ持ち越すかどうか | `FILE_TOOLS_DUPLICATE_GUARD_CARRY_OVER` |
-| `[main_agent_tool_guard]` | `enabled` | メインエージェント自身がビルトインツール・`run_script`配下のスキルスクリプトを直接呼び出せる回数を制限するガードの有効/無効（`dispatch_agent`配下のサブエージェントは対象外）。トークン消費の大きい重量系ツールの連打によるトークン上限到達を防ぐ | `MAIN_AGENT_TOOL_GUARD_ENABLED` |
-| `[main_agent_tool_guard]` | `visibility_mode` | `enabled=true`時の可視化モード。`strict`（既定）は呼び出せないツール・スキルを一覧から完全除外、`hint`は一覧に出しつつ直接実行不可のものへ`dispatch_agentへ委譲`という注記を付ける | `MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODE` |
-| `[main_agent_tool_guard]` | `allow_entries` | 許可リスト（ホワイトリスト）。`["ツール名", max_calls]`または`[["スキル名","スクリプトファイル名"], max_calls]`の要素からなるリスト形式で、未登録のツール・スキルスクリプトは`enabled=true`の間メインエージェントから一切呼び出せない。`max_calls`は`0`=登録のみで完全ブロック、`-1`=無制限、`1`以上=その回数まで許可（他のガードと0/-1の意味が逆なので注意） | `MAIN_AGENT_TOOL_GUARD_ALLOW_ENTRIES` |
+| `[main_agent_tool_guard]` | `mode` | メインエージェント自身がビルトインツール・`run_script`配下のスキルスクリプトを直接呼び出せる回数を制限するガードのモード（`dispatch_agent`配下のサブエージェントは対象外）。`false`=無効、`tools_skills_only`=MCP動的ツール（`mcp__server__tool`形式）のみ常に許可しそれ以外は制限、`all`（既定）=MCP動的ツールも含め全て制限。トークン消費の大きい重量系ツールの連打によるトークン上限到達を防ぐ | `MAIN_AGENT_TOOL_GUARD_MODE` |
+| `[main_agent_tool_guard]` | `visibility_mode` | `mode!=false`時の可視化モード。対象はスキル一覧とビルトインツールの呼べない名前案内（`mode=all`時はMCP動的ツール名も混ざりうる）。`strict`（既定）は呼び出せないツール・スキルを一覧から完全除外、`hint`は一覧に出しつつ直接実行不可のものへ`dispatch_agentへ委譲`という注記を付ける | `MAIN_AGENT_TOOL_GUARD_VISIBILITY_MODE` |
+| `[main_agent_tool_guard]` | `allow_entries` | 許可リスト（ホワイトリスト）。`["ツール名", max_calls]`または`[["スキル名","スクリプトファイル名"], max_calls]`の要素からなるリスト形式で、未登録のツール・スキルスクリプトは`mode=all`（または`tools_skills_only`時のMCP以外）の間メインエージェントから一切呼び出せない。`max_calls`は`0`=登録のみで完全ブロック、`-1`=無制限、`1`以上=その回数まで許可（他のガードと0/-1の意味が逆なので注意） | `MAIN_AGENT_TOOL_GUARD_ALLOW_ENTRIES` |
 | `[graph]` | `implementation` | ReAct ループの実装（`handwritten` または `prebuilt`） | `GRAPH_IMPL` |
 | `[graph]` | `recursion_limit` | メインReActループ（agent→tools遷移）の最大反復回数。超過時は打ち切りメッセージを表示 | `GRAPH_RECURSION_LIMIT` |
 | `[graph]` | `connection_error_max_retries` | LLMサーバーとの通信エラー（接続失敗・5xx等）検知時、直近接続先を一時クールダウンした上でグラフを再構築し同じ反復を自動リトライする回数（メインエージェント用。`0`でリトライせず通信エラーを通知して中断） | `GRAPH_CONNECTION_ERROR_MAX_RETRIES` |

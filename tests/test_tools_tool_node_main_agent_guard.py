@@ -34,9 +34,9 @@ def _make_input(name: str, args: dict | None = None) -> dict:
     }
 
 
-def _setup(monkeypatch, *, entries, enabled: bool = True):
+def _setup(monkeypatch, *, entries, mode: str = "all"):
     cfg = SimpleNamespace(
-        main_agent_tool_guard_enabled=enabled,
+        main_agent_tool_guard_mode=mode,
         main_agent_tool_guard_allow_entries=frozenset(entries),
     )
     monkeypatch.setattr(tool_node._state, "_LLM_CONFIG", cfg)
@@ -127,11 +127,31 @@ def test_subagent_call_is_not_guarded(monkeypatch) -> None:
 
 
 def test_guard_disabled_allows_everything(monkeypatch) -> None:
-    _setup(monkeypatch, entries=[], enabled=False)
+    _setup(monkeypatch, entries=[], mode="false")
 
     result = tool_node._guard_main_agent_tool_limit(_make_input("some_unlisted_tool"))
 
     assert result is None
+
+
+def test_tools_skills_only_mode_always_allows_unregistered_mcp_tool(monkeypatch) -> None:
+    """mode=tools_skills_only なら、未登録のMCP動的ツール（mcp__プレフィックス）は
+    常に許可される。"""
+    _setup(monkeypatch, entries=[], mode="tools_skills_only")
+
+    result = tool_node._guard_main_agent_tool_limit(_make_input("mcp__locohane-skills__list_skills"))
+
+    assert result is None
+
+
+def test_tools_skills_only_mode_still_blocks_unregistered_builtin_tool(monkeypatch) -> None:
+    """mode=tools_skills_only でも、ビルトインツールは mode=all と同じく
+    未登録なら引き続きブロックされる（MCP以外は対象外にしない）。"""
+    _setup(monkeypatch, entries=[], mode="tools_skills_only")
+
+    result = tool_node._guard_main_agent_tool_limit(_make_input("some_unlisted_tool"))
+
+    assert result is not None
 
 
 @pytest.mark.parametrize("entries", [[], [("Glob", 1)]])
@@ -176,18 +196,28 @@ def _make_tools(*names: str) -> list:
     return [SimpleNamespace(name=n) for n in names]
 
 
-def _make_cfg(*, entries, enabled: bool = True):
+def _make_cfg(*, entries, mode: str = "all"):
     return SimpleNamespace(
-        main_agent_tool_guard_enabled=enabled,
+        main_agent_tool_guard_mode=mode,
         main_agent_tool_guard_allow_entries=frozenset(entries),
     )
 
 
 def test_filter_main_agent_tools_guard_disabled_keeps_everything() -> None:
     tools = _make_tools("Glob", "Read", "run_script")
-    cfg = _make_cfg(entries=[], enabled=False)
+    cfg = _make_cfg(entries=[], mode="false")
 
     assert tool_node.filter_main_agent_tools(tools, cfg) == tools
+
+
+def test_filter_main_agent_tools_tools_skills_only_keeps_unregistered_mcp_tool() -> None:
+    """mode=tools_skills_only なら、未登録のMCP動的ツールも bind 対象に残る。"""
+    tools = _make_tools("Glob", "mcp__locohane-skills__list_skills")
+    cfg = _make_cfg(entries=[], mode="tools_skills_only")
+
+    result = tool_node.filter_main_agent_tools(tools, cfg)
+
+    assert {t.name for t in result} == {"mcp__locohane-skills__list_skills"}
 
 
 def test_filter_main_agent_tools_drops_unregistered_and_zero() -> None:
@@ -240,9 +270,20 @@ def test_filter_main_agent_tools_ignores_skill_visibility_dummy_entry_for_run_sc
 
 def test_list_blocked_tool_names_for_hint_guard_disabled_returns_empty() -> None:
     tools = _make_tools("Glob", "Read", "run_script")
-    cfg = _make_cfg(entries=[], enabled=False)
+    cfg = _make_cfg(entries=[], mode="false")
 
     assert tool_node.list_blocked_tool_names_for_hint(tools, cfg) == []
+
+
+def test_list_blocked_tool_names_for_hint_tools_skills_only_excludes_mcp_tool() -> None:
+    """mode=tools_skills_only なら、未登録のMCP動的ツール名はヒント一覧に含めない
+    （常に許可扱いのため）。"""
+    tools = _make_tools("Glob", "mcp__locohane-skills__list_skills")
+    cfg = _make_cfg(entries=[], mode="tools_skills_only")
+
+    result = tool_node.list_blocked_tool_names_for_hint(tools, cfg)
+
+    assert result == ["Glob"]
 
 
 def test_list_blocked_tool_names_for_hint_includes_unregistered_and_zero() -> None:
