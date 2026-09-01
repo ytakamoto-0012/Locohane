@@ -14,7 +14,8 @@ description: Locohane の evals/cases/<target>/*.yaml に新しい eval ケー�
 1. `evals/README.md` と `evals/case_schema.py` を読み、yaml のフィールド・
    `expect`/`judge` の役割分担を確認する。
 2. llama.cpp server が起動しているか確認する（`config.ini` の
-   `[llm].base_url`、既定 `http://localhost:8080/v1`）。手順6の動作確認で
+   `[llm].main_url`に設定された接続先。既定値を仮定せず、実際に使われる
+   `base_url` は都度 `config.ini` を直接見て確認する）。手順6の動作確認で
    実際に1件実行するため、未起動ならユーザーに起動を促す。
 
 ## 最重要1: turns は端的に書く。詳しく書くのは評価にならない

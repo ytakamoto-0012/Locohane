@@ -48,7 +48,8 @@ description: Locohane の config.ini の timeout系設定（[llm].request_timeou
 ## 前提条件の確認
 
 1. llama.cpp server が起動しているか確認する
-   （`config.ini` の `[llm].base_url`、既定 `http://localhost:8080/v1`）。
+   （`config.ini` の `[llm].main_url`に設定された接続先。既定値を仮定せず、
+   実際に使われる `base_url` は都度 `config.ini` を直接見て確認する）。
    起動していない場合、評価結果は `error: llm_unreachable` になる。
    このエラーが出た場合はループを進めず、ユーザーに server 起動を促して終了する。
 2. `evals/README.md` を一読し、ケース形式・実行方法を把握する。
