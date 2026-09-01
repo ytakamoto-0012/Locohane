@@ -7,8 +7,8 @@ src.tools は `import chainlit as cl` 済みだが、`cl.xxx` への参照は
 呼び出し時に解決される（モジュール属性ルックアップ）ため、install() を
 src.tools の関数を呼ぶより前に一度実行しておけば十分。差し替えは
 tools.py が実際に使っている範囲（user_session / AskActionMessage /
-AskUserMessage / Message）に限定し、cl.Action はコンストラクタが
-副作用を持たないためそのまま使う。
+AskUserMessage / CustomElement / AskElementMessage / Message）に限定し、
+cl.Action はコンストラクタが副作用を持たないためそのまま使う。
 
 1プロセス=1ケース実行という前提のため、元の chainlit 属性へ戻す処理は
 用意しない（run_case.py はケースごとに新規プロセスとして起動される）。
@@ -79,6 +79,49 @@ class _FakeAskUserMessage:
         return None
 
 
+class _FakeCustomElement:
+    """cl.CustomElement の代替。name/props を保持するだけで副作用は持たない。"""
+
+    def __init__(self, name: str = "", props: dict | None = None, **kwargs) -> None:
+        self.name = name
+        self.props = props or {}
+
+
+class _FakeAskElementMessage:
+    """cl.AskElementMessage の代替。AskUserQuestion(labels指定時)の
+    "MultiTextForm" と ask_user_choice(multi_select=True)の "MultiChoiceForm"
+    のみを扱う（tools.py が生成する element.name はこの2種類のみのため）。
+
+    MultiTextForm: labels 1件につき scripted_text_answers を1件ずつ消費し、
+    値のリストを返す。件数が足りなくなった時点でタイムアウト扱い（None）に
+    する（_FakeAskUserMessage と同じ規約）。
+    MultiChoiceForm: _FakeAskActionMessage と同じ auto_approve 規約に倣い、
+    auto_approve=True なら choices の先頭1件を選択、False なら未選択のまま
+    キャンセル扱い（submitted=False）にする。
+    """
+
+    def __init__(self, content: str = "", element=None, timeout: int = 0, **kwargs) -> None:
+        self.content = content
+        self.element = element
+
+    async def send(self):
+        props = getattr(self.element, "props", {}) or {}
+        name = getattr(self.element, "name", "")
+        if name == "MultiTextForm":
+            labels = props.get("labels") or []
+            answers = _state["scripted_text_answers"]
+            if len(answers) < len(labels):
+                return None
+            values = [answers.pop(0) for _ in labels]
+            return {"values": values}
+        if name == "MultiChoiceForm":
+            choices = props.get("choices") or []
+            if not choices or not _state["auto_approve"]:
+                return {"submitted": False}
+            return {"submitted": True, "values": [choices[0]], "other": ""}
+        return None
+
+
 class _FakeMessage:
     """cl.Message の代替。create_plan/update_task_progress からの表示更新のみを吸収する。"""
 
@@ -103,9 +146,9 @@ def install(auto_approve: bool = True, scripted_text_answers: list[str] | None =
     Args:
         auto_approve: run_script/execute_python_code/approve_plan の
             承認ダイアログを自動で承認するか拒否するか。
-        scripted_text_answers: AskUserQuestion が labels 省略（単一質問）で
-            呼ばれるたびに1件ずつ消費して返す回答のリスト。尽きればタイムアウト
-            扱い（None）。
+        scripted_text_answers: AskUserQuestion が呼ばれるたびに消費して返す
+            回答のリスト。labels 省略時（単一質問）は1件、labels 指定時は
+            その件数だけまとめて消費する。尽きればタイムアウト扱い（None）。
     """
     _state["auto_approve"] = auto_approve
     _state["scripted_text_answers"] = list(scripted_text_answers or [])
@@ -113,4 +156,6 @@ def install(auto_approve: bool = True, scripted_text_answers: list[str] | None =
     cl.user_session = _FakeUserSession()
     cl.AskActionMessage = _FakeAskActionMessage
     cl.AskUserMessage = _FakeAskUserMessage
+    cl.CustomElement = _FakeCustomElement
+    cl.AskElementMessage = _FakeAskElementMessage
     cl.Message = _FakeMessage
