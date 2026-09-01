@@ -58,6 +58,11 @@ class EvalCase:
             場合のプロジェクトルート相対パス（例:
             "evals/fixtures/annual_schedule"）。未指定なら config.ini の
             [default_workdir].dir をそのまま使う。
+        env: run_case.py がケース実行前に os.environ へ設定する追加の
+            環境変数（{"KEY": "value"} の形式）。config.ini の値を
+            ${変数名} で参照する設定（expand_config_vars）や
+            src/config.py が読む環境変数を、ケースごとに上書きしたい
+            場合に使う。未指定なら何も設定しない。
         timeout_seconds: run_all.py がこのケースをサブプロセス実行する際の
             タイムアウト秒数。未指定なら run_all.py の既定値
             （CASE_TIMEOUT_SECONDS）を使う。大量ファイルを扱う重量級ケース
@@ -74,6 +79,7 @@ class EvalCase:
     auto_approve: bool
     scripted_text_answers: list[str]
     work_dir: str | None
+    env: dict[str, str]
     timeout_seconds: int | None
     notes: str
     source_path: Path
@@ -129,6 +135,11 @@ def load_case(path: Path) -> EvalCase:
     if expect is None and not judge:
         raise ValueError(f"{path}: expect と judge のどちらも無いケースは無効です")
 
+    env_raw = data.get("env")
+    if env_raw is not None and not isinstance(env_raw, dict):
+        raise ValueError(f"{path}: env はオブジェクトである必要があります")
+    env = {str(k): str(v) for k, v in (env_raw or {}).items()}
+
     return EvalCase(
         id=case_id,
         target=target,
@@ -138,6 +149,7 @@ def load_case(path: Path) -> EvalCase:
         auto_approve=bool(data.get("auto_approve", True)),
         scripted_text_answers=[str(a) for a in (data.get("scripted_text_answers", []) or [])],
         work_dir=str(data["work_dir"]) if data.get("work_dir") else None,
+        env=env,
         timeout_seconds=int(data["timeout_seconds"]) if data.get("timeout_seconds") else None,
         notes=str(data.get("notes", "")),
         source_path=path,

@@ -279,6 +279,11 @@ async def _run(case: EvalCase) -> dict:
             os.environ["DEFAULT_WORKDIR"] = str(dst_dir)
         else:
             os.environ.pop("DEFAULT_WORKDIR", None)
+        # ケースが env（yaml の env: {KEY: value}）を指定していれば、
+        # config.ini の値を上書きする環境変数として適用する。1プロセス=
+        # 1ケースなので他ケースへの影響はない。
+        for key, value in case.env.items():
+            os.environ[key] = value
         config = load_config()
 
         # app.py の _setup() と同様、config.log_level に従いログをファイルへ出す。
