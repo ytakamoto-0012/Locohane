@@ -9,6 +9,11 @@ src.tools の関数を呼ぶより前に一度実行しておけば十分。差�
 tools.py が実際に使っている範囲（user_session / AskActionMessage /
 AskUserMessage / CustomElement / AskElementMessage / Message）に限定し、
 cl.Action はコンストラクタが副作用を持たないためそのまま使う。
+加えて、approve_plan/ask_user_choice/ask_user_question の3モジュールが
+個別に import 済みの `_ask_with_cross_session_relay`（スレッド切り替え後の
+別セッションからの回答中継を待つ本番用ロジック）も、headlessモードには
+「別セッション」概念が無く中継先が永久に解決されないため、factory() を
+直接呼ぶだけの版へ差し替える。
 
 1プロセス=1ケース実行という前提のため、元の chainlit 属性へ戻す処理は
 用意しない（run_case.py はケースごとに新規プロセスとして起動される）。
@@ -122,6 +127,21 @@ class _FakeAskElementMessage:
         return None
 
 
+async def _fake_ask_with_cross_session_relay(thread_id: str, factory, timeout: int):
+    """src.tools._ask_relay_helper._ask_with_cross_session_relay の代替。
+
+    本物は「スレッド切り替え後の別セッションから回答が中継されてくる」ケースを
+    asyncio.wait(FIRST_COMPLETED) で待つが、headlessモードには「別セッション」
+    という概念自体が無いため中継先（relay_future）が永久に解決されない。
+    config.ini の [timeouts] ask_user_question_seconds 等が 0（無期限待ち＝
+    _resolve_ask_timeout により 2**31-1 秒に変換される）の環境では、
+    scripted_text_answers が尽きた・想定外の ask 系ツール呼び出しが発生した
+    場合に事実上無限にハングしていた（2026-09-02 発覚）。headlessモードでは
+    中継を待つ意味が無いため、factory() の結果をそのまま返す。
+    """
+    return await factory()
+
+
 class _FakeMessage:
     """cl.Message の代替。create_plan/update_task_progress からの表示更新のみを吸収する。"""
 
@@ -159,3 +179,16 @@ def install(auto_approve: bool = True, scripted_text_answers: list[str] | None =
     cl.CustomElement = _FakeCustomElement
     cl.AskElementMessage = _FakeAskElementMessage
     cl.Message = _FakeMessage
+
+    # approve_plan/ask_user_choice/ask_user_question は `from
+    # ._ask_relay_helper import _ask_with_cross_session_relay` で名前を
+    # 各モジュールの名前空間へ直接束縛しているため、元モジュール
+    # （src.tools._ask_relay_helper）側を差し替えても反映されない。
+    # 呼び出し側3モジュールの属性を個別に上書きする。
+    import src.tools.approve_plan as _approve_plan_mod
+    import src.tools.ask_user_choice as _ask_user_choice_mod
+    import src.tools.ask_user_question as _ask_user_question_mod
+
+    _approve_plan_mod._ask_with_cross_session_relay = _fake_ask_with_cross_session_relay
+    _ask_user_choice_mod._ask_with_cross_session_relay = _fake_ask_with_cross_session_relay
+    _ask_user_question_mod._ask_with_cross_session_relay = _fake_ask_with_cross_session_relay
