@@ -7,9 +7,10 @@ docstring といった「LLM に渡すプロンプト資産」を、実際のロ
 
 ## 前提
 
-- llama.cpp server が `config.ini` の `[llm].base_url` で起動していること
-  （既定は `http://localhost:8080/v1`）。起動していない場合、各ケースは
-  `error: llm_unreachable` を返す。
+- llama.cpp server が `config.ini` の `[llm].main_url` に設定された接続先で
+  起動していること（複数接続先・時間帯切替の設定もあり得るため、実際に
+  使われる `base_url` は既定値を仮定せず `config.ini` を直接確認する）。
+  起動していない場合、各ケースは `error: llm_unreachable` を返す。
 - Chainlit サーバーは起動しない。`run_case.py` が `evals/headless_chainlit.py`
   で `chainlit` の UI 呼び出し（`cl.user_session` / `cl.Message` /
   `cl.AskActionMessage` / `cl.AskUserMessage`）をスタブに差し替え、
