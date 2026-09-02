@@ -24,10 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastmcp import FastMCP
 from fastmcp.server.providers.skills import SkillsDirectoryProvider
 
-from mcp_server import skill_tools
+from mcp_server import config, skill_tools
 from mcp_server.publish import build_publish_dir
 
-mcp = FastMCP("locohane-skills")
+mcp = FastMCP(config.SERVER_NAME)
 mcp.add_provider(
     SkillsDirectoryProvider(
         roots=build_publish_dir(),

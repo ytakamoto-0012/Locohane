@@ -110,6 +110,7 @@ mcp_server/
 | `LOCOHANE_MCP_SKILLS_SRC` | 対象とする `skills/` ディレクトリ（`os.pathsep`区切りで複数指定可、同名スキルは先頭優先） | プロジェクト直下 `skills/` の1つのみ |
 | `LOCOHANE_MCP_SKILLS_WORKDIR` | `run_skill_script` のサブプロセス cwd | 未設定（MCPサーバー自身の起動時cwdを継承） |
 | `LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS` | `run_skill_script` のタイムアウト秒数 | 300 |
+| `LOCOHANE_MCP_SKILLS_NAME` | MCPサーバー自体の名前（FastMCPインスタンス名） | `locohane-skills` |
 
 ### 3-1. 依存追加
 
@@ -402,7 +403,8 @@ CLI版のlocalスコープ登録だけで済ませず、上記の方法1・方�
       "env": {
         "LOCOHANE_MCP_SKILLS_SRC": "",
         "LOCOHANE_MCP_SKILLS_WORKDIR": "",
-        "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": ""
+        "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": "",
+        "LOCOHANE_MCP_SKILLS_NAME": ""
       }
     }
   }
@@ -417,7 +419,8 @@ CLI版のlocalスコープ登録だけで済ませず、上記の方法1・方�
 "env": {
   "LOCOHANE_MCP_SKILLS_SRC": "C:\\DT_Python\\Locohane\\skills;C:\\other\\skills",
   "LOCOHANE_MCP_SKILLS_WORKDIR": "C:\\DT_Python\\Locohane\\output",
-  "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": "600"
+  "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": "600",
+  "LOCOHANE_MCP_SKILLS_NAME": "locohane-skills-dev"
 }
 ```
 

@@ -262,6 +262,7 @@ Locohane/
 ├── pytest.ini              # pytest設定
 ├── .env.example            # 環境変数サンプル
 ├── .gitignore              # Git除外設定
+├── .mcp.json                # 独自スキル群をMCPサーバーとして配布する`mcp_server/`への接続設定（Claude Code等のMCPクライアント向け、project scope）
 ├── .chainlit/
 │   ├── config.toml         # Chainlit設定
 │   └── translations/       # 多言語翻訳ファイル
@@ -297,6 +298,12 @@ Locohane/
 │   └── compressing_test/    # プロンプト圧縮の効果検証用ワークスペース（開発時の実験、tune-prompt関連）
 ├── tools/
 │   └── gen_licenses.py      # THIRD_PARTY_LICENSES.md 再生成スクリプト
+├── mcp_server/               # skills/ をMCPサーバーとして外部（Claude Code等）へ配布する側の実装（`.mcp.json`から起動。詳細は`mcp_server/MCP_README.md`）
+│   ├── MCP_README.md         # 配布方式・クライアント接続設定の詳細ガイド
+│   ├── server.py              # エントリーポイント（FastMCPインスタンス生成、Resources/Tools登録）
+│   ├── config.py              # 設定値の集約（SKILLS_SRC/WORKDIR/タイムアウト秒数/除外ファイル名。環境変数で上書き可）
+│   ├── publish.py              # Resources配布用の一時コピー作成（.env等の機密ファイルを除外）
+│   └── skill_tools.py          # Tools方式の3ツール本体（list_skills/read_skill/run_skill_script）
 ├── evals/                   # プロンプト資産の自動評価・チューニングループ
 │   ├── README.md            # 実行方法・ケースの書き方
 │   ├── run_all.py           # 全ケース一括実行
@@ -739,6 +746,16 @@ Anthropic公式のModel Context Protocol（[仕様](https://modelcontextprotocol
   `mode=tools_skills_only`を使う（詳細は`config.ini`内コメント参照）。
 
 **MCPサーバー接続は、実装のみで動作テストしていないのでまともに動くか保証できません**
+
+### 逆方向：Locohaneのスキルを配布する側（サーバー）
+
+上記は Locohane が外部 MCP サーバーのツールを**使う側**（クライアント）の話。
+逆に、Locohane の `skills/` に溜めた SKILL.md 群を Claude Code / Claude Desktop
+等の外部 MCP クライアントから発見・取得・**実行**できるよう配布する側（サーバー）
+の実装は `mcp_server/` パッケージにあり、こちらは動作確認済み。設定ファイルは
+プロジェクト直下 `.mcp.json`（`command`/`args` にこのマシンのフルパスが書かれる
+ため環境が異なる相手には要調整）。詳細な仕組み・クライアント接続手順は
+[`mcp_server/MCP_README.md`](mcp_server/MCP_README.md) を参照。
 
 ---
 

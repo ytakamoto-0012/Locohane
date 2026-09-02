@@ -45,6 +45,12 @@ try:
 except ValueError:
     SCRIPT_TIMEOUT_SECONDS = 300
 
+# MCPサーバー自体の名前（FastMCPインスタンス名）。クライアント側の表示名や
+# ツール名衝突回避のため、複数のMCPサーバーを同時接続する場合に区別したいことがある。
+# 環境変数 LOCOHANE_MCP_SKILLS_NAME で上書きできる。既定は "locohane-skills"。
+_name_env = os.environ.get("LOCOHANE_MCP_SKILLS_NAME")
+SERVER_NAME: str = _name_env if _name_env else "locohane-skills"
+
 # Resources 配布（publish.build_publish_dir）から除外するファイル名／ディレクトリ名。
 # .env系: APIキー等の機密情報を含みうるもの（新しいスキルに追加した場合はここにも追記すること）。
 # __pycache__: 配布に無意味な Python コンパイルキャッシュ。
