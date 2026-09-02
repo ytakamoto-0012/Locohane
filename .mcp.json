@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "locohane-skills": {
+      "type": "stdio",
+      "command": "C:\\DT_Python\\Python311\\env_local_agent_system\\Scripts\\python.exe",
+      "args": [
+        "C:\\DT_Python\\Locohane\\mcp_server\\server.py"
+      ],
+      "env": {}
+    }
+  }
+}
