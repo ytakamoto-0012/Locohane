@@ -13,7 +13,9 @@ cl.Action はコンストラクタが副作用を持たないためそのまま�
 個別に import 済みの `_ask_with_cross_session_relay`（スレッド切り替え後の
 別セッションからの回答中継を待つ本番用ロジック）も、headlessモードには
 「別セッション」概念が無く中継先が永久に解決されないため、factory() を
-直接呼ぶだけの版へ差し替える。
+直接呼ぶだけの版へ差し替える（patch_ask_relay() 参照。install() 単体では
+不十分で、init_tools() 実行後に get_all_tools() の戻り値へ対して呼ぶ必要が
+ある。run_case.py 参照）。
 
 1プロセス=1ケース実行という前提のため、元の chainlit 属性へ戻す処理は
 用意しない（run_case.py はケースごとに新規プロセスとして起動される）。
@@ -180,15 +182,34 @@ def install(auto_approve: bool = True, scripted_text_answers: list[str] | None =
     cl.AskElementMessage = _FakeAskElementMessage
     cl.Message = _FakeMessage
 
-    # approve_plan/ask_user_choice/ask_user_question は `from
-    # ._ask_relay_helper import _ask_with_cross_session_relay` で名前を
-    # 各モジュールの名前空間へ直接束縛しているため、元モジュール
-    # （src.tools._ask_relay_helper）側を差し替えても反映されない。
-    # 呼び出し側3モジュールの属性を個別に上書きする。
-    import src.tools.approve_plan as _approve_plan_mod
-    import src.tools.ask_user_choice as _ask_user_choice_mod
-    import src.tools.ask_user_question as _ask_user_question_mod
 
-    _approve_plan_mod._ask_with_cross_session_relay = _fake_ask_with_cross_session_relay
-    _ask_user_choice_mod._ask_with_cross_session_relay = _fake_ask_with_cross_session_relay
-    _ask_user_question_mod._ask_with_cross_session_relay = _fake_ask_with_cross_session_relay
+_ASK_RELAY_TOOL_NAMES = ("approve_plan", "ask_user_choice", "AskUserQuestion")
+
+
+def patch_ask_relay(tools) -> None:
+    """approve_plan/ask_user_choice/AskUserQuestion の
+    `_ask_with_cross_session_relay`（スレッド切り替え後の別セッションからの
+    回答中継を待つ本番用ロジック）を、headlessモード向けの即時解決版へ
+    差し替える。init_tools() 実行後、get_all_tools() が返す実際のツール
+    オブジェクトに対して呼ぶこと（run_case.py 参照）。
+
+    3モジュールが `from ._ask_relay_helper import _ask_with_cross_session_relay`
+    で名前を自分の名前空間へ直接束縛しているため、
+    `src.tools._ask_relay_helper` 側や `sys.modules['src.tools.xxx']` 経由の
+    属性差し替えでは反映されないことがある（2026-09-02、init_tools() 実行後に
+    該当モジュールの sys.modules エントリが差し替え前と異なるオブジェクトに
+    なっている事例を確認した。原因不明だが、下記のように呼び出し対象の
+    StructuredTool 自身が保持する coroutine 関数の `__globals__` を直接
+    書き換える方式であれば、実際に呼ばれる関数と同じ名前空間を確実に
+    更新できる）。
+
+    Args:
+        tools: get_all_tools() の戻り値（BaseTool のリスト）。
+    """
+    for t in tools:
+        if t.name not in _ASK_RELAY_TOOL_NAMES:
+            continue
+        coroutine = getattr(t, "coroutine", None)
+        if coroutine is None or not hasattr(coroutine, "__globals__"):
+            continue
+        coroutine.__globals__["_ask_with_cross_session_relay"] = _fake_ask_with_cross_session_relay

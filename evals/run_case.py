@@ -47,6 +47,7 @@ if sys.platform == "win32":
 
 from evals.case_schema import EvalCase, Expect, load_case  # noqa: E402
 from evals.headless_chainlit import install as install_headless_chainlit  # noqa: E402
+from evals.headless_chainlit import patch_ask_relay  # noqa: E402
 from evals.timing_callbacks import LatencyCallbackHandler  # noqa: E402
 
 
@@ -244,7 +245,7 @@ async def _run(case: EvalCase) -> dict:
     from src.llm import ThinkingLoopDetected
     from src.memory import render_memory_block
     from src.skills import build_system_prompt, render_skills_block, scan_skills
-    from src.tools import init_tools
+    from src.tools import get_all_tools, init_tools
 
     # メモリー系ツール（create_memory 等）を評価すると本番の永続メモリーストア
     # （config.ini 既定の ./data/memory）を汚してしまうため、ケース実行のたびに
@@ -395,6 +396,12 @@ async def _run(case: EvalCase) -> dict:
             plan_auto_approve=config.plan_auto_approve,
             allow_sandbox_dirs=config.allow_sandbox_dirs,
         )
+        # install_headless_chainlit() 単体では approve_plan/ask_user_choice/
+        # AskUserQuestion の _ask_with_cross_session_relay 差し替えが
+        # init_tools() 実行後に失われることがあるため、get_all_tools() が
+        # 返す実際のツールオブジェクトに対して改めてパッチする
+        # （evals/headless_chainlit.py の patch_ask_relay() docstring参照）。
+        patch_ask_relay(get_all_tools())
 
         thread_id = str(uuid.uuid4())
         # recursion_limit を明示指定する。省略すると LangGraph のデフォルト（25）が
