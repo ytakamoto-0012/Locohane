@@ -59,15 +59,9 @@ def _resolve_analyze_image_path(raw: str) -> Path:
 @tool(response_format="content_and_artifact")
 def analyze_image(relative_path: str, show_in_chat: bool = False) -> tuple[str, dict | None]:
     """画像ファイルをLLMへ視覚情報として見せ、自分（LLM）がその内容を解析・説明・判断するために使う。
-
-    読み込み系ツールのため、ローカルファイルシステム上の任意の絶対パスを指定できる
-    （Read 等と同様、パスの制限は行わない。ただし `_tmp_<thread_id>` の他セッション
-    分だけは例外で解析できない）。
-
-    例: SKILL.md 本文が references/assets 配下の画像を参照していて内容を踏まえて
-    回答する必要がある場合、run_script が生成した画像ファイルの内容を確認して
-    次の判断に使う場合、ユーザーが指定した作業ディレクトリ配下にある画像
-    （写真・スキャン画像等）の内容を読み取って説明・分析する必要がある場合。
+    SKILL.md参照画像・生成物（run_script出力等）・ユーザー提供画像いずれの解析にも
+    使う。読み込み系ツールのため絶対パスを指定できる（`_tmp_<thread_id>` の他セッ
+    ション分だけ例外で解析できない）。
 
     `show_in_chat=True` を指定すると、自分（LLM）が内容を理解するのと同時に、
     その画像をチャット画面にも表示する（ユーザーが「見せて」「表示して」のように
@@ -76,9 +70,8 @@ def analyze_image(relative_path: str, show_in_chat: bool = False) -> tuple[str, 
     中身は見ない」という呼び方はできない（既定 `show_in_chat=False` は表示せず
     解析だけを行う。大量の画像を機械的に確認する場合はチャットが荒れないよう
     こちらを使う）。
-    ツール呼び出しの結果には画像データを直接積めない実装上の制約があるため、
-    この関数はテキストの確認メッセージのみを返す。画像本体は裏側で処理され、
-    次のモデル呼び出しで実際にLLMへ見えるようになる。
+    戻り値はテキストの確認メッセージのみで、画像本体は次のモデル呼び出しで
+    実際にLLMへ見えるようになる。
 
     Args:
         relative_path: 相対パスを渡すと skills ルートからの相対パスとして

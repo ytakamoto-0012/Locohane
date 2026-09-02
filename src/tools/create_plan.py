@@ -35,12 +35,9 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
 
     既に approve_plan で承認済み（Edit Automatically）の状態でこのツールを
     再度呼んで steps を差し替えると、config.ini の
-    [plan].reset_approval_on_recreate が既定の true の場合、承認状態は
-    無条件で失われ Plan Mode（未承認）へ戻る。この場合、続けて approve_plan
-    を呼び直さない限り書き込み系ツールは再びブロックされる（false に設定
-    されている環境では承認状態が維持され、approve_plan の呼び直しは不要）。
-    戻り値のテキストで「作成しました（要approve_plan）」か「更新しました
-    （承認維持）」かを都度確認できる。
+    [plan].reset_approval_on_recreate の設定によっては承認状態が失われ
+    Plan Mode（未承認）へ戻る（既定は失われる側）。その場合、続けて
+    approve_plan を呼び直さない限り書き込み系ツールは再びブロックされる。
 
     run_script_background/execute_python_code_background でバックグラウンド
     ジョブを扱う場合、「起動」と「完了確認」を同じステップにまとめないこと。
@@ -49,14 +46,12 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     状態）を取得できてから。起動ステップとは別に「結果を確認する」ステップを
     設けること。
 
-    detail_markdown を渡すと、steps とは別にメインチャットへそのまま
-    表示され（サイドパネルのチェックリストとは別に、通常のメッセージとして
-    出力される）、かつ data/plans/ 配下へ詳細な計画Markdownファイルとしても
-    保存される（会話スレッドごとに1ファイル、このツールを呼ぶたびに
-    上書き更新される。update_task_progress では更新されない）。
-    背景・設計判断・調査結果・代替案の検討など、パネル表示のチェックリスト
-    には収まらない情報をユーザーに見せたい複雑なタスクでは、この引数も
-    渡すことを推奨する（省略しても create_plan 自体はエラーにならない）。
+    detail_markdown を渡すと、steps とは別にメインチャットへそのまま表示され、
+    かつ data/plans/ 配下へ詳細な計画Markdownファイルとしても保存される
+    （会話スレッドごとに1ファイル、呼ぶたびに上書き更新。update_task_progress
+    では更新されない）。パネル表示のチェックリストに収まらない背景・設計判断・
+    調査結果等をユーザーに見せたい複雑なタスクでは、この引数も渡すことを
+    推奨する（省略してもエラーにはならない）。
 
     Args:
         steps: 実行計画の各ステップを表す辞書のリスト（1件以上、実行順）。

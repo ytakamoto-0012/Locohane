@@ -23,9 +23,8 @@ async def update_task_progress(step_index: int, status: str) -> str:
     進捗を見せること。"in_progress" の間はチェックリスト上に content の代わりに
     create_plan で渡した activeForm が表示される。同時に "in_progress" にする
     ステップは1つまでにすること。全ステップが completed になると計画は完了した
-    ものとみなし、承認状態を解除する（承認は作成済み計画の実行に限定した
-    スコープのため、完了後の無関係な run_script/execute_python_code は
-    再びブロックされる）。
+    ものとみなし、承認状態を解除する（完了後の無関係な run_script/
+    execute_python_code は再びブロックされる）。
 
     run_script_background/execute_python_code_background に対応するステップは、
     ジョブを起動しただけの時点では completed にしないこと。check_script_job
