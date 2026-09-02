@@ -6,7 +6,11 @@
       "args": [
         "C:\\DT_Python\\Locohane\\mcp_server\\server.py"
       ],
-      "env": {}
+      "env": {
+        "LOCOHANE_MCP_SKILLS_SRC": "",
+        "LOCOHANE_MCP_SKILLS_WORKDIR": "",
+        "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": ""
+      }
     }
   }
 }

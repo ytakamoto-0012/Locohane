@@ -298,20 +298,10 @@ claude mcp add --transport stdio locohane-skills -- "C:\DT_Python\Python311\env_
 `/mcp`で`3 tools`（`list_skills`/`read_skill`/`run_skill_script`）が
 表示されることを確認する。
 
-#### VSCode拡張版で認識されない場合（既知の問題）
-
-上記コマンドは指定なしだと既定で**localスコープ**（`~/.claude.json`の
-`projects`オブジェクトへ、現在の作業ディレクトリの**絶対パス文字列を
-キー**として保存）に登録される。**実際に確認された問題として、CLI版で
-登録した際のキーが`C:/DT_Python/Locohane`（大文字ドライブレター＋
-スラッシュ区切り）で保存される一方、VSCode拡張機能側が使う作業ディレクトリの
-表記が`c:\DT_Python\Locohane`（小文字＋バックスラッシュ区切り）等になっていると、
-文字列として一致せず別プロジェクト扱いになり、VSCode拡張側では
-`locohane-skills`が一切認識されない（`/mcp`のツール一覧に出てこない）。**
-CLI版では接続できるのにVSCode拡張版では認識されない場合、まずこれを疑うこと。
-
-対処法は2つ。パス文字列キーへの依存自体をなくすため、**local以外のスコープ**
-（`--scope`オプション）で登録し直す。
+上記はscope指定なしだと既定で**localスコープ**（`~/.claude.json`の
+`projects`オブジェクトへ、現在の作業ディレクトリの絶対パス文字列をキーとして
+保存）に登録される。project scope/user scopeで登録したい場合は`--scope`
+オプションを付ける（以下もCLI版のコマンド）。
 
 **方法1: project scope（推奨）** — プロジェクトルートに`.mcp.json`が
 作られ、パス文字列キーに依存しないため、CLI版・VSCode拡張版どちらからも
@@ -337,6 +327,103 @@ claude mcp add --transport stdio --scope user locohane-skills -- "C:\DT_Python\P
 ```
 claude mcp remove locohane-skills -s local
 ```
+
+#### VSCode拡張版
+
+**VSCode拡張版には`claude mcp add`のようなCLIコマンドは無い。** 設定ファイルを
+エディタ等で直接手動作成・編集して登録する。
+
+**方法1: project scope（推奨）** — プロジェクトルート
+（`c:\DT_Python\Locohane`）に`.mcp.json`を手動で作成し、以下の内容を書く。
+CLI版・VSCode拡張版どちらからも確実に認識される。リポジトリにコミットすれば
+他メンバー・他マシンとも共有できる（ただし`command`/`args`にはこのマシンの
+フルパスがそのまま書き込まれるため、環境が異なる相手には要調整）。
+
+```jsonc
+{
+  "mcpServers": {
+    "locohane-skills": {
+      "type": "stdio",
+      "command": "C:\\DT_Python\\Python311\\env_local_agent_system\\Scripts\\python.exe",
+      "args": ["C:\\DT_Python\\Locohane\\mcp_server\\server.py"]
+    }
+  }
+}
+```
+
+**方法2: user scope** — `~/.claude.json`（Windowsでは
+`%USERPROFILE%\.claude.json`）をエディタで開き、トップレベルの
+`mcpServers`オブジェクトに同じ内容を手動で追記する（既にファイルが存在し
+`projects`等の他キーがある場合は、それらは残したまま`mcpServers`キーだけを
+追加・マージする）。このマシン上のこのユーザーであればどのプロジェクトからでも
+使える。`.mcp.json`としてリポジトリには残らないため、他マシン・他ユーザーとは
+共有されない。
+
+```jsonc
+{
+  "mcpServers": {
+    "locohane-skills": {
+      "type": "stdio",
+      "command": "C:\\DT_Python\\Python311\\env_local_agent_system\\Scripts\\python.exe",
+      "args": ["C:\\DT_Python\\Locohane\\mcp_server\\server.py"]
+    }
+  }
+}
+```
+
+どちらの方法でも、混乱を避けるため元のlocalスコープ登録は（CLI版で
+`claude mcp remove locohane-skills -s local`を実行して）削除しておくとよい。
+
+**補足（既知の問題）**: CLI版で（scopeオプション無しの既定＝localスコープで）
+登録した場合、`~/.claude.json`の`projects`オブジェクトへ現在の作業ディレクトリの
+絶対パス文字列をキーとして保存される。実際に確認された問題として、CLI版で
+登録した際のキーが`C:/DT_Python/Locohane`（大文字ドライブレター＋スラッシュ
+区切り）で保存される一方、VSCode拡張機能側が使う作業ディレクトリの表記が
+`c:\DT_Python\Locohane`（小文字＋バックスラッシュ区切り）等になっていると、
+文字列として一致せず別プロジェクト扱いになり、VSCode拡張側では
+`locohane-skills`が一切認識されない（`/mcp`のツール一覧に出てこない）。
+CLI版のlocalスコープ登録だけで済ませず、上記の方法1・方法2のいずれかで
+設定ファイルを直接作成しておくのはこのためである。
+
+#### 環境変数の設定（`.mcp.json`の`env`フィールド）
+
+3節の表で挙げた`config.py`の3つの環境変数は、`.mcp.json`（project scope）の
+`mcpServers.locohane-skills.env`フィールドに直接書ける。`command`/`args`と
+同じ階層に`env`オブジェクトを追加するだけで、サブプロセス起動時の環境変数
+として渡される。
+
+```jsonc
+{
+  "mcpServers": {
+    "locohane-skills": {
+      "type": "stdio",
+      "command": "C:\\DT_Python\\Python311\\env_local_agent_system\\Scripts\\python.exe",
+      "args": ["C:\\DT_Python\\Locohane\\mcp_server\\server.py"],
+      "env": {
+        "LOCOHANE_MCP_SKILLS_SRC": "",
+        "LOCOHANE_MCP_SKILLS_WORKDIR": "",
+        "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": ""
+      }
+    }
+  }
+}
+```
+
+空文字のまま（または未設定）であれば`config.py`側の`os.environ.get(...)`が
+偽値と判定して既定値にフォールバックするため、上書きが不要な項目は空文字の
+ままでよい。値を指定する場合の例:
+
+```jsonc
+"env": {
+  "LOCOHANE_MCP_SKILLS_SRC": "C:\\DT_Python\\Locohane\\skills;C:\\other\\skills",
+  "LOCOHANE_MCP_SKILLS_WORKDIR": "C:\\DT_Python\\Locohane\\output",
+  "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": "600"
+}
+```
+
+`LOCOHANE_MCP_SKILLS_SRC`は複数パス指定時`os.pathsep`（Windowsでは`;`）区切り。
+user scope登録（`~/.claude.json`）やClaude Desktopの`claude_desktop_config.json`
+でも同様に`env`フィールドが使える。
 
 ### Claude Desktop
 
