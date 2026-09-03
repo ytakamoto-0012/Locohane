@@ -131,6 +131,7 @@ from src.tools import (
     reset_call_history_guards_after_compaction,
     toggle_plan_mode_from_ui,
 )
+from src.tools._plan_render import _render_plan_payload
 from src.tools._workdir import _build_workdir_status_info
 from src.uploads import cleanup_old_uploads, run_cleanup_loop
 
@@ -2096,9 +2097,28 @@ if _config.thread_store_enabled:
         cl.user_session.set("work_dir", meta.get("work_dir"))
         cl.user_session.set("work_dir_access", None)
         cl.user_session.set("work_dir_notice_pending", True)
-        cl.user_session.set("plan", meta.get("plan"))
-        cl.user_session.set("plan_message", None)
-        cl.user_session.set("plan_approved", bool(meta.get("plan_approved")))
+        plan = meta.get("plan")
+        plan_approved = bool(meta.get("plan_approved"))
+        cl.user_session.set("plan", plan)
+        cl.user_session.set("plan_approved", plan_approved)
+        if plan:
+            # plan_message（サイドパネルのPlanCard用メッセージ）は cl.Message
+            # インスタンスのためスレッドのmetadataへ永続化できず、旧実装は
+            # ここで常にNoneにリセットしていた。VSCode拡張のWebViewが非表示→
+            # 再表示で破棄・再構築されると、ユーザーが明示的にリロードした
+            # 覚えがなくても on_chat_resume が発火する（2026-09-04 ユーザー
+            # 報告・実機ログで確認）。plan_messageがNoneのまま以降
+            # update_task_progress が呼ばれ続けると、ステップの状態自体は
+            # 更新されるのに message.update() がガードでスキップされ続け、
+            # サーバーログには成功と出るのにサイドパネルの表示だけ古いまま
+            # 固着する。create_plan と同じ内容で新しいメッセージとして
+            # 再送信し、plan_message を有効な参照に戻す。
+            finished = all(s["status"] == "completed" for s in plan)
+            plan_message = cl.Message(content=_render_plan_payload(plan, finished=finished, approved=plan_approved))
+            await plan_message.send()
+            cl.user_session.set("plan_message", plan_message)
+        else:
+            cl.user_session.set("plan_message", None)
         cl.user_session.set("token_usage_cumulative", meta.get("token_usage_cumulative") or _new_usage_totals())
         cl.user_session.set("token_usage_cumulative_main", meta.get("token_usage_cumulative_main") or _new_usage_totals())
 
