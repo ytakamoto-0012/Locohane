@@ -6,7 +6,7 @@ import { WorkDirButton } from './WorkDirButton';
 import { PlanModeBadge } from './PlanModeBadge';
 import { Icon } from './Icon';
 
-interface PendingAttachment {
+export interface PendingAttachment {
   name: string;
   fileRef?: IFileRef;
   uploading: boolean;
@@ -26,6 +26,12 @@ interface ComposerProps {
   blockedByOtherThread?: boolean;
   // 作業ディレクトリの変更を許可するか（新規チャットで未送信の間のみtrue）。
   workDirEditable?: boolean;
+  // 添付ファイルのstate。StarterPrompts（定型文ボタン）とも共有するため
+  // App.tsx側で保持し、controlled propsとして受け取る。
+  attachments: PendingAttachment[];
+  onAttach: (files: FileList | File[] | null) => void;
+  onRemoveAttachment: (index: number) => void;
+  onAttachmentsSent: () => void;
 }
 
 export function Composer({
@@ -33,40 +39,21 @@ export function Composer({
   remoteGenerating,
   onStopRemote,
   blockedByOtherThread,
-  workDirEditable
+  workDirEditable,
+  attachments,
+  onAttach,
+  onRemoveAttachment,
+  onAttachmentsSent
 }: ComposerProps) {
   const { askUser, disabled, loading } = useChatData();
-  const { sendMessage, replyMessage, uploadFile, stopTask } = useChatInteract();
+  const { sendMessage, replyMessage, stopTask } = useChatInteract();
   const [value, setValue] = useState('');
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isReplying = askUser?.spec.type === 'text';
   // 他セッションでこのスレッドが処理中、または同じ所有者の別スレッドが
   // 処理中の間は送信自体を止める。
   const inputBlocked = disabled || Boolean(remoteGenerating) || Boolean(blockedByOtherThread);
-
-  const handleAttach = (files: FileList | File[] | null) => {
-    if (!files) return;
-    Array.from(files).forEach((file) => {
-      const entry: PendingAttachment = { name: file.name, uploading: true };
-      setAttachments((prev) => [...prev, entry]);
-      const { promise } = uploadFile(file, () => {});
-      promise
-        .then((fileRef) => {
-          setAttachments((prev) =>
-            prev.map((a) => (a === entry ? { ...a, fileRef, uploading: false } : a))
-          );
-        })
-        .catch(() => {
-          setAttachments((prev) => prev.filter((a) => a !== entry));
-        });
-    });
-  };
-
-  const handleRemoveAttachment = (index: number) => {
-    setAttachments((prev) => prev.filter((_, i) => i !== index));
-  };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const items = Array.from(e.clipboardData?.items ?? []);
@@ -82,7 +69,7 @@ export function Composer({
       });
     if (imageFiles.length === 0) return;
     e.preventDefault();
-    handleAttach(imageFiles);
+    onAttach(imageFiles);
   };
 
   const submit = () => {
@@ -106,7 +93,7 @@ export function Composer({
     }
 
     setValue('');
-    setAttachments([]);
+    onAttachmentsSent();
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -140,7 +127,7 @@ export function Composer({
                 type="button"
                 className="composer-attachment-remove"
                 title="添付を削除"
-                onClick={() => handleRemoveAttachment(i)}
+                onClick={() => onRemoveAttachment(i)}
               >
                 <Icon name="x" size={10} />
               </button>
@@ -182,7 +169,7 @@ export function Composer({
               type="file"
               multiple
               hidden
-              onChange={(e) => handleAttach(e.target.files)}
+              onChange={(e) => onAttach(e.target.files)}
             />
             <WorkDirButton disabled={!workDirEditable} />
           </div>

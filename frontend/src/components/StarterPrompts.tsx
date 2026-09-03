@@ -1,12 +1,23 @@
 import { v4 as uuidv4 } from 'uuid';
 import { useChatInteract } from '@chainlit/react-client';
 import type { IStep } from '@chainlit/react-client';
+import type { PendingAttachment } from './Composer';
 
 /**
  * チャット開始時のみ表示する定型文ボタン列。クリックすると即座にそのテキストを
  * ユーザー発言として送信する（Composer.tsx の submit() と同じ IStep 組み立て方式）。
+ * 添付ファイルはApp.tsx側で保持するstateをComposerと共有し、クリック時に
+ * アップロード済みの分だけ一緒に送信する。
  */
-export function StarterPrompts({ prompts }: { prompts: string[] }) {
+export function StarterPrompts({
+  prompts,
+  attachments,
+  onAttachmentsSent
+}: {
+  prompts: string[];
+  attachments: PendingAttachment[];
+  onAttachmentsSent: () => void;
+}) {
   const { sendMessage } = useChatInteract();
 
   if (prompts.length === 0) return null;
@@ -21,7 +32,9 @@ export function StarterPrompts({ prompts }: { prompts: string[] }) {
       createdAt: new Date().toISOString(),
       metadata: {}
     };
-    sendMessage(message, []);
+    const fileReferences = attachments.filter((a) => a.fileRef).map((a) => ({ id: a.fileRef!.id }));
+    sendMessage(message, fileReferences);
+    onAttachmentsSent();
   };
 
   return (

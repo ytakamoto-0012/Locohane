@@ -20,7 +20,7 @@ import { LoginForm } from './components/LoginForm';
 import { MessagePane } from './components/MessagePane';
 import { Sidebar } from './components/Sidebar';
 import { SidePanel } from './components/SidePanel';
-import { Composer } from './components/Composer';
+import { Composer, type PendingAttachment } from './components/Composer';
 import { AskActionBar } from './components/AskActionBar';
 import { AskFormBar } from './components/AskFormBar';
 import { AskChoiceFormBar } from './components/AskChoiceFormBar';
@@ -51,7 +51,7 @@ const DEFAULT_TAB_TITLE = 'Locohane';
 function App() {
   const { data: authData, isReady: authReady, isAuthenticated } = useAuth();
   const { connect } = useChatSession();
-  const { setIdToResume } = useChatInteract();
+  const { setIdToResume, uploadFile } = useChatInteract();
   const { messages } = useChatMessages();
   const { loading } = useChatData();
   const { config } = useConfig();
@@ -67,6 +67,41 @@ function App() {
   // 競合し古い値（未指定）が送られるリスクがある。seeded で「recoilへの
   // 書き込み確定後にのみconnectする」ことを保証する（Sidebar.tsx参照）。
   const [seeded, setSeeded] = useState(false);
+
+  // 添付ファイルのstate。Composer（送信欄）とStarterPrompts（定型文ボタン）の
+  // 両方から参照・送信できるよう、この階層で保持する（どちらから送信しても
+  // 同じ添付が使われるようにするため）。
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+
+  const handleAttach = useCallback(
+    (files: FileList | File[] | null) => {
+      if (!files) return;
+      Array.from(files).forEach((file) => {
+        const entry: PendingAttachment = { name: file.name, uploading: true };
+        setAttachments((prev) => [...prev, entry]);
+        const { promise } = uploadFile(file, () => {});
+        promise
+          .then((fileRef) => {
+            setAttachments((prev) =>
+              prev.map((a) => (a === entry ? { ...a, fileRef, uploading: false } : a))
+            );
+          })
+          .catch(() => {
+            setAttachments((prev) => prev.filter((a) => a !== entry));
+          });
+      });
+    },
+    [uploadFile]
+  );
+
+  const handleRemoveAttachment = useCallback((index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleAttachmentsSent = useCallback(() => {
+    setAttachments([]);
+  }, []);
+
   useEffect(() => {
     const threadId = new URLSearchParams(window.location.search).get('thread');
     if (threadId) setIdToResume(threadId);
@@ -264,13 +299,23 @@ function App() {
         <AskChoiceFormBar />
         <AskTextBar />
         <AskFileDropzone />
-        {!hasSentMessage && <StarterPrompts prompts={starterPrompts} />}
+        {!hasSentMessage && (
+          <StarterPrompts
+            prompts={starterPrompts}
+            attachments={attachments}
+            onAttachmentsSent={handleAttachmentsSent}
+          />
+        )}
         <Composer
           plan={plan}
           remoteGenerating={remoteGenerating}
           onStopRemote={stopRemoteGenerating}
           blockedByOtherThread={blockingThreadId !== null}
           workDirEditable={!hasSentMessage}
+          attachments={attachments}
+          onAttach={handleAttach}
+          onRemoveAttachment={handleRemoveAttachment}
+          onAttachmentsSent={handleAttachmentsSent}
         />
       </div>
       <SidePanel sideSteps={displaySideSteps} tokenUsage={tokenUsage} workDir={workDir} plan={plan} />
