@@ -64,7 +64,13 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.errors import GraphRecursionError
 
 from src.agent_types import render_agent_types_block, scan_agent_types
-from src.chat_log import append_turn, build_log_path, resolve_log_username
+from src.chat_log import (
+    append_resume_marker,
+    append_turn,
+    build_log_path,
+    find_existing_log_path,
+    resolve_log_username,
+)
 from src.cleanup import cleanup_old_dirs, cleanup_old_files, cleanup_old_files_in_subdirs
 from src.cleanup import run_cleanup_dirs_loop as cleanup_run_cleanup_dirs_loop
 from src.cleanup import run_cleanup_files_in_subdirs_loop as cleanup_run_cleanup_files_in_subdirs_loop
@@ -2070,9 +2076,14 @@ if _config.thread_store_enabled:
         if _config.chat_log_enabled:
             user = cl.user_session.get("user")
             username = resolve_log_username(user.identifier if user else None)
-            # 再開のたびに新しい日時サフィックスのファイルにする（既存ファイルへの
-            # 追記継続だと「いつ再開したか」が分からなくなるため）。
-            cl.user_session.set("chat_log_path", build_log_path(_config.chat_log_dir, username, thread_id))
+            # 同じ thread_id の既存ログファイルがあれば追記継続する（無ければ
+            # 新規作成）。ファイルが分割されないよう、再開したことは「いつ再開
+            # したか」が分かる区切り行として同じファイル内に残す。
+            existing_log_path = find_existing_log_path(_config.chat_log_dir, username, thread_id)
+            log_path = existing_log_path or build_log_path(_config.chat_log_dir, username, thread_id)
+            cl.user_session.set("chat_log_path", log_path)
+            if existing_log_path is not None:
+                append_resume_marker(log_path)
 
         # wait_when_busy=False: スレッド再開は直後に生成するとは限らないため、
         # 他タブが唯一の接続先を使用中でも待たない（_rebuild_graph docstring参照。

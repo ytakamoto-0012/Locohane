@@ -60,6 +60,39 @@ def build_log_path(chat_log_dir: Path, username: str, thread_id: str) -> Path:
     return chat_log_dir / username / f"{date_str}_{thread_id}.log"
 
 
+def find_existing_log_path(chat_log_dir: Path, username: str, thread_id: str) -> Path | None:
+    """同じ thread_id で過去に作成済みのログファイルを探す（スレッド再開用）。
+
+    ファイル名は build_log_path() が付ける日時プレフィックスを含むため、
+    thread_id だけでは決め打ちできず glob で検索する必要がある。
+
+    Args:
+        chat_log_dir: 会話ログの保存先ルートディレクトリ（config.ini の
+            [chat_log].dir）。
+        username: resolve_log_username() で解決済みのユーザー名。
+        thread_id: 再開先スレッドの thread_id。
+
+    Returns:
+        見つかった既存ログファイルの絶対パス。複数該当する場合は最新
+        （ファイル名の日時プレフィックスが最も新しいもの）。無ければ None。
+    """
+    candidates = sorted((chat_log_dir / username).glob(f"*_{thread_id}.log"))
+    return candidates[-1] if candidates else None
+
+
+def append_resume_marker(log_path: Path) -> None:
+    """スレッド再開時に「いつ再開したか」が分かる区切り行を追記する。
+
+    Args:
+        log_path: build_log_path()/find_existing_log_path() で確定した
+            ログファイルの絶対パス。
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(f"----- 再開 {timestamp} -----\n\n")
+
+
 def append_turn(
     log_path: Path,
     user_text: str,
