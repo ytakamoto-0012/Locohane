@@ -2113,10 +2113,31 @@ if _config.thread_store_enabled:
             # サーバーログには成功と出るのにサイドパネルの表示だけ古いまま
             # 固着する。create_plan と同じ内容で新しいメッセージとして
             # 再送信し、plan_message を有効な参照に戻す。
+            #
+            # on_chat_resume 自体が頻発しうるため、送信のたびに新規step
+            # （＝新規DB行）として積み上げると steps テーブルが際限なく
+            # 肥大化する（2026-09-04 レビュー指摘）。前回このハンドラで
+            # 送信した plan_message_id が metadata にあれば、新規メッセージを
+            # 送る前にそのstepをDBから削除してから送り直すことで、DB上には
+            # 常に最新の1件だけが残るようにする（resume_thread 再生用の
+            # steps一覧は on_chat_resume 呼び出し前に確定済みのスナップ
+            # ショットのため、今回の画面には一瞬だけ古い表示が残りうるが、
+            # 次回以降のresumeには影響しない）。
+            old_message_id = meta.get("plan_message_id")
+            if old_message_id:
+                try:
+                    await cl.Message(id=old_message_id, content="").remove()
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "旧plan_messageの削除に失敗しました thread_id=%s message_id=%s",
+                        thread_id,
+                        old_message_id,
+                    )
             finished = all(s["status"] == "completed" for s in plan)
             plan_message = cl.Message(content=_render_plan_payload(plan, finished=finished, approved=plan_approved))
             await plan_message.send()
             cl.user_session.set("plan_message", plan_message)
+            await _persist_plan_state()
         else:
             cl.user_session.set("plan_message", None)
         cl.user_session.set("token_usage_cumulative", meta.get("token_usage_cumulative") or _new_usage_totals())
@@ -2282,18 +2303,25 @@ async def _persist_plan_state() -> None:
     再開時に古い（未承認の）metadataへ巻き戻ってしまう
     （2026-08-24 ユーザー報告）。ここで即座に保存することで、ターンの
     成否に関わらず状態を一致させる。
+
+    plan_message_id も併せて保存する。on_chat_resume がこの id を使い、
+    plan_message を再送信ではなく既存stepの更新（remove→送信し直しても
+    ID一致でDB上は上書き）に振り替えて steps テーブルへの重複蓄積を防ぐ
+    （on_chat_resume docstring参照、2026-09-04 レビュー指摘）。
     """
     if not (_config.thread_store_enabled and _thread_store_conn is not None):
         return
     thread_id = cl.user_session.get("thread_id")
     if thread_id is None:
         return
+    plan_message: cl.Message | None = cl.user_session.get("plan_message")
     await thread_store.save_thread(
         _thread_store_conn,
         thread_id,
         metadata={
             "plan": cl.user_session.get("plan"),
             "plan_approved": cl.user_session.get("plan_approved"),
+            "plan_message_id": plan_message.id if plan_message is not None else None,
         },
     )
 

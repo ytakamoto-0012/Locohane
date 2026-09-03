@@ -21,18 +21,46 @@ background_llm_timeout_max_retries を設定していても実際には一度も
 import httpx
 import openai
 import pytest
+from dataclasses import dataclass
 from langchain_core.messages import AIMessage
 
 from src import subagent
 
 
+@dataclass
 class _FakeConfig:
-    thinking_loop_guard_max_retries = 0
-    subagent_empty_response_max_retries = 0
-    subagent_token_guard_enabled = False
-    track_token_usage = False
-    context_trim_enabled = False
-    context_compaction_enabled = False
+    """run_subagent が実際に参照するのは context_trim_subagent_*/
+    context_compaction_subagent_* 側（[context_trim.subagent]/
+    [context_compaction.subagent] 導入後の src/subagent.py の実装。config.py
+    docstring参照）。run_subagent 内の _subagent_compaction_config が
+    dataclasses.replace() を使うため dataclass にする必要があり、かつ
+    replace() の changes には main側 context_compaction_* のフィールド名が
+    そのまま使われるため main側フィールドも定義しておく必要がある。
+    """
+
+    thinking_loop_guard_max_retries: int = 0
+    subagent_empty_response_max_retries: int = 0
+    subagent_token_guard_enabled: bool = False
+    track_token_usage: bool = False
+    context_trim_subagent_enabled: bool = False
+    context_compaction_enabled: bool = False
+    context_compaction_token_threshold: int = 0
+    context_compaction_single_request_token_threshold: int = 0
+    context_compaction_keep_recent_turns: int = 0
+    context_compaction_min_messages_to_compact: int = 0
+    context_compaction_prompt_path: str | None = None
+    context_compaction_summary_source_max_chars: int = 0
+    context_compaction_pre_note_threshold: int = 0
+    context_compaction_pre_note_warning_text: str = ""
+    context_compaction_subagent_enabled: bool = False
+    context_compaction_subagent_token_threshold: int = 0
+    context_compaction_subagent_single_request_token_threshold: int = 0
+    context_compaction_subagent_keep_recent_turns: int = 0
+    context_compaction_subagent_min_messages_to_compact: int = 0
+    context_compaction_subagent_prompt_path: str | None = None
+    context_compaction_subagent_summary_source_max_chars: int = 0
+    context_compaction_subagent_pre_note_threshold: int = 0
+    context_compaction_subagent_pre_note_warning_text: str = ""
 
 
 def _default_exc() -> Exception:

@@ -6,6 +6,7 @@ Claude Codeがメイン会話・サブエージェントでコンテキスト管
 """
 
 import pytest
+from dataclasses import dataclass
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 
@@ -13,19 +14,49 @@ from src import subagent
 from src.subagent import _build_llm_input
 
 
+@dataclass
 class _FakeConfig:
-    thinking_loop_guard_max_retries = 0
-    subagent_empty_response_max_retries = 0
-    subagent_token_guard_enabled = False
-    track_token_usage = False
-    context_trim_enabled = True
-    context_trim_keep_recent_tool_messages = 1
-    context_trim_truncated_max_chars = 20
-    context_trim_duplicate_guard_tool_max_chars = 20
-    context_trim_ai_messages = False
-    context_trim_keep_recent_ai_messages = 1
-    context_trim_trigger_total_tokens = 0
-    context_compaction_enabled = False
+    """_build_llm_input/run_subagent が実際に参照するのは context_trim_subagent_*/
+    context_compaction_subagent_* 側（[context_trim.subagent]/
+    [context_compaction.subagent] 導入後の src/subagent.py の実装。config.py
+    docstring参照）。run_subagent 内の _subagent_compaction_config が
+    dataclasses.replace() を使うため、このフェイクも dataclass にする必要があり
+    （通常クラスだと "replace() should be called on dataclass instances" で
+    落ちる）、かつ replace() の changes には main側 context_compaction_* の
+    フィールド名がそのまま使われるため main側フィールドも定義しておく必要がある
+    （_subagent_compaction_config は「context_compaction_* を subagent_* の
+    値で置き換えたビュー」を作る実装のため）。
+    """
+
+    thinking_loop_guard_max_retries: int = 0
+    subagent_empty_response_max_retries: int = 0
+    subagent_token_guard_enabled: bool = False
+    track_token_usage: bool = False
+    context_trim_subagent_enabled: bool = True
+    context_trim_subagent_keep_recent_tool_messages: int = 1
+    context_trim_subagent_truncated_max_chars: int = 20
+    context_trim_subagent_duplicate_guard_tool_max_chars: int = 20
+    context_trim_subagent_ai_messages: bool = False
+    context_trim_subagent_keep_recent_ai_messages: int = 1
+    context_trim_subagent_trigger_total_tokens: int = 0
+    context_compaction_enabled: bool = False
+    context_compaction_token_threshold: int = 0
+    context_compaction_single_request_token_threshold: int = 0
+    context_compaction_keep_recent_turns: int = 0
+    context_compaction_min_messages_to_compact: int = 0
+    context_compaction_prompt_path: str | None = None
+    context_compaction_summary_source_max_chars: int = 0
+    context_compaction_pre_note_threshold: int = 0
+    context_compaction_pre_note_warning_text: str = ""
+    context_compaction_subagent_enabled: bool = False
+    context_compaction_subagent_token_threshold: int = 0
+    context_compaction_subagent_single_request_token_threshold: int = 0
+    context_compaction_subagent_keep_recent_turns: int = 0
+    context_compaction_subagent_min_messages_to_compact: int = 0
+    context_compaction_subagent_prompt_path: str | None = None
+    context_compaction_subagent_summary_source_max_chars: int = 0
+    context_compaction_subagent_pre_note_threshold: int = 0
+    context_compaction_subagent_pre_note_warning_text: str = ""
 
 
 def test_build_llm_input_trims_old_tool_messages_without_mutating_original() -> None:
@@ -54,7 +85,7 @@ def test_build_llm_input_trims_old_tool_messages_without_mutating_original() -> 
 
 def test_build_llm_input_noop_when_disabled() -> None:
     config = _FakeConfig()
-    config.context_trim_enabled = False
+    config.context_trim_subagent_enabled = False
     messages = [SystemMessage(content="sp"), HumanMessage(content="task")]
 
     assert _build_llm_input(messages, config) is messages
@@ -92,8 +123,8 @@ async def test_compaction_excludes_leading_system_message(monkeypatch) -> None:
     システムプロンプトを失う（本テストが検知したい退行）。
     """
     config = _FakeConfig()
-    config.context_trim_enabled = False
-    config.context_compaction_enabled = True
+    config.context_trim_subagent_enabled = False
+    config.context_compaction_subagent_enabled = True
     config.track_token_usage = True
 
     fake_model = _ToolCallThenFinalModel()

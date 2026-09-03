@@ -99,10 +99,12 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     cl.user_session.set("plan", plan)
     cl.user_session.set("plan_approved", still_approved)
     cl.user_session.set("awaiting_approve_plan_call", not still_approved)
-    await persist_plan_state()
     message = cl.Message(content=_render_plan_payload(plan, approved=still_approved))
     await message.send()
     cl.user_session.set("plan_message", message)
+    # persist_plan_state() は plan_message_id も一緒に保存するため、送信して
+    # id が確定した後に呼ぶ（app.py _persist_plan_state docstring参照）。
+    await persist_plan_state()
     logger.info(
         "create_plan: %d steps, detail_markdown=%d chars, still_approved=%s",
         len(steps),

@@ -1051,6 +1051,29 @@ def _as_bool(value: bool | str) -> bool:
     return str(value).strip().lower() not in ("0", "false", "no")
 
 
+def _subagent_override(section, key: str, main_value, converter=lambda v: v):
+    """[xxx.subagent] セクションの継承フォールバックを1箇所に共通化する。
+
+    section にキーの記載があれば converter を通した値を、無ければ
+    main_value（環境変数解決済みの [xxx] 側の実効値）をそのまま返す。
+    config.ini の生値へ直接フォールバックすると環境変数オーバーライドが
+    サブエージェント側にだけ反映されなくなるため、必ず呼び出し元で
+    環境変数解決済みの値を main_value として渡すこと
+    （context_trim_subagent_*/context_compaction_subagent_* 参照）。
+
+    Args:
+        section: config.ini の [xxx.subagent] セクション（SectionProxy/dict）。
+        key: セクション内のキー名。
+        main_value: 対応する [xxx] 側の実効値（環境変数解決済み）。
+        converter: section から得た生の文字列値を変換する関数（既定は恒等）。
+
+    Returns:
+        section にキーがあれば converter(生値)、無ければ main_value。
+    """
+    raw = section.get(key)
+    return converter(raw) if raw is not None else main_value
+
+
 def _as_optional_float(value: float | str | None) -> float | None:
     """config.ini の空欄、または環境変数の空文字列を None（未指定）として扱う。
 
@@ -1880,6 +1903,74 @@ def load_config(config_path: Path | None = None) -> Config:
     context_compaction_subagent = (
         parser["context_compaction.subagent"] if parser.has_section("context_compaction.subagent") else {}
     )
+
+    # [xxx.subagent] 側の継承フォールバック（_subagent_override() 参照）に
+    # 環境変数オーバーライドを反映させるため、[xxx] 側の実効値を先に計算する。
+    # ここで config.ini の生値（context_trim.get(...) 等）へ直接フォールバック
+    # すると、CONTEXT_TRIM_*/CONTEXT_COMPACTION_* 環境変数がサブエージェント側
+    # にだけ反映されなくなる。
+    _context_trim_enabled = _as_bool(os.getenv("CONTEXT_TRIM_ENABLED", context_trim.get("enabled", True)))
+    _context_trim_keep_recent_tool_messages = int(
+        os.getenv("CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES", context_trim.get("keep_recent_tool_messages", 5))
+    )
+    _context_trim_truncated_max_chars = int(
+        os.getenv("CONTEXT_TRIM_TRUNCATED_MAX_CHARS", context_trim.get("truncated_max_chars", 2000))
+    )
+    _context_trim_duplicate_guard_tool_max_chars = int(
+        os.getenv(
+            "CONTEXT_TRIM_DUPLICATE_GUARD_TOOL_MAX_CHARS",
+            context_trim.get("duplicate_guard_tool_max_chars", 2000),
+        )
+    )
+    _context_trim_ai_messages = _as_bool(os.getenv("CONTEXT_TRIM_AI_MESSAGES", context_trim.get("trim_ai_messages", True)))
+    _context_trim_keep_recent_ai_messages = int(
+        os.getenv("CONTEXT_TRIM_KEEP_RECENT_AI_MESSAGES", context_trim.get("keep_recent_ai_messages", 3))
+    )
+    _context_trim_trigger_total_tokens = int(
+        os.getenv("CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS", context_trim.get("trigger_total_tokens", 100_000))
+    )
+    _context_compaction_enabled = _as_bool(
+        os.getenv("CONTEXT_COMPACTION_ENABLED", context_compaction.get("enabled", True))
+    )
+    _context_compaction_token_threshold = int(
+        os.getenv("CONTEXT_COMPACTION_TOKEN_THRESHOLD", context_compaction.get("token_threshold", 60000))
+    )
+    _context_compaction_single_request_token_threshold = int(
+        os.getenv(
+            "CONTEXT_COMPACTION_SINGLE_REQUEST_TOKEN_THRESHOLD",
+            context_compaction.get("single_request_token_threshold", 60000),
+        )
+    )
+    _context_compaction_keep_recent_turns = int(
+        os.getenv("CONTEXT_COMPACTION_KEEP_RECENT_TURNS", context_compaction.get("keep_recent_turns", 2))
+    )
+    _context_compaction_min_messages_to_compact = int(
+        os.getenv(
+            "CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT",
+            context_compaction.get("min_messages_to_compact", 10),
+        )
+    )
+    _context_compaction_prompt_path = _resolve(
+        PROJECT_ROOT,
+        os.getenv(
+            "CONTEXT_COMPACTION_PROMPT_PATH",
+            context_compaction.get("compaction_prompt_path", "./system_prompt/compaction_prompt.md"),
+        ),
+    )
+    _context_compaction_summary_source_max_chars = int(
+        os.getenv(
+            "CONTEXT_COMPACTION_SUMMARY_SOURCE_MAX_CHARS",
+            context_compaction.get("summary_source_max_chars", 2000),
+        )
+    )
+    _context_compaction_pre_note_threshold = int(
+        os.getenv("CONTEXT_COMPACTION_PRE_NOTE_THRESHOLD", context_compaction.get("pre_note_threshold", 40000))
+    )
+    _context_compaction_pre_note_warning_text = os.getenv(
+        "CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT",
+        context_compaction.get("pre_note_warning_text", _DEFAULT_CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT),
+    )
+
     auth = parser["auth"] if parser.has_section("auth") else {}
     mcp = parser["mcp"] if parser.has_section("mcp") else {}
     checkpointer = parser["checkpointer"] if parser.has_section("checkpointer") else {}
@@ -2311,166 +2402,84 @@ def load_config(config_path: Path | None = None) -> Config:
                 thinking_loop_guard.get("empty_response_max_retries", 2),
             )
         ),
-        context_trim_enabled=_as_bool(os.getenv("CONTEXT_TRIM_ENABLED", context_trim.get("enabled", True))),
-        context_trim_keep_recent_tool_messages=int(
-            os.getenv(
-                "CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES",
-                context_trim.get("keep_recent_tool_messages", 5),
-            )
+        context_trim_enabled=_context_trim_enabled,
+        context_trim_keep_recent_tool_messages=_context_trim_keep_recent_tool_messages,
+        context_trim_truncated_max_chars=_context_trim_truncated_max_chars,
+        context_trim_duplicate_guard_tool_max_chars=_context_trim_duplicate_guard_tool_max_chars,
+        context_trim_ai_messages=_context_trim_ai_messages,
+        context_trim_keep_recent_ai_messages=_context_trim_keep_recent_ai_messages,
+        context_trim_trigger_total_tokens=_context_trim_trigger_total_tokens,
+        context_trim_subagent_enabled=_subagent_override(
+            context_trim_subagent, "enabled", _context_trim_enabled, _as_bool
         ),
-        context_trim_truncated_max_chars=int(
-            os.getenv(
-                "CONTEXT_TRIM_TRUNCATED_MAX_CHARS",
-                context_trim.get("truncated_max_chars", 2000),
-            )
+        context_trim_subagent_keep_recent_tool_messages=_subagent_override(
+            context_trim_subagent, "keep_recent_tool_messages", _context_trim_keep_recent_tool_messages, int
         ),
-        context_trim_duplicate_guard_tool_max_chars=int(
-            os.getenv(
-                "CONTEXT_TRIM_DUPLICATE_GUARD_TOOL_MAX_CHARS",
-                context_trim.get("duplicate_guard_tool_max_chars", 2000),
-            )
+        context_trim_subagent_truncated_max_chars=_subagent_override(
+            context_trim_subagent, "truncated_max_chars", _context_trim_truncated_max_chars, int
         ),
-        context_trim_ai_messages=_as_bool(os.getenv("CONTEXT_TRIM_AI_MESSAGES", context_trim.get("trim_ai_messages", True))),
-        context_trim_keep_recent_ai_messages=int(
-            os.getenv(
-                "CONTEXT_TRIM_KEEP_RECENT_AI_MESSAGES",
-                context_trim.get("keep_recent_ai_messages", 3),
-            )
+        context_trim_subagent_duplicate_guard_tool_max_chars=_subagent_override(
+            context_trim_subagent,
+            "duplicate_guard_tool_max_chars",
+            _context_trim_duplicate_guard_tool_max_chars,
+            int,
         ),
-        context_trim_trigger_total_tokens=int(
-            os.getenv(
-                "CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS",
-                context_trim.get("trigger_total_tokens", 100_000),
-            )
+        context_trim_subagent_ai_messages=_subagent_override(
+            context_trim_subagent, "trim_ai_messages", _context_trim_ai_messages, _as_bool
         ),
-        context_trim_subagent_enabled=_as_bool(
-            context_trim_subagent.get("enabled", context_trim.get("enabled", True))
+        context_trim_subagent_keep_recent_ai_messages=_subagent_override(
+            context_trim_subagent, "keep_recent_ai_messages", _context_trim_keep_recent_ai_messages, int
         ),
-        context_trim_subagent_keep_recent_tool_messages=int(
-            context_trim_subagent.get(
-                "keep_recent_tool_messages", context_trim.get("keep_recent_tool_messages", 5)
-            )
+        context_trim_subagent_trigger_total_tokens=_subagent_override(
+            context_trim_subagent, "trigger_total_tokens", _context_trim_trigger_total_tokens, int
         ),
-        context_trim_subagent_truncated_max_chars=int(
-            context_trim_subagent.get("truncated_max_chars", context_trim.get("truncated_max_chars", 2000))
+        context_compaction_enabled=_context_compaction_enabled,
+        context_compaction_token_threshold=_context_compaction_token_threshold,
+        context_compaction_single_request_token_threshold=_context_compaction_single_request_token_threshold,
+        context_compaction_keep_recent_turns=_context_compaction_keep_recent_turns,
+        context_compaction_min_messages_to_compact=_context_compaction_min_messages_to_compact,
+        context_compaction_prompt_path=_context_compaction_prompt_path,
+        context_compaction_summary_source_max_chars=_context_compaction_summary_source_max_chars,
+        context_compaction_pre_note_threshold=_context_compaction_pre_note_threshold,
+        context_compaction_pre_note_warning_text=_context_compaction_pre_note_warning_text,
+        context_compaction_subagent_enabled=_subagent_override(
+            context_compaction_subagent, "enabled", _context_compaction_enabled, _as_bool
         ),
-        context_trim_subagent_duplicate_guard_tool_max_chars=int(
-            context_trim_subagent.get(
-                "duplicate_guard_tool_max_chars",
-                context_trim.get("duplicate_guard_tool_max_chars", 2000),
-            )
+        context_compaction_subagent_token_threshold=_subagent_override(
+            context_compaction_subagent, "token_threshold", _context_compaction_token_threshold, int
         ),
-        context_trim_subagent_ai_messages=_as_bool(
-            context_trim_subagent.get("trim_ai_messages", context_trim.get("trim_ai_messages", True))
+        context_compaction_subagent_single_request_token_threshold=_subagent_override(
+            context_compaction_subagent,
+            "single_request_token_threshold",
+            _context_compaction_single_request_token_threshold,
+            int,
         ),
-        context_trim_subagent_keep_recent_ai_messages=int(
-            context_trim_subagent.get(
-                "keep_recent_ai_messages", context_trim.get("keep_recent_ai_messages", 3)
-            )
+        context_compaction_subagent_keep_recent_turns=_subagent_override(
+            context_compaction_subagent, "keep_recent_turns", _context_compaction_keep_recent_turns, int
         ),
-        context_trim_subagent_trigger_total_tokens=int(
-            context_trim_subagent.get(
-                "trigger_total_tokens", context_trim.get("trigger_total_tokens", 100_000)
-            )
+        context_compaction_subagent_min_messages_to_compact=_subagent_override(
+            context_compaction_subagent,
+            "min_messages_to_compact",
+            _context_compaction_min_messages_to_compact,
+            int,
         ),
-        context_compaction_enabled=_as_bool(os.getenv("CONTEXT_COMPACTION_ENABLED", context_compaction.get("enabled", True))),
-        context_compaction_token_threshold=int(
-            os.getenv(
-                "CONTEXT_COMPACTION_TOKEN_THRESHOLD",
-                context_compaction.get("token_threshold", 60000),
-            )
+        context_compaction_subagent_prompt_path=_subagent_override(
+            context_compaction_subagent,
+            "compaction_prompt_path",
+            _context_compaction_prompt_path,
+            lambda v: _resolve(PROJECT_ROOT, v),
         ),
-        context_compaction_single_request_token_threshold=int(
-            os.getenv(
-                "CONTEXT_COMPACTION_SINGLE_REQUEST_TOKEN_THRESHOLD",
-                context_compaction.get("single_request_token_threshold", 60000),
-            )
+        context_compaction_subagent_summary_source_max_chars=_subagent_override(
+            context_compaction_subagent,
+            "summary_source_max_chars",
+            _context_compaction_summary_source_max_chars,
+            int,
         ),
-        context_compaction_keep_recent_turns=int(
-            os.getenv(
-                "CONTEXT_COMPACTION_KEEP_RECENT_TURNS",
-                context_compaction.get("keep_recent_turns", 2),
-            )
+        context_compaction_subagent_pre_note_threshold=_subagent_override(
+            context_compaction_subagent, "pre_note_threshold", _context_compaction_pre_note_threshold, int
         ),
-        context_compaction_min_messages_to_compact=int(
-            os.getenv(
-                "CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT",
-                context_compaction.get("min_messages_to_compact", 10),
-            )
-        ),
-        context_compaction_prompt_path=_resolve(
-            PROJECT_ROOT,
-            os.getenv(
-                "CONTEXT_COMPACTION_PROMPT_PATH",
-                context_compaction.get("compaction_prompt_path", "./system_prompt/compaction_prompt.md"),
-            ),
-        ),
-        context_compaction_summary_source_max_chars=int(
-            os.getenv(
-                "CONTEXT_COMPACTION_SUMMARY_SOURCE_MAX_CHARS",
-                context_compaction.get("summary_source_max_chars", 2000),
-            )
-        ),
-        context_compaction_pre_note_threshold=int(
-            os.getenv(
-                "CONTEXT_COMPACTION_PRE_NOTE_THRESHOLD",
-                context_compaction.get("pre_note_threshold", 40000),
-            )
-        ),
-        context_compaction_pre_note_warning_text=os.getenv(
-            "CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT",
-            context_compaction.get(
-                "pre_note_warning_text",
-                _DEFAULT_CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT,
-            ),
-        ),
-        context_compaction_subagent_enabled=_as_bool(
-            context_compaction_subagent.get("enabled", context_compaction.get("enabled", True))
-        ),
-        context_compaction_subagent_token_threshold=int(
-            context_compaction_subagent.get(
-                "token_threshold", context_compaction.get("token_threshold", 60000)
-            )
-        ),
-        context_compaction_subagent_single_request_token_threshold=int(
-            context_compaction_subagent.get(
-                "single_request_token_threshold",
-                context_compaction.get("single_request_token_threshold", 60000),
-            )
-        ),
-        context_compaction_subagent_keep_recent_turns=int(
-            context_compaction_subagent.get(
-                "keep_recent_turns", context_compaction.get("keep_recent_turns", 2)
-            )
-        ),
-        context_compaction_subagent_min_messages_to_compact=int(
-            context_compaction_subagent.get(
-                "min_messages_to_compact", context_compaction.get("min_messages_to_compact", 10)
-            )
-        ),
-        context_compaction_subagent_prompt_path=_resolve(
-            PROJECT_ROOT,
-            context_compaction_subagent.get(
-                "compaction_prompt_path",
-                context_compaction.get("compaction_prompt_path", "./system_prompt/compaction_prompt.md"),
-            ),
-        ),
-        context_compaction_subagent_summary_source_max_chars=int(
-            context_compaction_subagent.get(
-                "summary_source_max_chars", context_compaction.get("summary_source_max_chars", 2000)
-            )
-        ),
-        context_compaction_subagent_pre_note_threshold=int(
-            context_compaction_subagent.get(
-                "pre_note_threshold", context_compaction.get("pre_note_threshold", 40000)
-            )
-        ),
-        context_compaction_subagent_pre_note_warning_text=context_compaction_subagent.get(
-            "pre_note_warning_text",
-            context_compaction.get(
-                "pre_note_warning_text",
-                _DEFAULT_CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT,
-            ),
+        context_compaction_subagent_pre_note_warning_text=_subagent_override(
+            context_compaction_subagent, "pre_note_warning_text", _context_compaction_pre_note_warning_text
         ),
         auth_enabled=_as_bool(os.getenv("AUTH_ENABLED", auth.get("enabled", False))),
         auth_require_password=_as_bool(os.getenv("AUTH_REQUIRE_PASSWORD", auth.get("require_password", True))),
