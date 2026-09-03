@@ -88,6 +88,7 @@ from src.llm import (
     build_model,
     describe_current_task,
     forget_session,
+    get_current_session,
     init_llm_concurrency,
     mark_last_endpoint_failed,
     pick_loop_nudge_message,
@@ -1429,6 +1430,23 @@ def _register_socket_lifecycle_logging() -> None:
     logger.info("WebSocket接続/切断のライフサイクルログ記録を有効化しました。")
 
 
+class _ThreadIdLogFilter(logging.Filter):
+    """全ログレコードへ会話の thread_id を付与する logging.Filter。
+
+    set_current_session()（@cl.on_message/@cl.on_chat_start 冒頭等で呼ばれる）が
+    contextvars 経由で設定した値を読むだけなので、src/ 配下の各所にある
+    既存の logging 呼び出しを一切変更せずに、全ログ行へ thread_id を
+    反映できる。dispatch_agent のサブエージェントも同じ contextvars を
+    引き継ぐ子タスクとして動くため、そのログにも同じ thread_id が付く。
+    未設定（起動時ログ・evals/ハーネス等 Chainlit セッションを持たない
+    呼び出し元）の場合は "-" にする。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.thread_id = get_current_session() or "-"
+        return True
+
+
 async def _setup() -> None:
     """スキル走査・ツール初期化など、全セッション共有資源の構築を一度だけ行う（冪等）。
 
@@ -1498,13 +1516,16 @@ async def _setup() -> None:
     else:
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.DEBUG if log_level == "debug" else logging.INFO)
-        formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        # thread_id を asctime の直後（できるだけ行の前側）に置き、
+        # どの会話スレッドのログかを grep 等で追いやすくする（_ThreadIdLogFilter参照）。
+        formatter = logging.Formatter("%(asctime)s [thread=%(thread_id)s] %(levelname)s %(name)s: %(message)s")
         file_handler = LineCountRotatingFileHandler(
             _config.log_dir,
             _config.log_max_lines,
             clear_on_startup=_config.log_clear_on_startup,
         )
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(_ThreadIdLogFilter())
         # chainlit run が basicConfig() で仕込んだコンソール用ハンドラを全て除去。
         # root logger が DEBUG レベルのとき、openai/httpx/httpcore/aiosqlite などの
         # サードパーティ製ロガーが DEBUG ログ（HTTP リクエスト/レスポンス本文を含む）
@@ -3010,6 +3031,11 @@ async def _on_message_impl(message: cl.Message) -> None:
     upload_user_obj = cl.user_session.get("user")
     upload_username = resolve_log_username(upload_user_obj.identifier if upload_user_obj else None)
     saved = _save_uploads(message, upload_username)
+    logging.getLogger(__name__).info(
+        "ユーザー送信メッセージ: user=%s content=%r",
+        upload_username,
+        message.content,
+    )
     processed_text = register_raw_unc_paths_in_text(message.content)
     # スレッド開始時・作業ディレクトリ変更時（on_chat_start/_apply_work_dir が
     # 立てるフラグ）のみ、実際の絶対パスをLLMへ知らせる（詳細は
