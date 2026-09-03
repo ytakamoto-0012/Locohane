@@ -105,7 +105,7 @@ from src.log_rotation import LineCountRotatingFileHandler
 from src.mcp_client import init_mcp_tools, shutdown_mcp_tools
 from src.memory import render_memory_block
 from src.ask_relay import pending_asks as _pending_asks, resolve_pending_ask
-from src.plan_persist import register_plan_persist
+from src.plan_persist import plan_message_id, register_plan_persist
 from src.project_instructions import render_project_instructions_block
 from src.skills import (
     build_system_prompt_from_block,
@@ -2111,33 +2111,63 @@ if _config.thread_store_enabled:
             # update_task_progress が呼ばれ続けると、ステップの状態自体は
             # 更新されるのに message.update() がガードでスキップされ続け、
             # サーバーログには成功と出るのにサイドパネルの表示だけ古いまま
-            # 固着する。create_plan と同じ内容で新しいメッセージとして
-            # 再送信し、plan_message を有効な参照に戻す。
+            # 固着する。
             #
-            # on_chat_resume 自体が頻発しうるため、送信のたびに新規step
-            # （＝新規DB行）として積み上げると steps テーブルが際限なく
-            # 肥大化する（2026-09-04 レビュー指摘）。前回このハンドラで
-            # 送信した plan_message_id が metadata にあれば、新規メッセージを
-            # 送る前にそのstepをDBから削除してから送り直すことで、DB上には
-            # 常に最新の1件だけが残るようにする（resume_thread 再生用の
-            # steps一覧は on_chat_resume 呼び出し前に確定済みのスナップ
-            # ショットのため、今回の画面には一瞬だけ古い表示が残りうるが、
-            # 次回以降のresumeには影響しない）。
-            old_message_id = meta.get("plan_message_id")
-            if old_message_id:
-                try:
-                    await cl.Message(id=old_message_id, content="").remove()
-                except Exception:
-                    logging.getLogger(__name__).exception(
-                        "旧plan_messageの削除に失敗しました thread_id=%s message_id=%s",
-                        thread_id,
-                        old_message_id,
-                    )
+            # ここでは send()/update() で新規にDBへ書き込まない（2026-09-04
+            # レビュー指摘で判明: chainlit/socket.py の connection_successful は
+            # on_chat_resume 完了後に thread（on_chat_resume 呼び出し*前*に
+            # 確定したDBスナップショット）で emitter.resume_thread() を呼び、
+            # フロント側の resume_thread ハンドラは新しい配列をそのスナップ
+            # ショットだけから作って messagesState を丸ごと置き換える
+            # （@chainlit/react-client dist/index.js 参照）。そのため
+            # on_chat_resume内で新規送信しても直後の resume_thread イベントで
+            # 上書きされ消える上、送信のたびに新規step（＝新規DB行）が
+            # steps テーブルに積み上がる副作用だけが残る）。
+            #
+            # create_plan/update_task_progress が既に plan_message_id()
+            # （thread_idから決定的に導出したid、src/plan_persist.py参照）を
+            # 使って書き込み済みのstep行を、resume_thread イベントがそのまま
+            # 正しい最新内容で再生してくれるため、ここでは同じidを持つ
+            # cl.Message インスタンスをローカル参照として作るだけでよい
+            # （send()しない）。これで以降の update_task_progress の
+            # message.update() が正しく効くようになる。
+            #
+            # 後方互換: この決定的id方式の導入（2026-09-04）より前に作成された
+            # スレッドは、metadata["plan_message_id"]にランダムUUIDが残って
+            # いることがある。新方式のidだけでローカル参照を作ると、DBに
+            # 実在するのは旧id側のstepのため、以降の message.update() が
+            # 旧idの行を見つけられず反映されない（フロントの
+            # updateMessageById はid不一致だとno-op）ので、旧idがあれば
+            # そのまま使い続ける。削除して新方式のidへ即座に移行しようとすると、
+            # このセッション内で一度も update_task_progress/create_plan が
+            # 呼ばれずに終わった場合、新idの行が一度も書き込まれずDB上に
+            # PlanCardのstepが1件も残らなくなる退行がありうるため採用しなかった
+            # （2026-09-04 レビュー指摘）。次に create_plan が呼ばれれば新方式の
+            # idに一本化される（旧idの行は孤立するが1件限りで、以後増え続ける
+            # ことはない）。
+            legacy_message_id = meta.get("plan_message_id")
+            resolved_message_id = (
+                legacy_message_id
+                if isinstance(legacy_message_id, str) and legacy_message_id
+                else plan_message_id(thread_id)
+            )
+            # created_at はDBの既存step（あれば）から引き継ぐ。指定しないと
+            # cl.Message の created_at は None のままとなり、後続の
+            # message.update() が upsert_step_row の created_at をNoneの
+            # フォールバック（_now()）で現在時刻に書き換えてしまい、
+            # get_thread_detail の ORDER BY created_at によるsteps再生順序が
+            # 狂う（2026-09-04 レビュー指摘）。
+            existing_step = next(
+                (s for s in thread.get("steps", []) if s.get("id") == resolved_message_id),
+                None,
+            )
             finished = all(s["status"] == "completed" for s in plan)
-            plan_message = cl.Message(content=_render_plan_payload(plan, finished=finished, approved=plan_approved))
-            await plan_message.send()
+            plan_message = cl.Message(
+                id=resolved_message_id,
+                created_at=(existing_step or {}).get("createdAt"),
+                content=_render_plan_payload(plan, finished=finished, approved=plan_approved),
+            )
             cl.user_session.set("plan_message", plan_message)
-            await _persist_plan_state()
         else:
             cl.user_session.set("plan_message", None)
         cl.user_session.set("token_usage_cumulative", meta.get("token_usage_cumulative") or _new_usage_totals())
@@ -2303,25 +2333,18 @@ async def _persist_plan_state() -> None:
     再開時に古い（未承認の）metadataへ巻き戻ってしまう
     （2026-08-24 ユーザー報告）。ここで即座に保存することで、ターンの
     成否に関わらず状態を一致させる。
-
-    plan_message_id も併せて保存する。on_chat_resume がこの id を使い、
-    plan_message を再送信ではなく既存stepの更新（remove→送信し直しても
-    ID一致でDB上は上書き）に振り替えて steps テーブルへの重複蓄積を防ぐ
-    （on_chat_resume docstring参照、2026-09-04 レビュー指摘）。
     """
     if not (_config.thread_store_enabled and _thread_store_conn is not None):
         return
     thread_id = cl.user_session.get("thread_id")
     if thread_id is None:
         return
-    plan_message: cl.Message | None = cl.user_session.get("plan_message")
     await thread_store.save_thread(
         _thread_store_conn,
         thread_id,
         metadata={
             "plan": cl.user_session.get("plan"),
             "plan_approved": cl.user_session.get("plan_approved"),
-            "plan_message_id": plan_message.id if plan_message is not None else None,
         },
     )
 

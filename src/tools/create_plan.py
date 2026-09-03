@@ -6,7 +6,7 @@ from langchain_core.tools import tool
 import chainlit as cl
 import logging
 
-from ..plan_persist import persist_plan_state
+from ..plan_persist import persist_plan_state, plan_message_id
 
 from . import _state
 from ._plan_render import _render_plan_payload, _write_plan_detail
@@ -99,12 +99,19 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     cl.user_session.set("plan", plan)
     cl.user_session.set("plan_approved", still_approved)
     cl.user_session.set("awaiting_approve_plan_call", not still_approved)
-    message = cl.Message(content=_render_plan_payload(plan, approved=still_approved))
+    # send() 失敗（通信エラー等）でも plan/plan_approved の永続化自体は
+    # 効かせるため、send() より前に呼ぶ（src/plan_persist.py docstring、
+    # 2026-08-24 ユーザー報告参照）。
+    await persist_plan_state()
+    # id は thread_id から決定的に導出する（app.py の on_chat_resume と
+    # 同じ id を使うことで steps テーブルへの永続化がUPSERTとして働き、
+    # 重複行が残らない。src/plan_persist.py plan_message_id docstring参照）。
+    message = cl.Message(
+        id=plan_message_id(cl.user_session.get("thread_id") or "_no_session"),
+        content=_render_plan_payload(plan, approved=still_approved),
+    )
     await message.send()
     cl.user_session.set("plan_message", message)
-    # persist_plan_state() は plan_message_id も一緒に保存するため、送信して
-    # id が確定した後に呼ぶ（app.py _persist_plan_state docstring参照）。
-    await persist_plan_state()
     logger.info(
         "create_plan: %d steps, detail_markdown=%d chars, still_approved=%s",
         len(steps),

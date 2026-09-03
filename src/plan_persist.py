@@ -21,9 +21,26 @@ update_task_progress/lock_plan_mode/toggle_plan_mode_from_ui）が、
 
 from __future__ import annotations
 
+import uuid
 from typing import Awaitable, Callable
 
 _persist_fn: Callable[[], Awaitable[None]] | None = None
+
+_PLAN_MESSAGE_ID_NAMESPACE = uuid.UUID("d9f4b6a0-3b8b-4f0e-9c3a-6e7c9f2a1b4d")
+
+
+def plan_message_id(thread_id: str) -> str:
+    """PlanCard用 cl.Message の id を thread_id から決定的に導出する。
+
+    create_plan（新規送信）と app.py の on_chat_resume（再送信）が同じ
+    thread_id に対して常に同じ id を使うことで、steps テーブルへの永続化が
+    id をキーにした UPSERT（ON CONFLICT(id) DO UPDATE、src/thread_store.py
+    upsert_step_row 参照）となり、常に1行に収束する。ランダムUUIDを都度
+    発行してmetadataへ"最後に送った1件のid"を保存する方式だと、複数タブが
+    同時に on_chat_resume した場合に片方の書き込みがもう片方を上書きし、
+    孤立したstep行が残ってしまう（2026-09-04 レビュー指摘）。
+    """
+    return str(uuid.uuid5(_PLAN_MESSAGE_ID_NAMESPACE, thread_id))
 
 
 def register_plan_persist(fn: Callable[[], Awaitable[None]] | None) -> None:
