@@ -96,7 +96,7 @@ Locohaneは既にChainlit内でFastAPIを部分的に使っているため、将
 ```
 mcp_server/
   __init__.py     # 空（パッケージ化のみ）
-  config.py        # 設定値の集約（SKILLS_SRC/WORKDIR/タイムアウト秒数/除外ファイル名）
+  config.py        # 設定値の集約（SKILLS_SRC/WORKDIR/タイムアウト秒数/SCRIPT_PYTHON/除外ファイル名）
   publish.py        # Resources配布用の一時コピー作成（build_publish_dir）
   skill_tools.py     # Tools方式の3ツール本体（list_skills/read_skill/run_skill_script）
   server.py          # エントリーポイント（FastMCPインスタンス生成、Resources/Tools登録）
@@ -110,6 +110,7 @@ mcp_server/
 | `LOCOHANE_MCP_SKILLS_SRC` | 対象とする `skills/` ディレクトリ（`os.pathsep`区切りで複数指定可、同名スキルは先頭優先） | プロジェクト直下 `skills/` の1つのみ |
 | `LOCOHANE_MCP_SKILLS_WORKDIR` | `run_skill_script` のサブプロセス cwd | 未設定（MCPサーバー自身の起動時cwdを継承） |
 | `LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS` | `run_skill_script` のタイムアウト秒数 | 300 |
+| `LOCOHANE_MCP_SKILLS_PYTHON` | `run_skill_script` がスクリプト起動に使うPython実行ファイル | 未設定（`sys.executable`、このMCPサーバー自身のPython） |
 | `LOCOHANE_MCP_SKILLS_NAME` | MCPサーバー自体の名前（FastMCPインスタンス名） | `locohane-skills` |
 
 ### 3-1. 依存追加
@@ -192,7 +193,15 @@ cwdに関係なく書き出せる。Claude Desktop等cwdが不定なクライア
 
 タイムアウトは同ファイルの `SCRIPT_TIMEOUT_SECONDS`（既定300秒、Locohane本体の
 `config.ini` `[scripts].timeout` と同値）。環境変数
-`LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS`（整数）で上書きできる。Locohane本体にある書き込み
+`LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS`（整数）で上書きできる。
+
+スクリプトを起動するPython実行ファイルは既定で`sys.executable`
+（このMCPサーバー自身を起動しているPython）だが、Locohane本体の
+`config.ini` `[scripts].python`（スキルが前提とする依存関係の入った
+仮想環境）と一致しない起動経路（Claude Desktop等、MCPクライアントの
+設定にある`command`が`env_local_agent_system`以外のPythonを指す場合）も
+あるため、環境変数`LOCOHANE_MCP_SKILLS_PYTHON`で明示的に上書きできる
+（`mcp_server/config.py`の`SCRIPT_PYTHON`）。Locohane本体にある書き込み
 サンドボックスガードや`create_plan`/`approve_plan`の承認フロー（Chainlitの
 マルチユーザー運用が前提）はここには無い。MCP接続元（Claude Code等）は
 既にこのマシン上でファイルシステムへフルアクセスできる前提のため、追加の
@@ -388,7 +397,7 @@ CLI版のlocalスコープ登録だけで済ませず、上記の方法1・方�
 
 #### 環境変数の設定（`.mcp.json`の`env`フィールド）
 
-3節の表で挙げた`config.py`の3つの環境変数は、`.mcp.json`（project scope）の
+3節の表で挙げた`config.py`の5つの環境変数は、`.mcp.json`（project scope）の
 `mcpServers.locohane-skills.env`フィールドに直接書ける。`command`/`args`と
 同じ階層に`env`オブジェクトを追加するだけで、サブプロセス起動時の環境変数
 として渡される。
@@ -404,6 +413,7 @@ CLI版のlocalスコープ登録だけで済ませず、上記の方法1・方�
         "LOCOHANE_MCP_SKILLS_SRC": "",
         "LOCOHANE_MCP_SKILLS_WORKDIR": "",
         "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": "",
+        "LOCOHANE_MCP_SKILLS_PYTHON": "",
         "LOCOHANE_MCP_SKILLS_NAME": ""
       }
     }
@@ -420,6 +430,7 @@ CLI版のlocalスコープ登録だけで済ませず、上記の方法1・方�
   "LOCOHANE_MCP_SKILLS_SRC": "C:\\DT_Python\\Locohane\\skills;C:\\other\\skills",
   "LOCOHANE_MCP_SKILLS_WORKDIR": "C:\\DT_Python\\Locohane\\output",
   "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": "600",
+  "LOCOHANE_MCP_SKILLS_PYTHON": "C:\\DT_Python\\Python311\\env_local_agent_system\\Scripts\\python.exe",
   "LOCOHANE_MCP_SKILLS_NAME": "locohane-skills-dev"
 }
 ```

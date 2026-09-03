@@ -9,6 +9,7 @@ standalone プロセスとして動くため、`config.ini` の読み込み機�
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -44,6 +45,14 @@ try:
     SCRIPT_TIMEOUT_SECONDS = int(_timeout_env) if _timeout_env else 300
 except ValueError:
     SCRIPT_TIMEOUT_SECONDS = 300
+
+# run_skill_script がスクリプトの実行に使う Python 実行ファイル。
+# 既定は sys.executable（このMCPサーバー自身を起動しているPython）だが、
+# それが Locohane 本体の config.ini [scripts].python（スキルが前提とする
+# 依存関係が入った仮想環境）と一致しない起動経路（Claude Desktop等）もあるため、
+# 環境変数 LOCOHANE_MCP_SKILLS_PYTHON で明示的に指定できるようにする。
+_python_env = os.environ.get("LOCOHANE_MCP_SKILLS_PYTHON")
+SCRIPT_PYTHON: str = _python_env if _python_env else sys.executable
 
 # MCPサーバー自体の名前（FastMCPインスタンス名）。クライアント側の表示名や
 # ツール名衝突回避のため、複数のMCPサーバーを同時接続する場合に区別したいことがある。

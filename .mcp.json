@@ -10,7 +10,8 @@
         "LOCOHANE_MCP_SKILLS_NAME": "locohane-skills",
         "LOCOHANE_MCP_SKILLS_SRC": "",
         "LOCOHANE_MCP_SKILLS_WORKDIR": "",
-        "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": ""
+        "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": "",
+        "LOCOHANE_MCP_SKILLS_PYTHON": "C:\\DT_Python\\Python311\\env_local_agent_system\\Scripts\\python.exe"
       }
     }
   }

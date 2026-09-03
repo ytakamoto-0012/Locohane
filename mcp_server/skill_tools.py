@@ -22,12 +22,11 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import yaml
 
-from .config import SCRIPT_TIMEOUT_SECONDS, SKILLS_SRC, WORKDIR
+from .config import SCRIPT_PYTHON, SCRIPT_TIMEOUT_SECONDS, SKILLS_SRC, WORKDIR
 
 
 def _parse_frontmatter(text: str) -> dict | None:
@@ -160,7 +159,9 @@ def run_skill_script(skill_name: str, script_filename: str, script_args: list[st
     生成物の出力先（output_path等）は相対パスに頼らず、絶対パスで
     script_args に指定すること。実行時の作業ディレクトリ（cwd）はこのMCP
     サーバー自身の起動時cwdをそのまま使う（環境変数 LOCOHANE_MCP_SKILLS_WORKDIR が
-    設定されていればそちらを優先する）。
+    設定されていればそちらを優先する）。スクリプトを起動するPython実行ファイルは
+    既定でこのMCPサーバー自身のPython（sys.executable）だが、環境変数
+    LOCOHANE_MCP_SKILLS_PYTHON が設定されていればそちらを優先する。
 
     Args:
         skill_name: スクリプトを持つスキルのフォルダ名。
@@ -181,7 +182,7 @@ def run_skill_script(skill_name: str, script_filename: str, script_args: list[st
 
     if WORKDIR is not None:
         WORKDIR.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, str(script_path), *(script_args or [])]
+    cmd = [SCRIPT_PYTHON, str(script_path), *(script_args or [])]
     try:
         result = subprocess.run(
             cmd,
