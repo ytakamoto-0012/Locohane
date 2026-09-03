@@ -628,10 +628,11 @@ class Config:
             （total_retries）を共有する。
         context_trim_enabled: 会話履歴中の古い ToolMessage を切り詰めて
             LLMへの入力を抑える機能の有効/無効（src.context_trim 参照）。
-            メインエージェント（src.graph）だけでなくサブエージェント
-            （src.subagent の run_subagent、dispatch_agent のローカル履歴）にも
-            同じ設定値が一律に適用される（Claude Codeがメイン/サブで
-            コンテキスト管理の有無を区別しない方式に倣った設計）。
+            メインエージェント（src.graph）向けの設定。サブエージェント
+            （src.subagent の run_subagent、dispatch_agent のローカル履歴）は
+            対応する context_trim_subagent_* を使う（config.ini の
+            [context_trim.subagent] に項目があればその値、無ければこちらの
+            値を継承する）。
         context_trim_keep_recent_tool_messages: 全文保持する直近 ToolMessage
             の件数。これより古い ToolMessage のみ切り詰め対象にする。
         context_trim_truncated_max_chars: 切り詰め対象 ToolMessage /
@@ -663,11 +664,12 @@ class Config:
             圧縮する機能の有効/無効（src.context_compaction 参照）。context_trim
             と異なり永続履歴（checkpointer上のメッセージ）自体を書き換える。
             context_trim と同様、サブエージェント（src.subagent の
-            run_subagent）にも同じ設定値が一律に適用される。ただし
-            「累積トークン数」の起点はメインとサブで別物である点に注意
-            （メインはスレッド全体を通じた累積、サブは個々の dispatch_agent
-            呼び出し1回の中だけの累積。圧縮発火のたびに0へリセットされる
-            のは共通）。
+            run_subagent）は対応する context_compaction_subagent_* を使う
+            （config.ini の [context_compaction.subagent] に項目があればその値、
+            無ければこちらの値を継承する）。ただし「累積トークン数」の起点は
+            メインとサブで別物である点に注意（メインはスレッド全体を通じた
+            累積、サブは個々の dispatch_agent 呼び出し1回の中だけの累積。
+            圧縮発火のたびに0へリセットされるのは共通）。
         context_compaction_token_threshold: 圧縮を発火させる、メインエージェントの
             累積 total_tokens（token_usage_cumulative_main、圧縮発火のたびに
             リセットされる）の閾値。直近1回のLLM呼び出し分だけで判定すると、
@@ -714,6 +716,13 @@ class Config:
             会話を止めずに注意喚起するだけの軽いフック。
         context_compaction_pre_note_warning_text: 上記閾値到達時に注入する
             注意メッセージの文言。
+        context_trim_subagent_*: 上記 context_trim_* の各項目のサブエージェント
+            専用版。config.ini の [context_trim.subagent] に対応するキーが
+            あればその値、無ければ同名の context_trim_* の値を継承する
+            （[context_trim.subagent] セクション自体が無ければ全項目継承）。
+        context_compaction_subagent_*: 上記 context_compaction_* の各項目の
+            サブエージェント専用版。継承ルールは context_trim_subagent_* と
+            同じ（[context_compaction.subagent] 参照）。
         auth_enabled: ログイン認証機能のON/OFF（[auth].enabled）。True の場合、
             app.py がモジュール読み込み時に @cl.password_auth_callback を
             登録し、未ログインユーザーはチャット画面にアクセスできなくなる。
@@ -915,6 +924,15 @@ class Config:
     context_trim_keep_recent_ai_messages: int
     context_trim_trigger_total_tokens: int
 
+    # --- 会話履歴トリミング・サブエージェント専用上書き（[context_trim.subagent]） ---
+    context_trim_subagent_enabled: bool
+    context_trim_subagent_keep_recent_tool_messages: int
+    context_trim_subagent_truncated_max_chars: int
+    context_trim_subagent_duplicate_guard_tool_max_chars: int
+    context_trim_subagent_ai_messages: bool
+    context_trim_subagent_keep_recent_ai_messages: int
+    context_trim_subagent_trigger_total_tokens: int
+
     # --- 会話履歴の自動要約・圧縮（src/context_compaction.py） ---
     context_compaction_enabled: bool
     context_compaction_token_threshold: int
@@ -925,6 +943,17 @@ class Config:
     context_compaction_summary_source_max_chars: int
     context_compaction_pre_note_threshold: int
     context_compaction_pre_note_warning_text: str
+
+    # --- 会話履歴の自動要約・圧縮・サブエージェント専用上書き（[context_compaction.subagent]） ---
+    context_compaction_subagent_enabled: bool
+    context_compaction_subagent_token_threshold: int
+    context_compaction_subagent_single_request_token_threshold: int
+    context_compaction_subagent_keep_recent_turns: int
+    context_compaction_subagent_min_messages_to_compact: int
+    context_compaction_subagent_prompt_path: Path
+    context_compaction_subagent_summary_source_max_chars: int
+    context_compaction_subagent_pre_note_threshold: int
+    context_compaction_subagent_pre_note_warning_text: str
 
     # --- ログイン認証（[auth]、機密情報は .env 側） ---
     auth_enabled: bool
@@ -1183,6 +1212,15 @@ DEFAULT_DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE = (
     "まだ確認間隔が短すぎます。あと約{wait_remaining}秒待ってから、"
     "改めて check_dispatch_agent_job(job_id={job_id!r}) を呼び直してください"
     "（最短確認間隔: {min_interval}秒）。"
+)
+
+# [context_compaction].pre_note_warning_text / [context_compaction.subagent]の
+# 同項目が空の場合に使う既定メッセージ。
+_DEFAULT_CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT = (
+    "[システム通知: まもなくコンテキスト圧縮（古い会話履歴の要約）が"
+    "行われます。要約後は書き出していない事実が失われるおそれがあるため、"
+    "write_thread_noteにまだ記録していない重要な事実（値・件数・該当箇所等）"
+    "があれば、次の応答でツールを呼ぶ前に書き出してください]"
 )
 
 
@@ -1837,7 +1875,11 @@ def load_config(config_path: Path | None = None) -> Config:
     plan_section = parser["plan"] if parser.has_section("plan") else {}
     thinking_loop_guard = parser["thinking_loop_guard"] if parser.has_section("thinking_loop_guard") else {}
     context_trim = parser["context_trim"] if parser.has_section("context_trim") else {}
+    context_trim_subagent = parser["context_trim.subagent"] if parser.has_section("context_trim.subagent") else {}
     context_compaction = parser["context_compaction"] if parser.has_section("context_compaction") else {}
+    context_compaction_subagent = (
+        parser["context_compaction.subagent"] if parser.has_section("context_compaction.subagent") else {}
+    )
     auth = parser["auth"] if parser.has_section("auth") else {}
     mcp = parser["mcp"] if parser.has_section("mcp") else {}
     checkpointer = parser["checkpointer"] if parser.has_section("checkpointer") else {}
@@ -2301,6 +2343,36 @@ def load_config(config_path: Path | None = None) -> Config:
                 context_trim.get("trigger_total_tokens", 100_000),
             )
         ),
+        context_trim_subagent_enabled=_as_bool(
+            context_trim_subagent.get("enabled", context_trim.get("enabled", True))
+        ),
+        context_trim_subagent_keep_recent_tool_messages=int(
+            context_trim_subagent.get(
+                "keep_recent_tool_messages", context_trim.get("keep_recent_tool_messages", 5)
+            )
+        ),
+        context_trim_subagent_truncated_max_chars=int(
+            context_trim_subagent.get("truncated_max_chars", context_trim.get("truncated_max_chars", 2000))
+        ),
+        context_trim_subagent_duplicate_guard_tool_max_chars=int(
+            context_trim_subagent.get(
+                "duplicate_guard_tool_max_chars",
+                context_trim.get("duplicate_guard_tool_max_chars", 2000),
+            )
+        ),
+        context_trim_subagent_ai_messages=_as_bool(
+            context_trim_subagent.get("trim_ai_messages", context_trim.get("trim_ai_messages", True))
+        ),
+        context_trim_subagent_keep_recent_ai_messages=int(
+            context_trim_subagent.get(
+                "keep_recent_ai_messages", context_trim.get("keep_recent_ai_messages", 3)
+            )
+        ),
+        context_trim_subagent_trigger_total_tokens=int(
+            context_trim_subagent.get(
+                "trigger_total_tokens", context_trim.get("trigger_total_tokens", 100_000)
+            )
+        ),
         context_compaction_enabled=_as_bool(os.getenv("CONTEXT_COMPACTION_ENABLED", context_compaction.get("enabled", True))),
         context_compaction_token_threshold=int(
             os.getenv(
@@ -2349,10 +2421,55 @@ def load_config(config_path: Path | None = None) -> Config:
             "CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT",
             context_compaction.get(
                 "pre_note_warning_text",
-                "[システム通知: まもなくコンテキスト圧縮（古い会話履歴の要約）が"
-                "行われます。要約後は書き出していない事実が失われるおそれがあるため、"
-                "write_thread_noteにまだ記録していない重要な事実（値・件数・該当箇所等）"
-                "があれば、次の応答でツールを呼ぶ前に書き出してください]",
+                _DEFAULT_CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT,
+            ),
+        ),
+        context_compaction_subagent_enabled=_as_bool(
+            context_compaction_subagent.get("enabled", context_compaction.get("enabled", True))
+        ),
+        context_compaction_subagent_token_threshold=int(
+            context_compaction_subagent.get(
+                "token_threshold", context_compaction.get("token_threshold", 60000)
+            )
+        ),
+        context_compaction_subagent_single_request_token_threshold=int(
+            context_compaction_subagent.get(
+                "single_request_token_threshold",
+                context_compaction.get("single_request_token_threshold", 60000),
+            )
+        ),
+        context_compaction_subagent_keep_recent_turns=int(
+            context_compaction_subagent.get(
+                "keep_recent_turns", context_compaction.get("keep_recent_turns", 2)
+            )
+        ),
+        context_compaction_subagent_min_messages_to_compact=int(
+            context_compaction_subagent.get(
+                "min_messages_to_compact", context_compaction.get("min_messages_to_compact", 10)
+            )
+        ),
+        context_compaction_subagent_prompt_path=_resolve(
+            PROJECT_ROOT,
+            context_compaction_subagent.get(
+                "compaction_prompt_path",
+                context_compaction.get("compaction_prompt_path", "./system_prompt/compaction_prompt.md"),
+            ),
+        ),
+        context_compaction_subagent_summary_source_max_chars=int(
+            context_compaction_subagent.get(
+                "summary_source_max_chars", context_compaction.get("summary_source_max_chars", 2000)
+            )
+        ),
+        context_compaction_subagent_pre_note_threshold=int(
+            context_compaction_subagent.get(
+                "pre_note_threshold", context_compaction.get("pre_note_threshold", 40000)
+            )
+        ),
+        context_compaction_subagent_pre_note_warning_text=context_compaction_subagent.get(
+            "pre_note_warning_text",
+            context_compaction.get(
+                "pre_note_warning_text",
+                _DEFAULT_CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT,
             ),
         ),
         auth_enabled=_as_bool(os.getenv("AUTH_ENABLED", auth.get("enabled", False))),

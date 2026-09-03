@@ -25,6 +25,7 @@ import asyncio
 import logging
 import traceback
 from collections.abc import Callable
+from dataclasses import replace
 
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -425,33 +426,60 @@ def _build_truncation_message(reason: str, messages: list) -> str:
 
 
 def _build_llm_input(messages: list, config: Config) -> list:
-    """会話履歴からLLM入力を組み立てる。[context_trim] が有効かつ
-    trigger_total_tokens の閾値に達していれば、graph.py の pre_model_hook /
-    call_model と同じロジックで古い ToolMessage/AIMessage を間引く
-    （Claude Codeがメイン会話・サブエージェントを区別せず同一の
-    コンテキスト管理を適用するのに倣い、メインエージェントと同じ設定・
-    同じ関数をサブエージェントのローカル履歴にも適用する）。
+    """会話履歴からLLM入力を組み立てる。[context_trim.subagent]（未設定の
+    項目は [context_trim] を継承）が有効かつ trigger_total_tokens の閾値に
+    達していれば、graph.py の pre_model_hook / call_model と同じロジックで
+    古い ToolMessage/AIMessage を間引く（Claude Codeがメイン会話・
+    サブエージェントを区別せず同一のコンテキスト管理を適用するのに倣い、
+    同じ関数をサブエージェントのローカル履歴にも適用する。ただし設定値は
+    サブエージェント専用の context_trim_subagent_* を使う）。
 
     呼び出し元の messages 本体は書き換えない（トリム結果はこの関数呼び出し
     1回分のLLM入力としてのみ使う）。
     """
-    if not config.context_trim_enabled or not is_trigger_reached(
-        messages, config.context_trim_trigger_total_tokens
+    if not config.context_trim_subagent_enabled or not is_trigger_reached(
+        messages, config.context_trim_subagent_trigger_total_tokens
     ):
         return messages
     trimmed = trim_old_tool_messages(
         messages,
-        keep_recent=config.context_trim_keep_recent_tool_messages,
-        max_chars=config.context_trim_truncated_max_chars,
-        guarded_tool_max_chars=config.context_trim_duplicate_guard_tool_max_chars,
+        keep_recent=config.context_trim_subagent_keep_recent_tool_messages,
+        max_chars=config.context_trim_subagent_truncated_max_chars,
+        guarded_tool_max_chars=config.context_trim_subagent_duplicate_guard_tool_max_chars,
     )
-    if config.context_trim_ai_messages:
+    if config.context_trim_subagent_ai_messages:
         trimmed = trim_old_ai_messages(
             trimmed,
-            keep_recent=config.context_trim_keep_recent_ai_messages,
-            max_chars=config.context_trim_truncated_max_chars,
+            keep_recent=config.context_trim_subagent_keep_recent_ai_messages,
+            max_chars=config.context_trim_subagent_truncated_max_chars,
         )
     return trimmed
+
+
+def _subagent_compaction_config(config: Config) -> Config:
+    """should_compact() / maybe_compact()（src.context_compaction）は Config を
+    丸ごと受け取り context_compaction_* 属性を参照する設計のため、
+    context_compaction_* をサブエージェント専用の context_compaction_subagent_*
+    の値に差し替えたビューを作って渡す（他のフィールドは元の config のまま）。
+    """
+    return replace(
+        config,
+        context_compaction_enabled=config.context_compaction_subagent_enabled,
+        context_compaction_token_threshold=config.context_compaction_subagent_token_threshold,
+        context_compaction_single_request_token_threshold=(
+            config.context_compaction_subagent_single_request_token_threshold
+        ),
+        context_compaction_keep_recent_turns=config.context_compaction_subagent_keep_recent_turns,
+        context_compaction_min_messages_to_compact=(
+            config.context_compaction_subagent_min_messages_to_compact
+        ),
+        context_compaction_prompt_path=config.context_compaction_subagent_prompt_path,
+        context_compaction_summary_source_max_chars=(
+            config.context_compaction_subagent_summary_source_max_chars
+        ),
+        context_compaction_pre_note_threshold=config.context_compaction_subagent_pre_note_threshold,
+        context_compaction_pre_note_warning_text=config.context_compaction_subagent_pre_note_warning_text,
+    )
 
 
 async def run_subagent(
@@ -513,11 +541,13 @@ async def run_subagent(
 
     token_guard_enabled = config.subagent_token_guard_enabled and config.track_token_usage
     soft_warning_issued = False
-    # [context_compaction] もメインエージェントと同じ設定を使ってサブエージェントの
-    # ローカル履歴にも適用する（Claude Code方式。src/context_compaction.py 参照）。
+    # [context_compaction.subagent]（未設定の項目は[context_compaction]を継承）を
+    # 使ってサブエージェントのローカル履歴にも適用する
+    # （Claude Code方式。src/context_compaction.py 参照）。
     # トークン使用量が取得できない場合（track_token_usage=false）は
     # should_compact() が常にFalseを返すため実質無効化される。
-    compaction_enabled = config.context_compaction_enabled and config.track_token_usage
+    compaction_enabled = config.context_compaction_subagent_enabled and config.track_token_usage
+    compaction_config = _subagent_compaction_config(config)
     cumulative_tokens_sub = 0
     # 会話圧縮・トークン閾値注意メッセージ注入の直後1手だけ、tool_calls無しの
     # 最終応答を無検査で受理しない（2026-08-23 issue対応）。前の反復の末尾で
@@ -608,7 +638,7 @@ async def run_subagent(
             {"total": cumulative_tokens_sub},
             {"total_tokens": total_tokens},
             len(messages),
-            config,
+            compaction_config,
         ):
             # 圧縮用モデルはツール未bindの素のインスタンスを使う（本編の model は
             # bind_tools 済みで、要約専用の呼び出しにツール定義を含める必要が
@@ -621,7 +651,7 @@ async def run_subagent(
             # 保持する構造が異なる。除外せずに渡すと要約で先頭が切り捨てられた際に
             # サブエージェントが以後システムプロンプト（役割・ツール方針等）を
             # 失ってしまうため、常に保持対象として明示的に除外してから渡す。
-            new_tail = await maybe_compact(messages[1:], summary_model, config, role="sub")
+            new_tail = await maybe_compact(messages[1:], summary_model, compaction_config, role="sub")
             if new_tail is not None:
                 logger.info(
                     "subagent: 会話履歴を圧縮しました (iter=%d) [%s]",
