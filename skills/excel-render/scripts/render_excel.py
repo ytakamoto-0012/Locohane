@@ -1,6 +1,6 @@
 """Excelファイルを画像(PNG)としてレンダリングする。
 
-excel-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
+excel-render スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script ツールから
     python render_excel.py <excel_path>
 の形で呼ばれる。全シート（PDF化後の全ページ）を画像化する。

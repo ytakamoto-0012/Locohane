@@ -1,6 +1,6 @@
 """ops（操作）のリストを適用してxlsmのVBAマクロコードを追加・上書き・削除・実行する。
 
-excel-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
+excel-vba-edit スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script から
     python edit_vba.py <path> --ops-json "<JSON配列>" [--new] [--overwrite] [--output <別名保存先>]
 または

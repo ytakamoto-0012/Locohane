@@ -1,6 +1,6 @@
 """xlsm/xls ファイルに埋め込まれたVBAマクロのコードを読み込みJSONで出力する。
 
-excel-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
+excel-vba-read スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script から
     python read_vba.py <file_path> [--module <モジュール名>]
 の形で呼ばれる。

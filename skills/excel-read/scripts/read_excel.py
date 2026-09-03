@@ -1,6 +1,6 @@
 """xlsx/xlsm/xls ファイルのシート一覧またはセルデータを読み込みJSONで出力する。
 
-excel-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
+excel-read スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script から
     python read_excel.py <file_path> [--sheet <シート名またはインデックス>]
                           [--offset N] [--limit N] [--data-only]

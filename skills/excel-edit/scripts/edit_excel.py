@@ -1,6 +1,6 @@
 """ops（操作）のリストを適用して xlsx/xlsm を新規作成または編集する。
 
-excel-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
+excel-edit スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script から
     python edit_excel.py <path> --ops-json "<JSON配列>" [--new] [--overwrite] [--output <別名保存先>]
 または

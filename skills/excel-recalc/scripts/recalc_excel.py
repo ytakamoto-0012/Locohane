@@ -1,6 +1,6 @@
 """Excel COM経由でxlsx/xlsm/xlsの数式を再計算・保存し、エラーセルを検出する。
 
-excel-tools スキルの実行スクリプト（progressive disclosure 第3段階）。
+excel-recalc スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script から
     python recalc_excel.py <path>
 の形で呼ばれる。
