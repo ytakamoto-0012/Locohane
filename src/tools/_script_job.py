@@ -24,6 +24,11 @@ from ._workdir import _resolve_workdir
 
 logger = logging.getLogger(__name__)
 
+# script_args の分割ミス（例: "--file C:\\aaa.png" を1要素にまとめてしまい、
+# スクリプト側のargparseが値を認識できない）は非ゼロ終了として現れる。
+# ヒントは終了コードが0以外の場合のみ結果へ付与する（正常終了時は不要）。
+_SCRIPT_ARGS_HINT = 'script_argsはオプションと値を別要素にする（例: ["--file", "C:\\\\aaa.png"]。["--file C:\\\\aaa.png"]のように1要素にまとめない）。'
+
 
 def _resolve_run_script_command(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> list[str] | str:
     """run_script の前段処理。
@@ -154,6 +159,8 @@ async def _run_script_impl(skill_name: str, script_filename: str, script_args: l
         parts.append(f"[標準出力]\n{proc.stdout.rstrip()}")
     if proc.stderr:
         parts.append(f"[標準エラー]\n{proc.stderr.rstrip()}")
+    if proc.returncode != 0:
+        parts.append(_SCRIPT_ARGS_HINT)
     warning = _track_failure_streak("run_script_failure_streak", proc.returncode != 0, "run_script")
     if warning:
         parts.append(warning)
@@ -358,6 +365,10 @@ def _format_job_result(job: "_BackgroundJob") -> str:
         path_memory_note = _register_exec_output_files(job.workdir, job.before_snapshot, job.thread_id)
         if path_memory_note:
             parts.append(path_memory_note)
+    # tmp_path is None の場合のみ run_script_background 由来（execute_python_code_background は
+    # script_args を持たないため対象外）。
+    if job.tmp_path is None and job.returncode not in (0, None):
+        parts.append(_SCRIPT_ARGS_HINT)
     return "\n".join(parts)
 
 

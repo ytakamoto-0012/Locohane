@@ -45,7 +45,8 @@ async def run_script(skill_name: str, script_filename: str, script_args: list[st
             パスや scripts/ プレフィックスは不要 — スキルフォルダの scripts/
             配下から自動検索される。同名ファイルが複数階層にある場合は
             最も浅い階層のものが使われる。
-        script_args: スクリプトへ渡す追加引数のリスト（省略可）。書き込み先の
+        script_args: スクリプトへ渡す追加引数のリスト（省略可）。オプションと
+            値は別要素にする（例: ["--file", "C:\\aaa.png"]）。書き込み先の
             パスは作業ディレクトリ配下を指定すること（上記サンドボックス参照）。
 
     Returns:

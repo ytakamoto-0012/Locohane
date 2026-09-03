@@ -46,7 +46,8 @@ async def run_script_background(skill_name: str, script_filename: str, script_ar
     Args:
         skill_name: スクリプトを持つスキルのフォルダ名。
         script_filename: 実行したいスクリプトのファイル名（例: "count.py"）。
-        script_args: スクリプトへ渡す追加引数のリスト（省略可）。
+        script_args: スクリプトへ渡す追加引数のリスト（省略可）。オプションと
+            値は別要素にする（例: ["--file", "C:\\aaa.png"]）。
 
     Returns:
         通常は run_script と同じ形式の最終結果文字列。安全上限に達した
