@@ -39,6 +39,7 @@ import shutil
 import sys
 import time
 import uuid
+import weakref
 from dataclasses import replace
 from pathlib import Path
 
@@ -222,7 +223,13 @@ _generating_thread_tasks: dict[str, "asyncio.Task"] = {}
 # 前提にある）。append_turn() はログファイルへ複数回 f.write() する非
 # アトミックな追記のため、ロック無しだと2つのターンの USER:/AI: 行が
 # 交錯して壊れたログになりうる（2026-09-04 レビュー指摘）。
-_chat_log_locks: dict[str, "asyncio.Lock"] = {}
+#
+# thread_idはUUIDで使い捨て（同じIDが再利用されない）ため、
+# _generating_thread_tasks等と同じ「ターン終了時にpopする」方式では、他
+# タブの同時ターンがまだロックを保持中に pop されると新規Lockが作られて
+# 排他が破れるレースがある。WeakValueDictionaryにして、そのLockを誰も
+# 参照しなくなった時点でGC任せに自動で片付ける（2026-09-04 レビュー指摘）。
+_chat_log_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
 # owner（thread_store.resolve_owner の結果）-> 現在生成中のthread_id。
 # 同じ所有者（匿名モードなら"anonymous"に一元化、認証ありならログイン
 # ユーザー単位）が、別タブ/別スレッドから同時に2つ目のターンを開始する
