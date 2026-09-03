@@ -5,6 +5,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 import chainlit as cl
 import logging
+import uuid
 
 from ..plan_persist import persist_plan_state, plan_message_id
 
@@ -106,8 +107,14 @@ async def create_plan(steps: list[dict[str, str]], detail_markdown: str | None =
     # id は thread_id から決定的に導出する（app.py の on_chat_resume と
     # 同じ id を使うことで steps テーブルへの永続化がUPSERTとして働き、
     # 重複行が残らない。src/plan_persist.py plan_message_id docstring参照）。
+    # thread_id が取れない異常系（テスト/evalハーネスからの直接呼び出し等、
+    # on_chat_start/on_chat_resumeを経由していないセッション）では、固定の
+    # ダミー文字列にフォールバックすると全セッションが同じidに収束し、
+    # 無関係なセッション同士が同じsteps行を奪い合って上書きし合う
+    # （2026-09-04 レビュー指摘）。ランダムUUIDにフォールバックして衝突を防ぐ。
+    _thread_id = cl.user_session.get("thread_id")
     message = cl.Message(
-        id=plan_message_id(cl.user_session.get("thread_id") or "_no_session"),
+        id=plan_message_id(_thread_id) if _thread_id else str(uuid.uuid4()),
         content=_render_plan_payload(plan, approved=still_approved),
     )
     await message.send()

@@ -214,6 +214,15 @@ _generating_thread_ids: set[str] = set()
 # （test_mark_and_unmark_are_idempotent）からも安全に呼べるようにするため
 # （asyncio.current_task() の取得はイベントループ内でしか行えない）。
 _generating_thread_tasks: dict[str, "asyncio.Task"] = {}
+# thread_id -> chat_logファイルへの追記を直列化する asyncio.Lock。
+# _generating_owner_threads は「同じ所有者」が別スレッドで同時に2つ目の
+# ターンを開始するのは防ぐが、同一thread_idを複数タブで開いて両方から
+# ほぼ同時に送信するケースまでは防がない（意図的な設計。同じスレッドを
+# 別タブで開いて生成をリアルタイム閲覧できる _make_relayed_emit の仕組みが
+# 前提にある）。append_turn() はログファイルへ複数回 f.write() する非
+# アトミックな追記のため、ロック無しだと2つのターンの USER:/AI: 行が
+# 交錯して壊れたログになりうる（2026-09-04 レビュー指摘）。
+_chat_log_locks: dict[str, "asyncio.Lock"] = {}
 # owner（thread_store.resolve_owner の結果）-> 現在生成中のthread_id。
 # 同じ所有者（匿名モードなら"anonymous"に一元化、認証ありならログイン
 # ユーザー単位）が、別タブ/別スレッドから同時に2つ目のターンを開始する
@@ -2132,25 +2141,7 @@ if _config.thread_store_enabled:
             # （send()しない）。これで以降の update_task_progress の
             # message.update() が正しく効くようになる。
             #
-            # 後方互換: この決定的id方式の導入（2026-09-04）より前に作成された
-            # スレッドは、metadata["plan_message_id"]にランダムUUIDが残って
-            # いることがある。新方式のidだけでローカル参照を作ると、DBに
-            # 実在するのは旧id側のstepのため、以降の message.update() が
-            # 旧idの行を見つけられず反映されない（フロントの
-            # updateMessageById はid不一致だとno-op）ので、旧idがあれば
-            # そのまま使い続ける。削除して新方式のidへ即座に移行しようとすると、
-            # このセッション内で一度も update_task_progress/create_plan が
-            # 呼ばれずに終わった場合、新idの行が一度も書き込まれずDB上に
-            # PlanCardのstepが1件も残らなくなる退行がありうるため採用しなかった
-            # （2026-09-04 レビュー指摘）。次に create_plan が呼ばれれば新方式の
-            # idに一本化される（旧idの行は孤立するが1件限りで、以後増え続ける
-            # ことはない）。
-            legacy_message_id = meta.get("plan_message_id")
-            resolved_message_id = (
-                legacy_message_id
-                if isinstance(legacy_message_id, str) and legacy_message_id
-                else plan_message_id(thread_id)
-            )
+            resolved_message_id = plan_message_id(thread_id)
             # created_at はDBの既存step（あれば）から引き継ぐ。指定しないと
             # cl.Message の created_at は None のままとなり、後続の
             # message.update() が upsert_step_row の created_at をNoneの
@@ -3113,7 +3104,11 @@ async def _on_message_impl(message: cl.Message) -> None:
     upload_user_obj = cl.user_session.get("user")
     upload_username = resolve_log_username(upload_user_obj.identifier if upload_user_obj else None)
     saved = _save_uploads(message, upload_username)
-    logging.getLogger(__name__).info(
+    # log_level="info"（既定）は「概要のみ」の方針（config.py Config.log_level
+    # docstring参照: ツール呼び出しの全引数・全結果・LLM応答本文はdebug限定）。
+    # ユーザーの生入力にはパスワード・APIキー等が含まれうるため、本文を伴う
+    # このログはdebugに留める（2026-09-04 レビュー指摘）。
+    logging.getLogger(__name__).debug(
         "ユーザー送信メッセージ: user=%s content=%r",
         upload_username,
         message.content,
@@ -3893,12 +3888,17 @@ async def _on_message_impl(message: cl.Message) -> None:
         messages = state.values.get("messages", []) if state else []
         final_ai_message = messages[-1] if messages else None
         ai_text = final_ai_message.content if isinstance(final_ai_message, AIMessage) else ""
-        append_turn(
-            chat_log_path,
-            message.content,
-            ai_text,
-            token_usage_cumulative=cl.user_session.get("token_usage_cumulative"),
-        )
+        # 同一thread_idを複数タブから使うと2ターンがほぼ同時に完了しうる
+        # （_chat_log_locks 宣言部のコメント参照）。ロックで直列化して
+        # ログファイルの行が交錯しないようにする。
+        lock = _chat_log_locks.setdefault(thread_id, asyncio.Lock())
+        async with lock:
+            append_turn(
+                chat_log_path,
+                message.content,
+                ai_text,
+                token_usage_cumulative=cl.user_session.get("token_usage_cumulative"),
+            )
 
     # スレッド再開（on_chat_resume）用に、cl.user_session限定でLangGraph側には
     # 保存されない付帯状態（work_dir/plan/トークン累計）をターン完了ごとに
