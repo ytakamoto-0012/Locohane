@@ -69,18 +69,31 @@ def test_format_token_usage_includes_all_three_tiers() -> None:
     cumulative_main = {"input": 10, "output": 20, "total": 30}
     cumulative = {"input": 100, "output": 200, "total": 300}
 
-    text = _format_token_usage(call, cumulative_main, cumulative)
+    text = _format_token_usage(call, cumulative_main, cumulative, is_subagent=False)
 
     assert text.startswith(TOKEN_USAGE_PREFIX)
     payload = json.loads(text[len(TOKEN_USAGE_PREFIX) :])
     rows = {row["label"]: row for row in payload["rows"]}
 
-    assert rows["リクエスト1回あたり"] == {"label": "リクエスト1回あたり", **call, "level": None}
+    assert rows["リクエスト1回あたり（main）"] == {"label": "リクエスト1回あたり（main）", **call, "level": None}
     assert rows["メインエージェント累計"] == {"label": "メインエージェント累計", **cumulative_main}
     assert rows["会話累計（サブエージェント含む）"] == {
         "label": "会話累計（サブエージェント含む）",
         **cumulative,
     }
+
+
+def test_format_token_usage_call_label_marks_subagent() -> None:
+    call = {"input": 1, "output": 2, "total": 3}
+    cumulative_main = {"input": 10, "output": 20, "total": 30}
+    cumulative = {"input": 100, "output": 200, "total": 300}
+
+    text = _format_token_usage(call, cumulative_main, cumulative, is_subagent=True)
+
+    payload = json.loads(text[len(TOKEN_USAGE_PREFIX) :])
+    rows = {row["label"]: row for row in payload["rows"]}
+
+    assert rows["リクエスト1回あたり（sub）"] == {"label": "リクエスト1回あたり（sub）", **call, "level": None}
 
 
 def test_token_usage_level_none_below_thresholds(monkeypatch) -> None:

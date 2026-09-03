@@ -1131,17 +1131,22 @@ def _token_usage_level(total: int) -> str | None:
     return None
 
 
-def _format_token_usage(call: dict, cumulative_main: dict, cumulative: dict) -> str:
+def _format_token_usage(call: dict, cumulative_main: dict, cumulative: dict, is_subagent: bool) -> str:
     """直近のリクエスト1回分・メインエージェント累計・会話累計（メイン+サブ合算）を、
     サイドパネルの TokenUsageCard（表形式）表示用に JSON 化する。
 
     cumulative_main はサブエージェント（dispatch_agent）内部の呼び出しを含まない、
     メインエージェント自身のLLM呼び出しのみの累計。委譲がどれだけ会話コンテキストの
     節約に寄与しているかを、cumulative（合算値）との差でユーザーが確認できる。
+
+    is_subagent は直近の call がメインエージェント自身のLLM呼び出しか、
+    dispatch_agent 内部（サブエージェント）由来かを示す（_is_subagent_call参照）。
+    「リクエスト1回あたり」の行がどちらの呼び出しの値かをラベルで区別できるようにする。
     """
+    call_label = f"リクエスト1回あたり（{'sub' if is_subagent else 'main'}）"
     payload = {
         "rows": [
-            {"label": "リクエスト1回あたり", **call, "level": _token_usage_level(call["total"])},
+            {"label": call_label, **call, "level": _token_usage_level(call["total"])},
             {"label": "メインエージェント累計", **cumulative_main},
             {"label": "会話累計（サブエージェント含む）", **cumulative},
         ]
@@ -3326,7 +3331,8 @@ async def _on_message_impl(message: cl.Message) -> None:
                         _accumulate_usage(cumulative, usage)
                         cl.user_session.set("token_usage_cumulative", cumulative)
                         cumulative_main = cl.user_session.get("token_usage_cumulative_main") or _new_usage_totals()
-                        if not _is_subagent_call(event, dispatch_agent_run_ids):
+                        is_subagent_usage = _is_subagent_call(event, dispatch_agent_run_ids)
+                        if not is_subagent_usage:
                             # last_usage はコンテキスト圧縮の単発閾値判定
                             # （should_compact の single_request_token_threshold）
                             # にのみ使うため、メインエージェント由来のusageでのみ
@@ -3380,7 +3386,9 @@ async def _on_message_impl(message: cl.Message) -> None:
                         # 累積ではなく、直近のリクエスト（LLM呼び出し）1回分の値を使う。
                         call_totals = {"input": 0, "output": 0, "total": 0}
                         _accumulate_usage(call_totals, usage)
-                        await cl.Message(content=_format_token_usage(call_totals, cumulative_main, cumulative)).send()
+                        await cl.Message(
+                            content=_format_token_usage(call_totals, cumulative_main, cumulative, is_subagent_usage)
+                        ).send()
 
                 elif kind == "on_custom_event" and event["name"] == "subagent_loop_retry":
                     # src/subagent.py の _invoke_with_loop_retry がサブエージェント
