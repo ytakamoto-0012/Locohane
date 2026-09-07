@@ -10,7 +10,11 @@ from dataclasses import dataclass
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from src.context_compaction import _PRE_NOTE_MARKER, maybe_append_precompact_note_nudge
+from src.context_compaction import (
+    _PRE_NOTE_MARKER,
+    is_compaction_blocked_by_missing_note,
+    maybe_append_precompact_note_nudge,
+)
 
 
 @dataclass
@@ -19,6 +23,7 @@ class _FakeConfig:
     context_compaction_pre_note_threshold: int = 1000
     context_compaction_pre_note_warning_text: str = "write_thread_noteへ書き出してください"
     context_compaction_keep_recent_turns: int = 3
+    context_compaction_require_note_max_skips: int = 0
 
 
 def _ai_with_usage(total_tokens: int) -> AIMessage:
@@ -131,3 +136,37 @@ def test_injects_again_once_write_thread_note_call_falls_outside_recent_turns() 
 
     assert len(result) == len(messages) + 1
     assert _PRE_NOTE_MARKER in result[-1].content
+
+
+def test_blocked_when_note_not_called_and_max_skips_zero() -> None:
+    """require_note_max_skips=0（無期限に待つ）なら、write_thread_note未呼び出しの
+    間はskip_countがいくつであっても常にブロックする。"""
+    config = _FakeConfig(context_compaction_require_note_max_skips=0)
+    messages = [HumanMessage(content="turn1"), _ai_with_usage(1500)]
+
+    assert is_compaction_blocked_by_missing_note(messages, config, skip_count=0) is True
+    assert is_compaction_blocked_by_missing_note(messages, config, skip_count=999) is True
+
+
+def test_not_blocked_when_note_called_recently() -> None:
+    """直近keep_recent_turns以内にwrite_thread_noteが呼ばれていればブロックしない。"""
+    config = _FakeConfig(context_compaction_require_note_max_skips=0)
+    messages = [
+        HumanMessage(content="turn1"),
+        _write_thread_note_call("call-1"),
+        ToolMessage(content="ok", tool_call_id="call-1"),
+        _ai_with_usage(1500),
+    ]
+
+    assert is_compaction_blocked_by_missing_note(messages, config, skip_count=0) is False
+
+
+def test_forced_unblock_once_max_skips_reached() -> None:
+    """未呼び出しのまま見送った回数がrequire_note_max_skipsに達したら、記録が
+    無くても圧縮を強制するためブロックを解除する（安全弁）。"""
+    config = _FakeConfig(context_compaction_require_note_max_skips=2)
+    messages = [HumanMessage(content="turn1"), _ai_with_usage(1500)]
+
+    assert is_compaction_blocked_by_missing_note(messages, config, skip_count=0) is True
+    assert is_compaction_blocked_by_missing_note(messages, config, skip_count=1) is True
+    assert is_compaction_blocked_by_missing_note(messages, config, skip_count=2) is False

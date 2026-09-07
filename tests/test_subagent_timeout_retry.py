@@ -52,6 +52,7 @@ class _FakeConfig:
     context_compaction_summary_source_max_chars: int = 0
     context_compaction_pre_note_threshold: int = 0
     context_compaction_pre_note_warning_text: str = ""
+    context_compaction_require_note_max_skips: int = 0
     context_compaction_subagent_enabled: bool = False
     context_compaction_subagent_token_threshold: int = 0
     context_compaction_subagent_single_request_token_threshold: int = 0
@@ -61,6 +62,7 @@ class _FakeConfig:
     context_compaction_subagent_summary_source_max_chars: int = 0
     context_compaction_subagent_pre_note_threshold: int = 0
     context_compaction_subagent_pre_note_warning_text: str = ""
+    context_compaction_subagent_require_note_max_skips: int = 0
 
 
 def _default_exc() -> Exception:

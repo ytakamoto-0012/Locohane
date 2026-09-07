@@ -716,6 +716,16 @@ class Config:
             会話を止めずに注意喚起するだけの軽いフック。
         context_compaction_pre_note_warning_text: 上記閾値到達時に注入する
             注意メッセージの文言。
+        context_compaction_require_note_max_skips: 圧縮の発火条件に「直近
+            context_compaction_keep_recent_turns以内にwrite_thread_noteが
+            呼ばれていること」を追加で課す
+            （src.context_compaction.is_compaction_blocked_by_missing_note）。
+            未呼び出しのまま閾値超過（token_threshold/
+            single_request_token_threshold）が続いて圧縮を見送った回数が
+            この値に達すると、記録が無くても圧縮を強制する安全弁。0を
+            指定すると無期限に待つ（write_thread_noteが呼ばれるまで圧縮
+            しない。token_guardのsoft/hard閾値による打ち切りに委ねる
+            ことになる）。
         context_trim_subagent_*: 上記 context_trim_* の各項目のサブエージェント
             専用版。config.ini の [context_trim.subagent] に対応するキーが
             あればその値、無ければ同名の context_trim_* の値を継承する
@@ -943,6 +953,7 @@ class Config:
     context_compaction_summary_source_max_chars: int
     context_compaction_pre_note_threshold: int
     context_compaction_pre_note_warning_text: str
+    context_compaction_require_note_max_skips: int
 
     # --- 会話履歴の自動要約・圧縮・サブエージェント専用上書き（[context_compaction.subagent]） ---
     context_compaction_subagent_enabled: bool
@@ -954,6 +965,7 @@ class Config:
     context_compaction_subagent_summary_source_max_chars: int
     context_compaction_subagent_pre_note_threshold: int
     context_compaction_subagent_pre_note_warning_text: str
+    context_compaction_subagent_require_note_max_skips: int
 
     # --- ログイン認証（[auth]、機密情報は .env 側） ---
     auth_enabled: bool
@@ -1970,6 +1982,12 @@ def load_config(config_path: Path | None = None) -> Config:
         "CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT",
         context_compaction.get("pre_note_warning_text", _DEFAULT_CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT),
     )
+    _context_compaction_require_note_max_skips = int(
+        os.getenv(
+            "CONTEXT_COMPACTION_REQUIRE_NOTE_MAX_SKIPS",
+            context_compaction.get("require_note_max_skips", 2),
+        )
+    )
 
     auth = parser["auth"] if parser.has_section("auth") else {}
     mcp = parser["mcp"] if parser.has_section("mcp") else {}
@@ -2442,6 +2460,7 @@ def load_config(config_path: Path | None = None) -> Config:
         context_compaction_summary_source_max_chars=_context_compaction_summary_source_max_chars,
         context_compaction_pre_note_threshold=_context_compaction_pre_note_threshold,
         context_compaction_pre_note_warning_text=_context_compaction_pre_note_warning_text,
+        context_compaction_require_note_max_skips=_context_compaction_require_note_max_skips,
         context_compaction_subagent_enabled=_subagent_override(
             context_compaction_subagent, "enabled", _context_compaction_enabled, _as_bool
         ),
@@ -2480,6 +2499,12 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         context_compaction_subagent_pre_note_warning_text=_subagent_override(
             context_compaction_subagent, "pre_note_warning_text", _context_compaction_pre_note_warning_text
+        ),
+        context_compaction_subagent_require_note_max_skips=_subagent_override(
+            context_compaction_subagent,
+            "require_note_max_skips",
+            _context_compaction_require_note_max_skips,
+            int,
         ),
         auth_enabled=_as_bool(os.getenv("AUTH_ENABLED", auth.get("enabled", False))),
         auth_require_password=_as_bool(os.getenv("AUTH_REQUIRE_PASSWORD", auth.get("require_password", True))),

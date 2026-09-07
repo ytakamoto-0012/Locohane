@@ -104,6 +104,44 @@ def _write_thread_note_called_recently(messages: list[BaseMessage], keep_recent_
     )
 
 
+def is_compaction_blocked_by_missing_note(
+    messages: list[BaseMessage], config: Config, skip_count: int
+) -> bool:
+    """圧縮条件（閾値）を満たしていても、write_thread_note未呼び出しのため
+    今回は圧縮を見送るべきかを判定する。
+
+    maybe_append_precompact_note_nudge による事前の注意喚起はあくまで促す
+    だけで、LLMが無視し続けても should_compact() が True である限り圧縮
+    （永続履歴の要約）自体は強制的に発火してしまう。それでは要約に含まれ
+    なかった古い会話中の具体的な事実が復元不能なまま失われうるため、
+    write_thread_noteへの書き出しを圧縮の前提条件にする。
+
+    ただしLLMが最後まで書き出さないケースに備え、見送った回数が
+    context_compaction_require_note_max_skips に達したら記録なしでも
+    圧縮を強制する（さもないとコンテキスト上限に張り付いたまま停止する
+    従来の問題が再発するため。src/main_token_guard.py docstring参照）。
+
+    Args:
+        messages: 圧縮対象の会話履歴全体。
+        config: context_compaction_require_note_max_skips /
+            context_compaction_keep_recent_turns を含むアプリ設定。
+        skip_count: 直近で連続して見送った回数（呼び出し元が保持・更新する。
+            この関数自体は状態を持たない）。
+
+    Returns:
+        見送るべきなら True（呼び出し元は skip_count を +1 し、今回は
+        圧縮を実行しない）。直近で書き出し済み、または見送り回数が
+        require_note_max_skips に達していれば False（圧縮してよい。
+        呼び出し元は skip_count を 0 へリセットする）。
+    """
+    if _write_thread_note_called_recently(messages, config.context_compaction_keep_recent_turns):
+        return False
+    max_skips = config.context_compaction_require_note_max_skips
+    if max_skips > 0 and skip_count >= max_skips:
+        return False
+    return True
+
+
 def should_compact(
     cumulative_usage: dict | None,
     last_usage: dict | None,
@@ -211,7 +249,12 @@ def _find_cut_index(messages: list[BaseMessage], keep_recent_turns: int) -> int 
     total_users = len(human_indices)
     target_idx = total_users - keep_recent_turns  # 切るべきユーザーのインデックス
     if target_idx >= 0:
-        target_human_index = human_indices[target_idx]
+        # target_idx == total_users（keep_recent_turns <= 0 で保持すべき直近
+        # ユーザーターンが1つも無い場合）は human_indices の範囲外になる。
+        # この場合は「全ユーザーターンを要約対象にしてよい」という意味なので、
+        # 境界をメッセージ列の末尾扱いにする（human_indices[target_idx] で
+        # IndexErrorになっていた既存バグの修正）。
+        target_human_index = human_indices[target_idx] if target_idx < total_users else len(messages)
         cut_index = None
         for boundary in safe_cut_points:
             if boundary > target_human_index:

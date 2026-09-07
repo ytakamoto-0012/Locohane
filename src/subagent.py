@@ -43,7 +43,12 @@ def _contains_error(content: str) -> bool:
 
 
 from .config import Config
-from .context_compaction import maybe_append_precompact_note_nudge, maybe_compact, should_compact
+from .context_compaction import (
+    is_compaction_blocked_by_missing_note,
+    maybe_append_precompact_note_nudge,
+    maybe_compact,
+    should_compact,
+)
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
 from .images import image_followup_message
 from .llm import (
@@ -479,6 +484,9 @@ def _subagent_compaction_config(config: Config) -> Config:
         ),
         context_compaction_pre_note_threshold=config.context_compaction_subagent_pre_note_threshold,
         context_compaction_pre_note_warning_text=config.context_compaction_subagent_pre_note_warning_text,
+        context_compaction_require_note_max_skips=(
+            config.context_compaction_subagent_require_note_max_skips
+        ),
     )
 
 
@@ -552,6 +560,9 @@ async def run_subagent(
     compaction_enabled = config.context_compaction_subagent_enabled and config.track_token_usage
     compaction_config = _subagent_compaction_config(config)
     cumulative_tokens_sub = 0
+    # is_compaction_blocked_by_missing_note が見送りを判定するたびに増える
+    # カウンタ（require_note_max_skips到達で記録なしでも圧縮を強制する）。
+    note_skip_count = 0
     # 会話圧縮・トークン閾値注意メッセージ注入の直後1手だけ、tool_calls無しの
     # 最終応答を無検査で受理しない（2026-08-23 issue対応）。前の反復の末尾で
     # 圧縮/nudgeが起きたら次の反復の頭でTrueになり、その反復の判定を終えたら
@@ -643,27 +654,42 @@ async def run_subagent(
             len(messages),
             compaction_config,
         ):
-            # 圧縮用モデルはツール未bindの素のインスタンスを使う（本編の model は
-            # bind_tools 済みで、要約専用の呼び出しにツール定義を含める必要が
-            # 無いため。src/context_compaction.py の maybe_compact docstring参照）。
-            summary_model = await build_model(config, role="sub")
-            # messages[0] は run_subagent 開始時に積んだ SystemMessage。graph.py の
-            # メインエージェントは system_prompt を state["messages"] に含めず
-            # call_model 側で毎回付け足す構造のため要約対象から自然に外れるが、
-            # サブエージェントの messages はローカルリストの先頭に SystemMessage を
-            # 保持する構造が異なる。除外せずに渡すと要約で先頭が切り捨てられた際に
-            # サブエージェントが以後システムプロンプト（役割・ツール方針等）を
-            # 失ってしまうため、常に保持対象として明示的に除外してから渡す。
-            new_tail = await maybe_compact(messages[1:], summary_model, compaction_config, role="sub")
-            if new_tail is not None:
-                logger.info(
-                    "subagent: 会話履歴を圧縮しました (iter=%d) [%s]",
+            if is_compaction_blocked_by_missing_note(messages, compaction_config, note_skip_count):
+                note_skip_count += 1
+                logger.warning(
+                    "subagent: write_thread_note未呼び出しのため圧縮を見送ります"
+                    "(iter=%d, skip_count=%d)",
                     iteration,
-                    describe_current_task(),
+                    note_skip_count,
                 )
-                messages = [messages[0], *new_tail]
-                cumulative_tokens_sub = 0
-                just_compacted_or_nudged = True
+            else:
+                # note_skip_count のリセットは実際に圧縮が完了した場合のみ行う
+                # （maybe_compactがNoneを返す＝要約LLM呼び出しの失敗・ループ検知
+                # 予算切れ等の場合はリセットしない。ここでリセットしてしまうと、
+                # 猶予を使い切って強制圧縮に踏み切った直後に要約が失敗したとき、
+                # 安全弁がまた最初から猶予を積み直すことになり骨抜きになる）。
+                # 圧縮用モデルはツール未bindの素のインスタンスを使う（本編の model は
+                # bind_tools 済みで、要約専用の呼び出しにツール定義を含める必要が
+                # 無いため。src/context_compaction.py の maybe_compact docstring参照）。
+                summary_model = await build_model(config, role="sub")
+                # messages[0] は run_subagent 開始時に積んだ SystemMessage。graph.py の
+                # メインエージェントは system_prompt を state["messages"] に含めず
+                # call_model 側で毎回付け足す構造のため要約対象から自然に外れるが、
+                # サブエージェントの messages はローカルリストの先頭に SystemMessage を
+                # 保持する構造が異なる。除外せずに渡すと要約で先頭が切り捨てられた際に
+                # サブエージェントが以後システムプロンプト（役割・ツール方針等）を
+                # 失ってしまうため、常に保持対象として明示的に除外してから渡す。
+                new_tail = await maybe_compact(messages[1:], summary_model, compaction_config, role="sub")
+                if new_tail is not None:
+                    logger.info(
+                        "subagent: 会話履歴を圧縮しました (iter=%d) [%s]",
+                        iteration,
+                        describe_current_task(),
+                    )
+                    messages = [messages[0], *new_tail]
+                    cumulative_tokens_sub = 0
+                    note_skip_count = 0
+                    just_compacted_or_nudged = True
 
         if (
             token_guard_enabled

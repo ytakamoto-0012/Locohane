@@ -96,3 +96,22 @@ def test_returns_none_when_not_enough_history_to_compact() -> None:
     messages = [HumanMessage(content="q1"), AIMessage(content="final")]
 
     assert _find_cut_index(messages, keep_recent_turns=2) is None
+
+
+def test_keep_recent_turns_zero_does_not_raise_and_cuts_everything() -> None:
+    """keep_recent_turns=0（保持すべき直近ユーザーターンが1つも無い）は
+    total_users - 0 == total_users がhuman_indicesの範囲外を指すため、以前は
+    IndexErrorになっていた回帰（is_compaction_blocked_by_missing_note経由で
+    実際に踏み抜いた）。0は「全ユーザーターンを要約対象にしてよい」という
+    意味として扱い、安全な切断点のうち最大のものを返す。
+    """
+    messages = [
+        HumanMessage(content="q1"),
+        AIMessage(content="", tool_calls=[_tool_call("a")]),
+        ToolMessage(content="ra", tool_call_id="a"),
+    ]
+
+    cut_index = _find_cut_index(messages, keep_recent_turns=0)
+
+    assert cut_index == 3
+    assert messages[cut_index:] == []

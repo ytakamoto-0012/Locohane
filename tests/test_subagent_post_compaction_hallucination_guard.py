@@ -50,6 +50,7 @@ class _FakeConfig:
     context_compaction_summary_source_max_chars: int = 0
     context_compaction_pre_note_threshold: int = 0
     context_compaction_pre_note_warning_text: str = ""
+    context_compaction_require_note_max_skips: int = 0
     context_compaction_subagent_enabled: bool = False
     context_compaction_subagent_token_threshold: int = 0
     context_compaction_subagent_single_request_token_threshold: int = 0
@@ -59,6 +60,7 @@ class _FakeConfig:
     context_compaction_subagent_summary_source_max_chars: int = 0
     context_compaction_subagent_pre_note_threshold: int = 0
     context_compaction_subagent_pre_note_warning_text: str = ""
+    context_compaction_subagent_require_note_max_skips: int = 0
 
 
 @tool
@@ -85,6 +87,7 @@ class _ScriptedModel:
 def _make_compaction_config() -> _FakeConfig:
     config = _FakeConfig()
     config.context_compaction_subagent_enabled = True
+    config.context_compaction_subagent_keep_recent_turns = 3
     config.track_token_usage = True
     return config
 
@@ -92,7 +95,13 @@ def _make_compaction_config() -> _FakeConfig:
 @pytest.mark.asyncio
 async def test_short_response_immediately_after_compaction_triggers_one_retry(monkeypatch) -> None:
     responses = [
-        AIMessage(content="", tool_calls=[{"name": "dummy_tool", "args": {}, "id": "call-1"}]),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "dummy_tool", "args": {}, "id": "call-1"},
+                {"name": "write_thread_note", "args": {"topic": "t", "content": "c"}, "id": "call-2"},
+            ],
+        ),
         AIMessage(content="1+1=2"),  # 圧縮直後の幻覚（短い・タスクと無関係）
         AIMessage(content="これまでの調査結果を踏まえてタスクを完了しました。詳細は以上の通りです。"),
     ]
@@ -127,7 +136,13 @@ async def test_short_response_immediately_after_compaction_triggers_one_retry(mo
 async def test_second_short_response_is_accepted_without_infinite_retry(monkeypatch) -> None:
     """1回リトライしても短いままなら、無限リトライせずそのまま最終回答として受理する。"""
     responses = [
-        AIMessage(content="", tool_calls=[{"name": "dummy_tool", "args": {}, "id": "call-1"}]),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "dummy_tool", "args": {}, "id": "call-1"},
+                {"name": "write_thread_note", "args": {"topic": "t", "content": "c"}, "id": "call-2"},
+            ],
+        ),
         AIMessage(content="1+1=2"),
         AIMessage(content="はい。"),  # リトライ後も短いが、2回目なので受理される
     ]
@@ -183,7 +198,13 @@ async def test_long_response_immediately_after_compaction_is_accepted_without_re
     """圧縮直後でも、十分な長さの妥当な最終応答ならそのまま受理する（誤検知しない）。"""
     long_answer = "調査の結果、以下の3点が判明しました。" * 5  # 十分な長さ
     responses = [
-        AIMessage(content="", tool_calls=[{"name": "dummy_tool", "args": {}, "id": "call-1"}]),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "dummy_tool", "args": {}, "id": "call-1"},
+                {"name": "write_thread_note", "args": {"topic": "t", "content": "c"}, "id": "call-2"},
+            ],
+        ),
         AIMessage(content=long_answer),
     ]
     fake_model = _ScriptedModel(responses)

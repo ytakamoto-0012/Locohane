@@ -82,7 +82,7 @@ from src.config import (
     render_agent_type_run_script_allowlist_block,
     render_plan_approval_exempt_scripts_block,
 )
-from src.context_compaction import maybe_compact, should_compact
+from src.context_compaction import is_compaction_blocked_by_missing_note, maybe_compact, should_compact
 from src.files import extract_generated_files
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
 from src.images import is_image_file, load_image_bytes, to_data_url
@@ -2032,6 +2032,10 @@ async def on_chat_start() -> None:
     # （サブエージェントへ委譲した分は含まない。委譲がどれだけ会話コンテキストの
     # 節約に寄与しているかをユーザーが確認できるように分けて集計する）。
     cl.user_session.set("token_usage_cumulative_main", _new_usage_totals())
+    # write_thread_note未呼び出しのまま圧縮を見送った回数（is_compaction_blocked_
+    # by_missing_note の安全弁）。token_usage_cumulative_main と同じく、新しい
+    # セッションでは0から開始する。
+    cl.user_session.set("context_compaction_note_skip_count", 0)
 
     # run_script の作業ディレクトリを歯車アイコンから指定できるようにする。
     # 未入力（初期値）なら config.ini の [default_workdir].dir が使われる
@@ -2170,6 +2174,7 @@ if _config.thread_store_enabled:
             cl.user_session.set("plan_message", None)
         cl.user_session.set("token_usage_cumulative", meta.get("token_usage_cumulative") or _new_usage_totals())
         cl.user_session.set("token_usage_cumulative_main", meta.get("token_usage_cumulative_main") or _new_usage_totals())
+        cl.user_session.set("context_compaction_note_skip_count", meta.get("context_compaction_note_skip_count") or 0)
 
         await cl.ChatSettings(
             [
@@ -2913,6 +2918,8 @@ async def _run_context_compaction(
     config: dict,
     thread_id: str,
     last_usage: dict | None,
+    *,
+    dry_run: bool = False,
 ) -> bool:
     """コンテキスト圧縮（src/context_compaction.py）の判定・実行を行う。
 
@@ -2920,9 +2927,23 @@ async def _run_context_compaction(
     タイミング）でのみ呼ばれる想定。on_message から、ターン完了後と
     ループ内の安全点（_CompactionCheckpoint）の両方から呼ぶ共通ヘルパー。
     会話ログ追記はターン完了時専用の処理のため、ここには含めない。
+    dry_run引数の使い方は _run_context_compaction_visible 参照。
+
+    Args:
+        dry_run: True の場合、判定（awaiting_approve_plan_call/
+            orphaned_tool_calls/should_compact/is_compaction_blocked_by_
+            missing_note）だけを行い、実際の要約LLM呼び出し・aupdate_state・
+            各種カウンタのリセットは行わない。_run_context_compaction_visible
+            が「圧縮が実際に発火するか」を正確に予測するために使う
+            （4つのゲートを個別に手で複製すると、ゲートが増減した際に
+            片方だけ更新し忘れて予測がずれる恐れがあるため、判定ロジック
+            自体をここへ一本化する）。context_compaction_note_skip_count は
+            読むだけで更新しない（実際に圧縮を試みる非dry_run呼び出し側でのみ
+            更新し、二重カウントを避ける）。
 
     Returns:
-        圧縮を実行した場合は True。
+        圧縮を実行した場合（dry_run=True では「実行するはず」と判定した
+        場合）は True。
     """
     if cl.user_session.get("awaiting_approve_plan_call"):
         # create_plan直後、approve_plan/lock_plan_modeが呼ばれるまでの承認待ち中。
@@ -2954,6 +2975,17 @@ async def _run_context_compaction(
     cumulative_main = cl.user_session.get("token_usage_cumulative_main")
     if not should_compact(cumulative_main, last_usage, len(messages), _config):
         return False
+    skip_count = cl.user_session.get("context_compaction_note_skip_count") or 0
+    if is_compaction_blocked_by_missing_note(messages, _config, skip_count):
+        if not dry_run:
+            cl.user_session.set("context_compaction_note_skip_count", skip_count + 1)
+            logging.getLogger(__name__).debug(
+                "コンテキスト圧縮: write_thread_note未呼び出しのため見送ります (skip_count=%d)",
+                skip_count + 1,
+            )
+        return False
+    if dry_run:
+        return True
     summary_model = await build_model(_config, role="main")
     new_messages = await maybe_compact(messages, summary_model, _config, role="main")
     if new_messages is None:
@@ -2982,6 +3014,11 @@ async def _run_context_compaction(
     # 圧縮により古い履歴が要約へ置き換わったため、次にまた同じ閾値で
     # 即座に発火し続けないよう、メインエージェントの累積トークン数をリセットする。
     cl.user_session.set("token_usage_cumulative_main", _new_usage_totals())
+    # write_thread_note見送りカウンタも、実際に圧縮が完了した時点でのみリセットする
+    # （is_compaction_blocked_by_missing_noteがFalseを返した直後ではなく、maybe_compact/
+    # aupdate_stateの成功を確認してから。ここより前でリセットすると、要約LLM呼び出しの
+    # 失敗やcheckpointer更新の失敗時にも猶予が失われ、安全弁が骨抜きになる）。
+    cl.user_session.set("context_compaction_note_skip_count", 0)
     # 要約後のモデルは要約に含まれなかった個々のツール呼び出しを覚えていない
     # ため、Read/Glob等の重複呼び出しガードの履歴も合わせてリセットする
     # （記憶が無いのにガードだけが残り、拒否され続けてループする問題を防ぐ）。
@@ -3014,17 +3051,23 @@ async def _run_context_compaction_visible(
     判定自体は一瞬で終わり、実際に圧縮が発火するときだけ時間がかかるため、
     メッセージは「発火が決まった後」にのみ表示する（圧縮不要な大多数の
     ターンでは何も表示されない）。
+
+    表示要否の判定は _run_context_compaction(dry_run=True) にそのまま委譲する
+    （awaiting_approve_plan_call/orphaned_tool_calls/should_compact/
+    is_compaction_blocked_by_missing_note の4ゲート全てを1箇所のロジックで
+    判定させることで、以前ここに手で複製していた一部のゲートだけを見て
+    「圧縮します」と表示した直後に本体側の別ゲートで却下される、という
+    表示と実処理の食い違いを構造的に防ぐ）。
     """
     try:
-        state = await graph.aget_state(config)
-        messages = state.values.get("messages", []) if state else []
-        cumulative_main = cl.user_session.get("token_usage_cumulative_main")
-        will_compact = should_compact(cumulative_main, last_usage, len(messages), _config)
+        will_compact = await _run_context_compaction(graph, config, thread_id, last_usage, dry_run=True)
     except Exception:
-        # 状態取得に失敗した場合、表示の要否だけ判定できないが、圧縮の実処理
-        # 自体は _run_context_compaction 内で同じ失敗に対する自己修復
-        # （今回はスキップして次ターンに委ねる）を既に持っているため、
-        # ここでは例外を伝播させずそちらに委譲する。
+        # dry_run=True でも aget_state 失敗等は _run_context_compaction 内部で
+        # 捕捉されFalseが返る設計のため、ここに来るのは想定外の場合のみ。
+        # 表示の要否だけ判定できなくても、圧縮の実処理自体は
+        # _run_context_compaction 内で同じ失敗に対する自己修復（今回は
+        # スキップして次ターンに委ねる）を既に持っているため、ここでは
+        # 例外を伝播させずそちらに委譲する。
         logging.getLogger(__name__).exception("コンテキスト圧縮: 表示要否の判定に失敗したため通常経路にフォールバックします")
         return await _run_context_compaction(graph, config, thread_id, last_usage)
     if not will_compact:
@@ -3921,6 +3964,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                 "plan_approved": cl.user_session.get("plan_approved"),
                 "token_usage_cumulative": cl.user_session.get("token_usage_cumulative"),
                 "token_usage_cumulative_main": cl.user_session.get("token_usage_cumulative_main"),
+                "context_compaction_note_skip_count": cl.user_session.get("context_compaction_note_skip_count"),
             },
         )
 

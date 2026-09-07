@@ -109,7 +109,7 @@ export function Composer({
       {remoteGenerating ? (
         <div className="composer-remote-generating-banner">
           <span className="composer-remote-generating-dot" />
-          この会話は生成中です。完了すると自動的に読み込み直します…
+          現在、この会話はタスク処理中です。
         </div>
       ) : blockedByOtherThread ? (
         <div className="composer-remote-generating-banner">
@@ -141,7 +141,7 @@ export function Composer({
           value={value}
           placeholder={
             remoteGenerating
-              ? '他のセッションで生成中です...'
+              ? 'タスク処理中です...'
               : blockedByOtherThread
                 ? '他の会話が処理中です...'
                 : isReplying

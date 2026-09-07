@@ -58,6 +58,8 @@ class _FakeConfig:
     context_compaction_subagent_summary_source_max_chars: int = 0
     context_compaction_subagent_pre_note_threshold: int = 0
     context_compaction_subagent_pre_note_warning_text: str = ""
+    context_compaction_require_note_max_skips: int = 0
+    context_compaction_subagent_require_note_max_skips: int = 0
     subagent_token_guard_soft_threshold: int = 999999999
     subagent_token_guard_hard_threshold: int = 999999999
     subagent_token_guard_soft_warning_text: str = ""
@@ -107,7 +109,17 @@ class _ToolCallThenFinalModel:
     async def ainvoke(self, messages):
         self.calls += 1
         if self.calls == 1:
-            return AIMessage(content="", tool_calls=[{"name": "dummy_tool", "args": {}, "id": "call-1"}])
+            # write_thread_note も同時に呼ばせておく（is_compaction_blocked_by_missing_note
+            # に見送られず、本テストの主目的＝SystemMessage除外の検証まで到達させるため。
+            # tools=[dummy_tool]しか渡されないためwrite_thread_note自体は「未知のツール」
+            # エラーになるが、判定はAIMessage.tool_callsの有無だけを見るため実害は無い）。
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "dummy_tool", "args": {}, "id": "call-1"},
+                    {"name": "write_thread_note", "args": {"topic": "t", "content": "c"}, "id": "call-2"},
+                ],
+            )
         return AIMessage(content="完了しました")
 
 
@@ -129,6 +141,7 @@ async def test_compaction_excludes_leading_system_message(monkeypatch) -> None:
     config = _FakeConfig()
     config.context_trim_subagent_enabled = False
     config.context_compaction_subagent_enabled = True
+    config.context_compaction_subagent_keep_recent_turns = 3
     config.track_token_usage = True
 
     fake_model = _ToolCallThenFinalModel()
@@ -237,6 +250,107 @@ async def test_pre_note_nudge_injected_when_soft_threshold_not_reached(monkeypat
     assert any(
         isinstance(m, HumanMessage) and _PRE_NOTE_MARKER in m.content for m in fake_model.captured_second_input
     )
+
+
+class _RepeatedToolCallModel:
+    """max_calls回目に達するまで毎回dummy_tool呼び出しのtool_callsを返し続ける
+    （write_thread_noteは一度も呼ばない）固定シナリオ。"""
+
+    def __init__(self, max_calls: int = 99) -> None:
+        self.calls = 0
+        self.max_calls = max_calls
+
+    def bind_tools(self, tools):
+        return self
+
+    async def ainvoke(self, messages):
+        self.calls += 1
+        if self.calls >= self.max_calls:
+            return AIMessage(content="完了しました")
+        return AIMessage(content="", tool_calls=[{"name": "dummy_tool", "args": {}, "id": f"call-{self.calls}"}])
+
+
+@pytest.mark.asyncio
+async def test_compaction_skipped_when_note_never_called(monkeypatch) -> None:
+    """write_thread_noteが一度も呼ばれなければ、require_note_max_skips=0（無期限に
+    待つ設定）の間はshould_compactがTrueであってもmaybe_compactが一度も呼ばれない
+    （is_compaction_blocked_by_missing_noteの実装漏れ修正に対するend-to-end回帰）。
+    """
+    config = _FakeConfig()
+    config.context_trim_subagent_enabled = False
+    config.context_compaction_subagent_enabled = True
+    config.context_compaction_subagent_keep_recent_turns = 3
+    config.track_token_usage = True
+    config.context_compaction_subagent_require_note_max_skips = 0
+
+    fake_model = _RepeatedToolCallModel()
+
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
+    monkeypatch.setattr(subagent, "should_compact", lambda *a, **k: True)
+
+    compact_calls = {"count": 0}
+
+    async def fake_maybe_compact(messages, model, config, *, role="sub"):
+        compact_calls["count"] += 1
+        return [HumanMessage(content="[要約]")]
+
+    monkeypatch.setattr(subagent, "maybe_compact", fake_maybe_compact)
+
+    result = await subagent.run_subagent(
+        task="t",
+        tools=[dummy_tool],
+        system_prompt="サブエージェント専用システムプロンプト",
+        config=config,
+        max_iterations=3,
+    )
+
+    assert compact_calls["count"] == 0
+    assert "最大反復回数" in result
+
+
+@pytest.mark.asyncio
+async def test_compaction_forced_after_max_skips(monkeypatch) -> None:
+    """write_thread_note未呼び出しでも、見送り回数がrequire_note_max_skipsに
+    達したら記録が無くても圧縮を強制する（安全弁。LLMが指示を無視し続けても
+    コンテキスト上限に張り付くのを防ぐ）。
+    """
+    config = _FakeConfig()
+    config.context_trim_subagent_enabled = False
+    config.context_compaction_subagent_enabled = True
+    config.context_compaction_subagent_keep_recent_turns = 3
+    config.track_token_usage = True
+    config.context_compaction_subagent_require_note_max_skips = 2
+
+    fake_model = _RepeatedToolCallModel()
+
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
+    monkeypatch.setattr(subagent, "should_compact", lambda *a, **k: True)
+
+    compact_calls = {"count": 0}
+
+    async def fake_maybe_compact(messages, model, config, *, role="sub"):
+        compact_calls["count"] += 1
+        return [HumanMessage(content="[要約]")]
+
+    monkeypatch.setattr(subagent, "maybe_compact", fake_maybe_compact)
+
+    await subagent.run_subagent(
+        task="t",
+        tools=[dummy_tool],
+        system_prompt="サブエージェント専用システムプロンプト",
+        config=config,
+        max_iterations=3,
+    )
+
+    # iter1: skip_count 0->1（見送り）, iter2: skip_count 1->2（見送り）,
+    # iter3: skip_count>=max_skips(2)のため強制的に圧縮を1回だけ実行する。
+    assert compact_calls["count"] == 1
 
 
 @pytest.mark.asyncio
