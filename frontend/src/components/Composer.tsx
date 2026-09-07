@@ -109,7 +109,7 @@ export function Composer({
       {remoteGenerating ? (
         <div className="composer-remote-generating-banner">
           <span className="composer-remote-generating-dot" />
-          他のセッションでこの会話は生成中です。完了すると自動的に読み込み直します…
+          この会話は生成中です。完了すると自動的に読み込み直します…
         </div>
       ) : blockedByOtherThread ? (
         <div className="composer-remote-generating-banner">
