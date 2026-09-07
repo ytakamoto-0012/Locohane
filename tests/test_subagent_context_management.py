@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.tools import tool
 
 from src import subagent
+from src.context_compaction import _PRE_NOTE_MARKER
 from src.subagent import _build_llm_input
 
 
@@ -57,6 +58,9 @@ class _FakeConfig:
     context_compaction_subagent_summary_source_max_chars: int = 0
     context_compaction_subagent_pre_note_threshold: int = 0
     context_compaction_subagent_pre_note_warning_text: str = ""
+    subagent_token_guard_soft_threshold: int = 999999999
+    subagent_token_guard_hard_threshold: int = 999999999
+    subagent_token_guard_soft_warning_text: str = ""
 
 
 def test_build_llm_input_trims_old_tool_messages_without_mutating_original() -> None:
@@ -164,3 +168,115 @@ async def test_compaction_excludes_leading_system_message(monkeypatch) -> None:
     # SystemMessage が圧縮対象（=要約に飲み込まれて消える可能性のある側）に
     # 含まれていないこと。
     assert not any(isinstance(m, SystemMessage) for m in passed_messages)
+
+
+class _ToolCallWithUsageThenFinalModel:
+    """1回目はusage_metadata付きtool_calls応答を返し、2回目に渡された入力を
+    記録した上で最終回答を返す固定シナリオ。"""
+
+    def __init__(self, total_tokens: int) -> None:
+        self.calls = 0
+        self.total_tokens = total_tokens
+        self.captured_second_input: list | None = None
+
+    def bind_tools(self, tools):
+        return self
+
+    async def ainvoke(self, messages):
+        self.calls += 1
+        if self.calls == 1:
+            msg = AIMessage(content="", tool_calls=[{"name": "dummy_tool", "args": {}, "id": "call-1"}])
+            msg.usage_metadata = {
+                "input_tokens": self.total_tokens - 10,
+                "output_tokens": 10,
+                "total_tokens": self.total_tokens,
+            }
+            return msg
+        self.captured_second_input = list(messages)
+        return AIMessage(content="完了しました")
+
+
+@pytest.mark.asyncio
+async def test_pre_note_nudge_injected_when_soft_threshold_not_reached(monkeypatch) -> None:
+    """[context_compaction.subagent].pre_note_threshold 到達時、次のLLM呼び出しの
+    入力へ write_thread_note を促す HumanMessage が差し込まれる。
+
+    以前は maybe_append_precompact_note_nudge が src/subagent.py から一度も
+    呼ばれておらず、[context_compaction.subagent].pre_note_threshold が
+    設定として存在するのに何の効果も持たない実装漏れになっていた（この
+    テストはその回帰防止）。
+    """
+    config = _FakeConfig()
+    config.context_trim_subagent_enabled = False
+    config.track_token_usage = True
+    config.subagent_token_guard_enabled = True
+    config.subagent_token_guard_soft_threshold = 100000  # 到達しない水準
+    config.subagent_token_guard_hard_threshold = 200000
+    config.context_compaction_subagent_enabled = True
+    config.context_compaction_subagent_pre_note_threshold = 1000  # 到達する水準
+    config.context_compaction_subagent_keep_recent_turns = 3
+    config.context_compaction_subagent_min_messages_to_compact = 9999  # should_compactは発火させない
+
+    fake_model = _ToolCallWithUsageThenFinalModel(total_tokens=1500)
+
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
+
+    result = await subagent.run_subagent(
+        task="t",
+        tools=[dummy_tool],
+        system_prompt="サブエージェント専用システムプロンプト",
+        config=config,
+        max_iterations=5,
+    )
+
+    assert result == "完了しました"
+    assert fake_model.captured_second_input is not None
+    assert any(
+        isinstance(m, HumanMessage) and _PRE_NOTE_MARKER in m.content for m in fake_model.captured_second_input
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_note_nudge_not_injected_when_soft_threshold_reached(monkeypatch) -> None:
+    """token_guardのソフト警告が発動する場合は、同じ呼び出しでpre_noteを
+    差し込まない（「これ以上調べるな」と「write_thread_noteを呼べ」が
+    矛盾するのを避けるsrc/graph.pyと同じ排他方針の回帰）。
+    """
+    config = _FakeConfig()
+    config.context_trim_subagent_enabled = False
+    config.track_token_usage = True
+    config.subagent_token_guard_enabled = True
+    config.subagent_token_guard_soft_threshold = 1000  # 到達する水準
+    config.subagent_token_guard_hard_threshold = 200000
+    config.subagent_token_guard_soft_warning_text = "ソフト警告文言"
+    config.context_compaction_subagent_enabled = True
+    config.context_compaction_subagent_pre_note_threshold = 1000  # softと同時に到達する水準
+    config.context_compaction_subagent_keep_recent_turns = 3
+    config.context_compaction_subagent_min_messages_to_compact = 9999
+
+    fake_model = _ToolCallWithUsageThenFinalModel(total_tokens=1500)
+
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
+
+    result = await subagent.run_subagent(
+        task="t",
+        tools=[dummy_tool],
+        system_prompt="サブエージェント専用システムプロンプト",
+        config=config,
+        max_iterations=5,
+    )
+
+    assert result == "完了しました"
+    assert fake_model.captured_second_input is not None
+    assert any(
+        isinstance(m, HumanMessage) and m.content == "ソフト警告文言" for m in fake_model.captured_second_input
+    )
+    assert not any(
+        isinstance(m, HumanMessage) and _PRE_NOTE_MARKER in m.content for m in fake_model.captured_second_input
+    )

@@ -43,7 +43,7 @@ def _contains_error(content: str) -> bool:
 
 
 from .config import Config
-from .context_compaction import maybe_compact, should_compact
+from .context_compaction import maybe_append_precompact_note_nudge, maybe_compact, should_compact
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
 from .images import image_followup_message
 from .llm import (
@@ -510,6 +510,9 @@ async def run_subagent(
     注入し、それでも subagent_token_guard_hard_threshold まで超過が続いた
     場合は max_iterations 到達時と同じ要約フォーマットで打ち切る
     （LLM自身は自分のトークン使用量を認識できないため、コード側で判定する）。
+    上記ソフト警告が発動しない場合のみ、[context_compaction.subagent]の
+    pre_note_threshold到達を判定し write_thread_note を促す（メインエージェント
+    側のsrc/graph.pyと同じ排他方針。詳細はmaybe_append_precompact_note_nudge参照）。
 
     Args:
         task: サブエージェントに委譲するタスクの説明文。
@@ -677,6 +680,19 @@ async def run_subagent(
                 iteration,
                 total_tokens,
             )
+        else:
+            # token_guardのソフト警告（会話をこれ以上進めず引継ぎを促す）と
+            # 同時に条件を満たす場合はそちらを優先し、pre_noteは差し込まない
+            # （src/graph.py の call_model/pre_model_hook と同じ排他方針。
+            # 「これ以上調べるな」と「write_thread_noteを呼べ」が矛盾するため。
+            # 元々この関数はsrc/context_compaction.pyに実装済みだったが、
+            # subagent.pyから一度も呼ばれておらず
+            # [context_compaction.subagent].pre_note_thresholdが死んだ設定に
+            # なっていた実装漏れを修正）。
+            before_pre_note = messages
+            messages = maybe_append_precompact_note_nudge(messages, compaction_config)
+            if messages is not before_pre_note:
+                just_compacted_or_nudged = True
 
     logger.warning("dispatch_agent: 最大反復回数(%d)に到達したため打ち切り", max_iterations)
     return _build_truncation_message(f"最大反復回数({max_iterations})に達した", messages)
