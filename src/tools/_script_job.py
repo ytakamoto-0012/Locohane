@@ -263,16 +263,33 @@ async def _push_background_job_progress(job: "_BackgroundJob", job_id: str) -> N
     フラグを見て永続化をスキップするため、スレッド再開時に「経過N秒・
     job_id=xxx」という実行時点でしか意味を持たない古い進捗表示が復元されない
     （2026-08-21 ユーザー報告）。ライブ表示（emitter.send_step）には影響しない。
+
+    2回目以降のpushは新規 cl.Message を送らず、1回目に送ったメッセージの
+    content を書き換えて .update() で送る。以前は毎回 .send() していたため、
+    長時間ジョブでは「実行中です」が会話に大量に積み上がり、他のやり取りが
+    流れて見えなくなる問題があった（2026-09-07 ユーザー報告）。.update() は
+    同一 id の StepDict を emitter.update_step 経由でフロントエンドへ送る
+    （Chainlit側のソケットイベント名は "update_message"）。フロントエンドは
+    @chainlit/react-client 標準の useChatSession/useChatMessages をそのまま
+    使っており、"update_message" 受信時に同一idのメッセージを上書きする
+    （新規追加しない）ため、会話上は1件のまま内容だけが更新される。
     """
+    message: "cl.Message | None" = None
     while job.status == "running":
         await asyncio.sleep(_state._SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS)
         if job.status != "running":
             break
-        await cl.Message(
-            content=_format_background_job_progress(job, job_id),
-            type="system_message",
-            metadata={"ephemeral_progress": True},
-        ).send()
+        content = _format_background_job_progress(job, job_id)
+        if message is None:
+            message = cl.Message(
+                content=content,
+                type="system_message",
+                metadata={"ephemeral_progress": True},
+            )
+            await message.send()
+        else:
+            message.content = content
+            await message.update()
 
 
 async def _run_background_job(job: "_BackgroundJob", job_id: str) -> None:

@@ -38,9 +38,10 @@ class _FakeUserSession:
 
 
 class _FakeMessage:
-    """tools.cl.Message の差し替え。send() された content と kwargs を記録する。"""
+    """tools.cl.Message の差し替え。send()/update() された content と kwargs を記録する。"""
 
     _sent: list | None = None  # _install_fake_message が差し替える
+    _updated: list | None = None  # 同上
 
     def __init__(self, content: str = "", **kwargs) -> None:
         self.content = content
@@ -50,12 +51,23 @@ class _FakeMessage:
         if _FakeMessage._sent is not None:
             _FakeMessage._sent.append((self.content, self.kwargs))
 
+    async def update(self) -> None:
+        if _FakeMessage._updated is not None:
+            _FakeMessage._updated.append((self.content, self.kwargs))
+
 
 def _install_fake_message(monkeypatch) -> list:
     sent: list = []
     _FakeMessage._sent = sent
+    _FakeMessage._updated = []
     monkeypatch.setattr(tools.cl, "Message", _FakeMessage)
     return sent
+
+
+def _install_fake_message_with_updates(monkeypatch) -> tuple[list, list]:
+    """send()/update() を両方検証したいテスト専用。(sent, updated) を返す。"""
+    sent = _install_fake_message(monkeypatch)
+    return sent, _FakeMessage._updated
 
 
 class _FakeStreamReader:
@@ -248,10 +260,12 @@ async def test_safety_cap_fallback_returns_job_id_and_keeps_job_running(monkeypa
 @pytest.mark.asyncio
 async def test_progress_is_pushed_without_llm_and_stops_after_completion(monkeypatch, tmp_path) -> None:
     """進捗pushはLLMを介さず cl.Message で type="system_message" として直接送られ、
-    ジョブ完了後は止まる。"""
+    ジョブ完了後は止まる。会話が「実行中です」で埋まらないよう、1回目のみ
+    .send() で新規メッセージを作り、2回目以降は同じメッセージを .update() で
+    書き換える（新規メッセージを積み増さない）（2026-09-07 ユーザー報告）。"""
     _setup(monkeypatch, tmp_path)
     monkeypatch.setattr(tools._state, "_SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS", 0.02)
-    sent = _install_fake_message(monkeypatch)
+    sent, updated = _install_fake_message_with_updates(monkeypatch)
     workdir = tools._state._DEFAULT_WORKDIR
     _stub_prepare_script_execution(monkeypatch, ["python", "count.py"], workdir)
     fake_process = _FakeProcess(started_running=True)
@@ -266,13 +280,16 @@ async def test_progress_is_pushed_without_llm_and_stops_after_completion(monkeyp
     await release_task
 
     assert "job_id=" not in result
-    assert len(sent) >= 1
+    # 新規メッセージ(.send())は1回だけ、以降は同一メッセージの更新(.update())になる。
+    assert len(sent) == 1
+    assert len(updated) >= 1
     assert all(kwargs.get("type") == "system_message" for _, kwargs in sent)
-    assert any("経過" in content for content, _ in sent)
+    assert any("経過" in content for content, _ in updated)
 
-    count_after_completion = len(sent)
+    updated_count_after_completion = len(updated)
     await asyncio.sleep(0.06)  # push間隔を跨いでも増えないことを確認
-    assert len(sent) == count_after_completion
+    assert len(sent) == 1
+    assert len(updated) == updated_count_after_completion
 
 
 @pytest.mark.asyncio

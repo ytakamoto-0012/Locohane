@@ -141,16 +141,33 @@ async def _push_dispatch_agent_progress(job: "_DispatchAgentJob", job_id: str) -
     には影響しない。サブエージェントの実際の発言（write_scratch_note等が
     生む本来のステップ）にはこのフラグを付けないため、それらは通常通り
     履歴に残る。
+
+    2回目以降のpushは新規 cl.Message を送らず、1回目に送ったメッセージの
+    content を書き換えて .update() で送る（_push_background_job_progress と
+    同じ変更）。以前は毎回 .send() していたため、長時間ジョブでは
+    「実行中です」が会話に大量に積み上がり、他のやり取りが流れて見えなく
+    なる問題があった（2026-09-07 ユーザー報告）。フロントエンドは
+    @chainlit/react-client 標準の useChatSession/useChatMessages をそのまま
+    使っており、.update() が送る "update_message" イベント受信時に同一id
+    のメッセージを上書きする（新規追加しない）ため、会話上は1件のまま内容
+    だけが更新される。
     """
+    message: "cl.Message | None" = None
     while job.status == "running":
         await asyncio.sleep(_state._DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS)
         if job.status != "running":
             break
-        await cl.Message(
-            content=_format_dispatch_agent_progress(job, job_id),
-            author=_SUBAGENT_MESSAGE_AUTHOR,
-            metadata={"ephemeral_progress": True},
-        ).send()
+        content = _format_dispatch_agent_progress(job, job_id)
+        if message is None:
+            message = cl.Message(
+                content=content,
+                author=_SUBAGENT_MESSAGE_AUTHOR,
+                metadata={"ephemeral_progress": True},
+            )
+            await message.send()
+        else:
+            message.content = content
+            await message.update()
 
 
 async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: str, resolved: "ResolvedAgentType") -> None:

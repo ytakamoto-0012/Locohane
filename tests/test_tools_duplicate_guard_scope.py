@@ -56,6 +56,9 @@ class _FakeMessage:
     async def send(self) -> None:
         pass
 
+    async def update(self) -> None:
+        pass
+
 
 def _setup(monkeypatch, carry_over: bool) -> None:
     monkeypatch.setattr(

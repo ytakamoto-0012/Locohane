@@ -40,6 +40,9 @@ class _FakeMessage:
     async def send(self) -> None:
         pass
 
+    async def update(self) -> None:
+        pass
+
 
 def _setup(monkeypatch, tmp_path, plan: list | None = None) -> None:
     monkeypatch.setattr(tools._state, "_LLM_CONFIG", object())

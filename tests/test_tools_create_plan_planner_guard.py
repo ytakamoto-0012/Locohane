@@ -38,6 +38,9 @@ class _FakeMessage:
     async def send(self) -> None:
         pass
 
+    async def update(self) -> None:
+        pass
+
 
 def _setup(monkeypatch, *, require_planner: bool = True) -> _FakeUserSession:
     monkeypatch.setattr(tools._state, "_LLM_CONFIG", object())
