@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --bg: #fafafa;
   --surface: #ffffff;
   --surface-muted: #f4f4f6;
@@ -24,6 +25,7 @@
 }
 
 :root[data-theme='dark'] {
+  color-scheme: dark;
   --bg: #121214;
   --surface: #1b1b1f;
   --surface-muted: #202024;
@@ -1524,7 +1526,14 @@
   border: 1px solid var(--border);
   font-size: 14px;
   background: transparent;
-  color: inherit;
+  color: var(--text);
+}
+
+.login-input:-webkit-autofill,
+.login-input:-webkit-autofill:hover,
+.login-input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text);
+  transition: background-color 999999s ease-in-out 0s;
 }
 
 .login-submit {
