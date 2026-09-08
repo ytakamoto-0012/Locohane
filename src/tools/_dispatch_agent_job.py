@@ -10,7 +10,7 @@ import time
 import traceback
 
 from .. import subagent
-from ..subagent import is_truncated_result
+from ..subagent import dump_messages_for_cancelled_rescue, is_truncated_result
 
 from . import _state
 from ._script_job import _JOB_OUTPUT_TAIL_CHARS
@@ -40,6 +40,44 @@ def _append_scratch_note_hint(result: str) -> str:
         f"書き残しています。Read で {path} を確認すると、打ち切り前に整理された"
         "内容が得られます。]"
     )
+
+
+def _make_rescue_on_cancelled(job: "_DispatchAgentJob"):
+    """run_subagent の on_cancelled 引数へ渡すコールバックを組み立てる。
+
+    停止ボタン等でこのジョブが強制終了された場合、run_subagent はここまでの
+    会話履歴を渡してこのコールバックを同期的に呼ぶ（CancelledError の再送出前）。
+    write_scratch_note と同じファイル（_scratch_notes_path_for_run(job.run_id)）
+    へ追記することで、check_dispatch_agent_job の進捗表示や
+    _append_scratch_note_hint など既存の案内導線がそのまま拾える。
+
+    書き込み失敗（OSError）に加え、パス解決自体の失敗も送出せずログに留める。
+    _scratch_notes_path_for_run は内部で _resolve_exec_workdir() 経由
+    cl.user_session からthread_idを読むため、Chainlitセッション文脈が
+    解決できない状況（cross-session停止でタスク生成元のタブが既に
+    閉じられている場合等）では ChainlitContextException 等、OSError以外の
+    例外を送出しうる。run_subagent 側は on_cancelled の例外を最終的に
+    捕捉して握りつぶす設計だが、CancelledError の伝播をここでも確実に
+    妨げないようにするため、パス解決から書き込みまでを1つのtryで囲み
+    Exception全体を捕捉する。
+    """
+
+    def _on_cancelled(messages: list) -> None:
+        dump = dump_messages_for_cancelled_rescue(messages)
+        if not dump:
+            return
+        try:
+            path = _scratch_notes_path_for_run(job.run_id)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(dump)
+                f.write("\n")
+        except Exception:  # noqa: BLE001 - パス解決・書き込みいずれの失敗でもCancelledErrorの伝播を妨げない
+            logger.exception(
+                "dispatch_agent: 強制停止時の会話履歴退避に失敗しました (run_id=%s)",
+                job.run_id,
+            )
+
+    return _on_cancelled
 
 
 @dataclass
@@ -205,6 +243,8 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
     def _on_iteration(iteration: int, max_iterations: int) -> None:
         job.current_iteration = iteration
 
+    on_cancelled = _make_rescue_on_cancelled(job)
+
     try:
         sem = _get_session_semaphore(_state._DISPATCH_AGENT_SEMAPHORES, _state._DISPATCH_AGENT_MAX_PARALLEL)
         if sem is not None:
@@ -217,6 +257,7 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
                     job.max_iterations,
                     on_iteration=_on_iteration,
                     llm_timeout_max_retries=_state._DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES,
+                    on_cancelled=on_cancelled,
                 )
         else:
             result = await subagent.run_subagent(
@@ -227,6 +268,7 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
                 job.max_iterations,
                 on_iteration=_on_iteration,
                 llm_timeout_max_retries=_state._DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES,
+                on_cancelled=on_cancelled,
             )
         result = _append_scratch_note_hint(result)
         if job.status != "killed":

@@ -9,7 +9,7 @@ loop_nudge等の後続メッセージが追記される・コンテキスト圧�
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app import _find_orphaned_tool_calls
+from app import _build_orphaned_placeholder_message, _find_orphaned_tool_calls
 
 
 def _ai_with_tool_call(tool_call_id: str) -> AIMessage:
@@ -56,3 +56,30 @@ def test_all_tool_calls_answered_returns_empty() -> None:
 
 def test_empty_messages_returns_empty() -> None:
     assert _find_orphaned_tool_calls([]) == []
+
+
+def test_build_orphaned_placeholder_message_for_dispatch_agent_includes_rescue_hint() -> None:
+    """dispatch_agentの孤立tool_callには、write_scratch_noteによる緊急退避内容を
+    次回どう扱うべきかの案内（explore委譲→write_thread_note→ユーザー指示に従う）が
+    追記されること（サブエージェント強制停止時の会話履歴退避機能の一部）。
+    """
+    tc = {"name": "dispatch_agent", "args": {}, "id": "tc-1", "type": "tool_call"}
+
+    message = _build_orphaned_placeholder_message(tc, "ユーザーの停止操作等により、")
+
+    assert message.tool_call_id == "tc-1"
+    assert message.name == "dispatch_agent"
+    assert "ユーザーの停止操作等により、このツール呼び出しの実行が中断されました。" in message.content
+    assert "write_scratch_note" in message.content
+    assert "explore" in message.content
+    assert "write_thread_note" in message.content
+
+
+def test_build_orphaned_placeholder_message_for_other_tool_has_no_rescue_hint() -> None:
+    tc = {"name": "read_skill", "args": {}, "id": "tc-2", "type": "tool_call"}
+
+    message = _build_orphaned_placeholder_message(tc, "直前のセッション異常により、")
+
+    assert message.tool_call_id == "tc-2"
+    assert "直前のセッション異常により、このツール呼び出しの実行が中断されました。" in message.content
+    assert "write_scratch_note" not in message.content

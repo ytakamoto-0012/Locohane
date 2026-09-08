@@ -498,6 +498,7 @@ async def run_subagent(
     max_iterations: int,
     on_iteration: Callable[[int, int], None] | None = None,
     llm_timeout_max_retries: int = 0,
+    on_cancelled: Callable[[list], None] | None = None,
 ) -> str:
     """独立した ReAct ループでタスクを処理し、最終回答のテキストのみを返す。
 
@@ -540,6 +541,11 @@ async def run_subagent(
             dispatch_agent は人間がターン内でリアルタイムに待つ間もジョブ自体は
             バックグラウンドタスクとして動き続けるため、より大きい値を渡して
             耐性を上げる（_invoke_with_timeout_retry 参照）。
+        on_cancelled: 停止ボタン等による asyncio.CancelledError 検知時、
+            その時点までの messages（会話履歴）を渡して呼ぶ同期コールバック
+            （省略可）。dispatch_agent がこの内容をスクラッチノートへ緊急
+            退避するために使う（_dispatch_agent_job.py 参照）。戻り値は
+            無視し、例外を送出しても CancelledError の伝播は妨げない。
 
     Returns:
         サブエージェントの最終回答テキスト。
@@ -570,158 +576,208 @@ async def run_subagent(
     just_compacted_or_nudged = False
     hallucination_retry_used = False
 
-    for iteration in range(1, max_iterations + 1):
-        check_final_answer_strictly = just_compacted_or_nudged
-        just_compacted_or_nudged = False
-        llm_input = _build_llm_input(messages, config)
-        try:
-            response, model, empty_retries_exhausted = await _invoke_with_timeout_retry(
-                model, llm_input, config, tools, llm_timeout_max_retries
-            )
-        except (TimeoutError, *LLM_CONNECTION_ERRORS) as exc:
-            logger.warning(
-                "dispatch_agent: LLM呼び出しがタイムアウトしたため打ち切り(iter=%d): %s",
-                iteration,
-                exc,
-            )
-            return _build_truncation_message(f"LLM呼び出しがタイムアウトした({exc})", messages)
-        messages.append(response)
-        logger.info("subagent iter=%d ai=%r", iteration, str(response.content)[:500])
-        if on_iteration is not None:
-            on_iteration(iteration, max_iterations)
-
-        tool_calls = getattr(response, "tool_calls", None)
-        if not tool_calls:
-            if empty_retries_exhausted:
+    try:
+        for iteration in range(1, max_iterations + 1):
+            check_final_answer_strictly = just_compacted_or_nudged
+            just_compacted_or_nudged = False
+            llm_input = _build_llm_input(messages, config)
+            try:
+                response, model, empty_retries_exhausted = await _invoke_with_timeout_retry(
+                    model, llm_input, config, tools, llm_timeout_max_retries
+                )
+            except (TimeoutError, *LLM_CONNECTION_ERRORS) as exc:
                 logger.warning(
-                    "dispatch_agent: 空の応答が%d回続いたため打ち切り (iter=%d)",
-                    config.subagent_empty_response_max_retries + 1,
+                    "dispatch_agent: LLM呼び出しがタイムアウトしたため打ち切り(iter=%d): %s",
                     iteration,
+                    exc,
+                )
+                return _build_truncation_message(f"LLM呼び出しがタイムアウトした({exc})", messages)
+            messages.append(response)
+            logger.info("subagent iter=%d ai=%r", iteration, str(response.content)[:500])
+            if on_iteration is not None:
+                on_iteration(iteration, max_iterations)
+
+            tool_calls = getattr(response, "tool_calls", None)
+            if not tool_calls:
+                if empty_retries_exhausted:
+                    logger.warning(
+                        "dispatch_agent: 空の応答が%d回続いたため打ち切り (iter=%d)",
+                        config.subagent_empty_response_max_retries + 1,
+                        iteration,
+                    )
+                    return _build_truncation_message(
+                        f"LLMが空の応答を{config.subagent_empty_response_max_retries + 1}" "回連続で返した",
+                        messages,
+                    )
+                content_text = str(response.content).strip()
+                if (
+                    check_final_answer_strictly
+                    and not hallucination_retry_used
+                    and len(content_text) < _POST_COMPACTION_SUSPICIOUS_RESPONSE_MIN_LENGTH
+                ):
+                    # 会話圧縮/トークン閾値注意の直後1手にもかかわらず極端に短い
+                    # 最終応答は、タスクと無関係な内容を幻覚している疑いがある
+                    # （実例: 圧縮直後に存在しない「1+1=?」への回答を返し、
+                    # dispatch_agentがそれを正常完了として扱ってそれまでの作業結果
+                    # を握りつぶした。issue/20260823_021924参照）。無限リトライは
+                    # せず1回だけやり直しを促す。
+                    hallucination_retry_used = True
+                    logger.warning(
+                        "dispatch_agent: 会話圧縮/トークン閾値注意の直後に極端に短い最終応答"
+                        "(%d文字)を検知したため再試行します (iter=%d)",
+                        len(content_text),
+                        iteration,
+                    )
+                    messages.append(HumanMessage(content=_POST_COMPACTION_SUSPICIOUS_RESPONSE_NUDGE_TEXT))
+                    continue
+                logger.info("dispatch_agent 正常終了: %d回で完了", iteration)
+                return response.content
+
+            total_tokens = _extract_total_tokens(response) if config.track_token_usage else None
+            if total_tokens is not None:
+                cumulative_tokens_sub += total_tokens
+
+            if (
+                token_guard_enabled
+                and soft_warning_issued
+                and total_tokens is not None
+                and total_tokens >= config.subagent_token_guard_hard_threshold
+            ):
+                logger.warning(
+                    "dispatch_agent: トークン使用量が閾値(%d)に達したため打ち切り" "(iter=%d, total_tokens=%d)",
+                    config.subagent_token_guard_hard_threshold,
+                    iteration,
+                    total_tokens,
                 )
                 return _build_truncation_message(
-                    f"LLMが空の応答を{config.subagent_empty_response_max_retries + 1}" "回連続で返した",
+                    "トークン使用量が上限" f"({config.subagent_token_guard_hard_threshold}トークン)に達した",
                     messages,
                 )
-            content_text = str(response.content).strip()
-            if (
-                check_final_answer_strictly
-                and not hallucination_retry_used
-                and len(content_text) < _POST_COMPACTION_SUSPICIOUS_RESPONSE_MIN_LENGTH
+
+            results = await asyncio.gather(*(_run_one_tool_call(call, tools_by_name) for call in tool_calls))
+            for tool_message, followup in results:
+                messages.append(tool_message)
+                if followup is not None:
+                    messages.append(followup)
+
+            if compaction_enabled and should_compact(
+                {"total": cumulative_tokens_sub},
+                {"total_tokens": total_tokens},
+                len(messages),
+                compaction_config,
             ):
-                # 会話圧縮/トークン閾値注意の直後1手にもかかわらず極端に短い
-                # 最終応答は、タスクと無関係な内容を幻覚している疑いがある
-                # （実例: 圧縮直後に存在しない「1+1=?」への回答を返し、
-                # dispatch_agentがそれを正常完了として扱ってそれまでの作業結果
-                # を握りつぶした。issue/20260823_021924参照）。無限リトライは
-                # せず1回だけやり直しを促す。
-                hallucination_retry_used = True
+                if is_compaction_blocked_by_missing_note(messages, compaction_config, note_skip_count):
+                    note_skip_count += 1
+                    logger.warning(
+                        "subagent: write_thread_note未呼び出しのため圧縮を見送ります"
+                        "(iter=%d, skip_count=%d)",
+                        iteration,
+                        note_skip_count,
+                    )
+                else:
+                    # note_skip_count のリセットは実際に圧縮が完了した場合のみ行う
+                    # （maybe_compactがNoneを返す＝要約LLM呼び出しの失敗・ループ検知
+                    # 予算切れ等の場合はリセットしない。ここでリセットしてしまうと、
+                    # 猶予を使い切って強制圧縮に踏み切った直後に要約が失敗したとき、
+                    # 安全弁がまた最初から猶予を積み直すことになり骨抜きになる）。
+                    # 圧縮用モデルはツール未bindの素のインスタンスを使う（本編の model は
+                    # bind_tools 済みで、要約専用の呼び出しにツール定義を含める必要が
+                    # 無いため。src/context_compaction.py の maybe_compact docstring参照）。
+                    summary_model = await build_model(config, role="sub")
+                    # messages[0] は run_subagent 開始時に積んだ SystemMessage。graph.py の
+                    # メインエージェントは system_prompt を state["messages"] に含めず
+                    # call_model 側で毎回付け足す構造のため要約対象から自然に外れるが、
+                    # サブエージェントの messages はローカルリストの先頭に SystemMessage を
+                    # 保持する構造が異なる。除外せずに渡すと要約で先頭が切り捨てられた際に
+                    # サブエージェントが以後システムプロンプト（役割・ツール方針等）を
+                    # 失ってしまうため、常に保持対象として明示的に除外してから渡す。
+                    new_tail = await maybe_compact(messages[1:], summary_model, compaction_config, role="sub")
+                    if new_tail is not None:
+                        logger.info(
+                            "subagent: 会話履歴を圧縮しました (iter=%d) [%s]",
+                            iteration,
+                            describe_current_task(),
+                        )
+                        messages = [messages[0], *new_tail]
+                        cumulative_tokens_sub = 0
+                        note_skip_count = 0
+                        just_compacted_or_nudged = True
+
+            if (
+                token_guard_enabled
+                and not soft_warning_issued
+                and total_tokens is not None
+                and total_tokens >= config.subagent_token_guard_soft_threshold
+            ):
+                messages.append(HumanMessage(content=config.subagent_token_guard_soft_warning_text))
+                soft_warning_issued = True
+                just_compacted_or_nudged = True
                 logger.warning(
-                    "dispatch_agent: 会話圧縮/トークン閾値注意の直後に極端に短い最終応答"
-                    "(%d文字)を検知したため再試行します (iter=%d)",
-                    len(content_text),
+                    "subagent: トークン使用量が閾値(%d)に近づいたため注意メッセージを注入" "(iter=%d, total_tokens=%d)",
+                    config.subagent_token_guard_soft_threshold,
                     iteration,
-                )
-                messages.append(HumanMessage(content=_POST_COMPACTION_SUSPICIOUS_RESPONSE_NUDGE_TEXT))
-                continue
-            logger.info("dispatch_agent 正常終了: %d回で完了", iteration)
-            return response.content
-
-        total_tokens = _extract_total_tokens(response) if config.track_token_usage else None
-        if total_tokens is not None:
-            cumulative_tokens_sub += total_tokens
-
-        if token_guard_enabled and soft_warning_issued and total_tokens is not None and total_tokens >= config.subagent_token_guard_hard_threshold:
-            logger.warning(
-                "dispatch_agent: トークン使用量が閾値(%d)に達したため打ち切り" "(iter=%d, total_tokens=%d)",
-                config.subagent_token_guard_hard_threshold,
-                iteration,
-                total_tokens,
-            )
-            return _build_truncation_message(
-                "トークン使用量が上限" f"({config.subagent_token_guard_hard_threshold}トークン)に達した",
-                messages,
-            )
-
-        results = await asyncio.gather(*(_run_one_tool_call(call, tools_by_name) for call in tool_calls))
-        for tool_message, followup in results:
-            messages.append(tool_message)
-            if followup is not None:
-                messages.append(followup)
-
-        if compaction_enabled and should_compact(
-            {"total": cumulative_tokens_sub},
-            {"total_tokens": total_tokens},
-            len(messages),
-            compaction_config,
-        ):
-            if is_compaction_blocked_by_missing_note(messages, compaction_config, note_skip_count):
-                note_skip_count += 1
-                logger.warning(
-                    "subagent: write_thread_note未呼び出しのため圧縮を見送ります"
-                    "(iter=%d, skip_count=%d)",
-                    iteration,
-                    note_skip_count,
+                    total_tokens,
                 )
             else:
-                # note_skip_count のリセットは実際に圧縮が完了した場合のみ行う
-                # （maybe_compactがNoneを返す＝要約LLM呼び出しの失敗・ループ検知
-                # 予算切れ等の場合はリセットしない。ここでリセットしてしまうと、
-                # 猶予を使い切って強制圧縮に踏み切った直後に要約が失敗したとき、
-                # 安全弁がまた最初から猶予を積み直すことになり骨抜きになる）。
-                # 圧縮用モデルはツール未bindの素のインスタンスを使う（本編の model は
-                # bind_tools 済みで、要約専用の呼び出しにツール定義を含める必要が
-                # 無いため。src/context_compaction.py の maybe_compact docstring参照）。
-                summary_model = await build_model(config, role="sub")
-                # messages[0] は run_subagent 開始時に積んだ SystemMessage。graph.py の
-                # メインエージェントは system_prompt を state["messages"] に含めず
-                # call_model 側で毎回付け足す構造のため要約対象から自然に外れるが、
-                # サブエージェントの messages はローカルリストの先頭に SystemMessage を
-                # 保持する構造が異なる。除外せずに渡すと要約で先頭が切り捨てられた際に
-                # サブエージェントが以後システムプロンプト（役割・ツール方針等）を
-                # 失ってしまうため、常に保持対象として明示的に除外してから渡す。
-                new_tail = await maybe_compact(messages[1:], summary_model, compaction_config, role="sub")
-                if new_tail is not None:
-                    logger.info(
-                        "subagent: 会話履歴を圧縮しました (iter=%d) [%s]",
-                        iteration,
-                        describe_current_task(),
-                    )
-                    messages = [messages[0], *new_tail]
-                    cumulative_tokens_sub = 0
-                    note_skip_count = 0
+                # token_guardのソフト警告（会話をこれ以上進めず引継ぎを促す）と
+                # 同時に条件を満たす場合はそちらを優先し、pre_noteは差し込まない
+                # （src/graph.py の call_model/pre_model_hook と同じ排他方針。
+                # 「これ以上調べるな」と「write_thread_noteを呼べ」が矛盾するため。
+                # 元々この関数はsrc/context_compaction.pyに実装済みだったが、
+                # subagent.pyから一度も呼ばれておらず
+                # [context_compaction.subagent].pre_note_thresholdが死んだ設定に
+                # なっていた実装漏れを修正）。
+                before_pre_note = messages
+                messages = maybe_append_precompact_note_nudge(messages, compaction_config)
+                if messages is not before_pre_note:
                     just_compacted_or_nudged = True
 
-        if (
-            token_guard_enabled
-            and not soft_warning_issued
-            and total_tokens is not None
-            and total_tokens >= config.subagent_token_guard_soft_threshold
-        ):
-            messages.append(HumanMessage(content=config.subagent_token_guard_soft_warning_text))
-            soft_warning_issued = True
-            just_compacted_or_nudged = True
-            logger.warning(
-                "subagent: トークン使用量が閾値(%d)に近づいたため注意メッセージを注入" "(iter=%d, total_tokens=%d)",
-                config.subagent_token_guard_soft_threshold,
-                iteration,
-                total_tokens,
-            )
-        else:
-            # token_guardのソフト警告（会話をこれ以上進めず引継ぎを促す）と
-            # 同時に条件を満たす場合はそちらを優先し、pre_noteは差し込まない
-            # （src/graph.py の call_model/pre_model_hook と同じ排他方針。
-            # 「これ以上調べるな」と「write_thread_noteを呼べ」が矛盾するため。
-            # 元々この関数はsrc/context_compaction.pyに実装済みだったが、
-            # subagent.pyから一度も呼ばれておらず
-            # [context_compaction.subagent].pre_note_thresholdが死んだ設定に
-            # なっていた実装漏れを修正）。
-            before_pre_note = messages
-            messages = maybe_append_precompact_note_nudge(messages, compaction_config)
-            if messages is not before_pre_note:
-                just_compacted_or_nudged = True
+        logger.warning("dispatch_agent: 最大反復回数(%d)に到達したため打ち切り", max_iterations)
+        return _build_truncation_message(f"最大反復回数({max_iterations})に達した", messages)
+    except asyncio.CancelledError:
+        # 停止ボタン等でこのサブエージェントが強制終了された場合、ここまでの
+        # messages（ローカル変数のためこの関数を抜けると失われる）を
+        # on_cancelled 経由で呼び出し元へ退避させてから再送出する。
+        # dispatch_agent → run_subagent という一方向の依存を保つため
+        # （モジュールdocstring参照）、退避先の決定・書き込みは呼び出し元
+        # （_dispatch_agent_job.py）の責務とし、ここではコールバックを
+        # 呼ぶだけに留める。
+        if on_cancelled is not None:
+            try:
+                on_cancelled(messages)
+            except Exception:  # noqa: BLE001 - 退避処理の失敗でCancelledErrorの伝播を妨げない
+                logger.exception("subagent: on_cancelled コールバックの実行に失敗しました")
+        raise
 
-    logger.warning("dispatch_agent: 最大反復回数(%d)に到達したため打ち切り", max_iterations)
-    return _build_truncation_message(f"最大反復回数({max_iterations})に達した", messages)
+
+def dump_messages_for_cancelled_rescue(messages: list) -> str:
+    """CancelledErrorによる強制停止時、会話履歴を緊急退避用に整形する。
+
+    run_subagent の on_cancelled コールバックから渡された messages
+    （SystemMessage/HumanMessage/AIMessage/ToolMessageの列）を、要約せず
+    ほぼそのままMarkdown化する。_collect_tool_results_summary は打ち切り時に
+    委譲元へ引き継ぐための軽量要約だが、こちらは停止ボタンによる予期しない
+    中断からの人間による調査・復旧が目的のため、tool_calls の引数を含め
+    情報量を優先する。
+
+    Args:
+        messages: run_subagent がキャンセルされた時点の会話履歴。
+
+    Returns:
+        メッセージごとに "### <型名>" の見出しとcontentを並べたMarkdown文字列
+        （tool_callsがあれば併記）。messagesが空なら空文字列。
+    """
+    if not messages:
+        return ""
+    parts = ["[サブエージェント強制停止による会話履歴の緊急退避]"]
+    for m in messages:
+        role = type(m).__name__
+        content = str(m.content)
+        parts.append(f"### {role}\n{content}")
+        tool_calls = getattr(m, "tool_calls", None)
+        if tool_calls:
+            parts.append(f"tool_calls: {tool_calls}")
+    return "\n\n".join(parts)
 
 
 _TOOL_RESULT_SNIPPET_LIMIT = 1500

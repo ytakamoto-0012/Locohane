@@ -18,6 +18,7 @@ import json
 import re
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from src import tools
 
@@ -470,6 +471,42 @@ def test_scratch_notes_path_for_run_is_isolated_per_run(monkeypatch, tmp_path) -
     assert path_a != path_b
     assert "run-a" in path_a.name
     assert "run-b" in path_b.name
+
+
+@pytest.mark.asyncio
+async def test_cancel_via_stop_button_rescues_conversation_to_scratch_note(monkeypatch, tmp_path) -> None:
+    """停止ボタン経由(cancel_dispatch_agent_jobs_for_thread)の強制終了時、
+    run_subagentのon_cancelledコールバックに渡された会話履歴が
+    write_scratch_noteと同じ_scratch_notes_<run_id>.mdへ退避されることを検証する。
+
+    停止ボタンによる強制終了ではサブエージェントのmessages（ローカル変数）が
+    完全に破棄されていた問題への対処（_make_rescue_on_cancelled参照）。
+    """
+    _setup(monkeypatch, tmp_path=tmp_path, thread_id="thread-1")
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.05)
+    started_running = asyncio.Event()
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, on_cancelled=None, **kwargs):
+        started_running.set()
+        try:
+            await asyncio.sleep(1000)
+        except asyncio.CancelledError:
+            if on_cancelled is not None:
+                on_cancelled([HumanMessage(content="rescued-task-marker")])
+            raise
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    job_id = _extract_job_id(started)
+    await started_running.wait()
+
+    run_id = tools._dispatch_agent_job._DISPATCH_AGENT_JOBS[job_id].run_id
+    result = await tools.cancel_dispatch_agent_jobs_for_thread("thread-1")
+
+    assert result is True
+    note_path = tools._dispatch_agent_job._scratch_notes_path_for_run(run_id)
+    assert note_path.is_file()
+    assert "rescued-task-marker" in note_path.read_text(encoding="utf-8")
 
 
 def test_dispatch_agent_family_is_base_only_not_subagent() -> None:

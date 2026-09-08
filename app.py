@@ -2828,6 +2828,71 @@ def _find_orphaned_tool_calls(messages: list) -> list[dict]:
     return orphaned
 
 
+def _dispatch_agent_rescue_note_hint() -> str:
+    """強制停止されたdispatch_agentの孤立tool_callに添える、緊急退避内容の案内文を組み立てる。
+
+    write_scratch_note・_scratch_notes_path_for_run が書き込む場所は常に
+    _resolve_exec_workdir()（default_workdir配下の_tmp_<thread_id>）であり、
+    ツールバーでユーザーが別の作業ディレクトリ（work_dir）を設定していても
+    そこには一切触れない（write_scratch_note.py docstring参照）。しかし
+    Glob/Read等の既定検索先（_resolve_workdir()）はwork_dir設定時にはそちらを
+    優先するため、単に「作業ディレクトリ配下」とだけ案内すると、work_dir
+    設定時にexploreがscratch_notesファイルを見つけられず、この案内文自身の
+    「ファイルが存在しない場合は退避前に停止したとみなす」という救済条項が
+    誤って発動し、実際には退避済みの内容が見過ごされてしまう。
+    _resolve_exec_workdir() を直接呼んで実際の絶対パスを案内文に埋め込み、
+    「作業ディレクトリ」という曖昧な表現に頼らないようにする。
+
+    _resolve_exec_workdir() は cl.user_session からthread_idを読むため、
+    Chainlitセッション文脈が解決できない状況（cross-session停止でタスク
+    生成元のタブが既に閉じられている場合等）では例外を送出しうる。その
+    場合は絶対パスを諦め、「作業ディレクトリ」という言葉を避けつつ
+    実行用一時ディレクトリの命名規則を説明する文言にフォールバックする。
+    """
+    try:
+        from src.tools._workdir import _resolve_exec_workdir
+
+        location = f"{_resolve_exec_workdir()} フォルダ"
+    except Exception:  # noqa: BLE001 - パス解決に失敗しても案内文の生成自体は諦めない
+        location = (
+            "実行用の一時フォルダ（default_workdir配下の_tmp_<スレッドID>という"
+            "名前。execute_python_code/run_scriptの中間生成物と同じ場所で、"
+            "ツールバーで別の作業ディレクトリを指定していてもそちらとは異なる）"
+        )
+    return (
+        "このサブエージェントへの委譲は中断直前まで会話内容をwrite_scratch_noteと"
+        f"同じ場所（{location}）へ緊急退避を試みています。次にこのタスクを"
+        "再開する際は、まずexploreサブエージェントへ委譲してそこの"
+        "_scratch_notes_*.mdの内容を把握し、write_thread_noteで要点を記録して"
+        "から、ユーザーの指示に従ってください（ファイルが存在しない場合は退避前"
+        "に停止したとみなし、通常どおりユーザーの指示に従ってください）。"
+    )
+
+
+def _build_orphaned_placeholder_message(tc: dict, base_reason: str) -> ToolMessage:
+    """孤立tool_callを埋めるプレースホルダのToolMessageを組み立てる。
+
+    _repair_orphaned_tool_calls（セッション復旧時）・on_message の
+    except asyncio.CancelledError（停止ボタン等による中断時）の両方から
+    使う共通処理。tool_callがdispatch_agentの場合のみ、強制停止時に
+    run_subagent が緊急退避した会話履歴（_dispatch_agent_job.py の
+    _make_rescue_on_cancelled 参照）をどう扱うべきかの案内を追記する。
+
+    Args:
+        tc: 孤立したtool_call（"id"/"name"を含む辞書）。
+        base_reason: 中断理由の文言（例: "ユーザーの停止操作等により、"）。
+            文末に「このツール呼び出しの実行が中断されました。」が続く
+            前提で渡すこと。
+
+    Returns:
+        補完用のToolMessage。
+    """
+    content = f"エラー: {base_reason}このツール呼び出しの実行が中断されました。"
+    if tc.get("name") == "dispatch_agent":
+        content = f"{content}\n\n[{_dispatch_agent_rescue_note_hint()}]"
+    return ToolMessage(content=content, tool_call_id=tc["id"], name=tc.get("name", ""))
+
+
 async def _repair_orphaned_tool_calls(graph, config: dict) -> int:
     """チェックポイント末尾に孤立tool_callがあれば、プレースホルダのToolMessageを
     補完コミットして修復する。修復した件数を返す（0なら修復不要だった）。
@@ -2855,11 +2920,7 @@ async def _repair_orphaned_tool_calls(graph, config: dict) -> int:
         config,
         {
             "messages": [
-                ToolMessage(
-                    content=("エラー: 直前のセッション異常により、" "このツール呼び出しの実行結果が失われました。"),
-                    tool_call_id=tc["id"],
-                    name=tc.get("name", ""),
-                )
+                _build_orphaned_placeholder_message(tc, "直前のセッション異常により、")
                 for tc in orphaned
             ]
         },
@@ -3723,11 +3784,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                         config,
                         {
                             "messages": [
-                                ToolMessage(
-                                    content=("エラー: ユーザーの停止操作等により、" "このツール呼び出しの実行が中断されました。"),
-                                    tool_call_id=tc["id"],
-                                    name=tc.get("name", ""),
-                                )
+                                _build_orphaned_placeholder_message(tc, "ユーザーの停止操作等により、")
                                 for tc in orphaned
                             ]
                         },
