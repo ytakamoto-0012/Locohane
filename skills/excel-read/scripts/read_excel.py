@@ -205,8 +205,11 @@ def _run_queries(ws, queries: list[dict], max_row: int) -> list[dict]:
     return results
 
 
-def _cell_json(cell) -> object:
+def _cell_json(cell, no_style: bool = False) -> object:
     value = cell_to_json(cell.value)
+    if no_style:
+        number_format = extract_style(cell).get("number_format")
+        return {"value": value, "style": {"number_format": number_format}} if number_format else {"value": value}
     style = extract_style(cell)
     return {"value": value, "style": style} if style else {"value": value}
 
@@ -218,6 +221,7 @@ def _read_xlsx(
     limit: int,
     data_only: bool,
     queries: list[dict] | None = None,
+    no_style: bool = False,
 ) -> dict:
     import openpyxl
 
@@ -229,7 +233,13 @@ def _read_xlsx(
         names = wb.sheetnames
         if sheet_arg is None:
             sheets = [
-                {"name": name, "max_row": wb[name].max_row or 0, "max_column": wb[name].max_column or 0}
+                {
+                    "name": name,
+                    "max_row": wb[name].max_row or 0,
+                    "max_column": wb[name].max_column or 0,
+                    # openpyxlのprint_areaは未設定時Noneではなく空文字列""を返すためNoneに正規化する
+                    "print_area": wb[name].print_area or None,
+                }
                 for name in names
             ]
             return {"path": str(path), "mode": "sheets", "sheets": sheets}
@@ -242,7 +252,7 @@ def _read_xlsx(
             max_row = min(total_rows, offset + limit)
             if offset < max_row:
                 for row in ws.iter_rows(min_row=offset + 1, max_row=max_row):
-                    rows.append([_cell_json(cell) for cell in row])
+                    rows.append([_cell_json(cell, no_style) for cell in row])
         result = {
             "path": str(path),
             "mode": "rows",
@@ -262,6 +272,10 @@ def _read_xlsx(
             }
             for t in ws.tables.values()
         ]
+        if no_style:
+            if queries:
+                result["query_results"] = _run_queries(ws, queries, total_rows)
+            return result
         # 列幅を取得（返却範囲の列のみ）
         from openpyxl.utils import get_column_letter
         column_widths = {}
@@ -382,6 +396,14 @@ def main() -> int:
         help="xlsx/xlsmで数式ではなく最後にExcelが計算したキャッシュ値を返す（xlsのみ影響なし）",
     )
     parser.add_argument(
+        "--no-style",
+        action="store_true",
+        help=(
+            "xlsx/xlsmでvalue/number_format/tables/merged_cellsのみを返す軽量モード"
+            "（column_widths/row_heights/warningsは計算自体を省略、number_format以外のstyleは省略）"
+        ),
+    )
+    parser.add_argument(
         "--query-json",
         default=None,
         help=(
@@ -407,6 +429,10 @@ def main() -> int:
         print("--query-json は .xlsx/.xlsm のみ対応です", file=sys.stderr)
         return 1
 
+    if ext == ".xls" and args.no_style:
+        print("--no-style は .xlsx/.xlsm のみ対応です（.xlsは元々styleを取得しません）", file=sys.stderr)
+        return 1
+
     queries: list[dict] | None = None
     if args.query_json:
         try:
@@ -420,7 +446,7 @@ def main() -> int:
 
     try:
         if ext in (".xlsx", ".xlsm"):
-            result = _read_xlsx(path, args.sheet, offset, limit, args.data_only, queries)
+            result = _read_xlsx(path, args.sheet, offset, limit, args.data_only, queries, args.no_style)
         elif ext == ".xls":
             result = _read_xls(path, args.sheet, offset, limit)
         else:
