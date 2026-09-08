@@ -21,7 +21,7 @@ background_llm_timeout_max_retries を設定していても実際には一度も
 import httpx
 import openai
 import pytest
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from langchain_core.messages import AIMessage
 
 from src import subagent
@@ -39,6 +39,7 @@ class _FakeConfig:
     """
 
     thinking_loop_guard_max_retries: int = 0
+    thinking_loop_guard_nudge_messages: list = field(default_factory=lambda: ["繰り返しを避けてください"])
     subagent_empty_response_max_retries: int = 0
     subagent_token_guard_enabled: bool = False
     track_token_usage: bool = False
@@ -213,3 +214,42 @@ async def test_recovers_from_openai_wrapped_timeout(monkeypatch) -> None:
     assert result == "完了しました"
     assert not subagent.is_truncated_result(result)
     assert state["calls"] == 3  # 2回失敗 + 3回目で成功
+
+
+@pytest.mark.asyncio
+async def test_thinking_loop_detected_truncates_like_timeout_instead_of_raising(monkeypatch) -> None:
+    """ThinkingLoopDetectedのリトライ上限到達を、通信エラーと同じ「打ち切りメッセージとして
+    正常return」扱いにする回帰テスト。
+
+    以前は run_subagent 本体がこの例外を捕捉せず、そのまま呼び出し元（dispatch_agent
+    のジョブランナー）まで伝播していた。通信エラー（TimeoutError/LLM_CONNECTION_ERRORS）
+    は _build_truncation_message で会話要約を保持したまま正常returnするのに対し、
+    ThinkingLoopDetected だけが例外送出で job.status="error" となり会話情報が
+    一切引き継がれない非対称な挙動になっていた（2026-09-09 実運用で確認）。
+    """
+    from src.llm import ThinkingLoopDetected
+
+    async def fake_aclose_model_client(model) -> None:
+        return None
+
+    monkeypatch.setattr(subagent, "aclose_model_client", fake_aclose_model_client)
+
+    def _loop_exc() -> Exception:
+        return ThinkingLoopDetected("反復ループ", snippet="同じ文の繰り返し")
+
+    fake_build_model, state = _make_fake_build_model(fail_times=99, final_message=_FINAL, make_exc=_loop_exc)
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
+    config = _FakeConfig()
+    config.thinking_loop_guard_max_retries = 1
+
+    result = await subagent.run_subagent(
+        task="t",
+        tools=[],
+        system_prompt="sp",
+        config=config,
+        max_iterations=5,
+    )
+
+    assert subagent.is_truncated_result(result)
+    assert "反復ループ" in result
+    assert "同じ文の繰り返し" in result

@@ -592,6 +592,24 @@ async def run_subagent(
                     exc,
                 )
                 return _build_truncation_message(f"LLM呼び出しがタイムアウトした({exc})", messages)
+            except ThinkingLoopDetected as exc:
+                # thinking_loop_guard_max_retries回再試行してもなお反復ループが
+                # 解消しなかった場合（_invoke_with_loop_retry参照）。以前はここで
+                # 捕捉せず素通りさせていたため、run_subagentの外まで例外が
+                # 伝播してjob.status="error"となり、通信エラー時とは非対称に
+                # 会話履歴が一切引き継がれずに失われていた（2026-09-09 実運用
+                # で確認）。通信エラーと同じ「打ち切りメッセージとして正常
+                # returnする」扱いに揃える。_invoke_with_loop_retry が既に
+                # aclose_model_client でこのモデルインスタンスをクローズ済み
+                # のため、ここでの追加クローズ処理は不要。
+                logger.warning(
+                    "dispatch_agent: LLM応答の反復ループが解消しないため打ち切り(iter=%d): %s",
+                    iteration,
+                    exc.snippet,
+                )
+                return _build_truncation_message(
+                    f"LLM応答の反復ループを検知した(直近テキスト: {exc.snippet!r})", messages
+                )
             messages.append(response)
             logger.info("subagent iter=%d ai=%r", iteration, str(response.content)[:500])
             if on_iteration is not None:

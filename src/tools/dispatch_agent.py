@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from langchain_core.tools import tool
+from langchain_core.tools import InjectedToolCallId, tool
+from typing import Annotated
 import asyncio
 import chainlit as cl
 import json
@@ -16,6 +17,7 @@ from ._dispatch_agent_job import _DispatchAgentJob, _dispatch_agent_job_started_
 from ._path_memory_helpers import _resolve_path_memory_tokens_in_text
 from ._plan_render import current_plan_status_text
 from ._workdir import _resolve_workdir
+from .write_scratch_note import sanitize_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,11 @@ def _task_with_plan_hint(task: str) -> str:
     return f"[実行計画（進行中・最優先タスク）]\n{status}\n\n{task}"
 
 @tool
-async def dispatch_agent(task: str, agent_type: str) -> str:
+async def dispatch_agent(
+    task: str,
+    agent_type: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+) -> str:
     """タスクを独立したサブエージェントへ委譲し、最終回答のみを受け取る。
 
     調査や複数ステップの下調べなど、詳細な思考過程やツール呼び出しの
@@ -122,7 +128,12 @@ async def dispatch_agent(task: str, agent_type: str) -> str:
 
     job = _DispatchAgentJob(
         thread_id=cl.user_session.get("thread_id") or "",
-        run_id=uuid.uuid4().hex,
+        # run_id はこの呼び出し自身の tool_call_id から作る（uuid4の新規発行
+        # ではなく）。強制停止で孤立tool_callになった際、app.py側がtc["id"]
+        # から同じ sanitize_run_id() で run_id を再計算でき、退避先
+        # scratch_notesファイルの絶対パスを案内文に埋め込めるようにするため
+        # （_build_orphaned_placeholder_messages 参照）。
+        run_id=sanitize_run_id(tool_call_id),
         agent_type=agent_type,
         task_preview=task[:200],
         started_at=time.monotonic(),

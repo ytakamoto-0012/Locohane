@@ -66,7 +66,14 @@ async def _dispatch_planner(monkeypatch) -> None:
         return "計画草案です。"
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    await tools.dispatch_agent.ainvoke({"task": "設計してください", "agent_type": "planner"})
+    await tools.dispatch_agent.ainvoke(
+        {
+            "name": "dispatch_agent",
+            "args": {"task": "設計してください", "agent_type": "planner"},
+            "id": "test-tc-planner",
+            "type": "tool_call",
+        }
+    )
 
 
 _STEPS = [{"content": "作業する", "activeForm": "作業中"}]
@@ -114,7 +121,14 @@ async def _dispatch_planner_info_insufficient(monkeypatch) -> None:
         return "情報不足のため、対象ファイルの原文を確認してください。"
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    await tools.dispatch_agent.ainvoke({"task": "設計してください", "agent_type": "planner"})
+    await tools.dispatch_agent.ainvoke(
+        {
+            "name": "dispatch_agent",
+            "args": {"task": "設計してください", "agent_type": "planner"},
+            "id": "test-tc-planner",
+            "type": "tool_call",
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -139,7 +153,14 @@ async def _dispatch_planner_with_incidental_info_insufficient_mention(monkeypatc
         )
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    await tools.dispatch_agent.ainvoke({"task": "設計してください", "agent_type": "planner"})
+    await tools.dispatch_agent.ainvoke(
+        {
+            "name": "dispatch_agent",
+            "args": {"task": "設計してください", "agent_type": "planner"},
+            "id": "test-tc-planner",
+            "type": "tool_call",
+        }
+    )
 
 
 @pytest.mark.asyncio

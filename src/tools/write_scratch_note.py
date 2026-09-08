@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
+import re
 from langchain_core.tools import tool
 from pathlib import Path
 
 from ._state import _SUBAGENT_RUN_ID
 from ._workdir import _resolve_exec_workdir
+
+_UNSAFE_RUN_ID_CHARS = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def sanitize_run_id(raw: str) -> str:
+    """run_id をファイル名の一部として安全な文字列に正規化する。
+
+    dispatch_agent は run_id として LLM/フレームワークが生成する
+    tool_call_id をそのまま使う（孤立tool_call検出時にtc["id"]から同じ
+    run_idを再計算し、退避先ファイルの絶対パスを案内文に埋め込むため）。
+    実測値（llama.cpp経由）は英数字のみだが、生成元のサーバー実装に
+    フォーマット保証は無く、将来パス区切り文字等を含む値が来ても
+    `_scratch_notes_path_for_run` がファイル名として安全に使えるように
+    英数字・アンダースコア・ハイフン以外を "_" に置換する。
+    """
+    cleaned = _UNSAFE_RUN_ID_CHARS.sub("_", raw)
+    return cleaned or "unknown"
 
 
 def _scratch_notes_path_for_run(run_id: str) -> Path:

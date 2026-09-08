@@ -75,6 +75,22 @@ def _setup(monkeypatch, tmp_path=None) -> None:
         monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", workdir)
 
 
+_TC_ID_COUNTER = 0
+
+
+async def _invoke_dispatch_agent(**kwargs):
+    """dispatch_agent は InjectedToolCallId を持つため ToolCall 形式で呼ぶ
+    必要がある（test_tools_dispatch_agent.py の _invoke_dispatch_agent と
+    同じ理由づけ。ToolCall形式では戻り値が ToolMessage にラップされるため
+    .content を取り出して従来通り文字列を返す）。"""
+    global _TC_ID_COUNTER
+    _TC_ID_COUNTER += 1
+    result = await tools.dispatch_agent.ainvoke(
+        {"name": "dispatch_agent", "args": kwargs, "id": f"test-tc-{_TC_ID_COUNTER}", "type": "tool_call"}
+    )
+    return result.content if hasattr(result, "content") else result
+
+
 async def _dispatch_three(monkeypatch) -> tuple[list[str], int]:
     concurrent = 0
     max_concurrent = 0
@@ -90,9 +106,9 @@ async def _dispatch_three(monkeypatch) -> tuple[list[str], int]:
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
     results = await asyncio.gather(
-        tools.dispatch_agent.ainvoke({"task": "a", "agent_type": "explore"}),
-        tools.dispatch_agent.ainvoke({"task": "b", "agent_type": "explore"}),
-        tools.dispatch_agent.ainvoke({"task": "c", "agent_type": "explore"}),
+        _invoke_dispatch_agent(task="a", agent_type="explore"),
+        _invoke_dispatch_agent(task="b", agent_type="explore"),
+        _invoke_dispatch_agent(task="c", agent_type="explore"),
     )
     return results, max_concurrent
 
@@ -153,7 +169,7 @@ async def test_dispatch_agent_max_parallel_is_independent_per_session(monkeypatc
 
     async def run_in_session(thread_id: str, task: str) -> str:
         llm.set_current_session(thread_id)
-        return await tools.dispatch_agent.ainvoke({"task": task, "agent_type": "explore"})
+        return await _invoke_dispatch_agent(task=task, agent_type="explore")
 
     loop = asyncio.get_event_loop()
     start = loop.time()
@@ -186,7 +202,7 @@ async def test_dispatch_agent_injects_work_dir_hint_into_task(monkeypatch, tmp_p
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
-    await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
+    await _invoke_dispatch_agent(task="investigate", agent_type="explore")
 
     # work_dir未設定時、_resolve_workdir()はdefault_workdir自体ではなく
     # スレッド専用フォルダ（_resolve_exec_workdir()）を返す（2026-08-29修正、
@@ -210,7 +226,7 @@ async def test_dispatch_agent_hint_injection_is_swallowed_when_default_workdir_u
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
-    result = await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
+    result = await _invoke_dispatch_agent(task="investigate", agent_type="explore")
 
     assert result == "ok"
     assert captured["task"] == "investigate"

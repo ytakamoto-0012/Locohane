@@ -101,6 +101,29 @@ def _extract_job_id(text: str) -> str:
     return m.group(1)
 
 
+_TC_ID_COUNTER = 0
+
+
+async def _invoke_dispatch_agent(**kwargs):
+    """dispatch_agent は InjectedToolCallId（tool_call_id）を持つため、単純な
+    引数辞書ではなく ToolCall 形式（name/args/id/type）で呼ぶ必要がある
+    （src/tools/dispatch_agent.py 参照。tool_call_id を run_id として使い、
+    強制停止時に孤立tool_callから退避先ファイルパスを再計算するため）。
+    テスト全体で使う呼び出しラッパー。
+
+    ToolCall形式で ainvoke すると langchain-core が戻り値を ToolMessage へ
+    自動ラップする（引数が単純な辞書の場合は生の文字列のまま返る、という
+    従来の呼び出し方との違い）。既存テストは戻り値が文字列であることを
+    前提にしているため、ここで .content を取り出して統一する。
+    """
+    global _TC_ID_COUNTER
+    _TC_ID_COUNTER += 1
+    result = await tools.dispatch_agent.ainvoke(
+        {"name": "dispatch_agent", "args": kwargs, "id": f"test-tc-{_TC_ID_COUNTER}", "type": "tool_call"}
+    )
+    return result.content if hasattr(result, "content") else result
+
+
 @pytest.mark.asyncio
 async def test_normal_completion_returns_final_result_directly(monkeypatch, tmp_path) -> None:
     """安全上限内に終わる通常ケースでは、1回の呼び出しで最終結果がそのまま返る。"""
@@ -112,7 +135,7 @@ async def test_normal_completion_returns_final_result_directly(monkeypatch, tmp_
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
-    result = await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
+    result = await _invoke_dispatch_agent(task="investigate", agent_type="explore")
 
     assert result == "done:investigate"
     assert "job_id=" not in result
@@ -134,7 +157,7 @@ async def test_background_dispatch_injects_work_dir_hint_into_task(monkeypatch, 
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
-    await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
+    await _invoke_dispatch_agent(task="investigate", agent_type="explore")
 
     # work_dir未設定時、_resolve_workdir()はdefault_workdir自体ではなく
     # スレッド専用フォルダ（_resolve_exec_workdir()）を返す（2026-08-29修正、
@@ -157,7 +180,7 @@ async def test_safety_cap_fallback_returns_job_id_and_keeps_job_running(monkeypa
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
-    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await _invoke_dispatch_agent(task="t", agent_type="explore")
     assert "job_id=" in started
     job_id = _extract_job_id(started)
 
@@ -185,7 +208,7 @@ async def test_fallback_completion_does_not_reset_main_agent_tool_guard(monkeypa
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
-    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await _invoke_dispatch_agent(task="t", agent_type="explore")
     assert "job_id=" in started
     job_id = _extract_job_id(started)
     job = tools._dispatch_agent_job._DISPATCH_AGENT_JOBS[job_id]
@@ -226,7 +249,7 @@ async def test_progress_is_pushed_without_llm_and_stops_after_completion(monkeyp
         gate.set()
 
     release_task = asyncio.create_task(_release_after_delay())
-    result = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    result = await _invoke_dispatch_agent(task="t", agent_type="explore")
     await release_task
 
     assert result == "done"
@@ -253,7 +276,7 @@ async def test_cross_session_access_is_rejected(monkeypatch, tmp_path) -> None:
         return "done"
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await _invoke_dispatch_agent(task="t", agent_type="explore")
     job_id = _extract_job_id(started)
 
     monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession("session-b"))
@@ -278,7 +301,7 @@ async def test_poll_rate_limiting_rejects_too_soon(monkeypatch, tmp_path) -> Non
         return "done"
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await _invoke_dispatch_agent(task="t", agent_type="explore")
     job_id = _extract_job_id(started)
 
     first = await tools.check_dispatch_agent_job.ainvoke({"job_id": job_id})
@@ -303,7 +326,7 @@ async def test_stop_cancels_running_job_cleanly(monkeypatch, tmp_path) -> None:
         await asyncio.sleep(1000)  # stop_dispatch_agent_job にキャンセルされる想定
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await _invoke_dispatch_agent(task="t", agent_type="explore")
     job_id = _extract_job_id(started)
     await started_running.wait()
 
@@ -335,7 +358,7 @@ async def test_cancel_dispatch_agent_jobs_for_thread_stops_running_job(monkeypat
         await asyncio.sleep(1000)  # cancel_dispatch_agent_jobs_for_thread にキャンセルされる想定
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await _invoke_dispatch_agent(task="t", agent_type="explore")
     job_id = _extract_job_id(started)
     await started_running.wait()
 
@@ -386,12 +409,12 @@ async def test_cancel_dispatch_agent_jobs_for_thread_cancels_concurrently(monkey
         return fake_run_subagent
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", _make_fake_run_subagent(0))
-    started_0 = await tools.dispatch_agent.ainvoke({"task": "t0", "agent_type": "explore"})
+    started_0 = await _invoke_dispatch_agent(task="t0", agent_type="explore")
     job_id_0 = _extract_job_id(started_0)
     await started_running[0].wait()
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", _make_fake_run_subagent(1))
-    started_1 = await tools.dispatch_agent.ainvoke({"task": "t1", "agent_type": "explore"})
+    started_1 = await _invoke_dispatch_agent(task="t1", agent_type="explore")
     job_id_1 = _extract_job_id(started_1)
     await started_running[1].wait()
 
@@ -416,7 +439,7 @@ async def test_cancel_dispatch_agent_jobs_for_thread_ignores_other_threads(monke
         return "ok"
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await _invoke_dispatch_agent(task="t", agent_type="explore")
     job_id = _extract_job_id(started)
     await started_running.wait()
 
@@ -439,7 +462,7 @@ async def test_exception_inside_job_is_returned_as_error_not_lost(monkeypatch, t
         raise RuntimeError("boom")
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    result = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    result = await _invoke_dispatch_agent(task="t", agent_type="explore")
 
     assert result.startswith("エラー: サブエージェントの実行に失敗しました: boom\n")
     assert "Traceback (most recent call last)" in result
@@ -458,7 +481,7 @@ async def test_exception_with_empty_str_falls_back_to_type_name(monkeypatch, tmp
         raise TimeoutError()  # str(TimeoutError()) == ""
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    result = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    result = await _invoke_dispatch_agent(task="t", agent_type="explore")
 
     assert result.startswith("エラー: サブエージェントの実行に失敗しました: TimeoutError\n")
     assert "Traceback (most recent call last)" in result
@@ -471,6 +494,22 @@ def test_scratch_notes_path_for_run_is_isolated_per_run(monkeypatch, tmp_path) -
     assert path_a != path_b
     assert "run-a" in path_a.name
     assert "run-b" in path_b.name
+
+
+def test_sanitize_run_id_keeps_safe_characters_unchanged() -> None:
+    """実測されるtool_call_id（英数字のみ）はそのまま通ること。"""
+    assert write_scratch_note_module.sanitize_run_id("URn3f6oVdPomA1pBa78USJgyNqniZzWT") == "URn3f6oVdPomA1pBa78USJgyNqniZzWT"
+
+
+def test_sanitize_run_id_replaces_unsafe_characters() -> None:
+    """パス区切り文字等、ファイル名として不適切な文字は保証されないフォーマット
+    （生成元のLLM/サーバー実装依存）のため防御的に置換する。"""
+    assert write_scratch_note_module.sanitize_run_id("../etc/passwd") == "___etc_passwd"
+    assert write_scratch_note_module.sanitize_run_id("a b\\c") == "a_b_c"
+
+
+def test_sanitize_run_id_empty_string_falls_back_to_unknown() -> None:
+    assert write_scratch_note_module.sanitize_run_id("") == "unknown"
 
 
 @pytest.mark.asyncio
@@ -496,7 +535,7 @@ async def test_cancel_via_stop_button_rescues_conversation_to_scratch_note(monke
             raise
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
-    started = await tools.dispatch_agent.ainvoke({"task": "t", "agent_type": "explore"})
+    started = await _invoke_dispatch_agent(task="t", agent_type="explore")
     job_id = _extract_job_id(started)
     await started_running.wait()
 

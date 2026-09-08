@@ -117,8 +117,12 @@ async def test_dispatch_agent_assigns_unique_run_id_per_call(monkeypatch) -> Non
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
-    await tools.dispatch_agent.ainvoke({"task": "a", "agent_type": "explore"})
-    await tools.dispatch_agent.ainvoke({"task": "b", "agent_type": "explore"})
+    await tools.dispatch_agent.ainvoke(
+        {"name": "dispatch_agent", "args": {"task": "a", "agent_type": "explore"}, "id": "test-tc-a", "type": "tool_call"}
+    )
+    await tools.dispatch_agent.ainvoke(
+        {"name": "dispatch_agent", "args": {"task": "b", "agent_type": "explore"}, "id": "test-tc-b", "type": "tool_call"}
+    )
 
     assert len(seen) == 2
     assert seen[0] != seen[1], "dispatch_agent 呼び出しごとに別の記録先になること"

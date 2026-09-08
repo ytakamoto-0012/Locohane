@@ -100,7 +100,14 @@ async def test_dispatch_agent_injects_plan_hint_into_task_reaching_subagent(monk
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
-    await tools.dispatch_agent.ainvoke({"task": "月間版を作って", "agent_type": "explore"})
+    await tools.dispatch_agent.ainvoke(
+        {
+            "name": "dispatch_agent",
+            "args": {"task": "月間版を作って", "agent_type": "explore"},
+            "id": "test-tc-1",
+            "type": "tool_call",
+        }
+    )
 
     assert "annual_schedule.pptxを1ファイルで作る" in captured["task"]
     assert captured["task"].endswith("月間版を作って")
@@ -117,7 +124,14 @@ async def test_dispatch_agent_task_unchanged_by_plan_hint_when_no_plan(monkeypat
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
 
-    await tools.dispatch_agent.ainvoke({"task": "investigate", "agent_type": "explore"})
+    await tools.dispatch_agent.ainvoke(
+        {
+            "name": "dispatch_agent",
+            "args": {"task": "investigate", "agent_type": "explore"},
+            "id": "test-tc-2",
+            "type": "tool_call",
+        }
+    )
 
     # work_dir未設定時、_resolve_workdir()はdefault_workdir自体ではなく
     # スレッド専用フォルダ（_resolve_exec_workdir()）を返す（2026-08-29修正、

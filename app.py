@@ -2840,55 +2840,85 @@ def _find_orphaned_tool_calls(messages: list) -> list[dict]:
     return orphaned
 
 
-def _dispatch_agent_rescue_note_hint() -> str:
+def _dispatch_agent_rescue_note_hint(tc: dict) -> str:
     """強制停止されたdispatch_agentの孤立tool_callに添える、緊急退避内容の案内文を組み立てる。
 
-    write_scratch_note・_scratch_notes_path_for_run が書き込む場所は常に
-    _resolve_exec_workdir()（default_workdir配下の_tmp_<thread_id>）であり、
-    ツールバーでユーザーが別の作業ディレクトリ（work_dir）を設定していても
-    そこには一切触れない（write_scratch_note.py docstring参照）。しかし
-    Glob/Read等の既定検索先（_resolve_workdir()）はwork_dir設定時にはそちらを
-    優先するため、単に「作業ディレクトリ配下」とだけ案内すると、work_dir
-    設定時にexploreがscratch_notesファイルを見つけられず、この案内文自身の
-    「ファイルが存在しない場合は退避前に停止したとみなす」という救済条項が
-    誤って発動し、実際には退避済みの内容が見過ごされてしまう。
-    _resolve_exec_workdir() を直接呼んで実際の絶対パスを案内文に埋め込み、
-    「作業ディレクトリ」という曖昧な表現に頼らないようにする。
+    dispatch_agent は自身の tool_call_id を run_id として使う
+    （sanitize_run_id 経由、src/tools/dispatch_agent.py 参照）。孤立した
+    tc["id"] に同じ変換を適用すれば、退避先ファイル
+    （_scratch_notes_path_for_run）の絶対パスをここで直接特定できる。
+    以前は「作業ディレクトリ配下」としか案内できず、ユーザーがツールバーで
+    カスタム作業ディレクトリを設定しているとexploreが実際の退避先
+    （_tmp_<thread_id>配下）を見つけられない問題があった。
 
-    _resolve_exec_workdir() は cl.user_session からthread_idを読むため、
-    Chainlitセッション文脈が解決できない状況（cross-session停止でタスク
-    生成元のタブが既に閉じられている場合等）では例外を送出しうる。その
-    場合は絶対パスを諦め、「作業ディレクトリ」という言葉を避けつつ
-    実行用一時ディレクトリの命名規則を説明する文言にフォールバックする。
+    _scratch_notes_path_for_run() は内部で cl.user_session から thread_id を
+    読むため、Chainlitセッション文脈が解決できない状況（cross-session停止で
+    タスク生成元のタブが既に閉じられている場合等）では例外を送出しうる。
+    その場合、またはファイルが実際に存在しない場合は「退避を確認できな
+    かった」ことを明示し、通常運用へのフォールバックを促す。
     """
+    path = None
     try:
-        from src.tools._workdir import _resolve_exec_workdir
+        from src.tools.write_scratch_note import _scratch_notes_path_for_run, sanitize_run_id
 
-        location = f"{_resolve_exec_workdir()} フォルダ"
+        candidate = _scratch_notes_path_for_run(sanitize_run_id(tc["id"]))
+        if candidate.is_file():
+            path = candidate
     except Exception:  # noqa: BLE001 - パス解決に失敗しても案内文の生成自体は諦めない
-        location = (
-            "実行用の一時フォルダ（default_workdir配下の_tmp_<スレッドID>という"
-            "名前。execute_python_code/run_scriptの中間生成物と同じ場所で、"
-            "ツールバーで別の作業ディレクトリを指定していてもそちらとは異なる）"
+        path = None
+
+    if path is not None:
+        return (
+            "このサブエージェントへの委譲は中断直前まで会話内容を次のファイルへ"
+            f"緊急退避済みです: {path}\n"
+            "次にこのタスクを再開する際は、まずexploreサブエージェントへ委譲して"
+            "このファイルを把握し、write_thread_noteで要点を記録してから、"
+            "続きの作業に着手してください。"
         )
     return (
-        "このサブエージェントへの委譲は中断直前まで会話内容をwrite_scratch_noteと"
-        f"同じ場所（{location}）へ緊急退避を試みています。次にこのタスクを"
-        "再開する際は、まずexploreサブエージェントへ委譲してそこの"
-        "_scratch_notes_*.mdの内容を把握し、write_thread_noteで要点を記録して"
-        "から、ユーザーの指示に従ってください（ファイルが存在しない場合は退避前"
-        "に停止したとみなし、通常どおりユーザーの指示に従ってください）。"
+        "このサブエージェントへの委譲は中断直前まで会話内容の緊急退避を"
+        "試みていますが、退避先ファイルを確認できませんでした（退避前に"
+        "停止した可能性があります）。その場合は通常どおりユーザーの指示に"
+        "従ってください。"
     )
 
 
-def _build_orphaned_placeholder_message(tc: dict, base_reason: str) -> ToolMessage:
-    """孤立tool_callを埋めるプレースホルダのToolMessageを組み立てる。
+def _dispatch_agent_rescue_nudge_text(hint: str) -> str:
+    """孤立したdispatch_agent tool_callの直後に追加する、念押しのHumanMessage文言。
+
+    ToolMessage単体（「エラー: ...」で始まる失敗通知の体裁）では、低
+    パラメータモデルが「このアプローチは失敗した、別の方法で最初から
+    やり直そう」と解釈し、後半の具体的な指示（scratch_note確認・
+    write_thread_note記録）を実行に移さない事象が実運用で確認された
+    （2026-09-09: dispatch_agent(explore)によるファイル読取り委譲が
+    停止ボタンで中断→ユーザーの「続けてください」の直後、案内に一切
+    触れず無関係な大規模調査を一から組み立て直した）。ToolMessageと
+    同じ情報をHumanMessage（ユーザー発話に近い形式）としても積むことで、
+    直近の文脈として拾われやすくする。
+
+    ただし、この直後に続くユーザー自身の実際の指示が明確に別方向・
+    中断を求めるものであれば、そちらを優先すべきなのでその旨も明記する
+    （retryではなく1回きりの案内であり、ユーザーの意思を上書きしては
+    ならないため）。
+    """
+    return (
+        f"[システム通知] 直前のdispatch_agentへの委譲は中断されました。{hint} "
+        "ただし、この直後の指示が明確に別の作業内容への変更や中断を"
+        "求めている場合は、そちらを優先してください。"
+    )
+
+
+def _build_orphaned_placeholder_messages(tc: dict, base_reason: str) -> list:
+    """孤立tool_callを埋めるプレースホルダのメッセージ列を組み立てる。
 
     _repair_orphaned_tool_calls（セッション復旧時）・on_message の
     except asyncio.CancelledError（停止ボタン等による中断時）の両方から
     使う共通処理。tool_callがdispatch_agentの場合のみ、強制停止時に
     run_subagent が緊急退避した会話履歴（_dispatch_agent_job.py の
-    _make_rescue_on_cancelled 参照）をどう扱うべきかの案内を追記する。
+    _make_rescue_on_cancelled 参照）をどう扱うべきかの案内を、通常の
+    ToolMessageに加えてHumanMessage（念押し、_dispatch_agent_rescue_nudge_text
+    参照）としても積む。langgraphのadd_messages reducerは渡した順序の
+    ままチェックポイントへ積むため、ToolMessage→HumanMessageの順で返す。
 
     Args:
         tc: 孤立したtool_call（"id"/"name"を含む辞書）。
@@ -2897,12 +2927,17 @@ def _build_orphaned_placeholder_message(tc: dict, base_reason: str) -> ToolMessa
             前提で渡すこと。
 
     Returns:
-        補完用のToolMessage。
+        補完用のメッセージ列（dispatch_agent以外はToolMessage1件のみ）。
     """
     content = f"エラー: {base_reason}このツール呼び出しの実行が中断されました。"
-    if tc.get("name") == "dispatch_agent":
-        content = f"{content}\n\n[{_dispatch_agent_rescue_note_hint()}]"
-    return ToolMessage(content=content, tool_call_id=tc["id"], name=tc.get("name", ""))
+    if tc.get("name") != "dispatch_agent":
+        return [ToolMessage(content=content, tool_call_id=tc["id"], name=tc.get("name", ""))]
+    hint = _dispatch_agent_rescue_note_hint(tc)
+    content = f"{content}\n\n[{hint}]"
+    return [
+        ToolMessage(content=content, tool_call_id=tc["id"], name=tc.get("name", "")),
+        HumanMessage(content=_dispatch_agent_rescue_nudge_text(hint)),
+    ]
 
 
 async def _repair_orphaned_tool_calls(graph, config: dict) -> int:
@@ -2932,8 +2967,9 @@ async def _repair_orphaned_tool_calls(graph, config: dict) -> int:
         config,
         {
             "messages": [
-                _build_orphaned_placeholder_message(tc, "直前のセッション異常により、")
+                msg
                 for tc in orphaned
+                for msg in _build_orphaned_placeholder_messages(tc, "直前のセッション異常により、")
             ]
         },
         as_node="tools",
@@ -3796,8 +3832,9 @@ async def _on_message_impl(message: cl.Message) -> None:
                         config,
                         {
                             "messages": [
-                                _build_orphaned_placeholder_message(tc, "ユーザーの停止操作等により、")
+                                msg
                                 for tc in orphaned
+                                for msg in _build_orphaned_placeholder_messages(tc, "ユーザーの停止操作等により、")
                             ]
                         },
                         as_node="tools",
