@@ -548,6 +548,68 @@ async def test_cancel_via_stop_button_rescues_conversation_to_scratch_note(monke
     assert "rescued-task-marker" in note_path.read_text(encoding="utf-8")
 
 
+@pytest.mark.asyncio
+async def test_cancelling_caller_task_directly_still_rescues_before_propagating(monkeypatch, tmp_path) -> None:
+    """メイングラフのタスク自体がキャンセルされる経路（session.current_task.cancel()）
+    でも、緊急退避が完了してからCancelledErrorが呼び出し元へ伝播することを検証する。
+
+    実運用のレース: 停止ボタン押下時、Chainlitのstop()ハンドラは
+    session.current_task.cancel()（メイングラフのタスク＝dispatch_agentを
+    呼び出しているタスクそのもの）を呼んだ"後"にon_stop()経由で
+    cancel_dispatch_agent_jobs_for_thread()（job.runner_task自身を個別に
+    cancel()する）を呼ぶ。単一イベントループ上ではこの2つのcancel()は
+    スケジュールされる順序が固定されており、"session.current_task.cancel()"
+    の方が"job.runner_task.cancel()"より確実に先に配送される。
+
+    このテストは cancel_dispatch_agent_jobs_for_thread を一切呼ばず、
+    dispatch_agent(...) をawaitしている外側のタスク自体を直接cancel()する
+    （asyncio.wait_for(asyncio.shield(job.runner_task), ...) の待機点へ
+    CancelledErrorが届く、実運用と同じ経路）。dispatch_agent側がjob.runner_task
+    自身のキャンセル・後始末（緊急退避書き込み含む）を待たずにそのまま
+    CancelledErrorを伝播させてしまうと、app.py側の孤立tool_call検出
+    （退避ファイルの存在確認）がまだファイルが作られていない状態で走ってしまう
+    （2026-09-09 実測で確認したレース。src/tools/dispatch_agent.py の
+    except asyncio.CancelledError 参照）。
+    """
+    _setup(monkeypatch, tmp_path=tmp_path, thread_id="thread-1")
+    # wait_for自体のタイムアウトでは発火させたくないため、テストが現実的な
+    # 時間で終わる範囲で十分大きくしておく。
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 5)
+    started_running = asyncio.Event()
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, on_cancelled=None, **kwargs):
+        started_running.set()
+        try:
+            await asyncio.sleep(1000)
+        except asyncio.CancelledError:
+            if on_cancelled is not None:
+                on_cancelled([HumanMessage(content="rescued-task-marker")])
+            raise
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+
+    outer_task = asyncio.create_task(_invoke_dispatch_agent(task="t", agent_type="explore"))
+    await started_running.wait()
+    await asyncio.sleep(0)  # job.runner_taskの起動・run_subagent呼び出しが完了するのを待つ
+
+    job = next(iter(tools._dispatch_agent_job._DISPATCH_AGENT_JOBS.values()))
+    run_id = job.run_id
+
+    # cancel_dispatch_agent_jobs_for_thread は呼ばない。session.current_task
+    # に相当する外側のタスクだけを直接cancel()し、job.runner_task自身は
+    # ここでは一切触れない（実運用の順序どおり、こちらのcancel()が先に届く）。
+    outer_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await outer_task
+
+    # outer_taskのCancelledErrorが呼び出し元まで伝播した"時点で"、既に
+    # job.runner_task自身の後始末（緊急退避）が完了していること。
+    note_path = tools._dispatch_agent_job._scratch_notes_path_for_run(run_id)
+    assert note_path.is_file()
+    assert "rescued-task-marker" in note_path.read_text(encoding="utf-8")
+    assert job.runner_task.cancelled() or job.runner_task.done()
+
+
 def test_dispatch_agent_family_is_base_only_not_subagent() -> None:
     assert tools.dispatch_agent in tools.registry._BASE_TOOLS
     assert tools.check_dispatch_agent_job in tools.registry._BASE_TOOLS

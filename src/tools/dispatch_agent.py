@@ -167,6 +167,27 @@ async def dispatch_agent(
         # 停止ボタン等でこのターン自体がキャンセルされた場合。job.runner_task は
         # shieldにより生き続けるため、TimeoutError時と同様にリセットを禁止する。
         job.turn_still_waiting = False
+        # このCancelledErrorは常に「セッション全体の停止」要求
+        # （app.py の on_stop / _stop_thread_generating）と同時に発生し、
+        # それらは cancel_dispatch_agent_jobs_for_thread 経由で job.runner_task も
+        # 独立に cancel() する（そちらが実際に run_subagent の on_cancelled を
+        # 発火させ、緊急退避ファイルを書き込む）。しかし単一イベントループ上では
+        # 「メイングラフのタスクへ届くこのCancelledError」の方が
+        # 「job.runner_task 自身のキャンセル処理」より確実に先にスケジュール
+        # される（stop()ハンドラがsession.current_task.cancel()を呼んでから
+        # on_stop()内でjob.runner_task.cancel()を呼ぶ順序のため）。この
+        # 例外をそのまま伝播させると、app.py側の孤立tool_call検出が退避
+        # ファイル作成より先に走ってしまい、フルパス案内ではなく「退避を
+        # 確認できませんでした」のフォールバック文言が常に選ばれてしまう
+        # （2026-09-09 実測で確認済みのレース）。ここで job.runner_task 自身の
+        # キャンセル・後始末（緊急退避の書き込み含む）が終わるのを待ってから
+        # 再送出し、案内文組み立て時には必ず退避ファイルが存在する状態にする。
+        if job.runner_task is not None:
+            job.runner_task.cancel()
+            try:
+                await job.runner_task
+            except BaseException:  # noqa: BLE001 - job側の結果に関わらずこのCancelledErrorの伝播を優先する
+                pass
         raise
 
     return _finalize_dispatch_agent_job_result(job, job_id)
