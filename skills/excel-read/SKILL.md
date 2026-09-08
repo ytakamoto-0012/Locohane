@@ -29,6 +29,7 @@ python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --offset 0 --limit 2
 | `--offset` | 任意 | 整数文字列 | `"0"` | 読み飛ばす行数（0始まり）。分割読み込み時に前回の`end_row`をそのまま次回`offset`に使う |
 | `--limit` | 任意 | 整数文字列 | `"200"` | 読み込む最大行数。大きい表でも一度に全件読まず、`total_rows`を見ながら分割読み込みする |
 | `--data-only` | 任意・値なしフラグ | - | 付けない＝数式文字列を返す | 数式セルを数式文字列ではなくExcelが最後に計算したキャッシュ値で返す。`.xlsx`/`.xlsm`のみ有効（`.xls`は常に値のみで無関係） |
+| `--no-style` | 任意・値なしフラグ | - | 付けない＝style情報をフルで返す | `.xlsx`/`.xlsm`限定の軽量モード。セルは`value`と（設定されていれば）`style.number_format`のみを返し、`column_widths`/`row_heights`/`warnings`は計算自体を省略する（`merged_cells`/`tables`は従来通り返す）。書式の細部（太字・背景色等）が不要で値と数値表示形式だけ見たいときに使う。`.xls`指定時はエラー（元々styleを取得しないため） |
 | `--query-json` | 任意 | 文字列（JSON配列を1行化） | なし | 構造化クエリ（詳細は下記「構造化クエリ」節）。`.xlsx`/`.xlsm`のみ対応かつ`--sheet`必須（`.xls`指定・`--sheet`省略はエラー） |
 
 `--sheet`を省略した場合はシート一覧のみを返す（大きいファイルを誤って全件読み込まないための既定動作）。それ以外の引数はすべて省略可。
@@ -53,7 +54,7 @@ python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --offset 0 --limit 2
 
 `result_path`（JSONファイル）のトップレベルキーはどちらのモードでも`path`（読み込んだファイルパス）と`mode`（`"sheets"`または`"rows"`）を含む。それ以外は`--sheet`の有無・拡張子（`.xlsx`/`.xlsm`か`.xls`か）・`--query-json`の組み合わせで変わる。
 
-**シート一覧モード**（`--sheet`省略時）: `sheets`＝各要素`{"name","max_row","max_column"}`のリストのみ。
+**シート一覧モード**（`--sheet`省略時）: `sheets`＝各要素`{"name","max_row","max_column","print_area"}`のリストのみ。`print_area`は各シートに設定された印刷範囲（例`"'Sheet1'!$A$1:$B$20"`、複数範囲があるシートはカンマ区切りで連結された文字列）で、未設定なら`null`。`.xlsx`/`.xlsm`のみ値が入り、`.xls`は`print_area`キー自体が存在しない（xlrdでは印刷範囲を取得できないため非対応）。
 
 **セルデータモード**（`--sheet`指定時）共通キー: `sheet`（解決後のシート名）、`total_rows`/`total_columns`（シート全体の行数・列数）、`start_row`/`end_row`（今回`rows`に含まれる1始まり行番号の範囲。1行も返らなければ両方`null`。次回`--offset`にはこの`end_row`をそのまま渡せる）、`rows`（1行1配列のリスト、`--offset`/`--limit`の範囲のみ）。
 
@@ -71,6 +72,7 @@ python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --offset 0 --limit 2
   - `row_heights`: 返却範囲（`start_row`〜`end_row`）の各行の高さ（`{"3": 15.0, ...}`）。未設定行は省略。
   - `warnings`: 構造的な不備の警告配列（該当なしならキー省略）。`wrap_text`が有効でないセルで、推定表示幅が列幅を超えている場合に文字切れの可能性を指摘。加えて、数式セル（`--data-only`未指定時のみ判定可能）の参照範囲が自身のセルを含む場合（例: `N8`セルの`=SUM(B8:N8)`）はExcelの循環参照エラーの可能性を指摘する（シート修飾された参照`Sheet2!A1:B2`は判定対象外）。
 - `--query-json`ありのとき: 上記`rows`一式に加え、トップレベルに`query_results`が付く。**`query_results`は`--offset`/`--limit`の範囲に関わらずシート全体が対象**（詳細・例は次の「構造化クエリ」節）。`query_results`にはstyle情報は含まれない。
+- `--no-style`ありのとき（`.xlsx`/`.xlsm`のみ）: `rows`の各セルは`value`と（`number_format`が設定されている場合のみ）`style.number_format`だけを返す（`bold`/`fill_color`等は省略）。トップレベルの`merged_cells`/`tables`は通常通り返るが、`column_widths`/`row_heights`/`warnings`はキー自体省略（計算をスキップする）。`--query-json`と併用可能で、`query_results`は`--no-style`の影響を受けない（元々style情報を含まないため）。
 
 ## 構造化クエリ（`--query-json`、必須ルール）
 
@@ -135,7 +137,7 @@ python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --query-json '[{"op"
 
 ## エッジケース
 
-ファイル不在／拡張子がxlsx・xlsm・xls以外／シート未検出／破損ファイルはエラー＋終了コード1。`.xls`はstyle情報・`--query-json`非対応（`--query-json`指定時のみエラー、style情報はそもそも`.xlsx`/`.xlsm`限定で自動的に付かない）。
+ファイル不在／拡張子がxlsx・xlsm・xls以外／シート未検出／破損ファイルはエラー＋終了コード1。`.xls`はstyle情報・`--query-json`・`--no-style`非対応（`--query-json`・`--no-style`は指定時のみエラー、style情報・印刷範囲はそもそも`.xlsx`/`.xlsm`限定で自動的に付かない）。
 
 ## 見た目の確認について
 
