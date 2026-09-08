@@ -824,7 +824,19 @@ if _config.thread_store_enabled:
 
     @_chainlit_asgi_app.delete("/locohane/threads/{thread_id}")
     async def _locohane_delete_thread(thread_id: str, current_user=Depends(_cl_get_current_user)):
+        """生成中のスレッドは削除させない。
+
+        削除すると _generating_thread_tasks/_generating_thread_ids 等の
+        紐付け先スレッドが消え、/locohane/threads/{id}/stop
+        （_stop_thread_generating参照）で該当タスクを cancel() する手段を
+        失ってしまう（削除後もタスク自体は裏で動き続け、CPU/GPUを専有し
+        続ける）。session_id による自セッション除外（isGenerating表示用の
+        /locohane/threads・.../status とは異なり）はここでは行わず、
+        自分自身が今まさに生成中の会話を削除しようとした場合も一律で拒否する。
+        """
         await _assert_owns_thread(thread_id, current_user)
+        if thread_id in _generating_thread_ids:
+            raise HTTPException(status_code=409, detail="この会話は生成中のため削除できません。停止してから削除してください。")
         await thread_store.delete_thread_row(_thread_store_conn, thread_id, _config.elements_dir)
         return {"success": True}
 

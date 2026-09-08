@@ -96,11 +96,26 @@ export function Sidebar() {
 
   const handleDelete = async (thread: ThreadSummary, event: MouseEvent) => {
     event.stopPropagation();
+    // isGenerating は自分自身が今まさに生成中のスレッドでは false になる
+    // （app.py の /locohane/threads docstring参照）ため、ここでの弾きは
+    // 見た目のヒントに過ぎない。実際の拒否はサーバー側（409）で行う
+    // （生成中に削除されるとタスクを止める手段を失うため）。
+    if (thread.isGenerating) {
+      window.alert('この会話は生成中のため削除できません。停止してから削除してください。');
+      return;
+    }
     if (!window.confirm(`「${thread.name ?? '無題の会話'}」を削除しますか？`)) return;
-    await fetch(`${BACKEND_URL}/locohane/threads/${thread.id}`, {
+    const res = await fetch(`${BACKEND_URL}/locohane/threads/${thread.id}`, {
       method: 'DELETE',
       credentials: 'include'
     });
+    if (!res.ok) {
+      if (res.status === 409) {
+        window.alert('この会話は生成中のため削除できません。停止してから削除してください。');
+      }
+      refresh();
+      return;
+    }
     if (thread.id === currentThreadId) {
       // 開いている会話を削除した場合、次のメッセージで空スタブが復活しないよう
       // 新規チャットへフォールバックする。
@@ -151,7 +166,12 @@ export function Sidebar() {
               <button type="button" title="名前を変更" onClick={(event) => handleRename(thread, event)}>
                 <Icon name="pencil" size={12} />
               </button>
-              <button type="button" title="削除" onClick={(event) => handleDelete(thread, event)}>
+              <button
+                type="button"
+                title={thread.isGenerating ? '生成中は削除できません' : '削除'}
+                disabled={thread.isGenerating}
+                onClick={(event) => handleDelete(thread, event)}
+              >
                 <Icon name="trash" size={12} />
               </button>
             </span>
