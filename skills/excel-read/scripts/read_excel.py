@@ -187,10 +187,16 @@ def _query_list_charts(ws, query: dict, max_row: int) -> dict:
     return {"op": "list_charts", "items": items}
 
 
+def _query_print_area(ws, query: dict, max_row: int) -> dict:
+    # openpyxlのprint_areaは未設定時Noneではなく空文字列""を返すためNoneに正規化する
+    return {"op": "print_area", "value": ws.print_area or None}
+
+
 _QUERY_HANDLERS = {
     "group_by": _query_group_by,
     "list_images": _query_list_images,
     "list_charts": _query_list_charts,
+    "print_area": _query_print_area,
 }
 
 

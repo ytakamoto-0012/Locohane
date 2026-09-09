@@ -151,6 +151,21 @@ python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --query-json '[{"op"
 そのまま返す）。`title`は未設定なら`null`。グラフが実在するか・タイトルが
 意図通りかを確認したいだけなら、excel-renderで画像化するよりこちらが速い。
 
+### `print_area`（印刷範囲のみ）
+
+指定した1シートの印刷範囲だけを軽量に取得したいとき（`--sheet`省略時のシート一覧モードでも`print_area`は返るが、全シート分の`max_row`/`max_column`や`rows`を含む重い応答を避けたい場合に使う）。
+
+```bash
+python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --query-json '[{"op": "print_area"}]'
+```
+出力（`result_path`内、`query_results`キー）:
+```json
+"query_results": [
+  {"op": "print_area", "value": "$A$1:$H$45"}
+]
+```
+`value`は未設定なら`null`。複数範囲が設定されているシートはカンマ区切りで連結された文字列になる（シート一覧モードの`print_area`と同じ形式）。`.xls`はそもそも`--query-json`非対応。
+
 ## エッジケース
 
 ファイル不在／拡張子がxlsx・xlsm・xls以外／シート未検出／破損ファイルはエラー＋終了コード1。`.xls`はstyle情報・`--query-json`・`--style`非対応（`--query-json`・`--style`は指定時のみエラー、style情報・印刷範囲はそもそも`.xlsx`/`.xlsm`限定で自動的に付かない）。
