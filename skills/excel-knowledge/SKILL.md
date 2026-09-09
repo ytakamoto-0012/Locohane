@@ -39,7 +39,7 @@ xlsx/xlsm を扱う `excel-edit`/`excel-read`/`excel-render`/`excel-recalc` ス�
 
 | トピック | ファイル | 内容 |
 |---|---|---|
-| excel-read/excel-renderの引数・query | `excel-knowledge/references/read-render-args-and-queries.md` | `read_excel.py`/`render_excel.py`の引数はSKILL.md記載のもので全て、`--query-json`の対応opは`group_by`/`list_images`のみ、存在しない引数・op名を当てずっぽうで発明しない |
+| excel-read/excel-renderの引数・query | `excel-knowledge/references/read-render-args-and-queries.md` | `read_excel.py`/`render_excel.py`の引数はSKILL.md記載のもので全て、`--query-json`の対応opは`group_by`/`list_images`/`list_charts`/`print_area`のみ、存在しない引数・op名を当てずっぽうで発明しない |
 | edit_excel.pyの呼び出し契約 | `excel-knowledge/references/edit-excel-invocation-contract.md` | `--ops-json`/`--ops-file`はどんな用途でも必須（コピー・復元ツールとして使えない）、`--new`は0シートの空ブックから始まる（Sheet1は存在しない）、`--query`と`--query-json`の混同 |
 | excel-editのopで表現できない要求 | `excel-knowledge/references/beyond-excel-edit-capabilities.md` | 積み上げグラフ等、`add_chart`が対応しない種類指定に当たったときの対処。生openpyxlへ無断でバイパスしてxlsmを破損させた実例、`keep_vba`、推奨する対処の順序 |
 | フォント名変更でraw openpyxlに頼るとき | `excel-knowledge/references/raw-openpyxl-xlsm-fallback.md` | excel-editにフォント名指定が無い、Fontはcopy()してから.nameだけ変更する（新規Font代入だとbold/size/colorが消える）、render_excel失敗=破損とは限らない、同じ仮説を実行せず繰り返す迷走への対処 |

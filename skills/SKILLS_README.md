@@ -5,7 +5,7 @@
 
 実装の中核は3ファイル:
 - `src/skills.py` … 第1段階 Discovery（スキル走査・システムプロンプト注入）
-- `src/tools.py`  … 第2・3段階 Read/Execute（`read_skill` / `read_skill_file` / `run_script` / `view_image`）
+- `src/tools/` パッケージ  … 第2・3段階 Read/Execute（`read_skill` / `read_skill_file` / `run_script` / `analyze_image`）
 - `src/graph.py`  … 上記ツールを LLM に `bind_tools` してReActループを回す
 
 ## 1. ディレクトリ構成
@@ -22,7 +22,7 @@ skills/
 ```
 
 - `<skill-name>` はディレクトリ名。`SKILL.md` の `name` と**完全一致必須**（不一致は起動時スキャンでスキップされ、警告ログのみで起動は継続する）。
-- `scripts/` / `references/` / `assets/` という名前自体はコードで強制されていない。強制されているのは「`run_script` はスキルフォルダの `scripts/` 配下にあるファイルしか実行できない」という1点のみ（`tools.py` の `_resolve_script_filename`）。呼び出し側は `scripts/` プレフィックスを書く必要はなく、ファイル名のみを渡せば `scripts/` 配下を再帰探索して解決する（同名ファイルが複数階層にある場合は最も浅い階層を採用）。`references/` `assets/` は Agent Skills 仕様上の慣例名であり、`read_skill_file` は skills ルート配下であればどのパスでも読める。
+- `scripts/` / `references/` / `assets/` という名前自体はコードで強制されていない。強制されているのは「`run_script` はスキルフォルダの `scripts/` 配下にあるファイルしか実行できない」という1点のみ（`src/tools/_safe_path.py` の `_resolve_script_filename`）。呼び出し側は `scripts/` プレフィックスを書く必要はなく、ファイル名のみを渡せば `scripts/` 配下を再帰探索して解決する（同名ファイルが複数階層にある場合は最も浅い階層を採用）。`references/` `assets/` は Agent Skills 仕様上の慣例名であり、`read_skill_file` は skills ルート配下であればどのパスでも読める。
 
 ## 2. SKILL.md の形式
 
@@ -49,7 +49,7 @@ metadata:                   # 任意
 |---|---|---|---|
 | 1. Discovery | `scan_skills()` (起動時1回) | 全スキルの frontmatter を走査 | システムプロンプト内の `name: description` 一覧 |
 | 2. Read | `read_skill` ツール | 該当スキルの `SKILL.md` 本文全体 | Markdown本文の生テキスト |
-| 3. Execute | `read_skill_file` / `run_script` / `view_image` ツール | 補助資料の読み込み／スクリプト実行／画像閲覧 | ファイル内容、スクリプトの実行結果テキスト、または画像そのもの（Vision入力） |
+| 3. Execute | `read_skill_file` / `run_script` / `analyze_image` ツール | 補助資料の読み込み／スクリプト実行／画像閲覧 | ファイル内容、スクリプトの実行結果テキスト、または画像そのもの（Vision入力） |
 
 LLMがどのスキルを読むか・どのスクリプトを叩くかは**すべてLLMの推論に委ねる**。コード側に選択ロジックはない（詳細は各ツールのdocstringとシステムプロンプトの指示文）。
 
@@ -83,7 +83,7 @@ JSONスキーマの説明として`path_memory`キー自体の存在に触れる
 
 ### 4-1. 受け渡しの実体
 
-`run_script` は `subprocess.run(..., capture_output=True, text=True)` でスクリプトを実行し、その結果を次の固定フォーマットの**1本のテキスト**に整形して返す（`tools.py` の `run_script` 末尾）:
+`run_script` は `subprocess.run(..., capture_output=True, text=True)` でスクリプトを実行し、その結果を次の固定フォーマットの**1本のテキスト**に整形して返す（`src/tools/run_script.py` の `run_script` 末尾）:
 
 ```
 [終了コード] <returncode>
@@ -97,10 +97,10 @@ JSONスキーマの説明として`path_memory`キー自体の存在に触れる
 
 ### 4-2. 制約
 
-- **テキストのみ**。`encoding="utf-8", errors="replace"` でデコードされるため、バイナリ・画像等をそのまま `run_script` の戻り値として返す経路はない。生成物を見せたい場合はファイルに保存し、そのパスを stdout に含めて後続手順で扱わせる — **画像ファイルであれば `view_image` ツールでLLMへ視覚情報として渡せる**（`references/`/`assets/`配下の既存画像だけでなく、`run_script` がその場で生成した画像ファイルも同じ経路で見せられる。対応拡張子: png/jpg/jpeg/gif/webp/bmp）。ただしこれはVision対応モデルが前提であり、テキスト専用モデルでは画像部分は無視される点に注意。
+- **テキストのみ**。`encoding="utf-8", errors="replace"` でデコードされるため、バイナリ・画像等をそのまま `run_script` の戻り値として返す経路はない。生成物を見せたい場合はファイルに保存し、そのパスを stdout に含めて後続手順で扱わせる — **画像ファイルであれば `analyze_image` ツールでLLMへ視覚情報として渡せる**（`references/`/`assets/`配下の既存画像だけでなく、`run_script` がその場で生成した画像ファイルも同じ経路で見せられる。対応拡張子: png/jpg/jpeg/gif/webp/bmp/heic/heif）。ただしこれはVision対応モデルが前提であり、テキスト専用モデルでは画像部分は無視される点に注意。
 - **タイムアウトあり**（既定60秒、`config.ini` の `script_timeout` で変更可）。超過時は `run_script` が「エラー: スクリプトが N 秒でタイムアウトしました。」を返し、スクリプト側の出力は破棄される。
 - **`.py` は設定された Python 実行ファイルで起動**（`config.ini` の `script_python`）。それ以外の拡張子はOSに実行を委ねる（Windowsネイティブ環境のため、shebang行は解釈されない点に注意。`.py` 以外のスクリプトを置く場合は `.bat`/`.exe`等、Windowsで直接実行可能な形式にすること）。
-- **作業ディレクトリ（cwd）はスキルフォルダではなく、ユーザーの作業ディレクトリ**（`tools.py` の `_resolve_workdir()`。Chainlit設定の `work_dir`、未設定時は `config.ini` の `default_workdir`）になる。スキル自身のファイル（`scripts/`内の補助モジュール等）を参照する場合は `Path(__file__).resolve().parent` を使い、cwd起点の相対パスに依存しないこと。生成物をスキル実行のたびに使い捨てたいだけなら、cwd配下のセッション専用一時フォルダ `_tmp_<name>/`（名前は環境変数 `AGENT_EXEC_TMP_NAME` で取得、無ければ `AGENT_THREAD_ID` へフォールバック。会話終了時に自動削除される。`pdf-tools` の `render_pdf_pages.py` 参照）に書くと、スキル本体のディレクトリを汚さず済む。
+- **作業ディレクトリ（cwd）はスキルフォルダではなく、ユーザーの作業ディレクトリ**（`src/tools/_workdir.py` の `_resolve_workdir()`。Chainlit設定の `work_dir`、未設定時は `config.ini` の `default_workdir`）になる。スキル自身のファイル（`scripts/`内の補助モジュール等）を参照する場合は `Path(__file__).resolve().parent` を使い、cwd起点の相対パスに依存しないこと。生成物をスキル実行のたびに使い捨てたいだけなら、cwd配下のセッション専用一時フォルダ `_tmp_<name>/`（名前は環境変数 `AGENT_EXEC_TMP_NAME` で取得、無ければ `AGENT_THREAD_ID` へフォールバック。会話終了時に自動削除される。`pdf-tools` の `render_pdf_pages.py` 参照）に書くと、スキル本体のディレクトリを汚さず済む。
 - 呼び出し側は `skill_name` とスクリプトのファイル名（`script_filename`）のみを渡す。`_resolve_script_filename()` が `skill_name/scripts/` 配下（`_safe_path()` により `skills/` ルート配下に強制、ディレクトリトラバーサル対策）を再帰探索して解決するため、`scripts/` プレフィックスや絶対パスを書く必要はない。見つからない場合・`scripts/` ディレクトリ自体が無い場合は実行前にエラーを返す。
 
 ### 4-3. 推奨する値渡しの規約（コード非強制・慣例）
@@ -239,7 +239,7 @@ config.ini `[default_workdir].retention_days` の保持日数ベース自動削�
 作られたまま消えずに溜まり続ける（過去に実際に発生した回帰。cwd基準は
 バグであり仕様ではない）。`AGENT_DEFAULT_WORKDIR` は `run_script`/
 `execute_python_code` のサブプロセス起動時に常に注入される
-（`src/tools.py` の `_subprocess_env()`）。
+（`src/tools/_subprocess_env.py` の `_subprocess_env()`）。
 
 `src/path_memory.py` に、このフォルダを作成して返すヘルパー `exec_tmp_dir()` がある
 （`execute_python_code` が内部で使う `_resolve_exec_workdir()` と同じ命名規約）。
@@ -396,7 +396,7 @@ def register_output_path(path, description: str | None = None) -> dict[str, str]
 2. 必要なら `skills/<skill-name>/scripts/` にスクリプトを置く（`.py` 推奨、Windows実行環境のため）。
 3. `SKILL.md` 本文に、いつ使うか・手順・呼び出しコマンド（`python <script>.py <args...>` 形式。4-0節参照）・出力の解釈方法・エッジケースを書く。
 4. アプリを再起動して `scan_skills()` に発見させる（ホットリロードなし。起動ログの `スキル発見: <name>` を確認）。
-5. 実際にチャットから使ってみて、`read_skill` → （必要なら `read_skill_file` / `view_image`）→ `run_script` の順にツールが呼ばれることを確認する。
+5. 実際にチャットから使ってみて、`read_skill` → （必要なら `read_skill_file` / `analyze_image`）→ `run_script` の順にツールが呼ばれることを確認する。
 
 ## 6. Anthropic互換について
 
@@ -405,7 +405,7 @@ def register_output_path(path, description: str | None = None) -> dict[str, str]
 ただし以下は本プロジェクト独自の実装であり、Anthropicのランタイムをそのまま使っているわけではない点に注意:
 
 - LLM本体は **llama.cpp server（OpenAI互換API）** に接続しており、Claude/Anthropic APIは使用していない（`src/graph.py` の `build_model()` 参照）。
-- `read_skill` / `read_skill_file` / `run_script` / `view_image` という4ツールはこのプロジェクトが `src/tools.py` に独自実装したものであり、Claude Code本体のSkillツール実装そのものではない（挙動を仕様に沿って再現しているだけ）。
+- `read_skill` / `read_skill_file` / `run_script` / `analyze_image` という4ツールはこのプロジェクトが `src/tools/` パッケージに独自実装したものであり、Claude Code本体のSkillツール実装そのものではない（挙動を仕様に沿って再現しているだけ）。
 - 仕様のうち本プロジェクトが実装しているのは frontmatter検証・3段階progressive disclosureのみ。仕様に存在しうるその他の付随機能（あれば）は未実装。
 
 つまり「**SKILL.mdのフォーマット・設計思想はAnthropic仕様準拠だが、実行系（LLM・ツール実装）はAnthropicのものではなく完全に自前**」というのが正確な位置づけ。

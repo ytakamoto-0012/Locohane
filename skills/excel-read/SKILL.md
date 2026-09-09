@@ -161,7 +161,7 @@ python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --query-json '[{"op"
 出力（`result_path`内、`query_results`キー）:
 ```json
 "query_results": [
-  {"op": "print_area", "value": "$A$1:$H$45"}
+  {"op": "print_area", "value": "'Sheet1'!$A$1:$H$45"}
 ]
 ```
 `value`は未設定なら`null`。複数範囲が設定されているシートはカンマ区切りで連結された文字列になる（シート一覧モードの`print_area`と同じ形式）。`.xls`はそもそも`--query-json`非対応。

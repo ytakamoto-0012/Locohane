@@ -10,7 +10,8 @@
 
 ```
 read_excel.py <file_path> [--sheet <名前 or 0始まり index>]
-              [--offset <N>] [--limit <N>] [--data-only] [--query-json '<...>']
+              [--offset <N>] [--limit <N>] [--data-only] [--style]
+              [--query-json '<...>']
 ```
 
 - `--sheet`省略時はシート一覧のみ返す（値は読めない）。
@@ -19,11 +20,14 @@ read_excel.py <file_path> [--sheet <名前 or 0始まり index>]
 - シート名やモード名を**位置引数**として並べて渡す間違いも起きた
   （例: `script_args: ["book.xlsm", "取引明細表", "all"]`）。`read_excel.py`の
   位置引数は`file_path`1個だけで、シート指定は必ず`--sheet`。
+- 既定は軽量モード（value/number_format/merged_cells/tablesのみ）。太字・背景色・
+  罫線等のフルstyle情報が要るときだけ`--style`を付ける（正確な引数一覧・出力形式は
+  `read_excel`のSKILL.md参照。ここは要点のみ）。
 
-## `--query-json`が対応するopは`group_by`と`list_images`の2つだけ
+## `--query-json`が対応するopは`group_by`/`list_images`/`list_charts`/`print_area`の4つだけ
 
 ```
-_QUERY_HANDLERS = {"group_by": ..., "list_images": ...}
+_QUERY_HANDLERS = {"group_by": ..., "list_images": ..., "list_charts": ..., "print_area": ...}
 ```
 
 セル範囲をまとめて読みたい・列幅を知りたい・特定条件で絞り込みたい、といった
@@ -31,7 +35,7 @@ _QUERY_HANDLERS = {"group_by": ..., "list_images": ...}
 当てずっぽうで送り、下記のエラーを受け取った実例が複数セッションで独立に発生した。
 
 ```
-未対応のqueryです: 'get_rows'（対応op: ['group_by', 'list_images']）
+未対応のqueryです: 'get_rows'（対応op: ['group_by', 'list_charts', 'list_images', 'print_area']）
 ```
 
 このエラーメッセージ自体に対応op一覧が含まれているにもかかわらず、次の試行でも
@@ -41,20 +45,22 @@ _QUERY_HANDLERS = {"group_by": ..., "list_images": ...}
 即座に`read_skill`でSKILL.mdのquery節を再読すること。** セル範囲の値そのものを
 知りたいだけなら、`--query-json`ではなく通常モードの`--offset`/`--limit`で
 代替できる（[[edit-excel-invocation-contract]]の`insert_row_group`の
-アンカー確認用途で使う`group_by`以外は、基本的に通常モードで足りる）。
+アンカー確認用途で使う`group_by`、グラフ確認用途の`list_charts`、印刷範囲確認用途の
+`print_area`以外は、基本的に通常モードで足りる）。
 
-## render_excel.pyの引数は`excel_path`1個だけ
-
-```
-render_excel.py <excel_path>
-```
-
-シート指定・ページ指定・部分出力のオプションは一切ない（全シートを常に丸ごと
-画像化する単純な仕様）。それにもかかわらず`--sheet`/`--pages`を付与して
-以下のエラーになった実例がある。
+## render_excel.pyの引数は`excel_path`と`--print-as-is`だけ
 
 ```
-usage: render_excel.py [-h] excel_path
+render_excel.py <excel_path> [--print-as-is]
+```
+
+シート指定・ページ指定・部分出力のオプションは無い（全シートを常に丸ごと
+画像化する単純な仕様）。`--print-as-is`は印刷設定の強制フィットを止める
+オプションであり、シートや出力範囲を選ぶものではない。それにもかかわらず
+`--sheet`/`--pages`を付与して以下のエラーになった実例がある。
+
+```
+usage: render_excel.py [-h] [--print-as-is] excel_path
 ```
 
 `read_excel.py`が`--sheet`を持つことに引きずられ、別スクリプトにも同じ引数体系が

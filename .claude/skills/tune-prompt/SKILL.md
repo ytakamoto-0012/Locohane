@@ -6,7 +6,7 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
 # tune-prompt: プロンプト資産の自動ループテスト・チューニング
 
 `Locohane` の `system_prompt/system_prompt.md`・`skills/*/SKILL.md`・
-`src/tools.py` のツール docstring を、実際のローカル LLM を動かして評価し、
+`src/tools/` パッケージ配下のツール docstring を、実際のローカル LLM を動かして評価し、
 失敗があれば最小限の修正を加えて再評価する、というループを完全自動で回す。
 
 引数（`args`）でチューニング対象カテゴリを指定する。省略時は `system_prompt`。
@@ -26,7 +26,7 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
   `args`に`config_timeouts`が指定されたら、このスキルではなく
   `tune-config-timeouts`を使うようユーザーに伝えて終了する。
 - （将来）`skill:<skill名>` → `skills/<skill名>/SKILL.md`
-- （将来）`tool_docstring` → `src/tools.py`
+- （将来）`tool_docstring` → `src/tools/` パッケージ配下の各ツールファイル
 
 新しい評価ケースを追加したい場合は `create-eval-case` スキルを使う
 （このスキルはケースの実行・チューニングのみを担当し、ケース作成は対象外）。
@@ -109,7 +109,7 @@ python evals/run_all.py <target>
 - git へのコミット・ステージングは一切行わない
   （スナップショット退避と `tuning_log.md` のみで変更履歴を追える）。
 - 対象カテゴリに対応するファイル以外は編集しない
-  （`system_prompt` 実行中に `skills/*/SKILL.md` や `src/tools.py` を触らない）。
+  （`system_prompt` 実行中に `skills/*/SKILL.md` や `src/tools/` を触らない）。
   FAILの根本原因が対象ファイルの記述ではなく `config.ini` 側の数値
   （token上限・timeout等）にあると判明した場合も同様に、対象ファイルは
   変更せず状況をユーザーに報告して終了する（ユーザーから明示指示があれば

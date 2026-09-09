@@ -106,7 +106,7 @@ from excel_common import setup_utf8_stdio, ...  # スキルのファミリーに
 ## 2. Locohane固有の環境変数（ソフト依存）
 
 `_common.py`の`register_output_path`/`write_json_result`は、`run_script`の
-子プロセスに注入される以下の環境変数を使う（`src/tools.py`の`_subprocess_env()`）:
+子プロセスに注入される以下の環境変数を使う（`src/tools/_subprocess_env.py`の`_subprocess_env()`）:
 
 - `AGENT_SRC_DIR`: `src/path_memory.py`をimportするためのパス
 - `AGENT_THREAD_ID` / `AGENT_PATH_MEMORY_DIR` / `AGENT_PATH_MEMORY_MAX_ENTRIES`: `@N`パスメモリー登録用（`register_output_path`）

@@ -1,6 +1,6 @@
 # evals — プロンプト資産の自動ループテスト・チューニング
 
-`system_prompt/system_prompt.md`・`skills/*/SKILL.md`・`src/tools.py` の各ツール
+`system_prompt/system_prompt.md`・`skills/*/SKILL.md`・`src/tools/` パッケージ配下の各ツール
 docstring といった「LLM に渡すプロンプト資産」を、実際のローカル LLM
 （llama.cpp server）を動かして評価し、失敗があれば ClaudeCode が修正して
 再評価する、というループを回すための仕組み。
@@ -62,7 +62,7 @@ judge: |                             # 自由記述の判定基準（省略可�
 auto_approve: true                   # run_script/execute_python_code/approve_plan の
                                       # 承認ダイアログを自動承認(true)/拒否(false)するか
 scripted_text_answers: []            # AskUserQuestion が labels 省略で呼ばれるたびに1件ずつ消費して返す回答
-work_dir: "evals/fixtures/xxx"       # run_script/execute_python_code/view_image の既定
+work_dir: "evals/fixtures/xxx"       # run_script/execute_python_code/analyze_image の既定
                                       # 作業ディレクトリをこのケース専用に固定したい場合の
                                       # プロジェクトルート相対パス（省略可、既定は config.ini
                                       # の [default_workdir].dir）
