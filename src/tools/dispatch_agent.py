@@ -16,6 +16,7 @@ from . import _state
 from ._dispatch_agent_job import _DispatchAgentJob, _dispatch_agent_job_started_message, _finalize_dispatch_agent_job_result, _purge_stale_dispatch_agent_jobs, _run_dispatch_agent_job
 from ._path_memory_helpers import _resolve_path_memory_tokens_in_text
 from ._plan_render import current_plan_status_text
+from ._safe_path import _safe_path
 from ._workdir import _resolve_workdir
 from .write_scratch_note import sanitize_run_id
 
@@ -68,11 +69,40 @@ def _task_with_plan_hint(task: str) -> str:
         return task
     return f"[実行計画（進行中・最優先タスク）]\n{status}\n\n{task}"
 
+def _task_with_orchestrator_skill_hint(task: str, orchestrator_skill: str) -> tuple[str | None, str | None]:
+    """orchestrator_skill 指定時、その SKILL.md 全文を task の先頭に機械的に注入する。
+
+    複数SKILLを横断的に指示するオーケストレーター役のSKILL.mdは、委譲元
+    （メインエージェント）がその内容を要約してtask文へ詰め込もうとすると、
+    必須ルール・禁止事項のような細部が委譲元自身の要約時に脱落しうる
+    （LLMによる自由記述の要約は本質的にlossy）。_task_with_work_dir_hint /
+    _task_with_plan_hint と同じ「委譲元の書き起こしを信用せず、ground truth
+    を機械的に注入する」パターンをここにも適用し、SKILL.md本文そのものを
+    システム側が直接読み込んで先頭に付与することで、LLMによる要約・
+    コピーの工程を経由させない。
+
+    Returns:
+        (注入済みのtask, エラーメッセージ) のタプル。成功時は (task, None)、
+        失敗時は (None, "エラー: ...")。
+    """
+    try:
+        skill_md = _safe_path(f"{orchestrator_skill}/SKILL.md")
+    except ValueError as e:
+        return None, f"エラー: {e}"
+    if not skill_md.is_file():
+        return None, (
+            f"エラー: オーケストレータースキル '{orchestrator_skill}' の SKILL.md が見つかりません。"
+            "スキル名が間違っている可能性が高いです。"
+        )
+    content = skill_md.read_text(encoding="utf-8")
+    return f"[オーケストレータースキル: {orchestrator_skill}]\n{content}\n\n{task}", None
+
 @tool
 async def dispatch_agent(
     task: str,
     agent_type: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
+    orchestrator_skill: str | None = None,
 ) -> str:
     """タスクを独立したサブエージェントへ委譲し、最終回答のみを受け取る。
 
@@ -105,6 +135,13 @@ async def dispatch_agent(
         agent_type: 使用するサブエージェントの種別名（必須、暗黙の既定値は
             無い）。利用可能な種別とそれぞれの用途はシステムプロンプトの
             一覧を参照し、タスクの内容に合った種別を毎回明示的に選ぶこと。
+        orchestrator_skill: 複数のSKILLを横断的に使うよう指示するオーケストレーター
+            役のSKILL.md（本文冒頭で「本スキルはオーケストレータースキルです」等と
+            自己申告している）の文脈で作業している場合にのみ、そのスキル名を指定する。
+            指定すると、そのSKILL.md本文全体がtaskの先頭にそのまま埋め込まれ、
+            必須ルール・禁止事項を要約せずサブエージェントへ渡せる。通常の委譲では
+            省略してよい。存在しないスキル名を指定した場合は起動前に「エラー: ...」
+            を返す（この場合 job は作られない）。
 
     Returns:
         通常はサブエージェントの最終回答テキスト。安全上限に達した場合のみ
@@ -122,7 +159,17 @@ async def dispatch_agent(
     task = _resolve_path_memory_tokens_in_text(task)
     task = _task_with_work_dir_hint(task)
     task = _task_with_plan_hint(task)
-    logger.info("dispatch_agent: task=%r agent_type=%r", task, agent_type)
+    if orchestrator_skill is not None:
+        injected_task, error = _task_with_orchestrator_skill_hint(task, orchestrator_skill)
+        if error:
+            return error
+        task = injected_task
+    logger.info(
+        "dispatch_agent: task=%r agent_type=%r orchestrator_skill=%r",
+        task,
+        agent_type,
+        orchestrator_skill,
+    )
 
     _purge_stale_dispatch_agent_jobs()
 
