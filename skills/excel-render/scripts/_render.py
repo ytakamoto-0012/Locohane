@@ -112,12 +112,17 @@ def _sheet_required_scale(ws) -> float:
         return 1.0
 
 
-def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> tuple[Path, dict[str, float]]:
+def _convert_office_to_pdf(
+    path: Path, tool: str, thread_id: str, force_fit_to_page: bool = True
+) -> tuple[Path, dict[str, float]]:
     """OfficeファイルをOLE（COM）で開き、一時PDFへエクスポートする。
 
     tool: "excel" | "pptx" | "docx"
+    force_fit_to_page: Trueなら各シートの印刷設定を横1ページ×縦1ページの
+        フィット印刷へ強制する（既定）。Falseならシートに既に設定されている
+        印刷設定（Zoom/FitToPages/PrintArea等）をそのまま使う（excelのみ意味を持つ）。
     戻り値: (生成されたPDFのパス, シート名→required_scaleの辞書)。
-        excel以外はscale辞書は空dict。
+        excel以外、またforce_fit_to_page=Falseの場合はscale辞書は空dict。
     """
     import pythoncom
     import win32com.client as win32
@@ -165,18 +170,19 @@ def _convert_office_to_pdf(path: Path, tool: str, thread_id: str) -> tuple[Path,
         if tool == "excel":
             # Workbook → PDF (xlTypePDF = 0)
             doc = app.Workbooks.Open(abs_path)
-            for ws in doc.Worksheets:
-                try:
-                    scale_by_sheet[ws.Name] = _sheet_required_scale(ws)
-                except Exception:
-                    scale_by_sheet[ws.Name] = 1.0
-                try:
-                    page_setup = ws.PageSetup
-                    page_setup.Zoom = False
-                    page_setup.FitToPagesWide = 1
-                    page_setup.FitToPagesTall = 1
-                except Exception:
-                    continue
+            if force_fit_to_page:
+                for ws in doc.Worksheets:
+                    try:
+                        scale_by_sheet[ws.Name] = _sheet_required_scale(ws)
+                    except Exception:
+                        scale_by_sheet[ws.Name] = 1.0
+                    try:
+                        page_setup = ws.PageSetup
+                        page_setup.Zoom = False
+                        page_setup.FitToPagesWide = 1
+                        page_setup.FitToPagesTall = 1
+                    except Exception:
+                        continue
             doc.ExportAsFixedFormat(0, pdf_path, Quality=0, IncludeDocProperties=True, IgnorePrintAreas=False, OpenAfterPublish=False)
             doc.Close(SaveChanges=False)
             doc = None
@@ -338,6 +344,7 @@ def render_office_file(
     crop: bool = True,
     target_dpi: int = _TARGET_DPI,
     thread_id: str | None = None,
+    force_fit_to_page: bool = True,
 ) -> dict:
     """Officeファイル（excel/pptx/docx）の全ページをレンダリングして画像化。
 
@@ -353,6 +360,10 @@ def render_office_file(
         余白除去後の目標DPI
     thread_id : str | None
         AGENT_EXEC_TMP_NAME（無ければAGENT_THREAD_ID）。None なら "_no_session"
+    force_fit_to_page : bool
+        True（既定）なら各シートの印刷設定を横1ページ×縦1ページのフィット印刷へ
+        強制する。Falseならシートに既に設定されている印刷範囲・フィット設定を
+        そのまま使う（excelのみ意味を持つ。この場合DPIブースト・分割警告は行わない）。
 
     Returns
     -------
@@ -363,7 +374,7 @@ def render_office_file(
         thread_id = os.environ.get("AGENT_EXEC_TMP_NAME") or os.environ.get("AGENT_THREAD_ID") or "_no_session"
 
     # 1. OLE → PDF 変換（excelのみ、シートごとの必要縮尺も同時に取得）
-    pdf_path, scale_by_sheet = _convert_office_to_pdf(path, tool, thread_id)
+    pdf_path, scale_by_sheet = _convert_office_to_pdf(path, tool, thread_id, force_fit_to_page)
 
     # 1.5 縮尺に応じたキャプチャDPI・目標DPIの動的ブーストと、分割警告の生成
     capture_dpi = _CAPTURE_DPI

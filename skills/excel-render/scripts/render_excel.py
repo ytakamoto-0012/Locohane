@@ -7,10 +7,13 @@ run_script ツールから
 
 動作概要:
   1. OLE（COM）で Excel をヘッドレス起動し、各シートの印刷設定を横1ページ×
-     縦1ページに収まるフィット印刷へ強制した上でファイルをPDFへエクスポート。
+     縦1ページに収まるフィット印刷へ強制した上でファイルをPDFへエクスポート
+     （--print-as-is指定時はこの強制を行わず、シートに既に
+     設定されている印刷範囲・フィット設定をそのまま使う）。
   2. pypdfium2 で PDF ページを画像化（既定300DPI）。
   3. 白黒境界判定で余白を除去（既定）。
-  4. シートの縮尺に応じてキャプチャDPIを動的にブースト。
+  4. シートの縮尺に応じてキャプチャDPIを動的にブースト
+     （--print-as-is指定時はブーストを行わない）。
 
 生成したPNGは、default_workdir配下のセッション専用一時フォルダ
 `_tmp_<thread_id>/rendered/` に保存する（run_script の cwd＝ユーザー指定
@@ -41,6 +44,11 @@ def main() -> int:
     setup_utf8_stdio()
     parser = argparse.ArgumentParser()
     parser.add_argument("excel_path")
+    parser.add_argument(
+        "--print-as-is",
+        action="store_true",
+        help="シートに既に設定されている印刷範囲・フィット設定をそのまま使ってPDF化する（既定は横1×縦1ページへの強制フィット）",
+    )
     args = parser.parse_args()
 
     path = Path(args.excel_path)
@@ -58,6 +66,7 @@ def main() -> int:
         result = render_office_file(
             path=path,
             tool="excel",
+            force_fit_to_page=not args.print_as_is,
         )
     except ImportError as e:
         print(f"必要なライブラリが見つかりません（pywin32が必要です）: {e}", file=sys.stderr)
