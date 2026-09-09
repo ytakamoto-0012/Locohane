@@ -15,11 +15,11 @@ run_script から
 うっかり全件読み込まないための既定動作）。--sheet を指定した場合のみセル
 データ本体を --offset/--limit の範囲で返す。
 
-xlsx/xlsmでは--sheet指定時、太字・背景色・セル結合・構造化テーブルなどの
-style情報も常に合わせて返す（低パラメータモデルでもstyle情報を見落とさず
-不具合判断できるようにするため）。セル単位の書式（apply_styleと同じキー体系）
-に加え、シート全体のmerged_cells/tablesも返す。openpyxlのread_onlyモードは
-使わないため、通常モードよりメモリ効率は落ちる。
+xlsx/xlsmでは--sheet指定時、既定では軽量モード（value/number_format/
+merged_cells/tablesのみ）で返す。太字・背景色・罫線・セル結合の詳細等の
+フルstyle情報（+column_widths/row_heights/warnings）が必要なときは
+--style を付ける。openpyxlのread_onlyモードは使わないため、通常モードより
+メモリ効率は落ちる。
 """
 
 from __future__ import annotations
@@ -396,11 +396,11 @@ def main() -> int:
         help="xlsx/xlsmで数式ではなく最後にExcelが計算したキャッシュ値を返す（xlsのみ影響なし）",
     )
     parser.add_argument(
-        "--no-style",
+        "--style",
         action="store_true",
         help=(
-            "xlsx/xlsmでvalue/number_format/tables/merged_cellsのみを返す軽量モード"
-            "（column_widths/row_heights/warningsは計算自体を省略、number_format以外のstyleは省略）"
+            "xlsx/xlsmで太字・背景色・罫線等のフルstyle情報とcolumn_widths/row_heights/warningsも返す"
+            "（既定は軽量モードでvalue/number_format/tables/merged_cellsのみ）"
         ),
     )
     parser.add_argument(
@@ -429,8 +429,8 @@ def main() -> int:
         print("--query-json は .xlsx/.xlsm のみ対応です", file=sys.stderr)
         return 1
 
-    if ext == ".xls" and args.no_style:
-        print("--no-style は .xlsx/.xlsm のみ対応です（.xlsは元々styleを取得しません）", file=sys.stderr)
+    if ext == ".xls" and args.style:
+        print("--style は .xlsx/.xlsm のみ対応です（.xlsは元々styleを取得しません）", file=sys.stderr)
         return 1
 
     queries: list[dict] | None = None
@@ -446,7 +446,7 @@ def main() -> int:
 
     try:
         if ext in (".xlsx", ".xlsm"):
-            result = _read_xlsx(path, args.sheet, offset, limit, args.data_only, queries, args.no_style)
+            result = _read_xlsx(path, args.sheet, offset, limit, args.data_only, queries, no_style=not args.style)
         elif ext == ".xls":
             result = _read_xls(path, args.sheet, offset, limit)
         else:
