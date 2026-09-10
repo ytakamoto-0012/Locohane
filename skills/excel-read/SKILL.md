@@ -26,6 +26,12 @@ python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1
 # 201行目以降を続けて読む（分割読み込み）
 python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --offset 200 --limit 200
 
+# 必要な列だけに絞り込んで読む（列数が多い表で一度に読む量を減らす）
+python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --columns "A,C,E"
+
+# 列を絞った上で行も分割して読む（行数・列数どちらも多い表はこの組み合わせが基本）
+python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --columns "A,C,E" --offset 200 --limit 200
+
 # 数式セルをExcelが最後に計算した値で取得する（数式文字列ではなく計算結果が欲しいとき）
 python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --data-only
 
@@ -34,9 +40,6 @@ python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --style
 
 # 列の値ごとの行範囲をグルーピング取得する（生のrowsを目で数えない）
 python read_excel.py "C:\Users\me\book.xlsx" --sheet 月間予定表 --query-json '[{"op": "group_by", "column": "A"}]'
-
-# 必要な列だけに絞り込んで読む（列数が多い表で一度に読む量を減らす）
-python read_excel.py "C:\Users\me\book.xlsx" --sheet Sheet1 --columns "A,C,E"
 ```
 
 ## 引数一覧
