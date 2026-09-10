@@ -407,6 +407,27 @@ def column_index(column: str) -> int:
     return idx
 
 
+def parse_column_selection(columns_arg: str | None, total_columns: int) -> list[int] | None:
+    """--columns引数（カンマ区切りの列アルファベット/1始まり列番号）を
+    1始まり列番号の昇順・重複除去済みリストへ変換する。
+
+    columns_arg が None なら None（呼び出し側は全列を対象にする）。
+    空文字列・区切りのみはエラー（黙って全列扱いにすると指定ミスに気づけないため）。
+    """
+    if columns_arg is None:
+        return None
+    tokens = [t.strip() for t in columns_arg.split(",") if t.strip()]
+    if not tokens:
+        raise ValueError("--columns は有効な列（列アルファベットまたは1始まり列番号）を1つ以上指定してください")
+    indices: set[int] = set()
+    for token in tokens:
+        idx = column_index(token)
+        if idx > total_columns:
+            raise ValueError(f"指定列が範囲外です: {token!r}（このシートの列数: {total_columns}）")
+        indices.add(idx)
+    return sorted(indices)
+
+
 def group_column_values(ws, column: str, max_row: int | None = None) -> list[dict]:
     """指定列を上から走査し、非null値ごとに連続する行範囲をグループ化する。
 

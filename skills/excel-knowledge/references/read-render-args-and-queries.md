@@ -11,7 +11,7 @@
 ```
 read_excel.py <file_path> [--sheet <名前 or 0始まり index>]
               [--offset <N>] [--limit <N>] [--data-only] [--style]
-              [--query-json '<...>']
+              [--query-json '<...>'] [--columns 'A,C,E']
 ```
 
 - `--sheet`省略時はシート一覧のみ返す（値は読めない）。
@@ -23,6 +23,10 @@ read_excel.py <file_path> [--sheet <名前 or 0始まり index>]
 - 既定は軽量モード（value/number_format/merged_cells/tablesのみ）。太字・背景色・
   罫線等のフルstyle情報が要るときだけ`--style`を付ける（正確な引数一覧・出力形式は
   `read_excel`のSKILL.md参照。ここは要点のみ）。
+- 列を絞り込みたいときは`--columns "A,C,E"`（列アルファベット/1始まり列番号の
+  カンマ区切り、`--sheet`必須）。返り値の`columns`キーが今回`rows`に含まれる
+  列アルファベットの配列で、`rows`の各行の`j`番目は必ず`columns[j]`列の値。
+  列数が多い表を一度に全列読まず、必要な列だけに絞る方が安全。
 
 ## `--query-json`が対応するopは`group_by`/`list_images`/`list_charts`/`print_area`の4つだけ
 

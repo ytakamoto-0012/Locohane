@@ -3,7 +3,7 @@
 excel-read スキルの実行スクリプト（progressive disclosure 第3段階）。
 run_script から
     python read_excel.py <file_path> [--sheet <シート名またはインデックス>]
-                          [--offset N] [--limit N] [--data-only]
+                          [--offset N] [--limit N] [--data-only] [--columns A,C,E]
 の形で呼ばれる。
 
 拡張子でライブラリを切り替える:
@@ -43,6 +43,7 @@ from excel_common import (  # noqa: E402
     _display_width,
     cell_to_json,
     group_column_values,
+    parse_column_selection,
     resolve_sheet_name,
     setup_utf8_stdio,
     summarize_result,
@@ -228,11 +229,15 @@ def _read_xlsx(
     data_only: bool,
     queries: list[dict] | None = None,
     no_style: bool = False,
+    columns: str | None = None,
 ) -> dict:
     import openpyxl
+    from openpyxl.utils import get_column_letter
 
     if queries and sheet_arg is None:
         raise ValueError("--query-json は --sheet 指定時のみ使えます")
+    if columns and sheet_arg is None:
+        raise ValueError("--columns は --sheet 指定時のみ使えます")
 
     wb = openpyxl.load_workbook(str(path), data_only=data_only, read_only=False)
     try:
@@ -253,20 +258,24 @@ def _read_xlsx(
         resolved = resolve_sheet_name(names, sheet_arg)
         ws = wb[resolved]
         total_rows = ws.max_row or 0
+        total_columns = ws.max_column or 0
+        selected_indices = parse_column_selection(columns, total_columns) or list(range(1, total_columns + 1))
+        columns_out = [get_column_letter(idx) for idx in selected_indices]
         rows: list[list[object]] = []
         if total_rows:
             max_row = min(total_rows, offset + limit)
             if offset < max_row:
                 for row in ws.iter_rows(min_row=offset + 1, max_row=max_row):
-                    rows.append([_cell_json(cell, no_style) for cell in row])
+                    rows.append([_cell_json(row[idx - 1], no_style) for idx in selected_indices])
         result = {
             "path": str(path),
             "mode": "rows",
             "sheet": resolved,
             "total_rows": total_rows,
-            "total_columns": ws.max_column or 0,
+            "total_columns": total_columns,
             "start_row": offset + 1 if rows else None,
             "end_row": offset + len(rows) if rows else None,
+            "columns": columns_out,
             "rows": rows,
         }
         result["merged_cells"] = [str(r) for r in ws.merged_cells.ranges]
@@ -283,15 +292,7 @@ def _read_xlsx(
                 result["query_results"] = _run_queries(ws, queries, total_rows)
             return result
         # 列幅を取得（返却範囲の列のみ）
-        from openpyxl.utils import get_column_letter
-        column_widths = {}
-        if rows:
-            min_col = 1
-            max_col = len(rows[0]) if rows else 0
-            for col_idx in range(min_col, min_col + max_col):
-                letter = get_column_letter(col_idx)
-                width = ws.column_dimensions[letter].width
-                column_widths[letter] = width
+        column_widths = {letter: ws.column_dimensions[letter].width for letter in columns_out} if rows else {}
         result["column_widths"] = column_widths
 
         # 行の高さを取得（返却範囲のみ）
@@ -308,8 +309,9 @@ def _read_xlsx(
         warnings = []
         for row_offset, row in enumerate(rows):
             row_num = offset + 1 + row_offset
-            for col_idx, cell in enumerate(row):
-                col_letter = get_column_letter(col_idx + 1)
+            for pos, cell in enumerate(row):
+                col_idx_actual = selected_indices[pos]  # 実列番号（1始まり、--columnsで間引かれていてもズレない）
+                col_letter = columns_out[pos]
                 cell_width = column_widths.get(col_letter)
                 # 各セルは _cell_json が {"value": ..., "style": {...}} の dict を返す
                 cell_value = cell.get("value")
@@ -332,7 +334,7 @@ def _read_xlsx(
                 # 例: N8セルに=SUM(B8:N8)（N8自身を含む）。--data-only指定時は
                 # 数式文字列ではなくキャッシュ値が入るため自動的にスキップされる。
                 if isinstance(cell_value, str) and cell_value.startswith("="):
-                    if _formula_self_references(cell_value, col_idx + 1, row_num):
+                    if _formula_self_references(cell_value, col_idx_actual, row_num):
                         cell_ref = f"{resolved}!{col_letter}{row_num}"
                         warnings.append(
                             f"'{cell_ref}' の数式（{cell_value}）が自身のセルを範囲に含んでおり、"
@@ -347,8 +349,18 @@ def _read_xlsx(
         wb.close()
 
 
-def _read_xls(path: Path, sheet_arg: str | None, offset: int, limit: int) -> dict:
+def _read_xls(
+    path: Path,
+    sheet_arg: str | None,
+    offset: int,
+    limit: int,
+    columns: str | None = None,
+) -> dict:
     import xlrd
+    from openpyxl.utils import get_column_letter
+
+    if columns and sheet_arg is None:
+        raise ValueError("--columns は --sheet 指定時のみ使えます")
 
     book = xlrd.open_workbook(str(path))
     names = book.sheet_names()
@@ -362,12 +374,15 @@ def _read_xls(path: Path, sheet_arg: str | None, offset: int, limit: int) -> dic
     resolved = resolve_sheet_name(names, sheet_arg)
     sh = book.sheet_by_name(resolved)
     total_rows = sh.nrows
+    total_columns = sh.ncols
+    selected_indices = parse_column_selection(columns, total_columns) or list(range(1, total_columns + 1))
+    columns_out = [get_column_letter(idx) for idx in selected_indices]
     end = min(total_rows, offset + limit)
     rows: list[list[object]] = []
     for r in range(offset, end):
         row_values = []
-        for c in range(sh.ncols):
-            cell = sh.cell(r, c)
+        for idx in selected_indices:
+            cell = sh.cell(r, idx - 1)
             if cell.ctype == xlrd.XL_CELL_DATE:
                 dt = xlrd.xldate.xldate_as_datetime(cell.value, book.datemode)
                 row_values.append(dt.isoformat())
@@ -382,9 +397,10 @@ def _read_xls(path: Path, sheet_arg: str | None, offset: int, limit: int) -> dic
         "mode": "rows",
         "sheet": resolved,
         "total_rows": total_rows,
-        "total_columns": sh.ncols,
+        "total_columns": total_columns,
         "start_row": offset + 1 if rows else None,
         "end_row": offset + len(rows) if rows else None,
+        "columns": columns_out,
         "rows": rows,
     }
 
@@ -420,6 +436,15 @@ def main() -> int:
             "生のrowsを目で数えて手計算する代わりに使う。"
         ),
     )
+    parser.add_argument(
+        "--columns",
+        default=None,
+        help=(
+            "読み込む列をカンマ区切りで指定（列アルファベットまたは1始まりの列番号、例 'A,C,E'。"
+            "--sheet必須）。省略時は全列。列が多い表は必要な列だけに絞って読むとトークン消費を抑えられる。"
+            "結果のcolumnsキーにrowsの各要素が対応する列アルファベットの配列が入る。"
+        ),
+    )
     args = parser.parse_args()
 
     path = Path(args.file_path)
@@ -452,9 +477,12 @@ def main() -> int:
 
     try:
         if ext in (".xlsx", ".xlsm"):
-            result = _read_xlsx(path, args.sheet, offset, limit, args.data_only, queries, no_style=not args.style)
+            result = _read_xlsx(
+                path, args.sheet, offset, limit, args.data_only, queries,
+                no_style=not args.style, columns=args.columns,
+            )
         elif ext == ".xls":
-            result = _read_xls(path, args.sheet, offset, limit)
+            result = _read_xls(path, args.sheet, offset, limit, columns=args.columns)
         else:
             print(f"未対応の拡張子です（.xlsx/.xlsm/.xls のみ対応）: {ext}", file=sys.stderr)
             return 1
