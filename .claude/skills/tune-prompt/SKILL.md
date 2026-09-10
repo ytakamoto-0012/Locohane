@@ -25,6 +25,8 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
   `.claude/skills/tune-config-timeouts/SKILL.md` が担当する。
   `args`に`config_timeouts`が指定されたら、このスキルではなく
   `tune-config-timeouts`を使うようユーザーに伝えて終了する。
+- `excel-skills` → `skills/excel-read/SKILL.md`（excel-readスキル単体のeval。
+  `evals/cases/excel-skills/`参照）
 - （将来）`skill:<skill名>` → `skills/<skill名>/SKILL.md`
 - （将来）`tool_docstring` → `src/tools/` パッケージ配下の各ツールファイル
 
