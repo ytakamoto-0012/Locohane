@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -112,17 +113,29 @@ def _sheet_required_scale(ws) -> float:
         return 1.0
 
 
+# Excelシート名はWindowsファイル名として不正な文字を含みうる（`<>:"|`など。
+# `\/?*[]:`はExcel自体が既にシート名に使用禁止のため実質重複チェック）。
+_UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _sanitize_sheet_filename(name: str) -> str:
+    safe = _UNSAFE_FILENAME_CHARS.sub("_", name).strip()
+    return safe or "sheet"
+
+
 def _convert_office_to_pdf(
     path: Path, tool: str, thread_id: str, force_fit_to_page: bool = True
-) -> tuple[Path, dict[str, float]]:
+) -> tuple[list[tuple[str | None, Path]], dict[str, float]]:
     """OfficeファイルをOLE（COM）で開き、一時PDFへエクスポートする。
 
     tool: "excel" | "pptx" | "docx"
     force_fit_to_page: Trueなら各シートの印刷設定を横1ページ×縦1ページの
         フィット印刷へ強制する（既定）。Falseならシートに既に設定されている
         印刷設定（Zoom/FitToPages/PrintArea等）をそのまま使う（excelのみ意味を持つ）。
-    戻り値: (生成されたPDFのパス, シート名→required_scaleの辞書)。
-        excel以外、またforce_fit_to_page=Falseの場合はscale辞書は空dict。
+    戻り値: ((シート名 | None, PDFパス)のリスト, シート名→required_scaleの辞書)。
+        excelは非表示シートを除く可視シート1枚につきPDF1つをエクスポートする
+        （出力画像ファイル名にシート名を使うため）。pptx/docxは(None, 単一PDF)の
+        1要素リスト。scale辞書はexcel以外、またforce_fit_to_page=Falseの場合は空dict。
     """
     import pythoncom
     import win32com.client as win32
@@ -137,9 +150,9 @@ def _convert_office_to_pdf(
     pythoncom.CoInitialize()
     app = None
     doc = None
-    pdf_path = None
     recorded_pid = None
     scale_by_sheet: dict[str, float] = {}
+    pdf_entries: list[tuple[str | None, Path]] = []
     try:
         app = win32.DispatchEx(prog_id)
         # run_scriptの外部タイムアウト等でPythonプロセスごと強制終了されると
@@ -165,13 +178,20 @@ def _convert_office_to_pdf(
         out_dir = base_dir / f"_tmp_{thread_id}" / "pdf_export"
         out_dir.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha1(abs_path.encode("utf-8")).hexdigest()[:8]
-        pdf_path = str(out_dir / f"{tool}_{digest}_export.pdf")
 
         if tool == "excel":
-            # Workbook → PDF (xlTypePDF = 0)
+            # シートごとに個別PDFへエクスポートする（xlTypePDF = 0）。
+            # ワークブック一括エクスポートだとPDFページとシートの対応が
+            # 複数ページ分割時に取れなくなるため、Worksheet.ExportAsFixedFormat
+            # で1シート=1PDFにし、出力画像ファイル名にシート名をそのまま使えるようにする。
             doc = app.Workbooks.Open(abs_path)
-            if force_fit_to_page:
-                for ws in doc.Worksheets:
+            for idx, ws in enumerate(doc.Worksheets):
+                try:
+                    if ws.Visible != -1:  # xlSheetVisible以外（非表示/最非表示）は印刷対象外
+                        continue
+                except Exception:
+                    pass
+                if force_fit_to_page:
                     try:
                         scale_by_sheet[ws.Name] = _sheet_required_scale(ws)
                     except Exception:
@@ -182,29 +202,40 @@ def _convert_office_to_pdf(
                         page_setup.FitToPagesWide = 1
                         page_setup.FitToPagesTall = 1
                     except Exception:
-                        continue
-            doc.ExportAsFixedFormat(0, pdf_path, Quality=0, IncludeDocProperties=True, IgnorePrintAreas=False, OpenAfterPublish=False)
+                        pass
+                sheet_pdf_path = out_dir / f"excel_{digest}_{idx}_export.pdf"
+                try:
+                    ws.ExportAsFixedFormat(
+                        0, str(sheet_pdf_path), Quality=0, IncludeDocProperties=True, IgnorePrintAreas=False, OpenAfterPublish=False
+                    )
+                except Exception:
+                    continue
+                pdf_entries.append((ws.Name, sheet_pdf_path))
             doc.Close(SaveChanges=False)
             doc = None
 
         elif tool == "pptx":
             # Presentation → PDF (ppSaveAsPDF = 32)
+            pdf_path = out_dir / f"{tool}_{digest}_export.pdf"
             doc = app.Presentations.Open(abs_path, ReadOnly=True, Untitled=False, WithWindow=False)
-            doc.SaveAs(pdf_path, 32)
+            doc.SaveAs(str(pdf_path), 32)
             doc.Close()
             doc = None
+            pdf_entries.append((None, pdf_path))
 
         elif tool == "docx":
             # Document → PDF (wdFormatPDF = 17)
+            pdf_path = out_dir / f"{tool}_{digest}_export.pdf"
             doc = app.Documents.Open(abs_path, ReadOnly=False, Revert=True)
-            doc.SaveAs2(pdf_path, 17)
+            doc.SaveAs2(str(pdf_path), 17)
             doc.Close(SaveChanges=False)
             doc = None
+            pdf_entries.append((None, pdf_path))
 
         else:
             raise ValueError(f"未知のツール: {tool}")
 
-        return Path(pdf_path), (scale_by_sheet if tool == "excel" else {})
+        return pdf_entries, scale_by_sheet
 
     except Exception:
         raise
@@ -296,39 +327,53 @@ def _crop_image(image_path: Path, bbox: tuple[int, int, int, int], target_dpi: i
 # ---------------------------------------------------------------------------
 
 
-def _render_pdf_to_images(pdf_path: Path, dpi: int, thread_id: str) -> list[dict]:
-    """PDFファイルの全ページを pypdfium2 で画像化し、リストとして返す。"""
+def _render_pdf_to_images(pdf_entries: list[tuple[str | None, Path]], dpi: int, thread_id: str) -> list[dict]:
+    """PDF群を pypdfium2 で画像化し、リストとして返す。
+
+    pdf_entries: (シート名 | None, PDFパス)のリスト。
+    シート名が付いている場合（excel）はファイル名に使う（`{digest}_{シート名}.png`。
+    シートが複数ページに分割された場合のみ`_p{ローカルページ番号}`を付与）。
+    シート名が無い場合（pptx/docx）は従来通り`{digest}_p{通し番号}.png`。
+    """
     base_dir = Path(os.environ.get("AGENT_DEFAULT_WORKDIR") or "./data/temp")
     rendered_dir = base_dir / f"_tmp_{thread_id}" / "rendered"
     rendered_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        pdf = pdfium.PdfDocument(str(pdf_path))
-    except Exception:
-        return []
-
-    total_pages = len(pdf)
     scale = dpi / 72
+    images: list[dict] = []
+    global_page = 0
 
-    digest = hashlib.sha1(os.path.abspath(str(pdf_path)).encode("utf-8")).hexdigest()[:8]
-
-    images = []
-    for i in range(total_pages):
-        page_num = i + 1
-        filename = f"{digest}_p{page_num}.png"
-        out_path = rendered_dir / filename
+    for sheet_name, pdf_path in pdf_entries:
         try:
-            bitmap = pdf[i].render(scale=scale)
-            bitmap.to_pil().save(out_path)
+            pdf = pdfium.PdfDocument(str(pdf_path))
         except Exception:
             continue
-        images.append(
-            {
-                "page": page_num,
+
+        total_pages = len(pdf)
+        digest = hashlib.sha1(os.path.abspath(str(pdf_path)).encode("utf-8")).hexdigest()[:8]
+        safe_name = _sanitize_sheet_filename(sheet_name) if sheet_name else None
+
+        for i in range(total_pages):
+            global_page += 1
+            local_page = i + 1
+            if safe_name:
+                filename = f"{digest}_{safe_name}.png" if total_pages == 1 else f"{digest}_{safe_name}_p{local_page}.png"
+            else:
+                filename = f"{digest}_p{global_page}.png"
+            out_path = rendered_dir / filename
+            try:
+                bitmap = pdf[i].render(scale=scale)
+                bitmap.to_pil().save(out_path)
+            except Exception:
+                continue
+            img_info = {
+                "page": global_page,
                 "image_path": str(out_path),
                 "original_dpi": dpi,
             }
-        )
+            if sheet_name:
+                img_info["sheet"] = sheet_name
+            images.append(img_info)
 
     return images
 
@@ -373,8 +418,8 @@ def render_office_file(
     if thread_id is None:
         thread_id = os.environ.get("AGENT_EXEC_TMP_NAME") or os.environ.get("AGENT_THREAD_ID") or "_no_session"
 
-    # 1. OLE → PDF 変換（excelのみ、シートごとの必要縮尺も同時に取得）
-    pdf_path, scale_by_sheet = _convert_office_to_pdf(path, tool, thread_id, force_fit_to_page)
+    # 1. OLE → PDF 変換（excelはシートごとに個別PDF、シートごとの必要縮尺も同時に取得）
+    pdf_entries, scale_by_sheet = _convert_office_to_pdf(path, tool, thread_id, force_fit_to_page)
 
     # 1.5 縮尺に応じたキャプチャDPI・目標DPIの動的ブーストと、分割警告の生成
     capture_dpi = _CAPTURE_DPI
@@ -397,15 +442,17 @@ def render_office_file(
             warnings.append(msg)
             print(msg, file=sys.stderr)
 
-    # PDFの総ページ数を取得（PDF→画像化の前に取得）
-    try:
-        tmp_pdf = pdfium.PdfDocument(str(pdf_path))
-        total_pages = len(tmp_pdf)
-    except Exception:
-        total_pages = 0
+    # PDFの総ページ数を取得（PDF→画像化の前に取得、全PDFの合算）
+    total_pages = 0
+    for _sheet_name, pdf_path in pdf_entries:
+        try:
+            tmp_pdf = pdfium.PdfDocument(str(pdf_path))
+            total_pages += len(tmp_pdf)
+        except Exception:
+            continue
 
     # 2. PDF → 画像化（全ページ）
-    images = _render_pdf_to_images(pdf_path, capture_dpi, thread_id)
+    images = _render_pdf_to_images(pdf_entries, capture_dpi, thread_id)
 
     if not images:
         result = {
@@ -442,10 +489,11 @@ def render_office_file(
                 img_info["cropped"] = False
 
     # 一時PDFを削除
-    try:
-        pdf_path.unlink(missing_ok=True)
-    except Exception:
-        pass
+    for _sheet_name, pdf_path in pdf_entries:
+        try:
+            pdf_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     first_page = images[0]["page"]
     last_page = images[-1]["page"]

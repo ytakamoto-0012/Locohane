@@ -37,7 +37,11 @@ _OFFICE_SHARED = Path(__file__).resolve().parent.parent.parent / "office_shared"
 if str(_OFFICE_SHARED) not in sys.path:
     sys.path.append(str(_OFFICE_SHARED))
 from excel_common import register_output_path, setup_utf8_stdio  # noqa: E402
-from _render import render_office_file  # noqa: E402
+from _render import _TARGET_DPI, render_office_file  # noqa: E402
+
+# --print-as-is指定時は縮尺ブーストが働かないため、既定の_TARGET_DPI(300)のまま
+# キャプチャすると容量・処理時間が嵩みやすい。ターゲットDPIを下げて出力する。
+_PRINT_AS_IS_TARGET_DPI = 150
 
 
 def main() -> int:
@@ -67,6 +71,7 @@ def main() -> int:
             path=path,
             tool="excel",
             force_fit_to_page=not args.print_as_is,
+            target_dpi=_PRINT_AS_IS_TARGET_DPI if args.print_as_is else _TARGET_DPI,
         )
     except ImportError as e:
         print(f"必要なライブラリが見つかりません（pywin32が必要です）: {e}", file=sys.stderr)

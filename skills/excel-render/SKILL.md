@@ -13,20 +13,28 @@ Excelシートを画像化してLLMに見せるスキル。`render_excel.py` を
 
 excel-readスキルは数値・テキストは取れても罫線・書式・グラフ・レイアウトは読み取れないため、シートの意図をより正確に把握したいときに画像で確認する。
 
-PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フィット印刷（`Zoom=False`+`FitToPagesWide=1`+`FitToPagesTall=1`）へ自動強制し、使用範囲が複数ページに分割される（画像が細切れになる）ことを防ぐ。`--print-as-is`を指定するとこの強制を行わず、シートに既に設定されている印刷範囲・拡大縮小率をそのまま使ってPDF化する。PDF→画像化は既定300DPIで行い、シートの縮尺が小さいほどキャプチャDPIを自動的に引き上げる（上限900DPI、`--print-as-is`指定時はブーストなし）。全シート（PDF化後の全ページ）を一度に画像化する。
+PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フィット印刷（`Zoom=False`+`FitToPagesWide=1`+`FitToPagesTall=1`）へ自動強制し、使用範囲が複数ページに分割される（画像が細切れになる）ことを防ぐ。`--print-as-is`を指定するとこの強制を行わず、シートに既に設定されている印刷範囲・拡大縮小率をそのまま使ってPDF化する。PDF→画像化は既定300DPIで行い、シートの縮尺が小さいほどキャプチャDPIを自動的に引き上げる（上限900DPI、`--print-as-is`指定時はブーストなし。代わりに`target_dpi`は150に下がる）。全シート（PDF化後の全ページ）を一度に画像化する。
 
 ## 呼び出し
 
+罫線・書式・グラフ等の見た目を確認したいだけなら、まずこちらを使う（印刷設定に関係なく横1×縦1ページに強制フィットして画像化）。
+
 ```bash
 python render_excel.py "C:\Users\me\book.xlsx"
+```
+
+シートに既に設定されている印刷範囲・拡大縮小率をそのまま（強制フィットせずに）確認したいときだけ`--print-as-is`を付ける。「印刷したときの見え方を確認したい」「強制フィットだと不自然になる／指定した印刷範囲と違う」と言われた場合に使う。
+
+```bash
 python render_excel.py "C:\Users\me\book.xlsx" --print-as-is
 ```
+
 ## 引数一覧
 
 | 引数 | 必須/任意 | 値の型 | 既定値 | 説明 |
 |---|---|---|---|---|
 | `excel_path`（位置引数） | 必須 | 文字列（絶対パス） | - | 画像化対象の`.xlsx`/`.xlsm`/`.xls`ファイルパス。他拡張子はエラー |
-| `--print-as-is` | 任意 | フラグ | 指定なし（＝強制フィット） | 指定すると、各シートに既に設定されている印刷範囲・印刷の向き・拡大縮小率（Zoom/FitToPagesWide/FitToPagesTall）をそのまま使ってPDF化する。既定の「横1×縦1ページへの強制フィット」を行わないため、シート側の設定次第で複数ページに分割されることがある（この場合もDPIブースト・分割警告（10%下限）は行わない） |
+| `--print-as-is` | 任意 | フラグ | 指定なし（＝強制フィット） | 指定すると、各シートに既に設定されている印刷範囲・印刷の向き・拡大縮小率（Zoom/FitToPagesWide/FitToPagesTall）をそのまま使ってPDF化する。既定の「横1×縦1ページへの強制フィット」を行わないため、シート側の設定次第で複数ページに分割されることがある（この場合もDPIブースト・分割警告（10%下限）は行わない）。`target_dpi`も既定の300から150に下がる |
 
 ## 入出力の型
 
@@ -37,10 +45,11 @@ python render_excel.py "C:\Users\me\book.xlsx" --print-as-is
 ```json
 {"path": "C:\\foo\\book.xlsx", "tool": "excel", "total_pages": 5, "start_page": 1, "end_page": 5,
  "dpi": 300, "target_dpi": 300, "crop_applied": true,
- "images": [{"page": 1, "image_path": "C:\\...\\rendered\\1a2b3c4d_p1.png", "original_dpi": 300, "cropped": true}, ...]}
+ "images": [{"page": 1, "sheet": "Sheet1", "image_path": "C:\\...\\rendered\\1a2b3c4d_Sheet1_cropped.png", "original_dpi": 300, "cropped": true}, ...]}
 ```
-`images`には全ページ（=全シート、通常は`total_pages`件）が含まれる。
-`images`の各要素は常に`original_dpi`（クロップ前の実解像度）を持つ。`cropped`（bbox検出に
+`images`には全ページ（=全シート、通常は`total_pages`件、非表示シートは除く）が含まれる。
+画像ファイル名にはシート名がそのまま使われる（`1a2b3c4d_Sheet1_cropped.png`等）。1シートが複数ページに分割された場合のみ`_p2`のようにページ番号が付く。
+`images`の各要素は常に`original_dpi`（クロップ前の実解像度）と`sheet`（元シート名）を持つ。`cropped`（bbox検出に
 成功しクロップできたら`true`、検出できず元画像のままなら`false`）は既定動作で各画像に付与される。
 
 **DPIの動的ブースト**: シート内容が用紙に収まりにくいほど、キャプチャDPI・`target_dpi`は自動的に引き上げられる場合がある（上限900DPI）。
