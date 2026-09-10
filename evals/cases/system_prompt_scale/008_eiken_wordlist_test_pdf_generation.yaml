@@ -199,8 +199,6 @@ turns:
     まずは第1巡の1回目のテスト（新規単語1～40、見出し語番号0001~0040）から作成してください。
 expect:
   tool_called_any: [read_skill]
-  tool_call_args_contains:
-    run_script: {skill_name: "pdf-tools"}
   response_not_contains: ["申し訳ありません", "できません", "機能がありません"]
 judge: |
   英検3級の単語帳（合成フィクスチャ、evals/fixtures/generate_eiken_wordlist_fixture.py
@@ -306,3 +304,12 @@ notes: >-
   system_prompt_scale に置き、/tune-prompt の自動ループには含めない。
   `python -m evals.run_case evals/cases/system_prompt_scale/008_eiken_wordlist_test_pdf_generation.yaml`
   で手動実行する（`run_all.py` は使わない）。
+
+  2026-09-10: expect の `tool_call_args_contains: {run_script: {skill_name: pdf-tools}}`
+  を削除した。本ケースの設計上、PDF生成はmain agentが直接run_scriptを呼ぶのでは
+  なく`dispatch_agent(agent_type="worker")`への委譲経由で行われる（judge指示7番も
+  worker経由を許容している）。本評価基盤は007側のnotesに記載の通りdispatch_agent
+  内部のツール呼び出しをtranscriptに記録しないため、このルールはworker委譲設計と
+  併用すると常にFAILする構造的な欠陥だった（実機確認：workerが実際にcreate_pdf.py
+  でPDFを生成しverifierも検証済みだったにもかかわらず、ルールベース判定は
+  `expected {'skill_name': 'pdf-tools'} in one of []`でFAILしていた）。

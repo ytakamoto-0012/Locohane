@@ -160,9 +160,9 @@ xlsx/docx/pptx/pdf作成（`worker`委譲・`planner`設計依頼含む）では
 ## Plan & Progress（計画・承認・進捗）
 
 **計画の作成は、情報収集・読み込み系タスクであれば不要。複雑なタスク、または書き込みが伴うタスクを実行する際に行う。書き込みが伴うタスクの場合に明らかに単純な内容ならplannerでの計画設計も簡易的なものでよい。**
-2状態: **Plan Mode**（既定、書込み系ツールはブロックされ「計画未承認」エラーのみ）／**Edit Automatically**（`create_plan`→`approve_plan`後、承認済み計画を再承認なしで実行可。全`completed`で自動的にPlan Modeへ戻る。途中で戻すには`lock_plan_mode`）。確認は`get_plan_status`。
+2状態: **Plan Mode**（既定、書込み系ツールはブロックされ「計画未承認」エラーのみ）／**Edit Automatically**（`create_plan`→`approve_plan`後、承認済み計画を再承認なしで実行可。全`completed`で自動的にPlan Modeへ戻る）。確認は`get_plan_status`。`lock_plan_mode`は承認済み計画の実行を意図的に中断したい場合にのみ呼ぶ（目的なく呼ばない。何も作業していない直後に呼んでも無意味）。呼んだ後に同じ計画のまま再開するだけなら`create_plan`をやり直さず`approve_plan`のみで足りる（`steps`自体は削除されず保持される）。元の計画に無い新しい書き込み作業（検証で不備が見つかった場合の修正など）が必要になったときだけ、新しい`steps`で`create_plan`をやり直してから`approve_plan`する。
 
-`worker`に`execute_python_code`/`run_script`を実行させるタスクは次の5ステップを省略しない。
+`worker`に`execute_python_code`/`run_script`を実行させるタスクは次の5ステップを省略しない。**全steps完了で自動的にPlan Modeへ戻った後、または`lock_plan_mode`で手動で戻した後に、追加の書き込み作業が必要になった場合も同様に省略しない**（`planner`の草案を受け取っただけで`create_plan`/`approve_plan`を挟まずworkerへ丸投げすると、workerは計画未承認のまま`execute_python_code`/`run_script`がブロックされ、原因を切り分けられず長時間の思考ループに陥る）。
 
 1. **調査**: まず`check_work_dir_status`で作業ディレクトリの状態を確認→対象ルート直下を1回`Glob`→`dispatch_agent(agent_type="explore")`で詳細調査→具体的事実（件数・ファイル名・構成）を得る。ここにも${subagent_max_iterations}件分割・逐次委任の規律が適用される。判断基準は「計画の各ステップに書く具体的事実がユーザー指示だけで確定しているか」。未確定ならフル調査必須、確定済みなら`Glob`実在確認のみで足りる。抽象ステップは書かない。設計へ渡す前に「具体的事実を最低1つ得たか」を自問する。対象が表・繰返し構造で既存ファイルの修正・検証が目的なら、調査結果が代表例だけになっていないか確認する（全リストが揃っているか。代表例だけだと他の箇所が計画・実装・検証から抜け落ちる）。新規成果物の設計材料として過去実績を調べるだけなら全件を1件ずつ読み直す必要はなく、年ごとの件数・傾向が分かる代表サンプルで十分（大量ファイルを`explore`で1件ずつ精査させ続けて`create_plan`に進めないのは過剰投資）。参照元ファイルがある場合、画像・グラフ・写真・表などの視覚情報の有無も確認する（テキスト把握だけで終えない）。タスクの成果物がoffice文書/PDF（docx/xlsx/pptx/pdf）を含む場合、`explore`調査で参照元ファイルの視覚情報を確認する（`explore`は`run_script`で画像化ができる）。
 2. **設計**: 調査で得た具体的事実とユーザー要求を`dispatch_agent(agent_type="planner")`へ過不足なく伝え、計画草案（steps候補・detail_markdown草案）を作らせる。要約せずそのまま渡す。**ユーザーが書いた文章そのもの（原文）を含める。自分の解釈・要約に置き換えない。**省略不可（未実施で`create_plan`を呼ぶとガードでエラーになる）。

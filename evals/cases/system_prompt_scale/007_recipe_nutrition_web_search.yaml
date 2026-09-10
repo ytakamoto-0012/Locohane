@@ -33,7 +33,6 @@ turns:
     ここにWEBで調べた栄養情報を記述
 expect:
   tool_called_any: [dispatch_agent, execute_python_code]
-  tool_not_called: [analyze_image]
   tool_call_args_contains:
     dispatch_agent: {agent_type: "worker"}
   response_not_contains: ["申し訳ありません", "できません", "機能がありません"]
@@ -103,3 +102,11 @@ notes: >-
   web-search skillのAPIキー・レート制限に依存する）。
   `python -m evals.run_case evals/cases/system_prompt_scale/007_recipe_nutrition_web_search.yaml`
   で手動実行する（`run_all.py` は使わない）。
+
+  2026-09-10: expect の `tool_not_called: [analyze_image]` を削除した。
+  system_prompt.md は2026-08-30の変更（コミット9d71b96）で「analyze_imageは
+  1〜2枚程度なら自分で直接呼べる」という例外を明記しており、本ケースは
+  画像がちょうど2枚（IMG_2194.JPG, IMG_2195.JPG）なのでmain agentが直接
+  analyze_imageを呼ぶのは仕様通りの正常動作。006（297枚、委譲必須）と
+  同じ`tool_not_called`ルールを追従なく流用していたため、実際には
+  system_prompt.mdの現行仕様に合致した正しい挙動を誤ってFAIL判定していた。
