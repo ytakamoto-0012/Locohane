@@ -72,7 +72,7 @@ python read_excel.py "C:\Users\me\book.xlsx" --sheet 月間予定表 --query-jso
    - `--columns`: 見たい列が分かっているとき（特定の列だけ値を確認したい、列数が多い表を一度に全部読みたくない等）に使う。`total_columns`が20を超えるような表では、まず`--sheet`なしの一覧やヘッダー行1行だけを読んで列の中身を把握してから、必要な列だけに絞って読む方が、全列を大きい`--limit`で一度に読むより安全（一度に読む量が多いと内容の見落としにつながる）。
    - `--query-json`: 列の値ごとの行範囲（グルーピング列の範囲確認、`insert_rows`/`merge_cells`後の検証など）を知りたいときに使う（下記「構造化クエリ」節）。生の`rows`を目で数えて行範囲を手計算しない。`--offset`/`--limit`/`--columns`の指定値には影響されず、常にシート全体（1行目〜`total_rows`）が対象になる。`rows`本体が不要なら`--limit`は既定`200`のままでよい（`query_results`は`--limit`の値に関係なく全件返る）。
 4. 数式セルは既定で数式文字列（`"=SUM(A1:A10)"`）を返す。Excelが最後に計算した値が欲しければ`--data-only`（xlsxのみ、`rows`・`query_results`両方の値表示に影響する）。数式を書き込んだ直後の最新値が欲しい場合は先にexcel-recalcスキルの`recalc_excel.py`を実行してから読み直す。
-5. `.xlsx`/`.xlsm`は`--sheet`指定時、既定では`value`と数値表示形式のみを返す。excel-editスキルの`edit_excel.py`で書いた書式（太字・背景色・結合・テーブル）が正しく反映されているか検証したいとき、**または表のデータがおかしくないか調べたいとき**は`--style`を付ける（`read_only=False`でファイル全体を読むため`.xls`や既定モードより低速）。既定（`--style`なし）では数式の循環参照・列幅超過などの構造的な異常は一切検出されない。`warnings`にこれらが自動で入るのは`--style`を付けた場合のみなので、「おかしいところがないか確認して」と言われたら必ず`--style`付きで読む。`--query-json`の`query_results`にはstyle情報は含まれない（`rows`側のみ）。
+5. `.xlsx`/`.xlsm`は`--sheet`指定時、既定では`value`と数値表示形式のみを返す。excel-editスキルの`edit_excel.py`で書いた書式（太字・背景色・結合・テーブル）が正しく反映されているか検証したいときは`--style`を付けてセル単位のフルstyle情報を取得する（`read_only=False`でファイル全体を読むため`.xls`や既定モードより低速）。`--query-json`の`query_results`にはstyle情報は含まれない（`rows`側のみ）。
 
 ## 出力
 
