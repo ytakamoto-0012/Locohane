@@ -62,12 +62,8 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 
 1. `log_dir` 配下の `app_*.log` を対象に、`last_checked` より新しい
    タイムスタンプの行のうち **`WARNING` / `ERROR` / `CRITICAL`** を抽出する
-   （`.gitignore` 対象のため `glob` では検知できない。`run_shell_command`
-   で `dir` コマンドを呼び、ファイル一覧を取得してから `read_file` で
-   内容を読み取る）。
-   - Windowsの場合: `dir /b /o-d data\logs\app_*.log` でファイル一覧を取得
-   - ファイル一覧を取得後、各ファイルについて `read_file` で全文読み込み、
-     `last_checked` 以降の行をフィルタリング（grep等）する。
+   （Bashのgrep等で `%(levelname)s` 部分を条件に絞り込み、行頭の
+   `%(asctime)s` と `last_checked` を比較する）。
 2. **特例**: ログレベルに関わらず、logger名 `src.context_compaction` の
    行（会話履歴の自動圧縮に関するログ。例:
    `会話履歴を圧縮しました: ...`〈INFO〉、
