@@ -36,7 +36,15 @@ python evals/run_all.py system_prompt
 `summary.md` に保存され、標準出力にも同じサマリが表示される
 （`evals/results/` は再生成可能なデータのため `.gitignore` 対象）。
 
-1ケースだけ試したい場合:
+第3引数以降にケースID（ファイル名から拡張子を除いたもの）を空白区切りで
+指定すると、そのケースのみをサマリ集計付きで実行できる
+（`tune-prompt` スキルの対話でのケース選択に使用）:
+
+```
+python evals/run_all.py system_prompt 001_annual_schedule_investigation_before_plan
+```
+
+1ケースだけ試したい場合（サマリ集計不要、`run_case.py` を直接実行）:
 
 ```
 python -m evals.run_case evals/cases/system_prompt/001_skill_routing_pdf.yaml

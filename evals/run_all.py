@@ -1,7 +1,12 @@
-"""指定カテゴリの eval ケースを全件実行し、結果を集計する。
+"""指定カテゴリの eval ケースを全件、または指定ケースのみ実行し、結果を集計する。
 
 使い方:
     python evals/run_all.py system_prompt
+    python evals/run_all.py system_prompt 001_annual_schedule_investigation_before_plan 005_glob_single_call_then_delegate
+
+第3引数以降にケースID（ファイル名から拡張子`.yaml`を除いたもの）を
+指定すると、そのケースのみを実行する（tune-promptスキルの対話選択で使用）。
+省略時は従来通り対象ディレクトリ配下の全ケースを実行する。
 
 evals/cases/<target>/*.yaml を昇順に glob し、ケースごとに
 `<このプロセスと同じ python> -m evals.run_case <file>` をサブプロセスとして
@@ -41,22 +46,35 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
 
 
-def _iter_case_paths(target: str) -> list[Path]:
+def _iter_case_paths(target: str, case_ids: list[str] | None = None) -> list[Path]:
     """evals/cases/<target>/*.yaml を昇順に列挙する。
 
     Args:
         target: チューニング対象カテゴリ名（例: "system_prompt"）。
+        case_ids: 指定された場合、これらのケースID（拡張子抜きファイル名）
+            のみに絞り込む。None または空リストなら全件。
 
     Returns:
         yaml ファイルパスの昇順リスト。
 
     Raises:
-        SystemExit: 対象ディレクトリが存在しない場合。
+        SystemExit: 対象ディレクトリが存在しない場合、または指定した
+            case_ids に対応する yaml が見つからない場合。
     """
     cases_dir = PROJECT_ROOT / "evals" / "cases" / target
     if not cases_dir.is_dir():
         raise SystemExit(f"ケースディレクトリが見つかりません: {cases_dir}")
-    return sorted(cases_dir.glob("*.yaml"))
+    all_paths = sorted(cases_dir.glob("*.yaml"))
+    if not case_ids:
+        return all_paths
+
+    by_stem = {p.stem: p for p in all_paths}
+    missing = [cid for cid in case_ids if cid not in by_stem]
+    if missing:
+        raise SystemExit(
+            f"指定されたケースが見つかりません: {missing}（対象: {cases_dir}）"
+        )
+    return [by_stem[cid] for cid in case_ids]
 
 
 def _run_one(case_path: Path) -> dict:
@@ -183,12 +201,15 @@ def _render_summary(target: str, results: list[dict]) -> str:
 
 def main() -> int:
     """CLI エントリポイント。"""
-    if len(sys.argv) != 2:
-        print("使い方: python evals/run_all.py <target>", file=sys.stderr)
+    if len(sys.argv) < 2:
+        print(
+            "使い方: python evals/run_all.py <target> [case_id ...]", file=sys.stderr
+        )
         return 2
     target = sys.argv[1]
+    case_ids = sys.argv[2:]
 
-    case_paths = _iter_case_paths(target)
+    case_paths = _iter_case_paths(target, case_ids)
     if not case_paths:
         print(f"対象ケースが1件もありません: evals/cases/{target}/", file=sys.stderr)
         return 1
