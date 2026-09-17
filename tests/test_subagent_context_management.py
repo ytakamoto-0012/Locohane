@@ -34,11 +34,11 @@ class _FakeConfig:
     subagent_token_guard_enabled: bool = False
     track_token_usage: bool = False
     context_trim_subagent_enabled: bool = True
-    context_trim_subagent_keep_recent_tool_messages: int = 1
+    context_trim_subagent_keep_recent_tool_turns: int = 0
     context_trim_subagent_truncated_max_chars: int = 20
     context_trim_subagent_duplicate_guard_tool_max_chars: int = 20
     context_trim_subagent_ai_messages: bool = False
-    context_trim_subagent_keep_recent_ai_messages: int = 1
+    context_trim_subagent_keep_recent_ai_turns: int = 0
     context_trim_subagent_trigger_total_tokens: int = 0
     context_compaction_enabled: bool = False
     context_compaction_token_threshold: int = 0
@@ -68,25 +68,38 @@ class _FakeConfig:
 def test_build_llm_input_trims_old_tool_messages_without_mutating_original() -> None:
     """context_trim_enabled=True なら、古い ToolMessage を切り詰めたコピーを返し、
     呼び出し元の messages 本体（run_subagent の永続履歴）は書き換えない。
+
+    サブエージェントの会話は通常ユーザーターン（HumanMessage）が1件しか
+    無い（1回のタスク指示の中で何度もツール呼び出しを繰り返す構造）ため、
+    find_turn_cut_index()のフォールバック（ツール往復単位のカウント）が
+    効くよう、3回分のラウンドトリップ（各ToolMessageに対応するAIMessage.
+    tool_callsを含む現実的な構造）を用意し、keep_recent_tool_turns=2で
+    直近2往復（c0, c1）は全文保持、最古の往復（c_old）だけ切り詰められる
+    ことを確認する。
     """
     long_content = "x" * 1000
     messages = [
         SystemMessage(content="sp"),
         HumanMessage(content="task"),
+        AIMessage(content="", tool_calls=[{"name": "Read", "args": {}, "id": "c_old"}]),
+        ToolMessage(content=long_content, name="Read", tool_call_id="c_old"),
+        AIMessage(content="解釈", tool_calls=[{"name": "Read", "args": {}, "id": "c0"}]),
         ToolMessage(content=long_content, name="Read", tool_call_id="c0"),
-        AIMessage(content="解釈"),
+        AIMessage(content="", tool_calls=[{"name": "Read", "args": {}, "id": "c1"}]),
         ToolMessage(content=long_content, name="Read", tool_call_id="c1"),
     ]
     config = _FakeConfig()
+    config.context_trim_subagent_keep_recent_tool_turns = 2
 
     llm_input = _build_llm_input(messages, config)
 
-    # 直近1件（c1）は全文保持、古い方（c0）は切り詰められる。
-    assert llm_input[2].content != long_content
-    assert len(llm_input[2].content) < 1000
-    assert llm_input[4].content == long_content
+    # 最古の往復（c_old）は切り詰められ、直近2往復（c0, c1）は全文保持される。
+    assert llm_input[3].content != long_content
+    assert len(llm_input[3].content) < 1000
+    assert llm_input[5].content == long_content
+    assert llm_input[7].content == long_content
     # 元の messages は書き換えられていない（永続履歴を守る context_trim の方針）。
-    assert messages[2].content == long_content
+    assert messages[3].content == long_content
 
 
 def test_build_llm_input_noop_when_disabled() -> None:

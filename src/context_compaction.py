@@ -19,7 +19,7 @@ from typing import Literal
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from .config import Config
-from .context_trim import last_ai_total_tokens, trim_old_tool_messages
+from .context_trim import find_turn_cut_index, last_ai_total_tokens, trim_old_tool_messages
 from .llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -87,7 +87,7 @@ def _write_thread_note_called_recently(messages: list[BaseMessage], keep_recent_
     """直近 keep_recent_turns ユーザーターン以内に write_thread_note が
     呼ばれていれば True を返す。
 
-    「直近何ターンか」の切り出しには _find_cut_index と同じ安全な切断点を
+    「直近何ターンか」の切り出しには find_turn_cut_index と同じ安全な切断点を
     使う（境界より後ろが keep_recent_turns 分の直近範囲）。単純に「前回の
     ナッジ以降」で判定しないのは、ナッジ自体が永続履歴へ書き込まれない
     一時的な差し込みメッセージであり、状態として覚えておく場所が無いため
@@ -96,7 +96,7 @@ def _write_thread_note_called_recently(messages: list[BaseMessage], keep_recent_
     丸ごと残る範囲を決めている値であり、その範囲内に書き出し済みなら
     再度書かせても得るものが無い。
     """
-    cut_index = _find_cut_index(messages, keep_recent_turns)
+    cut_index = find_turn_cut_index(messages, keep_recent_turns)
     recent = messages[cut_index:] if cut_index is not None else messages
     return any(
         isinstance(m, AIMessage) and any(tc.get("name") == "write_thread_note" for tc in (m.tool_calls or []))
@@ -179,11 +179,11 @@ async def force_write_thread_note(
     """
     from .tools.thread_notes import write_thread_note
 
-    cut_index = _find_cut_index(messages, config.context_compaction_keep_recent_turns)
+    cut_index = find_turn_cut_index(messages, config.context_compaction_keep_recent_turns)
     old_messages = messages[:cut_index] if cut_index else messages
     trimmed_old = trim_old_tool_messages(
         old_messages,
-        keep_recent=0,
+        keep_recent_turns=0,
         max_chars=config.context_compaction_summary_source_max_chars,
     )
     text = _messages_to_text(trimmed_old)
@@ -265,93 +265,6 @@ def should_compact(
     return last_total >= config.context_compaction_single_request_token_threshold
 
 
-def _find_cut_index(messages: list[BaseMessage], keep_recent_turns: int) -> int | None:
-    """安全な切断点のうち、末尾から keep_recent_turns 個目のユーザーターン
-    の直前の切断点（スライス境界）を返す。
-
-    旧実装は HumanMessage の個数で判定していたが、analyze_image の画像
-    フォローアップ（_with_image_followups）とループガードの nudge は
-    ツール往復の途中に HumanMessage を挿入する。LangGraph は tool_call を
-    1件ずつ tools ノードへ渡すため、ToolMessage(a) → HumanMessage(画像) →
-    ToolMessage(b) という並びが起こりうる。HumanMessage の位置で切ると
-    ToolMessage(b) だけが対応する AIMessage を失い、OpenAI 互換 API が
-    エラーを返す。
-
-    そこで以下の方式へ置き換える:
-
-    1. 先頭から走査し、各インデックス i で「発行済み tool_call id の集合」と
-       「返却済み ToolMessage id の集合」が一致している（＝未処理のツール
-       呼び出しが無い）状態になった時点の**スライス境界 i+1**を「安全な
-       切断点」として列挙する（`messages[0:境界]` が自己完結することを
-       意味する。境界を message[i] の直後、つまり i+1 にするのが重要で、
-       安全になった直後の message[i] 自身（多くの場合は直前の ToolMessage）
-       を境界にそのまま使うと、その ToolMessage だけが `messages[:境界]`
-       から漏れて対応する AIMessage.tool_calls だけが残る、という壊れ方を
-       する）。先頭（境界0、何も含まない）も自明に安全なため常に候補へ含める。
-    2. ユーザーターン境界（HumanMessage）が keep_recent_turns 個より
-       十分にあれば、それを優先して境界を選ぶ。
-    3. ユーザーターンが keep_recent_turns 個に満たない場合（1ターン内で
-       LLM呼び出しを何十回も繰り返す長時間タスク等）は、HumanMessage境界
-       だけでは圧縮の機会が一度も来ない。この場合はツール往復の境界
-       （安全な切断点そのもの）を「直近何回ぶんを残すか」の単位として使う。
-
-    これによりターン途中でも安全に切り分けられる。
-
-    Args:
-        messages: 現在の会話履歴全体。
-        keep_recent_turns: 丸ごと保持する直近のユーザーターン数
-            （ユーザーターンが不足する場合は、直近何回ぶんのツール往復を
-            残すかの単位として使う）。
-
-    Returns:
-        `messages[:戻り値]` が要約対象、それ以降が保持対象になる境界値。
-        圧縮しても縮まらない・安全な境界が無い場合は None。
-    """
-    # --- 1. 安全な切断点（スライス境界）を列挙 ---
-    issued_ids: set[str] = set()
-    done_ids: set[str] = set()
-    safe_cut_points: list[int] = [0]  # 境界0（何も含まない）は常に自明に安全
-
-    for i, m in enumerate(messages):
-        # ToolMessage が返ってきた → 対応する tool_call が完了
-        if isinstance(m, ToolMessage):
-            done_ids.add(m.tool_call_id)
-        # AIMessage が tool_calls を発行 → 未完了としてマーク
-        if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
-            for tc in m.tool_calls:
-                issued_ids.add(tc.get("id", ""))
-        # 現在の位置で未処理の tool_call が無い → message[i] を含めた境界 i+1 が安全
-        if issued_ids == done_ids:
-            safe_cut_points.append(i + 1)
-
-    # --- 2. 末尾から keep_recent_turns 個目のユーザーターンの直前を選ぶ ---
-    human_indices = [i for i, m in enumerate(messages) if isinstance(m, HumanMessage)]
-    total_users = len(human_indices)
-    target_idx = total_users - keep_recent_turns  # 切るべきユーザーのインデックス
-    if target_idx >= 0:
-        # target_idx == total_users（keep_recent_turns <= 0 で保持すべき直近
-        # ユーザーターンが1つも無い場合）は human_indices の範囲外になる。
-        # この場合は「全ユーザーターンを要約対象にしてよい」という意味なので、
-        # 境界をメッセージ列の末尾扱いにする（human_indices[target_idx] で
-        # IndexErrorになっていた既存バグの修正）。
-        target_human_index = human_indices[target_idx] if target_idx < total_users else len(messages)
-        cut_index = None
-        for boundary in safe_cut_points:
-            if boundary > target_human_index:
-                break
-            cut_index = boundary
-        return cut_index if cut_index else None
-
-    # --- 3. ユーザーターンが不足する場合は、安全な切断点の個数を単位にする ---
-    # safe_cut_points には常に境界0（何も進んでいない状態）が含まれるため、
-    # 実質的に使える切断点数は1個少ない。
-    usable_points = len(safe_cut_points) - 1
-    if usable_points <= keep_recent_turns:
-        return None
-    cut_index = safe_cut_points[-(keep_recent_turns + 1)]
-    return cut_index if cut_index else None
-
-
 def _messages_to_text(messages: list[BaseMessage]) -> str:
     """要約対象メッセージ列を、要約LLMへ渡すプレーンテキストへ変換する。"""
     lines = []
@@ -423,7 +336,7 @@ async def maybe_compact(
         でも、次のリトライ・次のターンのLLM呼び出しが応答ヘッダー待ちで
         ハングし続けることを防ぐ。
     """
-    cut_index = _find_cut_index(messages, config.context_compaction_keep_recent_turns)
+    cut_index = find_turn_cut_index(messages, config.context_compaction_keep_recent_turns)
     if cut_index is None:
         return None
 
@@ -434,7 +347,7 @@ async def maybe_compact(
 
     # 要約対象自体が長大だと要約プロンプト自体のプリフィルが遅くなるため、
     # context_trim と同様の切り詰めを要約対象にも適用してから渡す
-    # （keep_recent=0: 要約対象内では「直近だから全文保持」は意味を持たない）。
+    # （keep_recent_turns=0: 要約対象内では「直近だから全文保持」は意味を持たない）。
     # ただし max_chars は [context_trim] のものを流用せず、要約専用の
     # context_compaction_summary_source_max_chars を使う。要約は永続履歴を
     # 置き換える恒久的な操作のため、プリフィル短縮目的の[context_trim]と
@@ -443,7 +356,7 @@ async def maybe_compact(
     # ファイル名の列挙しか残らない）。
     trimmed_old = trim_old_tool_messages(
         old_messages,
-        keep_recent=0,
+        keep_recent_turns=0,
         max_chars=config.context_compaction_summary_source_max_chars,
     )
     text = _messages_to_text(trimmed_old)

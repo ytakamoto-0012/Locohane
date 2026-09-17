@@ -1,4 +1,8 @@
-"""src/context_compaction.py の _find_cut_index() の回帰テスト。
+"""src/context_trim.py の find_turn_cut_index() の回帰テスト。
+
+context_compaction.py の要約対象切り出しと、context_trim.py の
+trim_old_tool_messages/trim_old_ai_messages（直近何ターン分を全文保持
+するか）の両方で共有される境界計算ロジック。
 
 旧実装は HumanMessage の個数だけで切断点を決めていたが、2つの欠陥があった:
 
@@ -18,7 +22,7 @@ ToolMessage自体がスライスから漏れる（境界は message index + 1 �
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from src.context_compaction import _find_cut_index
+from src.context_trim import find_turn_cut_index
 
 
 def _tool_call(call_id: str) -> dict:
@@ -39,7 +43,7 @@ def test_does_not_cut_between_tool_call_and_its_delayed_response() -> None:
         AIMessage(content="final2"),
     ]
 
-    cut_index = _find_cut_index(messages, keep_recent_turns=1)
+    cut_index = find_turn_cut_index(messages, keep_recent_turns=1)
 
     assert cut_index == 6
     assert cut_index not in (2, 3, 4)
@@ -67,7 +71,7 @@ def test_cut_point_found_mid_turn_with_single_human_message() -> None:
         ToolMessage(content="r3", tool_call_id="a3"),
     ]
 
-    cut_index = _find_cut_index(messages, keep_recent_turns=2)
+    cut_index = find_turn_cut_index(messages, keep_recent_turns=2)
 
     assert cut_index is not None
     old_messages = messages[:cut_index]
@@ -89,13 +93,13 @@ def test_returns_none_when_only_pending_tool_call_exists() -> None:
         AIMessage(content="", tool_calls=[_tool_call("a")]),
     ]
 
-    assert _find_cut_index(messages, keep_recent_turns=2) is None
+    assert find_turn_cut_index(messages, keep_recent_turns=2) is None
 
 
 def test_returns_none_when_not_enough_history_to_compact() -> None:
     messages = [HumanMessage(content="q1"), AIMessage(content="final")]
 
-    assert _find_cut_index(messages, keep_recent_turns=2) is None
+    assert find_turn_cut_index(messages, keep_recent_turns=2) is None
 
 
 def test_keep_recent_turns_zero_does_not_raise_and_cuts_everything() -> None:
@@ -111,7 +115,7 @@ def test_keep_recent_turns_zero_does_not_raise_and_cuts_everything() -> None:
         ToolMessage(content="ra", tool_call_id="a"),
     ]
 
-    cut_index = _find_cut_index(messages, keep_recent_turns=0)
+    cut_index = find_turn_cut_index(messages, keep_recent_turns=0)
 
     assert cut_index == 3
     assert messages[cut_index:] == []

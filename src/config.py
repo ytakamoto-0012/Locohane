@@ -633,8 +633,14 @@ class Config:
             対応する context_trim_subagent_* を使う（config.ini の
             [context_trim.subagent] に項目があればその値、無ければこちらの
             値を継承する）。
-        context_trim_keep_recent_tool_messages: 全文保持する直近 ToolMessage
-            の件数。これより古い ToolMessage のみ切り詰め対象にする。
+        context_trim_keep_recent_tool_turns: 全文保持する直近のユーザーターン数
+            （src.context_trim.find_turn_cut_index）。それより古い ToolMessage
+            のみ切り詰め対象にする。ユーザーターンが不足する場合（1ターン内で
+            LLM呼び出しを繰り返す長時間タスク）は、ツール往復（ラウンド
+            トリップ）単位のフォールバックになる。1回のAIMessageが並列発行
+            した複数tool_callsに対応するToolMessage群は必ずラウンドトリップ
+            単位で丸ごと同じ側（保持/切り詰め）に入り、一部だけ分断される
+            ことはない。
         context_trim_truncated_max_chars: 切り詰め対象 ToolMessage /
             AIMessage の content を、先頭何文字まで残すか
             （超過分はマーカー文言に置換）。context_trim_duplicate_guard_tool_max_chars
@@ -650,8 +656,9 @@ class Config:
             別枠で持たせる。
         context_trim_ai_messages: ToolMessage だけでなく AIMessage
             （モデル自身の思考本文と tool_calls の引数）も切り詰めるか。
-        context_trim_keep_recent_ai_messages: 全文保持する直近 AIMessage
-            の件数。これより古い AIMessage のみ切り詰め対象にする。
+        context_trim_keep_recent_ai_turns: 全文保持する直近のユーザーターン数
+            （context_trim_keep_recent_tool_turns と同じ判定方式・独立した値）。
+            それより古い AIMessage のみ切り詰め対象にする。
         context_trim_trigger_total_tokens: トリムを発動させる閾値
             （Claude API の context editing、clear_tool_uses_20250919 の
             trigger.value 相当）。直近1回のLLM呼び出しの total_tokens
@@ -927,20 +934,20 @@ class Config:
 
     # --- 会話履歴トリミング（src/context_trim.py） ---
     context_trim_enabled: bool
-    context_trim_keep_recent_tool_messages: int
+    context_trim_keep_recent_tool_turns: int
     context_trim_truncated_max_chars: int
     context_trim_duplicate_guard_tool_max_chars: int
     context_trim_ai_messages: bool
-    context_trim_keep_recent_ai_messages: int
+    context_trim_keep_recent_ai_turns: int
     context_trim_trigger_total_tokens: int
 
     # --- 会話履歴トリミング・サブエージェント専用上書き（[context_trim.subagent]） ---
     context_trim_subagent_enabled: bool
-    context_trim_subagent_keep_recent_tool_messages: int
+    context_trim_subagent_keep_recent_tool_turns: int
     context_trim_subagent_truncated_max_chars: int
     context_trim_subagent_duplicate_guard_tool_max_chars: int
     context_trim_subagent_ai_messages: bool
-    context_trim_subagent_keep_recent_ai_messages: int
+    context_trim_subagent_keep_recent_ai_turns: int
     context_trim_subagent_trigger_total_tokens: int
 
     # --- 会話履歴の自動要約・圧縮（src/context_compaction.py） ---
@@ -1845,7 +1852,7 @@ def load_config(config_path: Path | None = None) -> Config:
       THINKING_LOOP_GUARD_CHECK_INTERVAL_CHARS / THINKING_LOOP_GUARD_COMPRESSION_RATIO_THRESHOLD /
       THINKING_LOOP_GUARD_CONFIRM_COUNT / THINKING_LOOP_GUARD_MAX_RETRIES /
       THINKING_LOOP_GUARD_NUDGE_MESSAGES
-      CONTEXT_TRIM_ENABLED / CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES / CONTEXT_TRIM_TRUNCATED_MAX_CHARS
+      CONTEXT_TRIM_ENABLED / CONTEXT_TRIM_KEEP_RECENT_TOOL_TURNS / CONTEXT_TRIM_TRUNCATED_MAX_CHARS
       CONTEXT_COMPACTION_ENABLED / CONTEXT_COMPACTION_TOKEN_THRESHOLD /
       CONTEXT_COMPACTION_KEEP_RECENT_TURNS / CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT /
       CONTEXT_COMPACTION_PROMPT_PATH
@@ -1922,8 +1929,8 @@ def load_config(config_path: Path | None = None) -> Config:
     # すると、CONTEXT_TRIM_*/CONTEXT_COMPACTION_* 環境変数がサブエージェント側
     # にだけ反映されなくなる。
     _context_trim_enabled = _as_bool(os.getenv("CONTEXT_TRIM_ENABLED", context_trim.get("enabled", True)))
-    _context_trim_keep_recent_tool_messages = int(
-        os.getenv("CONTEXT_TRIM_KEEP_RECENT_TOOL_MESSAGES", context_trim.get("keep_recent_tool_messages", 5))
+    _context_trim_keep_recent_tool_turns = int(
+        os.getenv("CONTEXT_TRIM_KEEP_RECENT_TOOL_TURNS", context_trim.get("keep_recent_tool_turns", 3))
     )
     _context_trim_truncated_max_chars = int(
         os.getenv("CONTEXT_TRIM_TRUNCATED_MAX_CHARS", context_trim.get("truncated_max_chars", 2000))
@@ -1935,8 +1942,8 @@ def load_config(config_path: Path | None = None) -> Config:
         )
     )
     _context_trim_ai_messages = _as_bool(os.getenv("CONTEXT_TRIM_AI_MESSAGES", context_trim.get("trim_ai_messages", True)))
-    _context_trim_keep_recent_ai_messages = int(
-        os.getenv("CONTEXT_TRIM_KEEP_RECENT_AI_MESSAGES", context_trim.get("keep_recent_ai_messages", 3))
+    _context_trim_keep_recent_ai_turns = int(
+        os.getenv("CONTEXT_TRIM_KEEP_RECENT_AI_TURNS", context_trim.get("keep_recent_ai_turns", 3))
     )
     _context_trim_trigger_total_tokens = int(
         os.getenv("CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS", context_trim.get("trigger_total_tokens", 100_000))
@@ -2421,17 +2428,17 @@ def load_config(config_path: Path | None = None) -> Config:
             )
         ),
         context_trim_enabled=_context_trim_enabled,
-        context_trim_keep_recent_tool_messages=_context_trim_keep_recent_tool_messages,
+        context_trim_keep_recent_tool_turns=_context_trim_keep_recent_tool_turns,
         context_trim_truncated_max_chars=_context_trim_truncated_max_chars,
         context_trim_duplicate_guard_tool_max_chars=_context_trim_duplicate_guard_tool_max_chars,
         context_trim_ai_messages=_context_trim_ai_messages,
-        context_trim_keep_recent_ai_messages=_context_trim_keep_recent_ai_messages,
+        context_trim_keep_recent_ai_turns=_context_trim_keep_recent_ai_turns,
         context_trim_trigger_total_tokens=_context_trim_trigger_total_tokens,
         context_trim_subagent_enabled=_subagent_override(
             context_trim_subagent, "enabled", _context_trim_enabled, _as_bool
         ),
-        context_trim_subagent_keep_recent_tool_messages=_subagent_override(
-            context_trim_subagent, "keep_recent_tool_messages", _context_trim_keep_recent_tool_messages, int
+        context_trim_subagent_keep_recent_tool_turns=_subagent_override(
+            context_trim_subagent, "keep_recent_tool_turns", _context_trim_keep_recent_tool_turns, int
         ),
         context_trim_subagent_truncated_max_chars=_subagent_override(
             context_trim_subagent, "truncated_max_chars", _context_trim_truncated_max_chars, int
@@ -2445,8 +2452,8 @@ def load_config(config_path: Path | None = None) -> Config:
         context_trim_subagent_ai_messages=_subagent_override(
             context_trim_subagent, "trim_ai_messages", _context_trim_ai_messages, _as_bool
         ),
-        context_trim_subagent_keep_recent_ai_messages=_subagent_override(
-            context_trim_subagent, "keep_recent_ai_messages", _context_trim_keep_recent_ai_messages, int
+        context_trim_subagent_keep_recent_ai_turns=_subagent_override(
+            context_trim_subagent, "keep_recent_ai_turns", _context_trim_keep_recent_ai_turns, int
         ),
         context_trim_subagent_trigger_total_tokens=_subagent_override(
             context_trim_subagent, "trigger_total_tokens", _context_trim_trigger_total_tokens, int

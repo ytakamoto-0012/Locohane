@@ -448,14 +448,14 @@ def _build_llm_input(messages: list, config: Config) -> list:
         return messages
     trimmed = trim_old_tool_messages(
         messages,
-        keep_recent=config.context_trim_subagent_keep_recent_tool_messages,
+        keep_recent_turns=config.context_trim_subagent_keep_recent_tool_turns,
         max_chars=config.context_trim_subagent_truncated_max_chars,
         guarded_tool_max_chars=config.context_trim_subagent_duplicate_guard_tool_max_chars,
     )
     if config.context_trim_subagent_ai_messages:
         trimmed = trim_old_ai_messages(
             trimmed,
-            keep_recent=config.context_trim_subagent_keep_recent_ai_messages,
+            keep_recent_turns=config.context_trim_subagent_keep_recent_ai_turns,
             max_chars=config.context_trim_subagent_truncated_max_chars,
         )
     return trimmed

@@ -35,7 +35,7 @@ def test_old_ai_message_content_and_args_are_truncated() -> None:
         ToolMessage(content="ok", tool_call_id="call-2"),
     ]
 
-    result = trim_old_ai_messages(messages, keep_recent=0, max_chars=50)
+    result = trim_old_ai_messages(messages, keep_recent_turns=0, max_chars=50)
 
     old_ai = result[1]
     assert isinstance(old_ai, AIMessage)
@@ -57,7 +57,7 @@ def test_tool_call_ids_and_names_and_count_are_unchanged() -> None:
         ToolMessage(content="ok", tool_call_id="b"),
     ]
 
-    result = trim_old_ai_messages(messages, keep_recent=0, max_chars=10)
+    result = trim_old_ai_messages(messages, keep_recent_turns=0, max_chars=10)
 
     trimmed_calls = result[0].tool_calls
     assert len(trimmed_calls) == 2
@@ -78,7 +78,7 @@ def test_recent_ai_messages_are_kept_verbatim() -> None:
         ToolMessage(content="ok", tool_call_id="call-2"),
     ]
 
-    result = trim_old_ai_messages(messages, keep_recent=1, max_chars=20)
+    result = trim_old_ai_messages(messages, keep_recent_turns=1, max_chars=20)
 
     assert result[0] is not ai_1
     assert len(result[0].content) < len(ai_1.content)
@@ -91,7 +91,7 @@ def test_original_messages_are_not_mutated() -> None:
     original = _ai_with_tool_call("body" * 200, long_code, "call-1")
     messages = [original, ToolMessage(content="ok", tool_call_id="call-1")]
 
-    trim_old_ai_messages(messages, keep_recent=0, max_chars=10)
+    trim_old_ai_messages(messages, keep_recent_turns=0, max_chars=10)
 
     assert original.content == "body" * 200
     assert original.tool_calls[0]["args"]["code"] == long_code
