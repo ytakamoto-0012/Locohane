@@ -776,7 +776,8 @@ def dump_messages_for_cancelled_rescue(messages: list) -> str:
     ほぼそのままMarkdown化する。_collect_tool_results_summary は打ち切り時に
     委譲元へ引き継ぐための軽量要約だが、こちらは停止ボタンによる予期しない
     中断からの人間による調査・復旧が目的のため、tool_calls の引数を含め
-    情報量を優先する。
+    情報量を優先する。SystemMessage（システムプロンプト本体）は調査・復旧に
+    不要な上に長大なため除外する。
 
     Args:
         messages: run_subagent がキャンセルされた時点の会話履歴。
@@ -789,6 +790,8 @@ def dump_messages_for_cancelled_rescue(messages: list) -> str:
         return ""
     parts = ["[サブエージェント強制停止による会話履歴の緊急退避]"]
     for m in messages:
+        if isinstance(m, SystemMessage):
+            continue
         role = type(m).__name__
         content = str(m.content)
         parts.append(f"### {role}\n{content}")
