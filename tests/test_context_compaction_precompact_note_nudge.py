@@ -22,7 +22,7 @@ class _FakeConfig:
     context_compaction_enabled: bool = True
     context_compaction_pre_note_threshold: int = 1000
     context_compaction_pre_note_warning_text: str = "write_thread_noteへ書き出してください"
-    context_compaction_keep_recent_turns: int = 3
+    context_compaction_keep_recent_iterations: int = 3
     context_compaction_require_note_max_skips: int = 0
 
 
@@ -104,7 +104,7 @@ def _write_thread_note_call(call_id: str) -> AIMessage:
 
 def test_no_injection_when_write_thread_note_called_within_recent_turns() -> None:
     """直近ターン内で write_thread_note 済みなら、閾値超過でも再ナッジしない（無限ループ回避）。"""
-    config = _FakeConfig(context_compaction_pre_note_threshold=1000, context_compaction_keep_recent_turns=3)
+    config = _FakeConfig(context_compaction_pre_note_threshold=1000, context_compaction_keep_recent_iterations=3)
     messages = [
         HumanMessage(content="turn1"),
         _write_thread_note_call("call-1"),
@@ -118,8 +118,8 @@ def test_no_injection_when_write_thread_note_called_within_recent_turns() -> Non
 
 
 def test_injects_again_once_write_thread_note_call_falls_outside_recent_turns() -> None:
-    """write_thread_note 済みでも、それが keep_recent_turns より前なら再ナッジする。"""
-    config = _FakeConfig(context_compaction_pre_note_threshold=1000, context_compaction_keep_recent_turns=2)
+    """write_thread_note 済みでも、それが keep_recent_iterations より前なら再ナッジする。"""
+    config = _FakeConfig(context_compaction_pre_note_threshold=1000, context_compaction_keep_recent_iterations=2)
     messages = [
         HumanMessage(content="turn1"),
         _write_thread_note_call("call-1"),
@@ -149,7 +149,7 @@ def test_blocked_when_note_not_called_and_max_skips_zero() -> None:
 
 
 def test_not_blocked_when_note_called_recently() -> None:
-    """直近keep_recent_turns以内にwrite_thread_noteが呼ばれていればブロックしない。"""
+    """直近keep_recent_iterations反復以内にwrite_thread_noteが呼ばれていればブロックしない。"""
     config = _FakeConfig(context_compaction_require_note_max_skips=0)
     messages = [
         HumanMessage(content="turn1"),

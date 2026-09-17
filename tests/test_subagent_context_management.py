@@ -34,16 +34,16 @@ class _FakeConfig:
     subagent_token_guard_enabled: bool = False
     track_token_usage: bool = False
     context_trim_subagent_enabled: bool = True
-    context_trim_subagent_keep_recent_tool_turns: int = 0
+    context_trim_subagent_keep_recent_tool_iterations: int = 0
     context_trim_subagent_truncated_max_chars: int = 20
     context_trim_subagent_duplicate_guard_tool_max_chars: int = 20
     context_trim_subagent_ai_messages: bool = False
-    context_trim_subagent_keep_recent_ai_turns: int = 0
+    context_trim_subagent_keep_recent_ai_iterations: int = 0
     context_trim_subagent_trigger_total_tokens: int = 0
     context_compaction_enabled: bool = False
     context_compaction_token_threshold: int = 0
     context_compaction_single_request_token_threshold: int = 0
-    context_compaction_keep_recent_turns: int = 0
+    context_compaction_keep_recent_iterations: int = 0
     context_compaction_min_messages_to_compact: int = 0
     context_compaction_prompt_path: str | None = None
     context_compaction_summary_source_max_chars: int = 0
@@ -52,7 +52,7 @@ class _FakeConfig:
     context_compaction_subagent_enabled: bool = False
     context_compaction_subagent_token_threshold: int = 0
     context_compaction_subagent_single_request_token_threshold: int = 0
-    context_compaction_subagent_keep_recent_turns: int = 0
+    context_compaction_subagent_keep_recent_iterations: int = 0
     context_compaction_subagent_min_messages_to_compact: int = 0
     context_compaction_subagent_prompt_path: str | None = None
     context_compaction_subagent_summary_source_max_chars: int = 0
@@ -71,9 +71,9 @@ def test_build_llm_input_trims_old_tool_messages_without_mutating_original() -> 
 
     サブエージェントの会話は通常ユーザーターン（HumanMessage）が1件しか
     無い（1回のタスク指示の中で何度もツール呼び出しを繰り返す構造）ため、
-    find_turn_cut_index()のフォールバック（ツール往復単位のカウント）が
+    find_iteration_cut_index()のフォールバック（ツール往復単位のカウント）が
     効くよう、3回分のラウンドトリップ（各ToolMessageに対応するAIMessage.
-    tool_callsを含む現実的な構造）を用意し、keep_recent_tool_turns=2で
+    tool_callsを含む現実的な構造）を用意し、keep_recent_tool_iterations=2で
     直近2往復（c0, c1）は全文保持、最古の往復（c_old）だけ切り詰められる
     ことを確認する。
     """
@@ -89,7 +89,7 @@ def test_build_llm_input_trims_old_tool_messages_without_mutating_original() -> 
         ToolMessage(content=long_content, name="Read", tool_call_id="c1"),
     ]
     config = _FakeConfig()
-    config.context_trim_subagent_keep_recent_tool_turns = 2
+    config.context_trim_subagent_keep_recent_tool_iterations = 2
 
     llm_input = _build_llm_input(messages, config)
 
@@ -116,7 +116,7 @@ class _ToolCallThenFinalModel:
     def __init__(self) -> None:
         self.calls = 0
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, tool_choice=None):
         return self
 
     async def ainvoke(self, messages):
@@ -154,7 +154,7 @@ async def test_compaction_excludes_leading_system_message(monkeypatch) -> None:
     config = _FakeConfig()
     config.context_trim_subagent_enabled = False
     config.context_compaction_subagent_enabled = True
-    config.context_compaction_subagent_keep_recent_turns = 3
+    config.context_compaction_subagent_keep_recent_iterations = 3
     config.track_token_usage = True
 
     fake_model = _ToolCallThenFinalModel()
@@ -205,7 +205,7 @@ class _ToolCallWithUsageThenFinalModel:
         self.total_tokens = total_tokens
         self.captured_second_input: list | None = None
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, tool_choice=None):
         return self
 
     async def ainvoke(self, messages):
@@ -240,7 +240,7 @@ async def test_pre_note_nudge_injected_when_soft_threshold_not_reached(monkeypat
     config.subagent_token_guard_hard_threshold = 200000
     config.context_compaction_subagent_enabled = True
     config.context_compaction_subagent_pre_note_threshold = 1000  # 到達する水準
-    config.context_compaction_subagent_keep_recent_turns = 3
+    config.context_compaction_subagent_keep_recent_iterations = 3
     config.context_compaction_subagent_min_messages_to_compact = 9999  # should_compactは発火させない
 
     fake_model = _ToolCallWithUsageThenFinalModel(total_tokens=1500)
@@ -273,7 +273,7 @@ class _RepeatedToolCallModel:
         self.calls = 0
         self.max_calls = max_calls
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, tool_choice=None):
         return self
 
     async def ainvoke(self, messages):
@@ -285,14 +285,19 @@ class _RepeatedToolCallModel:
 
 @pytest.mark.asyncio
 async def test_compaction_skipped_when_note_never_called(monkeypatch) -> None:
-    """write_thread_noteが一度も呼ばれなければ、require_note_max_skips=0（無期限に
-    待つ設定）の間はshould_compactがTrueであってもmaybe_compactが一度も呼ばれない
+    """write_thread_noteが一度も呼ばれず、force_write_thread_noteによる強制実行も
+    失敗した場合は、require_note_max_skips=0（無期限に待つ設定）の間は
+    should_compactがTrueであってもmaybe_compactが一度も呼ばれない
     （is_compaction_blocked_by_missing_noteの実装漏れ修正に対するend-to-end回帰）。
+
+    ここで使う _RepeatedToolCallModel は write_thread_note ではなく dummy_tool を
+    呼ぶ応答を返すため、force_write_thread_note は topic/content を得られず
+    Noneを返す（＝従来の見送りへフォールバックする）。
     """
     config = _FakeConfig()
     config.context_trim_subagent_enabled = False
     config.context_compaction_subagent_enabled = True
-    config.context_compaction_subagent_keep_recent_turns = 3
+    config.context_compaction_subagent_keep_recent_iterations = 3
     config.track_token_usage = True
     config.context_compaction_subagent_require_note_max_skips = 0
 
@@ -325,6 +330,74 @@ async def test_compaction_skipped_when_note_never_called(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_force_write_thread_note_runs_before_skipping_compaction(monkeypatch) -> None:
+    """write_thread_note未呼び出しでも、見送る前にforce_write_thread_noteで
+    強制実行し、成功したらその回のうちに圧縮まで進むこと。
+
+    メインエージェント（app.py の _run_context_compaction）にだけ強制実行が
+    入っていてサブエージェント側が見送りのままだと、「委譲元へ返すのは要約、
+    具体的な事実は thread note へ」という前提で動くサブエージェントの方こそ
+    事実退避の機会を失う。require_note_max_skips=0（無期限に待つ設定）でも
+    圧縮まで到達することで、強制実行が効いていることを確認する。
+    """
+    config = _FakeConfig()
+    config.context_trim_subagent_enabled = False
+    config.context_compaction_subagent_enabled = True
+    config.context_compaction_subagent_keep_recent_iterations = 3
+    config.track_token_usage = True
+    config.context_compaction_subagent_require_note_max_skips = 0
+
+    fake_model = _RepeatedToolCallModel()
+
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
+    monkeypatch.setattr(subagent, "should_compact", lambda *a, **k: True)
+
+    forced_calls = {"count": 0}
+
+    async def fake_force_write_thread_note(messages, model, config):
+        forced_calls["count"] += 1
+        ai = AIMessage(
+            content="",
+            tool_calls=[{"name": "write_thread_note", "args": {"topic": "t", "content": "c"}, "id": "fc-1"}],
+        )
+        return ai, [ToolMessage(content="書き込みました", tool_call_id="fc-1")]
+
+    monkeypatch.setattr(subagent, "force_write_thread_note", fake_force_write_thread_note)
+
+    compact_inputs: list[list] = []
+
+    async def fake_maybe_compact(messages, model, config, *, role="sub"):
+        compact_inputs.append(list(messages))
+        return [HumanMessage(content="[要約]")]
+
+    monkeypatch.setattr(subagent, "maybe_compact", fake_maybe_compact)
+
+    await subagent.run_subagent(
+        task="t",
+        tools=[dummy_tool],
+        system_prompt="サブエージェント専用システムプロンプト",
+        config=config,
+        max_iterations=3,
+    )
+
+    assert forced_calls["count"] >= 1
+    assert len(compact_inputs) >= 1
+    # 強制実行の結果が圧縮対象の履歴へ積まれており、かつ tool_calls と
+    # ToolMessage が全件対応していること（1件でも欠けるとOpenAI互換APIが
+    # 以降のリクエストを拒否する）。
+    compacted = compact_inputs[0]
+    assert any(
+        isinstance(m, AIMessage) and any(tc["id"] == "fc-1" for tc in (m.tool_calls or [])) for m in compacted
+    )
+    issued = {tc["id"] for m in compacted if isinstance(m, AIMessage) for tc in (m.tool_calls or [])}
+    answered = {m.tool_call_id for m in compacted if isinstance(m, ToolMessage)}
+    assert issued == answered
+
+
+@pytest.mark.asyncio
 async def test_compaction_forced_after_max_skips(monkeypatch) -> None:
     """write_thread_note未呼び出しでも、見送り回数がrequire_note_max_skipsに
     達したら記録が無くても圧縮を強制する（安全弁。LLMが指示を無視し続けても
@@ -333,7 +406,7 @@ async def test_compaction_forced_after_max_skips(monkeypatch) -> None:
     config = _FakeConfig()
     config.context_trim_subagent_enabled = False
     config.context_compaction_subagent_enabled = True
-    config.context_compaction_subagent_keep_recent_turns = 3
+    config.context_compaction_subagent_keep_recent_iterations = 3
     config.track_token_usage = True
     config.context_compaction_subagent_require_note_max_skips = 2
 
@@ -381,7 +454,7 @@ async def test_pre_note_nudge_not_injected_when_soft_threshold_reached(monkeypat
     config.subagent_token_guard_soft_warning_text = "ソフト警告文言"
     config.context_compaction_subagent_enabled = True
     config.context_compaction_subagent_pre_note_threshold = 1000  # softと同時に到達する水準
-    config.context_compaction_subagent_keep_recent_turns = 3
+    config.context_compaction_subagent_keep_recent_iterations = 3
     config.context_compaction_subagent_min_messages_to_compact = 9999
 
     fake_model = _ToolCallWithUsageThenFinalModel(total_tokens=1500)
@@ -432,9 +505,11 @@ async def test_hard_threshold_triggers_without_prior_soft_warning(monkeypatch) -
     monkeypatch.setattr(subagent, "build_model", fake_build_model)
 
     captured: list = []
+    captured_reasons: list[str] = []
 
-    def _on_cancelled(messages: list) -> None:
+    def _on_cancelled(messages: list, reason: str) -> None:
         captured.append(list(messages))
+        captured_reasons.append(reason)
 
     result = await subagent.run_subagent(
         task="t",
@@ -449,6 +524,9 @@ async def test_hard_threshold_triggers_without_prior_soft_warning(monkeypatch) -
     # 2回目のainvoke（ツール実行後の続き）は発生せず、その場で打ち切られる。
     assert fake_model.captured_second_input is None
     assert len(captured) == 1
+    # 退避の見出しが「停止ボタンによる強制終了」と混ざらないこと
+    # （原因が全く異なるため、後からスクラッチノートを読む人が取り違える）。
+    assert captured_reasons == [subagent.RESCUE_REASON_TOKEN_GUARD]
 
 
 @pytest.mark.asyncio

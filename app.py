@@ -3107,9 +3107,10 @@ async def _run_context_compaction(
                 skip_count + 1,
             )
             return False
-        ai_message, tool_message = forced
+        ai_message, tool_messages = forced
+        forced_messages = [ai_message, *tool_messages]
         try:
-            await graph.aupdate_state(config, {"messages": [ai_message, tool_message]}, as_node="tools")
+            await graph.aupdate_state(config, {"messages": forced_messages}, as_node="tools")
         except Exception:
             # 上のaget_state/aupdate_state同様の理由で握りつぶす。強制実行済みの
             # write_thread_noteの結果は次回以降の判定（_write_thread_note_called_recently）
@@ -3119,8 +3120,13 @@ async def _run_context_compaction(
             )
             cl.user_session.set("context_compaction_note_skip_count", skip_count + 1)
             return False
+        # ここでのリセットは「圧縮完了を確認してからリセットする」という下の
+        # 方針と矛盾しない。skip_count は write_thread_note が書かれるまでの
+        # 猶予回数であり、強制実行が成功した＝事実の退避自体は済んでいる。
+        # 以降で要約LLM呼び出しが失敗しても、失われる恐れのある事実は既に
+        # thread note へ書き出されているため、猶予を積み直す意味が無い。
         cl.user_session.set("context_compaction_note_skip_count", 0)
-        messages = messages + [ai_message, tool_message]
+        messages = messages + forced_messages
     if dry_run:
         return True
     if summary_model is None:

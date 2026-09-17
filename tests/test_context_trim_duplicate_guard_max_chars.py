@@ -8,7 +8,7 @@ ToolMessage が一般的な max_chars（プリフィル短縮目的の小さめ�
 なり案内が機能しない。guarded_tool_max_chars はこれらのツールの
 ToolMessage にだけ別枠の（通常より大きい）切り詰め文字数を適用する。
 
-trim_old_tool_messages() は keep_recent_turns（find_turn_cut_index による
+trim_old_tool_messages() は keep_recent_iterations（find_iteration_cut_index による
 ラウンドトリップ境界判定）を使うため、各 ToolMessage には対応する
 AIMessage.tool_calls を含めた現実的な構造で組み立てる（対応するAIMessage
 が無いToolMessage単体だと「未処理のtool_callが無い」状態を検出できず、
@@ -35,7 +35,7 @@ def test_guarded_tool_uses_its_own_larger_limit() -> None:
     ]
 
     result = trim_old_tool_messages(
-        messages, keep_recent_turns=0, max_chars=50, guarded_tool_max_chars=500
+        messages, keep_recent_iterations=0, max_chars=50, guarded_tool_max_chars=500
     )
 
     read_msg, exec_msg = result[1], result[3]
@@ -52,7 +52,7 @@ def test_guarded_tool_names_cover_all_duplicate_guarded_tools() -> None:
     for i, name in enumerate(names):
         messages.extend(_round_trip(name, long_content, f"call-{i}"))
 
-    result = trim_old_tool_messages(messages, keep_recent_turns=0, max_chars=10, guarded_tool_max_chars=80)
+    result = trim_old_tool_messages(messages, keep_recent_iterations=0, max_chars=10, guarded_tool_max_chars=80)
 
     tool_messages = [m for m in result if isinstance(m, ToolMessage)]
     for original_name, trimmed in zip(names, tool_messages):
@@ -64,7 +64,7 @@ def test_none_guarded_tool_max_chars_falls_back_to_generic_max_chars() -> None:
     long_content = "z" * 1000
     messages = _round_trip("Read", long_content, "call-1")
 
-    result = trim_old_tool_messages(messages, keep_recent_turns=0, max_chars=30, guarded_tool_max_chars=None)
+    result = trim_old_tool_messages(messages, keep_recent_iterations=0, max_chars=30, guarded_tool_max_chars=None)
 
     tool_msg = result[1]
     assert tool_msg.content.startswith("z" * 30)

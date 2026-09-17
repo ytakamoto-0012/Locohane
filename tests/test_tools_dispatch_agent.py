@@ -20,7 +20,7 @@ import re
 import pytest
 from langchain_core.messages import HumanMessage
 
-from src import tools
+from src import subagent, tools
 
 # tools.write_scratch_note は@toolオブジェクトで上書き済みのため、モジュール自体は
 # importlib で sys.modules から直接取得する。
@@ -531,7 +531,7 @@ async def test_cancel_via_stop_button_rescues_conversation_to_scratch_note(monke
             await asyncio.sleep(1000)
         except asyncio.CancelledError:
             if on_cancelled is not None:
-                on_cancelled([HumanMessage(content="rescued-task-marker")])
+                on_cancelled([HumanMessage(content="rescued-task-marker")], subagent.RESCUE_REASON_CANCELLED)
             raise
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
@@ -583,7 +583,7 @@ async def test_cancelling_caller_task_directly_still_rescues_before_propagating(
             await asyncio.sleep(1000)
         except asyncio.CancelledError:
             if on_cancelled is not None:
-                on_cancelled([HumanMessage(content="rescued-task-marker")])
+                on_cancelled([HumanMessage(content="rescued-task-marker")], subagent.RESCUE_REASON_CANCELLED)
             raise
 
     monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)

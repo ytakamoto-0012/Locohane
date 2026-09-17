@@ -19,7 +19,12 @@ from typing import Literal
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from .config import Config
-from .context_trim import find_turn_cut_index, last_ai_total_tokens, trim_old_tool_messages
+from .context_trim import (
+    find_iteration_cut_index,
+    find_last_user_message_cut_index,
+    last_ai_total_tokens,
+    trim_old_tool_messages,
+)
 from .llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -60,7 +65,7 @@ def maybe_append_precompact_note_nudge(messages: list[BaseMessage], config: Conf
     Returns:
         閾値に達していれば末尾に HumanMessage を1件足した新しいリスト。
         達していない場合・無効化されている場合、または直近
-        keep_recent_turns ターン以内に write_thread_note が既に呼ばれて
+        keep_recent_iterations 反復以内に write_thread_note が既に呼ばれて
         いる場合は、引数の messages をそのまま返す。
     """
     if not config.context_compaction_enabled or config.context_compaction_pre_note_threshold <= 0:
@@ -68,7 +73,7 @@ def maybe_append_precompact_note_nudge(messages: list[BaseMessage], config: Conf
     total = last_ai_total_tokens(messages)
     if total is None or total < config.context_compaction_pre_note_threshold:
         return messages
-    if _write_thread_note_called_recently(messages, config.context_compaction_keep_recent_turns):
+    if _write_thread_note_called_recently(messages, config.context_compaction_keep_recent_iterations):
         # 直近で既に書き出し済みなら、同じ facts を書かせるためだけの
         # 再ナッジは無意味かつ有害（ナッジ自体・再書き込み自体がトークンを
         # 消費し、閾値超過が続く限り毎ターン再発火して無限ループ状態になる）。
@@ -83,25 +88,57 @@ def maybe_append_precompact_note_nudge(messages: list[BaseMessage], config: Conf
     return [*messages, HumanMessage(content=f"{_PRE_NOTE_MARKER}\n{config.context_compaction_pre_note_warning_text}")]
 
 
-def _write_thread_note_called_recently(messages: list[BaseMessage], keep_recent_turns: int) -> bool:
-    """直近 keep_recent_turns ユーザーターン以内に write_thread_note が
+def _write_thread_note_called_recently(messages: list[BaseMessage], keep_recent_iterations: int) -> bool:
+    """直近 keep_recent_iterations 反復以内に write_thread_note が
     呼ばれていれば True を返す。
 
-    「直近何ターンか」の切り出しには find_turn_cut_index と同じ安全な切断点を
-    使う（境界より後ろが keep_recent_turns 分の直近範囲）。単純に「前回の
+    「直近何反復か」の切り出しには find_iteration_cut_index を使う
+    （境界より後ろが keep_recent_iterations 分の直近範囲）。単純に「前回の
     ナッジ以降」で判定しないのは、ナッジ自体が永続履歴へ書き込まれない
     一時的な差し込みメッセージであり、状態として覚えておく場所が無いため
     （src/main_token_guard.py の maybe_append_token_guard と同じ、今回の
-    呼び出し限りの差し込み方針）。keep_recent_turns はどのみち圧縮時に
+    呼び出し限りの差し込み方針）。keep_recent_iterations はどのみち圧縮時に
     丸ごと残る範囲を決めている値であり、その範囲内に書き出し済みなら
     再度書かせても得るものが無い。
     """
-    cut_index = find_turn_cut_index(messages, keep_recent_turns)
+    cut_index = find_iteration_cut_index(messages, keep_recent_iterations)
     recent = messages[cut_index:] if cut_index is not None else messages
     return any(
         isinstance(m, AIMessage) and any(tc.get("name") == "write_thread_note" for tc in (m.tool_calls or []))
         for m in recent
     )
+
+
+def _find_compaction_cut_index(messages: list[BaseMessage], keep_recent_iterations: int) -> int | None:
+    """圧縮（要約）で「ここより前を要約対象にする」境界を決める。
+
+    基本は find_iteration_cut_index（直近 keep_recent_iterations 反復を
+    丸ごと保持）だが、圧縮は永続履歴を要約で置き換える恒久的な操作のため、
+    直近のユーザー発話まで要約に飲まれないよう
+    find_last_user_message_cut_index を上限として被せる。
+
+    ただしこの上限をそのまま適用すると、ユーザー発話が履歴の先頭近くに
+    しか無いケース（1ターン内でLLM呼び出しを何十回も繰り返す長時間タスク。
+    サブエージェントの典型形）で境界が0へ張り付き、圧縮の機会が一度も
+    来なくなる（コンテキスト上限に張り付いたまま停止する、まさに圧縮で
+    避けたい状態）。そのため上限は「0でない＝要約対象が残る」場合にのみ
+    適用する。
+
+    Args:
+        messages: 圧縮対象の会話履歴全体。
+        keep_recent_iterations: 丸ごと保持する直近の反復数。
+
+    Returns:
+        `messages[:戻り値]` が要約対象、それ以降が保持対象になる境界値。
+        圧縮しても縮まらない・安全な境界が無い場合は None。
+    """
+    cut_index = find_iteration_cut_index(messages, keep_recent_iterations)
+    if cut_index is None:
+        return None
+    protected = find_last_user_message_cut_index(messages)
+    if protected and protected < cut_index:
+        return protected
+    return cut_index
 
 
 def is_compaction_blocked_by_missing_note(
@@ -124,7 +161,7 @@ def is_compaction_blocked_by_missing_note(
     Args:
         messages: 圧縮対象の会話履歴全体。
         config: context_compaction_require_note_max_skips /
-            context_compaction_keep_recent_turns を含むアプリ設定。
+            context_compaction_keep_recent_iterations を含むアプリ設定。
         skip_count: 直近で連続して見送った回数（呼び出し元が保持・更新する。
             この関数自体は状態を持たない）。
 
@@ -134,7 +171,7 @@ def is_compaction_blocked_by_missing_note(
         require_note_max_skips に達していれば False（圧縮してよい。
         呼び出し元は skip_count を 0 へリセットする）。
     """
-    if _write_thread_note_called_recently(messages, config.context_compaction_keep_recent_turns):
+    if _write_thread_note_called_recently(messages, config.context_compaction_keep_recent_iterations):
         return False
     max_skips = config.context_compaction_require_note_max_skips
     if max_skips > 0 and skip_count >= max_skips:
@@ -144,7 +181,7 @@ def is_compaction_blocked_by_missing_note(
 
 async def force_write_thread_note(
     messages: list[BaseMessage], model, config: Config
-) -> tuple[AIMessage, ToolMessage] | None:
+) -> tuple[AIMessage, list[ToolMessage]] | None:
     """write_thread_note が未呼び出しのまま圧縮閾値に達した際、見送る代わりに
     その場でLLMへ write_thread_note の実行を強制する。
 
@@ -167,23 +204,27 @@ async def force_write_thread_note(
         messages: 現在の会話履歴全体（圧縮対象を含む）。
         model: build_model() が返す素のモデル（未 bind_tools でよい。
             この関数の中で write_thread_note のみへ bind_tools し直す）。
-        config: context_compaction_keep_recent_turns /
+        config: context_compaction_keep_recent_iterations /
             context_compaction_summary_source_max_chars /
             context_compaction_pre_note_warning_text を含むアプリ設定。
 
     Returns:
         書き出しに成功した場合、実際に永続履歴へ追記すべき
-        (AIMessage, ToolMessage) のペア。LLM呼び出し自体の失敗、
-        tool_calls が空、または topic/content 引数が欠けている等の
-        異常時は None（呼び出し元は従来の見送り処理へフォールバックする）。
+        (AIMessage, ToolMessageのリスト) のペア。ToolMessage は
+        AIMessage.tool_calls の**全件**に対応する（1件でも欠けると
+        OpenAI互換APIが以降のリクエストを拒否するため。モデルが
+        write_thread_note をトピック別に複数回呼ぶことがある）。
+        LLM呼び出し自体の失敗、tool_calls が空、または全ての呼び出しが
+        topic/content 引数の不足・書き込み失敗で1件も書けなかった場合は
+        None（呼び出し元は従来の見送り処理へフォールバックする）。
     """
     from .tools.thread_notes import write_thread_note
 
-    cut_index = find_turn_cut_index(messages, config.context_compaction_keep_recent_turns)
+    cut_index = find_iteration_cut_index(messages, config.context_compaction_keep_recent_iterations)
     old_messages = messages[:cut_index] if cut_index else messages
     trimmed_old = trim_old_tool_messages(
         old_messages,
-        keep_recent_turns=0,
+        keep_recent_iterations=0,
         max_chars=config.context_compaction_summary_source_max_chars,
     )
     text = _messages_to_text(trimmed_old)
@@ -192,9 +233,25 @@ async def force_write_thread_note(
         "---\n\n# 会話履歴（要約により失われる可能性がある古い部分）\n\n" + text
     )
 
-    bound_model = model.bind_tools([write_thread_note], tool_choice="required")
+    # bind_tools も try の内側に置く: ここは「見送る代わりの追加の試み」で
+    # あり、失敗しても呼び出し元（app.py / run_subagent）は従来どおり見送りへ
+    # フォールバックできればよい。bind_tools の失敗で本編のターンごと落とす
+    # 価値は無い。
     try:
+        bound_model = model.bind_tools([write_thread_note], tool_choice="required")
         response = await bound_model.ainvoke([HumanMessage(content=prompt)])
+    except ThinkingLoopDetected:
+        # maybe_compact の except ThinkingLoopDetected と同じ理由で、この
+        # モデルインスタンス専用のクライアントを無条件に強制クローズする
+        # （閉じないまま return すると、ストリームの後始末が終わらず
+        # llama-server側の生成が続き、次のLLM呼び出しが応答ヘッダー待ちで
+        # ハングし続ける）。ここはリトライせず見送りへフォールバックするが、
+        # 後始末だけは必ず行う。クローズ対象は bind_tools 後の
+        # RunnableBinding ではなく素の model（httpx.AsyncClient を保持して
+        # いるのはこちら）。
+        await aclose_model_client(model)
+        logger.exception("write_thread_note の強制実行が要約LLMのループ検知で失敗しました")
+        return None
     except Exception:
         logger.exception("write_thread_note の強制実行に失敗しました（LLM呼び出しエラー）")
         return None
@@ -203,23 +260,39 @@ async def force_write_thread_note(
     if not tool_calls:
         logger.warning("write_thread_note の強制実行でtool_callsが空の応答が返りました")
         return None
-    call = tool_calls[0]
-    args = call.get("args") or {}
-    topic = args.get("topic")
-    content = args.get("content")
-    if not topic or not content:
-        logger.warning("write_thread_note の強制実行でtopic/content引数が不足していました: %r", args)
+
+    # tool_choice="required" でツールを1件に絞っていても、モデルが
+    # write_thread_note を複数回（トピック別に）呼ぶことはありうる。response を
+    # そのまま永続履歴へ追記する以上、**全ての tool_call に ToolMessage を
+    # 返さないと対応の取れない tool_call が残り**、次回以降のLLM呼び出しが
+    # OpenAI互換APIのバリデーションで落ち続ける。引数不足・実行失敗の場合も
+    # エラー文言の ToolMessage を返して対応を取る。
+    tool_messages: list[ToolMessage] = []
+    written_topics: list[str] = []
+    for call in tool_calls:
+        args = call.get("args") or {}
+        topic = args.get("topic")
+        content = args.get("content")
+        if not topic or not content:
+            logger.warning("write_thread_note の強制実行でtopic/content引数が不足していました: %r", args)
+            result_text = "エラー: topic/content が不足していたため書き込みませんでした。"
+        else:
+            try:
+                result_text = await write_thread_note.ainvoke({"topic": topic, "content": content})
+            except Exception:
+                logger.exception("write_thread_note の強制実行でツール本体の実行に失敗しました")
+                result_text = "エラー: thread note への書き込みに失敗しました。"
+            else:
+                written_topics.append(topic)
+        tool_messages.append(ToolMessage(content=result_text, tool_call_id=call.get("id", "")))
+
+    if not written_topics:
+        # 1件も書けていない。履歴に無意味なやり取りを残さず、従来の見送りへ
+        # フォールバックする（呼び出し元は skip_count を進める）。
         return None
 
-    try:
-        result_text = await write_thread_note.ainvoke({"topic": topic, "content": content})
-    except Exception:
-        logger.exception("write_thread_note の強制実行でツール本体の実行に失敗しました")
-        return None
-
-    tool_message = ToolMessage(content=result_text, tool_call_id=call.get("id", ""))
-    logger.warning("write_thread_note の強制実行に成功しました (topic=%r)", topic)
-    return response, tool_message
+    logger.warning("write_thread_note の強制実行に成功しました (topics=%r)", written_topics)
+    return response, tool_messages
 
 
 def should_compact(
@@ -336,7 +409,7 @@ async def maybe_compact(
         でも、次のリトライ・次のターンのLLM呼び出しが応答ヘッダー待ちで
         ハングし続けることを防ぐ。
     """
-    cut_index = find_turn_cut_index(messages, config.context_compaction_keep_recent_turns)
+    cut_index = _find_compaction_cut_index(messages, config.context_compaction_keep_recent_iterations)
     if cut_index is None:
         return None
 
@@ -347,7 +420,7 @@ async def maybe_compact(
 
     # 要約対象自体が長大だと要約プロンプト自体のプリフィルが遅くなるため、
     # context_trim と同様の切り詰めを要約対象にも適用してから渡す
-    # （keep_recent_turns=0: 要約対象内では「直近だから全文保持」は意味を持たない）。
+    # （keep_recent_iterations=0: 要約対象内では「直近だから全文保持」は意味を持たない）。
     # ただし max_chars は [context_trim] のものを流用せず、要約専用の
     # context_compaction_summary_source_max_chars を使う。要約は永続履歴を
     # 置き換える恒久的な操作のため、プリフィル短縮目的の[context_trim]と
@@ -356,7 +429,7 @@ async def maybe_compact(
     # ファイル名の列挙しか残らない）。
     trimmed_old = trim_old_tool_messages(
         old_messages,
-        keep_recent_turns=0,
+        keep_recent_iterations=0,
         max_chars=config.context_compaction_summary_source_max_chars,
     )
     text = _messages_to_text(trimmed_old)

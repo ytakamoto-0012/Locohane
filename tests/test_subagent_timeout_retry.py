@@ -47,7 +47,7 @@ class _FakeConfig:
     context_compaction_enabled: bool = False
     context_compaction_token_threshold: int = 0
     context_compaction_single_request_token_threshold: int = 0
-    context_compaction_keep_recent_turns: int = 0
+    context_compaction_keep_recent_iterations: int = 0
     context_compaction_min_messages_to_compact: int = 0
     context_compaction_prompt_path: str | None = None
     context_compaction_summary_source_max_chars: int = 0
@@ -57,7 +57,7 @@ class _FakeConfig:
     context_compaction_subagent_enabled: bool = False
     context_compaction_subagent_token_threshold: int = 0
     context_compaction_subagent_single_request_token_threshold: int = 0
-    context_compaction_subagent_keep_recent_turns: int = 0
+    context_compaction_subagent_keep_recent_iterations: int = 0
     context_compaction_subagent_min_messages_to_compact: int = 0
     context_compaction_subagent_prompt_path: str | None = None
     context_compaction_subagent_summary_source_max_chars: int = 0
@@ -84,7 +84,7 @@ class _FakeModel:
         self._final_message = final_message
         self._make_exc = make_exc
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, tool_choice=None):
         return self
 
     async def ainvoke(self, messages):

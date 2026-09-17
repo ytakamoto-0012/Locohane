@@ -30,7 +30,7 @@ class _FakeConfig:
     context_compaction_enabled: bool = False
     context_compaction_token_threshold: int = 0
     context_compaction_single_request_token_threshold: int = 0
-    context_compaction_keep_recent_turns: int = 0
+    context_compaction_keep_recent_iterations: int = 0
     context_compaction_min_messages_to_compact: int = 0
     context_compaction_prompt_path: str | None = None
     context_compaction_summary_source_max_chars: int = 0
@@ -40,7 +40,7 @@ class _FakeConfig:
     context_compaction_subagent_enabled: bool = False
     context_compaction_subagent_token_threshold: int = 0
     context_compaction_subagent_single_request_token_threshold: int = 0
-    context_compaction_subagent_keep_recent_turns: int = 0
+    context_compaction_subagent_keep_recent_iterations: int = 0
     context_compaction_subagent_min_messages_to_compact: int = 0
     context_compaction_subagent_prompt_path: str | None = None
     context_compaction_subagent_summary_source_max_chars: int = 0
@@ -55,7 +55,7 @@ class _CancellingModel:
     def __init__(self) -> None:
         self._calls = 0
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, tool_choice=None):
         return self
 
     async def ainvoke(self, messages):
@@ -88,9 +88,11 @@ async def test_on_cancelled_receives_messages_and_cancelled_error_propagates(mon
     monkeypatch.setattr(subagent, "build_model", _fake_build_model)
 
     captured: list = []
+    captured_reasons: list[str] = []
 
-    def _on_cancelled(messages: list) -> None:
+    def _on_cancelled(messages: list, reason: str) -> None:
         captured.append(list(messages))
+        captured_reasons.append(reason)
 
     with pytest.raises(asyncio.CancelledError):
         await subagent.run_subagent(
@@ -108,6 +110,7 @@ async def test_on_cancelled_receives_messages_and_cancelled_error_propagates(mon
     # までは積まれた状態でキャンセルされているはず。
     assert any(isinstance(m, ToolMessage) and m.content == "ok" for m in rescued_messages)
     assert any(isinstance(m, HumanMessage) and m.content == "t" for m in rescued_messages)
+    assert captured_reasons == [subagent.RESCUE_REASON_CANCELLED]
 
 
 @pytest.mark.asyncio
@@ -129,7 +132,7 @@ async def test_on_cancelled_exception_does_not_suppress_cancelled_error(monkeypa
     """退避コールバック自体が失敗しても、CancelledErrorの伝播を妨げてはならない。"""
     monkeypatch.setattr(subagent, "build_model", _fake_build_model)
 
-    def _broken_on_cancelled(messages: list) -> None:
+    def _broken_on_cancelled(messages: list, reason: str) -> None:
         raise RuntimeError("scratch note write failed")
 
     with pytest.raises(asyncio.CancelledError):

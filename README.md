@@ -955,15 +955,15 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[thinking_loop_guard]` | `nudge_messages` | ループ検知後に注入する注意メッセージ（複数指定可） | `THINKING_LOOP_GUARD_NUDGE_MESSAGES` |
 | `[context_trim]` | `enabled` | 古い `ToolMessage` を切り詰めてプリフィル遅延を抑える機能の有効/無効 | `CONTEXT_TRIM_ENABLED` |
 | `[context_trim]` | `trigger_total_tokens` | トリムを発動させる閾値（Claude APIのcontext editing、`clear_tool_uses_20250919`のtrigger.value相当）。直近1回のLLM呼び出しのtotal_tokensがこの値未満のうちは発動しない。0以下なら常に発動 | `CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS` |
-| `[context_trim]` | `keep_recent_tool_turns` | 全文保持する直近のユーザーターン数（ユーザーターンが不足する場合はツール往復単位にフォールバック。並列tool_callsに対応する`ToolMessage`群が同じラウンドトリップ内で分断されないようにするための単位） | `CONTEXT_TRIM_KEEP_RECENT_TOOL_TURNS` |
+| `[context_trim]` | `keep_recent_tool_iterations` | 全文保持する直近の反復数（1反復＝ReActループ1周＝LLM呼び出し1回。`AIMessage`の件数で数える。ユーザーの発話回数では数えない — 画像フォローアップや各種nudgeが`HumanMessage`として積まれるためずれる。並列tool_callsに対応する`ToolMessage`群は同じ反復内で分断されない） | `CONTEXT_TRIM_KEEP_RECENT_TOOL_ITERATIONS` |
 | `[context_trim]` | `trim_ai_messages` | `ToolMessage`だけでなく`AIMessage`（モデル自身の思考本文・tool_calls引数）も切り詰め対象にするか。`execute_python_code`のcode引数へファイル本文を書き写す使い方をすると`ToolMessage`側だけの切り詰めでは1リクエスト入力が膨らみ続けるため既定で有効 | `CONTEXT_TRIM_AI_MESSAGES` |
-| `[context_trim]` | `keep_recent_ai_turns` | 全文保持する直近のユーザーターン数（`keep_recent_tool_turns`と同じ判定方式・独立した値。`trim_ai_messages=true`の場合のみ意味を持つ） | `CONTEXT_TRIM_KEEP_RECENT_AI_TURNS` |
+| `[context_trim]` | `keep_recent_ai_iterations` | 全文保持する直近の反復数（`keep_recent_tool_iterations`と同じ判定方式・独立した値。`trim_ai_messages=true`の場合のみ意味を持つ） | `CONTEXT_TRIM_KEEP_RECENT_AI_ITERATIONS` |
 | `[context_trim]` | `truncated_max_chars` | 切り詰め対象 `ToolMessage` の残す最大文字数 | `CONTEXT_TRIM_TRUNCATED_MAX_CHARS` |
 | `[context_trim]` | `duplicate_guard_tool_max_chars` | Read/Glob/Grep/json_query/analyze_image（`[file_tools_duplicate_guard]`の対象ツール）の `ToolMessage` にだけ適用する切り詰め文字数（`truncated_max_chars`の代わりに使う） | `CONTEXT_TRIM_DUPLICATE_GUARD_TOOL_MAX_CHARS` |
 | `[context_compaction]` | `enabled` | 会話履歴の自動要約・圧縮機能（ClaudeCodeのcompact相当）の有効/無効 | `CONTEXT_COMPACTION_ENABLED` |
 | `[context_compaction]` | `token_threshold` | メインエージェントの累積トークン数（圧縮発火のたびに0へリセット）がこの値を超えたら圧縮する条件（1リクエストあたりの上限ではない） | `CONTEXT_COMPACTION_TOKEN_THRESHOLD` |
 | `[context_compaction]` | `single_request_token_threshold` | 直近1回のLLM呼び出しのtotal_tokensがこの値を超えたら圧縮する条件（累積条件とのOR判定） | `CONTEXT_COMPACTION_SINGLE_REQUEST_TOKEN_THRESHOLD` |
-| `[context_compaction]` | `keep_recent_turns` | 圧縮時に丸ごと保持する直近のユーザーターン数 | `CONTEXT_COMPACTION_KEEP_RECENT_TURNS` |
+| `[context_compaction]` | `keep_recent_iterations` | 圧縮時に丸ごと保持する直近の反復数（`[context_trim]`の`keep_recent_tool_iterations`と同じ単位）。これとは別に「末尾の`HumanMessage`以降は必ず原文のまま残す」上限も内部で被せる（適用すると要約対象が空になる場合は圧縮の機会自体が失われるため適用しない） | `CONTEXT_COMPACTION_KEEP_RECENT_ITERATIONS` |
 | `[context_compaction]` | `min_messages_to_compact` | 会話全体のメッセージ数がこの件数未満なら圧縮しない安全弁 | `CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT` |
 | `[context_compaction]` | `compaction_prompt_path` | 要約を指示するプロンプト本文（Markdown）のパス | `CONTEXT_COMPACTION_PROMPT_PATH` |
 | `[context_compaction]` | `summary_source_max_chars` | 要約対象の古い`ToolMessage`を要約LLMへ渡す前に切り詰める文字数（`[context_trim]`とは別枠） | `CONTEXT_COMPACTION_SUMMARY_SOURCE_MAX_CHARS` |

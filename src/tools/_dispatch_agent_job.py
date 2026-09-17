@@ -46,12 +46,14 @@ def _make_rescue_on_cancelled(job: "_DispatchAgentJob"):
     """run_subagent の on_cancelled 引数へ渡すコールバックを組み立てる。
 
     停止ボタン等でこのジョブが強制終了された場合、run_subagent はここまでの
-    会話履歴を渡してこのコールバックを同期的に呼ぶ（CancelledError の再送出前）。
-    また [subagent].token_guard_hard_threshold 到達時（急速なトークン爆発で
-    ソフト警告を飛び越えて一気にhardへ到達したケース含む）にも、
+    会話履歴と理由を渡してこのコールバックを同期的に呼ぶ（CancelledError の
+    再送出前）。また [subagent].token_guard_hard_threshold 到達時（急速な
+    トークン爆発でソフト警告を飛び越えて一気にhardへ到達したケース含む）にも、
     CancelledErrorは使わず同じコールバックが同期的に呼ばれる（この場合は
     run_subagentが通常のreturnで打ち切りメッセージを返す前に呼ばれる。
-    src/subagent.py の run_subagent docstring参照）。
+    src/subagent.py の run_subagent docstring参照）。理由は退避テキストの
+    見出しへそのまま出るため、後から読む人が停止ボタンとトークン超過を
+    取り違えずに済む。
     write_scratch_note と同じファイル（_scratch_notes_path_for_run(job.run_id)）
     へ追記することで、check_dispatch_agent_job の進捗表示や
     _append_scratch_note_hint など既存の案内導線がそのまま拾える。
@@ -67,8 +69,8 @@ def _make_rescue_on_cancelled(job: "_DispatchAgentJob"):
     Exception全体を捕捉する。
     """
 
-    def _on_cancelled(messages: list) -> None:
-        dump = dump_messages_for_cancelled_rescue(messages)
+    def _on_cancelled(messages: list, reason: str) -> None:
+        dump = dump_messages_for_cancelled_rescue(messages, reason)
         if not dump:
             return
         try:

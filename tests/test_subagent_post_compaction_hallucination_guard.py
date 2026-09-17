@@ -44,7 +44,7 @@ class _FakeConfig:
     context_compaction_enabled: bool = False
     context_compaction_token_threshold: int = 0
     context_compaction_single_request_token_threshold: int = 0
-    context_compaction_keep_recent_turns: int = 0
+    context_compaction_keep_recent_iterations: int = 0
     context_compaction_min_messages_to_compact: int = 0
     context_compaction_prompt_path: str | None = None
     context_compaction_summary_source_max_chars: int = 0
@@ -54,7 +54,7 @@ class _FakeConfig:
     context_compaction_subagent_enabled: bool = False
     context_compaction_subagent_token_threshold: int = 0
     context_compaction_subagent_single_request_token_threshold: int = 0
-    context_compaction_subagent_keep_recent_turns: int = 0
+    context_compaction_subagent_keep_recent_iterations: int = 0
     context_compaction_subagent_min_messages_to_compact: int = 0
     context_compaction_subagent_prompt_path: str | None = None
     context_compaction_subagent_summary_source_max_chars: int = 0
@@ -76,7 +76,7 @@ class _ScriptedModel:
         self._responses = list(responses)
         self.calls = 0
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, tool_choice=None):
         return self
 
     async def ainvoke(self, messages):
@@ -87,7 +87,7 @@ class _ScriptedModel:
 def _make_compaction_config() -> _FakeConfig:
     config = _FakeConfig()
     config.context_compaction_subagent_enabled = True
-    config.context_compaction_subagent_keep_recent_turns = 3
+    config.context_compaction_subagent_keep_recent_iterations = 3
     config.track_token_usage = True
     return config
 

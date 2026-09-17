@@ -41,7 +41,7 @@ class _FakeModel:
         self._fail_until = fail_until
         self._final_message = final_message
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, tool_choice=None):
         return self
 
     async def ainvoke(self, messages):

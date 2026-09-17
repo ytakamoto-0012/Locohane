@@ -40,23 +40,24 @@ _DUPLICATE_GUARD_TOOL_NAMES = frozenset({"Read", "Glob", "Grep", "json_query", "
 def trim_old_tool_messages(
     messages: list[BaseMessage],
     *,
-    keep_recent_turns: int,
+    keep_recent_iterations: int,
     max_chars: int,
     guarded_tool_max_chars: int | None = None,
 ) -> list[BaseMessage]:
-    """直近 keep_recent_turns ターン分の ToolMessage は全文保持し、それより
+    """直近 keep_recent_iterations 反復分の ToolMessage は全文保持し、それより
     古いものは content を先頭 max_chars 文字に切り詰める。
 
-    「ターン」の境界は find_turn_cut_index() が返すもの（ユーザーターン
-    境界、不足時はツール往復単位にフォールバック）を使う。単純な件数指定
-    だと、1回のAIMessageが並列発行した複数tool_callsに対応するToolMessage
-    群のうち一部だけが保持され残りが切り詰められる、という分断が起きうる
-    ため（同じラウンドトリップは丸ごと同じ側に入ることを保証するため）。
+    「1反復」の数え方と境界の選び方は find_iteration_cut_index() を参照
+    （ReActループ1周＝AIMessage 1件を単位に数え、切断位置は必ず安全な
+    切断点から選ぶ）。単純な ToolMessage 件数指定にしないのは、1回の
+    AIMessage が並列発行した複数 tool_calls に対応する ToolMessage 群の
+    うち一部だけが保持され残りが切り詰められる、という分断が起きうる
+    ため（同じ反復は丸ごと同じ側に入ることを保証するため）。
 
     Args:
         messages: state["messages"]（元の全履歴。書き換えない）。
-        keep_recent_turns: 全文保持する直近のユーザーターン数
-            （不足する場合は直近何回ぶんのツール往復を残すかの単位）。
+        keep_recent_iterations: 全文保持する直近の反復数
+            （ReActループ1周＝LLM呼び出し1回）。
         max_chars: 切り詰め後に残す本文の最大文字数（マーカー文言は含まない）。
             _DUPLICATE_GUARD_TOOL_NAMES に含まれないツールの ToolMessage に
             適用する。
@@ -69,7 +70,7 @@ def trim_old_tool_messages(
         content だけ差し替えたコピーを含むメッセージ列。書き換え不要な
         メッセージは元のオブジェクトをそのまま含む。
     """
-    cut_index = find_turn_cut_index(messages, keep_recent_turns)
+    cut_index = find_iteration_cut_index(messages, keep_recent_iterations)
     keep_from = cut_index or 0
 
     result: list[BaseMessage] = []
@@ -138,14 +139,14 @@ def _trim_tool_call_args(tool_calls: list[dict], max_chars: int) -> list[dict] |
 
 
 def trim_old_ai_messages(
-    messages: list[BaseMessage], *, keep_recent_turns: int, max_chars: int
+    messages: list[BaseMessage], *, keep_recent_iterations: int, max_chars: int
 ) -> list[BaseMessage]:
-    """直近 keep_recent_turns ターン分の AIMessage は全文保持し、それより
+    """直近 keep_recent_iterations 反復分の AIMessage は全文保持し、それより
     古いものは content と tool_calls の引数を先頭 max_chars 文字に切り詰める。
 
-    「ターン」の境界は trim_old_tool_messages() と同じ find_turn_cut_index()
-    を使う（keep_recent_turns はこちらの独自の値を渡せるため、tool側と
-    ai側で異なるターン数を指定できる）。
+    境界の決め方は trim_old_tool_messages() と同じ find_iteration_cut_index()
+    を使う（keep_recent_iterations はこちらの独自の値を渡せるため、tool側と
+    ai側で異なる反復数を指定できる）。
 
     trim_old_tool_messages() は ToolMessage しか見ないため、モデル自身が
     `execute_python_code` の `code` 引数へファイル本文を書き写すような使い方を
@@ -155,15 +156,15 @@ def trim_old_ai_messages(
 
     Args:
         messages: state["messages"]（元の全履歴。書き換えない）。
-        keep_recent_turns: 全文保持する直近のユーザーターン数
-            （不足する場合は直近何回ぶんのツール往復を残すかの単位）。
+        keep_recent_iterations: 全文保持する直近の反復数
+            （ReActループ1周＝LLM呼び出し1回）。
         max_chars: 切り詰め後に残す本文の最大文字数（マーカー文言は含まない）。
 
     Returns:
         content / tool_calls.args だけ差し替えたコピーを含むメッセージ列。
         書き換え不要なメッセージは元のオブジェクトをそのまま含む。
     """
-    cut_index = find_turn_cut_index(messages, keep_recent_turns)
+    cut_index = find_iteration_cut_index(messages, keep_recent_iterations)
     keep_from = cut_index or 0
 
     result: list[BaseMessage] = []
@@ -185,61 +186,32 @@ def trim_old_ai_messages(
     return result
 
 
-def find_turn_cut_index(messages: list[BaseMessage], keep_recent_turns: int) -> int | None:
-    """安全な切断点のうち、末尾から keep_recent_turns 個目のユーザーターン
-    の直前の切断点（スライス境界）を返す。
+def _safe_cut_points(messages: list[BaseMessage]) -> list[int]:
+    """`messages[:境界]` が自己完結する（未処理の tool_call を含まない）
+    スライス境界を、昇順で列挙する。
 
-    src/context_compaction.py の要約対象切り出しと、この
-    モジュール（trim_old_tool_messages / trim_old_ai_messages）の
-    「直近何ターン分を全文保持するか」判定の両方で共有する。
+    先頭から走査し、各インデックス i で「発行済み tool_call id の集合」と
+    「返却済み ToolMessage id の集合」が一致している（＝未処理のツール
+    呼び出しが無い）状態になった時点の**スライス境界 i+1**を候補にする。
+    境界を message[i] の直後、つまり i+1 にするのが重要で、安全になった
+    直後の message[i] 自身（多くの場合は直前の ToolMessage）を境界に
+    そのまま使うと、その ToolMessage だけが `messages[:境界]` から漏れて
+    対応する AIMessage.tool_calls だけが残る、という壊れ方をする。
 
-    旧実装は HumanMessage の個数で判定していたが、analyze_image の画像
-    フォローアップ（_with_image_followups）とループガードの nudge は
-    ツール往復の途中に HumanMessage を挿入する。LangGraph は tool_call を
-    1件ずつ tools ノードへ渡すため、ToolMessage(a) → HumanMessage(画像) →
-    ToolMessage(b) という並びが起こりうる。HumanMessage の位置で切ると
-    ToolMessage(b) だけが対応する AIMessage を失い、OpenAI 互換 API が
-    エラーを返す。
-
-    そこで以下の方式へ置き換える:
-
-    1. 先頭から走査し、各インデックス i で「発行済み tool_call id の集合」と
-       「返却済み ToolMessage id の集合」が一致している（＝未処理のツール
-       呼び出しが無い）状態になった時点の**スライス境界 i+1**を「安全な
-       切断点」として列挙する（`messages[0:境界]` が自己完結することを
-       意味する。境界を message[i] の直後、つまり i+1 にするのが重要で、
-       安全になった直後の message[i] 自身（多くの場合は直前の ToolMessage）
-       を境界にそのまま使うと、その ToolMessage だけが `messages[:境界]`
-       から漏れて対応する AIMessage.tool_calls だけが残る、という壊れ方を
-       する）。先頭（境界0、何も含まない）も自明に安全なため常に候補へ含める。
-    2. ユーザーターン境界（HumanMessage）が keep_recent_turns 個より
-       十分にあれば、それを優先して境界を選ぶ。
-    3. ユーザーターンが keep_recent_turns 個に満たない場合（1ターン内で
-       LLM呼び出しを何十回も繰り返す長時間タスク等。並列tool_callsを含む
-       サブエージェントの典型形）は、HumanMessage境界だけでは切り分けの
-       機会が一度も来ない。この場合はツール往復の境界（安全な切断点その
-       もの）を「直近何回ぶんを残すか」の単位として使う。これにより、1回の
-       AIMessageが並列発行した複数のtool_callsに対応するToolMessage群が
-       同じラウンドトリップ内で「一部だけ保持・一部だけ切り詰め」という
-       ふうに分断されることもない（ラウンドトリップ単位で丸ごと同じ側に
-       入る）。
-
-    これによりターン途中でも安全に切り分けられる。
-
-    Args:
-        messages: 現在の会話履歴全体。
-        keep_recent_turns: 丸ごと保持する直近のユーザーターン数
-            （ユーザーターンが不足する場合は、直近何回ぶんのツール往復を
-            残すかの単位として使う）。
+    HumanMessage の位置をそのまま境界にできないのは、analyze_image の画像
+    フォローアップ（_with_image_followups）やループガードの nudge が
+    ツール往復の途中に HumanMessage を挿入するため。LangGraph は tool_call を
+    1件ずつ tools ノードへ渡すので、ToolMessage(a) → HumanMessage(画像) →
+    ToolMessage(b) という並びが起こりうる。そこで切ると ToolMessage(b) だけが
+    対応する AIMessage を失い、OpenAI 互換 API がエラーを返す。
 
     Returns:
-        `messages[:戻り値]` が古い側、それ以降が直近側になる境界値。
-        古い側が空になる・安全な境界が無い場合は None。
+        昇順のスライス境界。先頭（境界0、何も含まない）は自明に安全なため
+        常に含む。
     """
-    # --- 1. 安全な切断点（スライス境界）を列挙 ---
     issued_ids: set[str] = set()
     done_ids: set[str] = set()
-    safe_cut_points: list[int] = [0]  # 境界0（何も含まない）は常に自明に安全
+    points: list[int] = [0]
 
     for i, m in enumerate(messages):
         # ToolMessage が返ってきた → 対応する tool_call が完了
@@ -251,34 +223,96 @@ def find_turn_cut_index(messages: list[BaseMessage], keep_recent_turns: int) -> 
                 issued_ids.add(tc.get("id", ""))
         # 現在の位置で未処理の tool_call が無い → message[i] を含めた境界 i+1 が安全
         if issued_ids == done_ids:
-            safe_cut_points.append(i + 1)
+            points.append(i + 1)
+    return points
 
-    # --- 2. 末尾から keep_recent_turns 個目のユーザーターンの直前を選ぶ ---
-    human_indices = [i for i, m in enumerate(messages) if isinstance(m, HumanMessage)]
-    total_users = len(human_indices)
-    target_idx = total_users - keep_recent_turns  # 切るべきユーザーのインデックス
-    if target_idx >= 0:
-        # target_idx == total_users（keep_recent_turns <= 0 で保持すべき直近
-        # ユーザーターンが1つも無い場合）は human_indices の範囲外になる。
-        # この場合は「全ユーザーターンを古い側にしてよい」という意味なので、
-        # 境界をメッセージ列の末尾扱いにする（human_indices[target_idx] で
-        # IndexErrorになっていた既存バグの修正）。
-        target_human_index = human_indices[target_idx] if target_idx < total_users else len(messages)
-        cut_index = None
-        for boundary in safe_cut_points:
-            if boundary > target_human_index:
-                break
-            cut_index = boundary
-        return cut_index if cut_index else None
 
-    # --- 3. ユーザーターンが不足する場合は、安全な切断点の個数を単位にする ---
-    # safe_cut_points には常に境界0（何も進んでいない状態）が含まれるため、
-    # 実質的に使える切断点数は1個少ない。
-    usable_points = len(safe_cut_points) - 1
-    if usable_points <= keep_recent_turns:
-        return None
-    cut_index = safe_cut_points[-(keep_recent_turns + 1)]
+def _largest_safe_cut_point_upto(safe_points: list[int], limit: int) -> int | None:
+    """safe_points のうち limit 以下で最大のものを返す（0 の場合は None）。"""
+    cut_index = None
+    for boundary in safe_points:
+        if boundary > limit:
+            break
+        cut_index = boundary
     return cut_index if cut_index else None
+
+
+def find_iteration_cut_index(messages: list[BaseMessage], keep_recent_iterations: int) -> int | None:
+    """安全な切断点のうち、末尾から keep_recent_iterations 回目の反復
+    （AIMessage）の直前の切断点（スライス境界）を返す。
+
+    src/context_compaction.py の要約対象切り出しと、このモジュール
+    （trim_old_tool_messages / trim_old_ai_messages）の「直近何反復分を
+    全文保持するか」判定の両方で共有する。
+
+    ここでいう「1反復」は ReActループの1周（model.ainvoke 1回＝AIMessage
+    1件と、それに対応する ToolMessage 群）を指す。メインエージェントの
+    agent→tools 遷移1回、サブエージェント（run_subagent）の1 iteration が
+    そのまま単位になる。
+
+    数える対象を AIMessage にするのが要点:
+
+    - HumanMessage の個数（＝ユーザーターン数）では数えられない。
+      analyze_image の画像フォローアップや各種 nudge（ループガード、
+      token_guard のソフト警告、幻覚リトライ）が HumanMessage として
+      履歴に積まれるため、「ユーザーが何回発話したか」とはずれる。
+      注入が増えるほどカウントが汚染され、保持範囲が意図せず広がって
+      トリム・圧縮が効かなくなる。
+    - 安全な切断点の個数でも数えられない。SystemMessage や注入
+      HumanMessage の位置でも（未処理の tool_call が無いため）境界は
+      立つので、1反復あたり1〜2個と履歴の中身次第でぶれる。
+
+    一方、切断位置そのものは必ず安全な切断点（_safe_cut_points）から選ぶ
+    ため、1回の AIMessage が並列発行した複数 tool_calls に対応する
+    ToolMessage 群が「一部だけ保持・一部だけ切り詰め」に分断されることは
+    ない（同じ反復は丸ごと同じ側に入る）。
+
+    Args:
+        messages: 現在の会話履歴全体。
+        keep_recent_iterations: 丸ごと保持する直近の反復数。0 以下を渡すと
+            「全反復を古い側にしてよい」という意味になり、末尾の安全な
+            切断点を返す（要約対象そのものを切り詰める用途で使う）。
+
+    Returns:
+        `messages[:戻り値]` が古い側、それ以降が直近側になる境界値。
+        古い側が空になる・安全な境界が無い場合は None。
+    """
+    safe_points = _safe_cut_points(messages)
+    ai_indices = [i for i, m in enumerate(messages) if isinstance(m, AIMessage)]
+    target_idx = len(ai_indices) - keep_recent_iterations  # 古い側に入れてよい最後の反復の次
+    if target_idx < 0:
+        # 反復数そのものが keep_recent_iterations に満たない
+        # （＝全反復が保持対象）。切るものが無い。
+        return None
+    # target_idx == len(ai_indices) は keep_recent_iterations <= 0 のケース。
+    # ai_indices の範囲外になるため、境界をメッセージ列の末尾扱いにする。
+    target_ai_index = ai_indices[target_idx] if target_idx < len(ai_indices) else len(messages)
+    return _largest_safe_cut_point_upto(safe_points, target_ai_index)
+
+
+def find_last_user_message_cut_index(messages: list[BaseMessage]) -> int | None:
+    """末尾の HumanMessage 以降を必ず直近側へ残すための、安全な切断点を返す。
+
+    src/context_compaction.py が要約対象の上限として使う。圧縮は永続履歴を
+    要約で置き換える恒久的な操作のため、反復数だけで切ると直近のユーザー
+    発話そのものが原文のまま残らない（要約LLMの書きぶり次第で指示内容が
+    薄まる）ことがありうる。その下限として使う。
+
+    注入 HumanMessage（画像フォローアップ・各種 nudge）と本来のユーザー
+    発話は区別できないため、ここでは区別しない。注入が末尾に来ている場合は
+    保護範囲が狭まるだけで、壊れる方向には働かない。
+
+    Returns:
+        末尾の HumanMessage の位置以下で最大の安全な切断点。HumanMessage が
+        無い、または境界が0にしかならない場合は None。
+    """
+    last_human_index = None
+    for i, m in enumerate(messages):
+        if isinstance(m, HumanMessage):
+            last_human_index = i
+    if last_human_index is None:
+        return None
+    return _largest_safe_cut_point_upto(_safe_cut_points(messages), last_human_index)
 
 
 def last_ai_total_tokens(messages: list[BaseMessage]) -> int | None:

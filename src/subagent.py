@@ -44,6 +44,7 @@ def _contains_error(content: str) -> bool:
 
 from .config import Config
 from .context_compaction import (
+    force_write_thread_note,
     is_compaction_blocked_by_missing_note,
     maybe_append_precompact_note_nudge,
     maybe_compact,
@@ -68,6 +69,11 @@ _EMPTY_RESPONSE_NUDGE_TEXT = (
     "これまでに分かったことをまとめて回答するか、必要な追加のツール呼び出しを"
     "行ってください]"
 )
+
+# on_cancelled（会話履歴の緊急退避）が呼ばれる理由。スクラッチノートの見出しに
+# そのまま出るため、後からログを読む人が原因を取り違えないよう区別する。
+RESCUE_REASON_CANCELLED = "停止ボタン等による強制終了"
+RESCUE_REASON_TOKEN_GUARD = "トークン使用量が上限に到達したことによる打ち切り"
 
 # 会話履歴圧縮・トークン閾値注意メッセージ注入の直後1手に限り、tool_calls無し
 # の最終応答を無検査で受理しない（2026-08-23 issue: 圧縮直後にモデルが
@@ -448,14 +454,14 @@ def _build_llm_input(messages: list, config: Config) -> list:
         return messages
     trimmed = trim_old_tool_messages(
         messages,
-        keep_recent_turns=config.context_trim_subagent_keep_recent_tool_turns,
+        keep_recent_iterations=config.context_trim_subagent_keep_recent_tool_iterations,
         max_chars=config.context_trim_subagent_truncated_max_chars,
         guarded_tool_max_chars=config.context_trim_subagent_duplicate_guard_tool_max_chars,
     )
     if config.context_trim_subagent_ai_messages:
         trimmed = trim_old_ai_messages(
             trimmed,
-            keep_recent_turns=config.context_trim_subagent_keep_recent_ai_turns,
+            keep_recent_iterations=config.context_trim_subagent_keep_recent_ai_iterations,
             max_chars=config.context_trim_subagent_truncated_max_chars,
         )
     return trimmed
@@ -474,7 +480,7 @@ def _subagent_compaction_config(config: Config) -> Config:
         context_compaction_single_request_token_threshold=(
             config.context_compaction_subagent_single_request_token_threshold
         ),
-        context_compaction_keep_recent_turns=config.context_compaction_subagent_keep_recent_turns,
+        context_compaction_keep_recent_iterations=config.context_compaction_subagent_keep_recent_iterations,
         context_compaction_min_messages_to_compact=(
             config.context_compaction_subagent_min_messages_to_compact
         ),
@@ -498,7 +504,7 @@ async def run_subagent(
     max_iterations: int,
     on_iteration: Callable[[int, int], None] | None = None,
     llm_timeout_max_retries: int = 0,
-    on_cancelled: Callable[[list], None] | None = None,
+    on_cancelled: Callable[[list, str], None] | None = None,
 ) -> str:
     """独立した ReAct ループでタスクを処理し、最終回答のテキストのみを返す。
 
@@ -548,10 +554,11 @@ async def run_subagent(
             バックグラウンドタスクとして動き続けるため、より大きい値を渡して
             耐性を上げる（_invoke_with_timeout_retry 参照）。
         on_cancelled: 停止ボタン等による asyncio.CancelledError 検知時、
-            または subagent_token_guard_hard_threshold 到達時、その時点
-            までの messages（会話履歴）を渡して呼ぶ同期コールバック
-            （省略可）。dispatch_agent がこの内容をスクラッチノートへ緊急
-            退避するために使う（_dispatch_agent_job.py 参照）。戻り値は
+            または subagent_token_guard_hard_threshold 到達時に呼ぶ同期
+            コールバック（省略可）。その時点までの messages（会話履歴）と、
+            呼ばれた理由（RESCUE_REASON_CANCELLED / RESCUE_REASON_TOKEN_GUARD）
+            の2引数を渡す。dispatch_agent がこの内容をスクラッチノートへ
+            緊急退避するために使う（_dispatch_agent_job.py 参照）。戻り値は
             無視する。CancelledError検知時は例外を送出しても伝播を妨げない。
             hard_threshold到達時はCancelledErrorを使わず通常のreturnで
             打ち切るため、このコールバック自体の例外はここで捕捉して
@@ -678,7 +685,7 @@ async def run_subagent(
                 )
                 if on_cancelled is not None:
                     try:
-                        on_cancelled(messages)
+                        on_cancelled(messages, RESCUE_REASON_TOKEN_GUARD)
                     except Exception:  # noqa: BLE001 - 退避処理の失敗で打ち切り自体を妨げない
                         logger.exception("subagent: token_guard hard_threshold到達時の退避コールバック実行に失敗しました")
                 return _build_truncation_message(
@@ -698,24 +705,55 @@ async def run_subagent(
                 len(messages),
                 compaction_config,
             ):
-                if is_compaction_blocked_by_missing_note(messages, compaction_config, note_skip_count):
-                    note_skip_count += 1
-                    logger.warning(
-                        "subagent: write_thread_note未呼び出しのため圧縮を見送ります"
-                        "(iter=%d, skip_count=%d)",
-                        iteration,
-                        note_skip_count,
-                    )
-                else:
+                blocked = is_compaction_blocked_by_missing_note(messages, compaction_config, note_skip_count)
+                # 圧縮用モデルはツール未bindの素のインスタンスを使う（本編の model は
+                # bind_tools 済みで、要約専用の呼び出しにツール定義を含める必要が
+                # 無いため。src/context_compaction.py の maybe_compact docstring参照）。
+                # write_thread_note の強制実行にも同じインスタンスを使い回す
+                # （force_write_thread_note が内部で write_thread_note のみへ
+                # bind_tools し直す。bind_tools は新しい Runnable を返すだけで
+                # 元のインスタンスは素のまま）。
+                summary_model = None
+                if blocked:
+                    # 見送るだけだと、require_note_max_skips 回まで見送った末に
+                    # 記録なしで圧縮が強制される（事実退避の機会が一度も無いまま
+                    # 要約されうる）。メインエージェント側（app.py の
+                    # _run_context_compaction）と同じく、見送る前にその場で
+                    # write_thread_note の実行を強制する。サブエージェントは
+                    # 「委譲元へ返すのは要約、具体的な事実は thread note へ」と
+                    # いう前提で動くため、ここでの退避はメイン側以上に重要。
+                    summary_model = await build_model(config, role="sub")
+                    # messages[0]（SystemMessage）は要約元テキストに含めない
+                    # （maybe_compact へ messages[1:] を渡すのと同じ理由。下記参照）。
+                    forced = await force_write_thread_note(messages[1:], summary_model, compaction_config)
+                    if forced is None:
+                        note_skip_count += 1
+                        logger.warning(
+                            "subagent: write_thread_noteの強制実行に失敗したため圧縮を見送ります"
+                            "(iter=%d, skip_count=%d)",
+                            iteration,
+                            note_skip_count,
+                        )
+                    else:
+                        forced_ai, forced_tools = forced
+                        # AIMessage と、その tool_calls 全件に対応する ToolMessage を
+                        # 揃えて追記する（1件でも欠けるとOpenAI互換APIが以降の
+                        # リクエストを拒否する）。
+                        messages = [*messages, forced_ai, *forced_tools]
+                        note_skip_count = 0
+                        blocked = False
+                        logger.warning(
+                            "subagent: write_thread_noteを強制実行した上で圧縮します (iter=%d)",
+                            iteration,
+                        )
+                if not blocked:
                     # note_skip_count のリセットは実際に圧縮が完了した場合のみ行う
                     # （maybe_compactがNoneを返す＝要約LLM呼び出しの失敗・ループ検知
                     # 予算切れ等の場合はリセットしない。ここでリセットしてしまうと、
                     # 猶予を使い切って強制圧縮に踏み切った直後に要約が失敗したとき、
                     # 安全弁がまた最初から猶予を積み直すことになり骨抜きになる）。
-                    # 圧縮用モデルはツール未bindの素のインスタンスを使う（本編の model は
-                    # bind_tools 済みで、要約専用の呼び出しにツール定義を含める必要が
-                    # 無いため。src/context_compaction.py の maybe_compact docstring参照）。
-                    summary_model = await build_model(config, role="sub")
+                    if summary_model is None:
+                        summary_model = await build_model(config, role="sub")
                     # messages[0] は run_subagent 開始時に積んだ SystemMessage。graph.py の
                     # メインエージェントは system_prompt を state["messages"] に含めず
                     # call_model 側で毎回付け足す構造のため要約対象から自然に外れるが、
@@ -776,25 +814,29 @@ async def run_subagent(
         # 呼ぶだけに留める。
         if on_cancelled is not None:
             try:
-                on_cancelled(messages)
+                on_cancelled(messages, RESCUE_REASON_CANCELLED)
             except Exception:  # noqa: BLE001 - 退避処理の失敗でCancelledErrorの伝播を妨げない
                 logger.exception("subagent: on_cancelled コールバックの実行に失敗しました")
         raise
 
 
-def dump_messages_for_cancelled_rescue(messages: list) -> str:
-    """CancelledErrorによる強制停止時、会話履歴を緊急退避用に整形する。
+def dump_messages_for_cancelled_rescue(messages: list, reason: str = RESCUE_REASON_CANCELLED) -> str:
+    """打ち切り時、会話履歴を緊急退避用に整形する。
 
     run_subagent の on_cancelled コールバックから渡された messages
     （SystemMessage/HumanMessage/AIMessage/ToolMessageの列）を、要約せず
     ほぼそのままMarkdown化する。_collect_tool_results_summary は打ち切り時に
-    委譲元へ引き継ぐための軽量要約だが、こちらは停止ボタンによる予期しない
-    中断からの人間による調査・復旧が目的のため、tool_calls の引数を含め
-    情報量を優先する。SystemMessage（システムプロンプト本体）は調査・復旧に
-    不要な上に長大なため除外する。
+    委譲元へ引き継ぐための軽量要約だが、こちらは予期しない中断からの人間に
+    よる調査・復旧が目的のため、tool_calls の引数を含め情報量を優先する。
+    SystemMessage（システムプロンプト本体）は調査・復旧に不要な上に長大な
+    ため除外する。
 
     Args:
-        messages: run_subagent がキャンセルされた時点の会話履歴。
+        messages: 打ち切られた時点の会話履歴。
+        reason: 退避の理由（見出しに出す）。停止ボタン等による
+            CancelledError と token_guard の hard_threshold 到達では原因が
+            全く異なるため、後からログを読む人が取り違えないよう区別する。
+            RESCUE_REASON_* を使う。
 
     Returns:
         メッセージごとに "### <型名>" の見出しとcontentを並べたMarkdown文字列
@@ -802,7 +844,7 @@ def dump_messages_for_cancelled_rescue(messages: list) -> str:
     """
     if not messages:
         return ""
-    parts = ["[サブエージェント強制停止による会話履歴の緊急退避]"]
+    parts = [f"[サブエージェントの会話履歴の緊急退避: {reason}]"]
     for m in messages:
         if isinstance(m, SystemMessage):
             continue

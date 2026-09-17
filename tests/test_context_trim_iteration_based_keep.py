@@ -3,7 +3,7 @@
 件数ベースの keep_recent だと、1回のAIMessageが並列発行した複数の
 tool_calls に対応するToolMessage群のうち、直近何件かだけが保持され残りが
 切り詰められる、という分断が起きうる（同じラウンドトリップの一部だけが
-欠落する）。keep_recent_turns（src.context_trim.find_turn_cut_index による
+欠落する）。keep_recent_iterations（src.context_trim.find_iteration_cut_index による
 ラウンドトリップ境界判定）はこれを防ぎ、1回のラウンドトリップは常に
 丸ごと同じ側（保持/切り詰め）に入ることを保証する。
 """
@@ -27,7 +27,7 @@ def test_parallel_tool_calls_in_same_round_trip_are_not_split() -> None:
     # 件数ベースの旧実装なら keep_recent=3 等で後半3件だけが保持され、
     # 前半2件が切り詰められて分断が起きていた。ターン単位では「直近1
     # ターン全体」が単位のため、5件とも同じ側（保持）に入る。
-    result = trim_old_tool_messages(messages, keep_recent_turns=1, max_chars=10)
+    result = trim_old_tool_messages(messages, keep_recent_iterations=1, max_chars=10)
 
     tool_messages = [m for m in result if isinstance(m, ToolMessage)]
     assert len(tool_messages) == 5
@@ -46,7 +46,7 @@ def test_parallel_tool_calls_in_old_round_trip_are_trimmed_together() -> None:
         ToolMessage(content=long_content, name="Read", tool_call_id="recent"),
     ]
 
-    result = trim_old_tool_messages(messages, keep_recent_turns=1, max_chars=10)
+    result = trim_old_tool_messages(messages, keep_recent_iterations=1, max_chars=10)
 
     old_tool_messages = [m for m in result if isinstance(m, ToolMessage) and m.tool_call_id.startswith("old-")]
     recent_tool_message = next(m for m in result if isinstance(m, ToolMessage) and m.tool_call_id == "recent")

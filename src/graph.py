@@ -100,7 +100,7 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
             # 相当）の閾値到達が条件（is_trigger_reached）。
             history = trim_old_tool_messages(
                 history,
-                keep_recent_turns=config.context_trim_keep_recent_tool_turns,
+                keep_recent_iterations=config.context_trim_keep_recent_tool_iterations,
                 max_chars=config.context_trim_truncated_max_chars,
                 guarded_tool_max_chars=config.context_trim_duplicate_guard_tool_max_chars,
             )
@@ -110,7 +110,7 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
                 # 対象にする（src/context_trim.py 参照）。
                 history = trim_old_ai_messages(
                     history,
-                    keep_recent_turns=config.context_trim_keep_recent_ai_turns,
+                    keep_recent_iterations=config.context_trim_keep_recent_ai_iterations,
                     max_chars=config.context_trim_truncated_max_chars,
                 )
         # 切り詰めてもなお1リクエストあたりのトークン量が閾値に達している場合は、
@@ -192,7 +192,7 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
         if should_trim:
             trimmed = trim_old_tool_messages(
                 trimmed,
-                keep_recent_turns=config.context_trim_keep_recent_tool_turns,
+                keep_recent_iterations=config.context_trim_keep_recent_tool_iterations,
                 max_chars=config.context_trim_truncated_max_chars,
                 guarded_tool_max_chars=config.context_trim_duplicate_guard_tool_max_chars,
             )
@@ -202,7 +202,7 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
             # 対象にする（src/context_trim.py 参照）。
             trimmed = trim_old_ai_messages(
                 trimmed,
-                keep_recent_turns=config.context_trim_keep_recent_ai_turns,
+                keep_recent_iterations=config.context_trim_keep_recent_ai_iterations,
                 max_chars=config.context_trim_truncated_max_chars,
             )
         # 切り詰めてもなお1リクエストあたりのトークン量が閾値に達している場合は、

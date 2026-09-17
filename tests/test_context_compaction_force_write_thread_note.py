@@ -20,7 +20,7 @@ from src.context_compaction import force_write_thread_note
 
 @dataclass
 class _FakeConfig:
-    context_compaction_keep_recent_turns: int
+    context_compaction_keep_recent_iterations: int
     context_compaction_summary_source_max_chars: int
     context_compaction_pre_note_warning_text: str
 
@@ -38,7 +38,7 @@ class _FakeUserSession:
 
 def _config() -> _FakeConfig:
     return _FakeConfig(
-        context_compaction_keep_recent_turns=1,
+        context_compaction_keep_recent_iterations=1,
         context_compaction_summary_source_max_chars=2000,
         context_compaction_pre_note_warning_text="[**システム通知: 書き出してください**]",
     )
@@ -90,10 +90,11 @@ async def test_force_write_thread_note_success(monkeypatch, tmp_path: Path) -> N
     result = await force_write_thread_note(_messages(), model, _config())
 
     assert result is not None
-    ai_message, tool_message = result
+    ai_message, tool_messages = result
     assert ai_message.tool_calls[0]["name"] == "write_thread_note"
-    assert tool_message.tool_call_id == "call_1"
-    assert "書き込みました" in tool_message.content
+    assert len(tool_messages) == 1
+    assert tool_messages[0].tool_call_id == "call_1"
+    assert "書き込みました" in tool_messages[0].content
 
     # tool_choice="required" かつ write_thread_note のみへ絞って bind_tools していること。
     assert len(model.bind_tools_calls) == 1
@@ -130,6 +131,68 @@ async def test_force_write_thread_note_missing_args_returns_none(monkeypatch, tm
     result = await force_write_thread_note(_messages(), model, _config())
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_force_write_thread_note_returns_tool_message_for_every_tool_call(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """tool_calls が複数返っても、全件に対応する ToolMessage を返すこと。
+
+    返り値はそのまま永続履歴へ追記される。OpenAI互換APIは「tool_calls N件
+    なら直後に tool メッセージ N件」を要求するため、1件でも欠けると対応の
+    取れない tool_call が履歴へ焼き付き、以降そのスレッドのLLM呼び出しが
+    全て落ちる。tool_choice="required" でツールを1件に絞っていても、
+    モデルがトピック別に複数回呼ぶことはありうる。
+    """
+    monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", tmp_path)
+    monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession({"thread_id": "t1"}))
+
+    model = _FakeToolCallModel(
+        [
+            {"name": "write_thread_note", "args": {"topic": "件数", "content": "123件"}, "id": "call_1"},
+            {"name": "write_thread_note", "args": {"topic": "該当箇所", "content": "L42"}, "id": "call_2"},
+        ]
+    )
+
+    result = await force_write_thread_note(_messages(), model, _config())
+
+    assert result is not None
+    ai_message, tool_messages = result
+    issued = {tc["id"] for tc in ai_message.tool_calls}
+    answered = {m.tool_call_id for m in tool_messages}
+    assert issued == answered == {"call_1", "call_2"}
+
+    listing = tools.list_thread_notes.invoke({})
+    assert "件数" in listing
+    assert "該当箇所" in listing
+
+
+@pytest.mark.asyncio
+async def test_force_write_thread_note_answers_failed_call_to_avoid_orphan(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """一部の tool_call が引数不足でも、全件に ToolMessage を返すこと
+    （1件でも書き込みに成功していれば履歴へ追記する）。"""
+    monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", tmp_path)
+    monkeypatch.setattr(tools.cl, "user_session", _FakeUserSession({"thread_id": "t1"}))
+
+    model = _FakeToolCallModel(
+        [
+            {"name": "write_thread_note", "args": {"topic": "件数", "content": "123件"}, "id": "call_1"},
+            {"name": "write_thread_note", "args": {"topic": "見出しだけ"}, "id": "call_2"},
+        ]
+    )
+
+    result = await force_write_thread_note(_messages(), model, _config())
+
+    assert result is not None
+    ai_message, tool_messages = result
+    issued = {tc["id"] for tc in ai_message.tool_calls}
+    answered = {m.tool_call_id for m in tool_messages}
+    assert issued == answered
+    failed = next(m for m in tool_messages if m.tool_call_id == "call_2")
+    assert failed.content.startswith("エラー:")
 
 
 @pytest.mark.asyncio

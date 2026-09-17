@@ -19,7 +19,7 @@ from src.context_compaction import maybe_compact
 
 @dataclass
 class _FakeConfig:
-    context_compaction_keep_recent_turns: int
+    context_compaction_keep_recent_iterations: int
     context_compaction_prompt_path: Path
     context_trim_truncated_max_chars: int
     context_compaction_summary_source_max_chars: int
@@ -51,7 +51,7 @@ async def test_summary_source_uses_dedicated_max_chars_not_context_trim(tmp_path
     ]
 
     config = _FakeConfig(
-        context_compaction_keep_recent_turns=1,
+        context_compaction_keep_recent_iterations=1,
         context_compaction_prompt_path=prompt_path,
         # [context_trim] 側は小さい値のままにしておき、これが使われて
         # いないことを検証する。

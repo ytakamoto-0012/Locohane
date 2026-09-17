@@ -633,14 +633,17 @@ class Config:
             対応する context_trim_subagent_* を使う（config.ini の
             [context_trim.subagent] に項目があればその値、無ければこちらの
             値を継承する）。
-        context_trim_keep_recent_tool_turns: 全文保持する直近のユーザーターン数
-            （src.context_trim.find_turn_cut_index）。それより古い ToolMessage
-            のみ切り詰め対象にする。ユーザーターンが不足する場合（1ターン内で
-            LLM呼び出しを繰り返す長時間タスク）は、ツール往復（ラウンド
-            トリップ）単位のフォールバックになる。1回のAIMessageが並列発行
-            した複数tool_callsに対応するToolMessage群は必ずラウンドトリップ
-            単位で丸ごと同じ側（保持/切り詰め）に入り、一部だけ分断される
-            ことはない。
+        context_trim_keep_recent_tool_iterations: 全文保持する直近の反復数
+            （src.context_trim.find_iteration_cut_index）。「1反復」は
+            ReActループ1周＝LLM呼び出し1回（AIMessage 1件とそれに対応する
+            ToolMessage群）で、メインの agent→tools 遷移1回・サブエージェント
+            の1 iteration がそのまま単位になる。それより古い ToolMessage の
+            み切り詰め対象にする。ユーザーの発話回数では数えない（画像
+            フォローアップや各種nudgeがHumanMessageとして積まれるためずれ、
+            注入が増えるほど保持範囲が広がってトリムが効かなくなる）。1回の
+            AIMessageが並列発行した複数tool_callsに対応するToolMessage群は
+            必ず反復単位で丸ごと同じ側（保持/切り詰め）に入り、一部だけ
+            分断されることはない。
         context_trim_truncated_max_chars: 切り詰め対象 ToolMessage /
             AIMessage の content を、先頭何文字まで残すか
             （超過分はマーカー文言に置換）。context_trim_duplicate_guard_tool_max_chars
@@ -656,8 +659,8 @@ class Config:
             別枠で持たせる。
         context_trim_ai_messages: ToolMessage だけでなく AIMessage
             （モデル自身の思考本文と tool_calls の引数）も切り詰めるか。
-        context_trim_keep_recent_ai_turns: 全文保持する直近のユーザーターン数
-            （context_trim_keep_recent_tool_turns と同じ判定方式・独立した値）。
+        context_trim_keep_recent_ai_iterations: 全文保持する直近の反復数
+            （context_trim_keep_recent_tool_iterations と同じ判定方式・独立した値）。
             それより古い AIMessage のみ切り詰め対象にする。
         context_trim_trigger_total_tokens: トリムを発動させる閾値
             （Claude API の context editing、clear_tool_uses_20250919 の
@@ -693,10 +696,16 @@ class Config:
             あたりcontext window未満に収める必要があるため、ツール結果1往復分
             の余裕を見てそれより低い値にすること。track_token_usage=False の
             場合は判定材料が無いためこの条件は実質発火しない。
-        context_compaction_keep_recent_turns: 圧縮時に丸ごと保持する直近の
-            ユーザーターン数（HumanMessage単位）。tool_calls とそれに
-            対応する ToolMessage の対応関係を壊さないよう、この境界
-            （直近N個目のHumanMessage直前）でのみ古い側を切り離す。
+        context_compaction_keep_recent_iterations: 圧縮時に丸ごと保持する直近の
+            反復数（context_trim_keep_recent_tool_iterations と同じ単位＝
+            ReActループ1周＝LLM呼び出し1回）。tool_calls とそれに対応する
+            ToolMessage の対応関係を壊さないよう、安全な切断点
+            （src.context_trim.find_iteration_cut_index）でのみ古い側を
+            切り離す。圧縮は永続履歴を要約で置き換える恒久的な操作のため、
+            この反復数とは別に「末尾のHumanMessage以降は必ず原文のまま残す」
+            上限も内部で被せる（src.context_compaction._find_compaction_cut_index。
+            ただし適用すると要約対象が空になる場合は、圧縮の機会自体が
+            失われるため適用しない）。
         context_compaction_min_messages_to_compact: 会話全体のメッセージ数が
             この件数未満なら、閾値を超えていても圧縮しない安全弁。
         context_compaction_prompt_path: 要約を指示するプロンプト本文
@@ -724,7 +733,7 @@ class Config:
         context_compaction_pre_note_warning_text: 上記閾値到達時に注入する
             注意メッセージの文言。
         context_compaction_require_note_max_skips: 圧縮の発火条件に「直近
-            context_compaction_keep_recent_turns以内にwrite_thread_noteが
+            context_compaction_keep_recent_iterations以内にwrite_thread_noteが
             呼ばれていること」を追加で課す
             （src.context_compaction.is_compaction_blocked_by_missing_note）。
             未呼び出しのまま閾値超過（token_threshold/
@@ -934,27 +943,27 @@ class Config:
 
     # --- 会話履歴トリミング（src/context_trim.py） ---
     context_trim_enabled: bool
-    context_trim_keep_recent_tool_turns: int
+    context_trim_keep_recent_tool_iterations: int
     context_trim_truncated_max_chars: int
     context_trim_duplicate_guard_tool_max_chars: int
     context_trim_ai_messages: bool
-    context_trim_keep_recent_ai_turns: int
+    context_trim_keep_recent_ai_iterations: int
     context_trim_trigger_total_tokens: int
 
     # --- 会話履歴トリミング・サブエージェント専用上書き（[context_trim.subagent]） ---
     context_trim_subagent_enabled: bool
-    context_trim_subagent_keep_recent_tool_turns: int
+    context_trim_subagent_keep_recent_tool_iterations: int
     context_trim_subagent_truncated_max_chars: int
     context_trim_subagent_duplicate_guard_tool_max_chars: int
     context_trim_subagent_ai_messages: bool
-    context_trim_subagent_keep_recent_ai_turns: int
+    context_trim_subagent_keep_recent_ai_iterations: int
     context_trim_subagent_trigger_total_tokens: int
 
     # --- 会話履歴の自動要約・圧縮（src/context_compaction.py） ---
     context_compaction_enabled: bool
     context_compaction_token_threshold: int
     context_compaction_single_request_token_threshold: int
-    context_compaction_keep_recent_turns: int
+    context_compaction_keep_recent_iterations: int
     context_compaction_min_messages_to_compact: int
     context_compaction_prompt_path: Path
     context_compaction_summary_source_max_chars: int
@@ -966,7 +975,7 @@ class Config:
     context_compaction_subagent_enabled: bool
     context_compaction_subagent_token_threshold: int
     context_compaction_subagent_single_request_token_threshold: int
-    context_compaction_subagent_keep_recent_turns: int
+    context_compaction_subagent_keep_recent_iterations: int
     context_compaction_subagent_min_messages_to_compact: int
     context_compaction_subagent_prompt_path: Path
     context_compaction_subagent_summary_source_max_chars: int
@@ -1852,9 +1861,9 @@ def load_config(config_path: Path | None = None) -> Config:
       THINKING_LOOP_GUARD_CHECK_INTERVAL_CHARS / THINKING_LOOP_GUARD_COMPRESSION_RATIO_THRESHOLD /
       THINKING_LOOP_GUARD_CONFIRM_COUNT / THINKING_LOOP_GUARD_MAX_RETRIES /
       THINKING_LOOP_GUARD_NUDGE_MESSAGES
-      CONTEXT_TRIM_ENABLED / CONTEXT_TRIM_KEEP_RECENT_TOOL_TURNS / CONTEXT_TRIM_TRUNCATED_MAX_CHARS
+      CONTEXT_TRIM_ENABLED / CONTEXT_TRIM_KEEP_RECENT_TOOL_ITERATIONS / CONTEXT_TRIM_TRUNCATED_MAX_CHARS
       CONTEXT_COMPACTION_ENABLED / CONTEXT_COMPACTION_TOKEN_THRESHOLD /
-      CONTEXT_COMPACTION_KEEP_RECENT_TURNS / CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT /
+      CONTEXT_COMPACTION_KEEP_RECENT_ITERATIONS / CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT /
       CONTEXT_COMPACTION_PROMPT_PATH
       AUTH_ENABLED / AUTH_REQUIRE_PASSWORD / AUTH_USERS（AUTH_USERS は .env 専用、
       config.ini 側フォールバックを持たない）
@@ -1929,8 +1938,8 @@ def load_config(config_path: Path | None = None) -> Config:
     # すると、CONTEXT_TRIM_*/CONTEXT_COMPACTION_* 環境変数がサブエージェント側
     # にだけ反映されなくなる。
     _context_trim_enabled = _as_bool(os.getenv("CONTEXT_TRIM_ENABLED", context_trim.get("enabled", True)))
-    _context_trim_keep_recent_tool_turns = int(
-        os.getenv("CONTEXT_TRIM_KEEP_RECENT_TOOL_TURNS", context_trim.get("keep_recent_tool_turns", 3))
+    _context_trim_keep_recent_tool_iterations = int(
+        os.getenv("CONTEXT_TRIM_KEEP_RECENT_TOOL_ITERATIONS", context_trim.get("keep_recent_tool_iterations", 3))
     )
     _context_trim_truncated_max_chars = int(
         os.getenv("CONTEXT_TRIM_TRUNCATED_MAX_CHARS", context_trim.get("truncated_max_chars", 2000))
@@ -1942,8 +1951,8 @@ def load_config(config_path: Path | None = None) -> Config:
         )
     )
     _context_trim_ai_messages = _as_bool(os.getenv("CONTEXT_TRIM_AI_MESSAGES", context_trim.get("trim_ai_messages", True)))
-    _context_trim_keep_recent_ai_turns = int(
-        os.getenv("CONTEXT_TRIM_KEEP_RECENT_AI_TURNS", context_trim.get("keep_recent_ai_turns", 3))
+    _context_trim_keep_recent_ai_iterations = int(
+        os.getenv("CONTEXT_TRIM_KEEP_RECENT_AI_ITERATIONS", context_trim.get("keep_recent_ai_iterations", 3))
     )
     _context_trim_trigger_total_tokens = int(
         os.getenv("CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS", context_trim.get("trigger_total_tokens", 100_000))
@@ -1960,8 +1969,8 @@ def load_config(config_path: Path | None = None) -> Config:
             context_compaction.get("single_request_token_threshold", 60000),
         )
     )
-    _context_compaction_keep_recent_turns = int(
-        os.getenv("CONTEXT_COMPACTION_KEEP_RECENT_TURNS", context_compaction.get("keep_recent_turns", 2))
+    _context_compaction_keep_recent_iterations = int(
+        os.getenv("CONTEXT_COMPACTION_KEEP_RECENT_ITERATIONS", context_compaction.get("keep_recent_iterations", 2))
     )
     _context_compaction_min_messages_to_compact = int(
         os.getenv(
@@ -2428,17 +2437,17 @@ def load_config(config_path: Path | None = None) -> Config:
             )
         ),
         context_trim_enabled=_context_trim_enabled,
-        context_trim_keep_recent_tool_turns=_context_trim_keep_recent_tool_turns,
+        context_trim_keep_recent_tool_iterations=_context_trim_keep_recent_tool_iterations,
         context_trim_truncated_max_chars=_context_trim_truncated_max_chars,
         context_trim_duplicate_guard_tool_max_chars=_context_trim_duplicate_guard_tool_max_chars,
         context_trim_ai_messages=_context_trim_ai_messages,
-        context_trim_keep_recent_ai_turns=_context_trim_keep_recent_ai_turns,
+        context_trim_keep_recent_ai_iterations=_context_trim_keep_recent_ai_iterations,
         context_trim_trigger_total_tokens=_context_trim_trigger_total_tokens,
         context_trim_subagent_enabled=_subagent_override(
             context_trim_subagent, "enabled", _context_trim_enabled, _as_bool
         ),
-        context_trim_subagent_keep_recent_tool_turns=_subagent_override(
-            context_trim_subagent, "keep_recent_tool_turns", _context_trim_keep_recent_tool_turns, int
+        context_trim_subagent_keep_recent_tool_iterations=_subagent_override(
+            context_trim_subagent, "keep_recent_tool_iterations", _context_trim_keep_recent_tool_iterations, int
         ),
         context_trim_subagent_truncated_max_chars=_subagent_override(
             context_trim_subagent, "truncated_max_chars", _context_trim_truncated_max_chars, int
@@ -2452,8 +2461,8 @@ def load_config(config_path: Path | None = None) -> Config:
         context_trim_subagent_ai_messages=_subagent_override(
             context_trim_subagent, "trim_ai_messages", _context_trim_ai_messages, _as_bool
         ),
-        context_trim_subagent_keep_recent_ai_turns=_subagent_override(
-            context_trim_subagent, "keep_recent_ai_turns", _context_trim_keep_recent_ai_turns, int
+        context_trim_subagent_keep_recent_ai_iterations=_subagent_override(
+            context_trim_subagent, "keep_recent_ai_iterations", _context_trim_keep_recent_ai_iterations, int
         ),
         context_trim_subagent_trigger_total_tokens=_subagent_override(
             context_trim_subagent, "trigger_total_tokens", _context_trim_trigger_total_tokens, int
@@ -2461,7 +2470,7 @@ def load_config(config_path: Path | None = None) -> Config:
         context_compaction_enabled=_context_compaction_enabled,
         context_compaction_token_threshold=_context_compaction_token_threshold,
         context_compaction_single_request_token_threshold=_context_compaction_single_request_token_threshold,
-        context_compaction_keep_recent_turns=_context_compaction_keep_recent_turns,
+        context_compaction_keep_recent_iterations=_context_compaction_keep_recent_iterations,
         context_compaction_min_messages_to_compact=_context_compaction_min_messages_to_compact,
         context_compaction_prompt_path=_context_compaction_prompt_path,
         context_compaction_summary_source_max_chars=_context_compaction_summary_source_max_chars,
@@ -2480,8 +2489,8 @@ def load_config(config_path: Path | None = None) -> Config:
             _context_compaction_single_request_token_threshold,
             int,
         ),
-        context_compaction_subagent_keep_recent_turns=_subagent_override(
-            context_compaction_subagent, "keep_recent_turns", _context_compaction_keep_recent_turns, int
+        context_compaction_subagent_keep_recent_iterations=_subagent_override(
+            context_compaction_subagent, "keep_recent_iterations", _context_compaction_keep_recent_iterations, int
         ),
         context_compaction_subagent_min_messages_to_compact=_subagent_override(
             context_compaction_subagent,
