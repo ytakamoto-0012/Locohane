@@ -142,6 +142,86 @@ def is_compaction_blocked_by_missing_note(
     return True
 
 
+async def force_write_thread_note(
+    messages: list[BaseMessage], model, config: Config
+) -> tuple[AIMessage, ToolMessage] | None:
+    """write_thread_note が未呼び出しのまま圧縮閾値に達した際、見送る代わりに
+    その場でLLMへ write_thread_note の実行を強制する。
+
+    is_compaction_blocked_by_missing_note による「見送り」は、ユーザーの
+    次発話でLLMがナッジに応じてくれるのを待つだけであり、無視され続けると
+    require_note_max_skips 回まで見送った末に記録なしで圧縮が強制される
+    （事実退避の機会が一度も無いまま要約されうる）。この関数は、その場で
+    write_thread_note 以外のツールを使えなくした上でモデルを1回呼び出し、
+    確実に書き出させる。
+
+    実現方法: OpenAI互換の tool_choice で特定関数名を固定する方式
+    （{"type":"function","function":{"name":"write_thread_note"}}）は
+    llama-server（本アプリの前提バックエンド）では無視されることを実機で
+    確認済み。一方 tool_choice="required" は「bind_tools に渡したツールの
+    どれかを必ず呼ぶ」という強制として機能するため、ツール一覧を
+    write_thread_note 1件だけに絞った上で tool_choice="required" にする
+    ことで、実質的に特定ツールの強制呼び出しを実現する。
+
+    Args:
+        messages: 現在の会話履歴全体（圧縮対象を含む）。
+        model: build_model() が返す素のモデル（未 bind_tools でよい。
+            この関数の中で write_thread_note のみへ bind_tools し直す）。
+        config: context_compaction_keep_recent_turns /
+            context_compaction_summary_source_max_chars /
+            context_compaction_pre_note_warning_text を含むアプリ設定。
+
+    Returns:
+        書き出しに成功した場合、実際に永続履歴へ追記すべき
+        (AIMessage, ToolMessage) のペア。LLM呼び出し自体の失敗、
+        tool_calls が空、または topic/content 引数が欠けている等の
+        異常時は None（呼び出し元は従来の見送り処理へフォールバックする）。
+    """
+    from .tools.thread_notes import write_thread_note
+
+    cut_index = _find_cut_index(messages, config.context_compaction_keep_recent_turns)
+    old_messages = messages[:cut_index] if cut_index else messages
+    trimmed_old = trim_old_tool_messages(
+        old_messages,
+        keep_recent=0,
+        max_chars=config.context_compaction_summary_source_max_chars,
+    )
+    text = _messages_to_text(trimmed_old)
+    prompt = (
+        f"{config.context_compaction_pre_note_warning_text}\n\n"
+        "---\n\n# 会話履歴（要約により失われる可能性がある古い部分）\n\n" + text
+    )
+
+    bound_model = model.bind_tools([write_thread_note], tool_choice="required")
+    try:
+        response = await bound_model.ainvoke([HumanMessage(content=prompt)])
+    except Exception:
+        logger.exception("write_thread_note の強制実行に失敗しました（LLM呼び出しエラー）")
+        return None
+
+    tool_calls = getattr(response, "tool_calls", None) or []
+    if not tool_calls:
+        logger.warning("write_thread_note の強制実行でtool_callsが空の応答が返りました")
+        return None
+    call = tool_calls[0]
+    args = call.get("args") or {}
+    topic = args.get("topic")
+    content = args.get("content")
+    if not topic or not content:
+        logger.warning("write_thread_note の強制実行でtopic/content引数が不足していました: %r", args)
+        return None
+
+    try:
+        result_text = await write_thread_note.ainvoke({"topic": topic, "content": content})
+    except Exception:
+        logger.exception("write_thread_note の強制実行でツール本体の実行に失敗しました")
+        return None
+
+    tool_message = ToolMessage(content=result_text, tool_call_id=call.get("id", ""))
+    logger.warning("write_thread_note の強制実行に成功しました (topic=%r)", topic)
+    return response, tool_message
+
+
 def should_compact(
     cumulative_usage: dict | None,
     last_usage: dict | None,

@@ -82,7 +82,12 @@ from src.config import (
     render_agent_type_run_script_allowlist_block,
     render_plan_approval_exempt_scripts_block,
 )
-from src.context_compaction import is_compaction_blocked_by_missing_note, maybe_compact, should_compact
+from src.context_compaction import (
+    force_write_thread_note,
+    is_compaction_blocked_by_missing_note,
+    maybe_compact,
+    should_compact,
+)
 from src.files import extract_generated_files
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
 from src.images import is_image_file, load_image_bytes, to_data_url
@@ -3085,17 +3090,41 @@ async def _run_context_compaction(
     if not should_compact(cumulative_main, last_usage, len(messages), _config):
         return False
     skip_count = cl.user_session.get("context_compaction_note_skip_count") or 0
+    summary_model = None
     if is_compaction_blocked_by_missing_note(messages, _config, skip_count):
-        if not dry_run:
+        if dry_run:
+            # 見送るのではなく、これから強制的にwrite_thread_noteを書かせてから
+            # 圧縮する予定のため、「圧縮するはず」自体は変わらない。
+            return True
+        summary_model = await build_model(_config, role="main")
+        forced = await force_write_thread_note(messages, summary_model, _config)
+        if forced is None:
+            # 強制実行自体が失敗した場合のみ、従来通り見送ってターンを継続する
+            # （安全弁。無限に諦めないと require_note_max_skips の意味が無くなる）。
             cl.user_session.set("context_compaction_note_skip_count", skip_count + 1)
             logging.getLogger(__name__).debug(
-                "コンテキスト圧縮: write_thread_note未呼び出しのため見送ります (skip_count=%d)",
+                "コンテキスト圧縮: write_thread_noteの強制実行に失敗したため見送ります (skip_count=%d)",
                 skip_count + 1,
             )
-        return False
+            return False
+        ai_message, tool_message = forced
+        try:
+            await graph.aupdate_state(config, {"messages": [ai_message, tool_message]}, as_node="tools")
+        except Exception:
+            # 上のaget_state/aupdate_state同様の理由で握りつぶす。強制実行済みの
+            # write_thread_noteの結果は次回以降の判定（_write_thread_note_called_recently）
+            # で再度見えるとは限らないため、見送り扱いにしてskip_countを進める。
+            logging.getLogger(__name__).exception(
+                "コンテキスト圧縮: write_thread_note強制実行結果の状態更新(aupdate_state)に失敗したため今回は見送ります"
+            )
+            cl.user_session.set("context_compaction_note_skip_count", skip_count + 1)
+            return False
+        cl.user_session.set("context_compaction_note_skip_count", 0)
+        messages = messages + [ai_message, tool_message]
     if dry_run:
         return True
-    summary_model = await build_model(_config, role="main")
+    if summary_model is None:
+        summary_model = await build_model(_config, role="main")
     new_messages = await maybe_compact(messages, summary_model, _config, role="main")
     if new_messages is None:
         return False
