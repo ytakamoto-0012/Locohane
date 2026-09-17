@@ -47,6 +47,11 @@ def _make_rescue_on_cancelled(job: "_DispatchAgentJob"):
 
     停止ボタン等でこのジョブが強制終了された場合、run_subagent はここまでの
     会話履歴を渡してこのコールバックを同期的に呼ぶ（CancelledError の再送出前）。
+    また [subagent].token_guard_hard_threshold 到達時（急速なトークン爆発で
+    ソフト警告を飛び越えて一気にhardへ到達したケース含む）にも、
+    CancelledErrorは使わず同じコールバックが同期的に呼ばれる（この場合は
+    run_subagentが通常のreturnで打ち切りメッセージを返す前に呼ばれる。
+    src/subagent.py の run_subagent docstring参照）。
     write_scratch_note と同じファイル（_scratch_notes_path_for_run(job.run_id)）
     へ追記することで、check_dispatch_agent_job の進捗表示や
     _append_scratch_note_hint など既存の案内導線がそのまま拾える。

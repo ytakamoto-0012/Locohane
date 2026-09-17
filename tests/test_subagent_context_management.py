@@ -394,3 +394,73 @@ async def test_pre_note_nudge_not_injected_when_soft_threshold_reached(monkeypat
     assert not any(
         isinstance(m, HumanMessage) and _PRE_NOTE_MARKER in m.content for m in fake_model.captured_second_input
     )
+
+
+@pytest.mark.asyncio
+async def test_hard_threshold_triggers_without_prior_soft_warning(monkeypatch) -> None:
+    """急速なトークン爆発でsoft_thresholdを経ずに一気にhard_thresholdへ到達した
+    場合でも、その場でon_cancelledを呼んでスクラッチノートへ退避した上で
+    打ち切りメッセージを返す（以前はsoft警告発火済みであることが前提の
+    判定だったため、この飛び越えケースでガードが効かず打ち切られない
+    事象があった。この回帰テスト）。
+    """
+    config = _FakeConfig()
+    config.context_trim_subagent_enabled = False
+    config.track_token_usage = True
+    config.subagent_token_guard_enabled = True
+    config.subagent_token_guard_soft_threshold = 100000
+    config.subagent_token_guard_hard_threshold = 150000
+
+    fake_model = _ToolCallWithUsageThenFinalModel(total_tokens=200000)
+
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
+
+    captured: list = []
+
+    def _on_cancelled(messages: list) -> None:
+        captured.append(list(messages))
+
+    result = await subagent.run_subagent(
+        task="t",
+        tools=[dummy_tool],
+        system_prompt="サブエージェント専用システムプロンプト",
+        config=config,
+        max_iterations=5,
+        on_cancelled=_on_cancelled,
+    )
+
+    assert "トークン使用量が上限" in result
+    # 2回目のainvoke（ツール実行後の続き）は発生せず、その場で打ち切られる。
+    assert fake_model.captured_second_input is None
+    assert len(captured) == 1
+
+
+@pytest.mark.asyncio
+async def test_hard_threshold_without_on_cancelled_still_truncates(monkeypatch) -> None:
+    """on_cancelled未指定でも例外なく打ち切りメッセージが返る。"""
+    config = _FakeConfig()
+    config.context_trim_subagent_enabled = False
+    config.track_token_usage = True
+    config.subagent_token_guard_enabled = True
+    config.subagent_token_guard_soft_threshold = 100000
+    config.subagent_token_guard_hard_threshold = 150000
+
+    fake_model = _ToolCallWithUsageThenFinalModel(total_tokens=200000)
+
+    async def fake_build_model(config, role):
+        return fake_model
+
+    monkeypatch.setattr(subagent, "build_model", fake_build_model)
+
+    result = await subagent.run_subagent(
+        task="t",
+        tools=[dummy_tool],
+        system_prompt="サブエージェント専用システムプロンプト",
+        config=config,
+        max_iterations=5,
+    )
+
+    assert "トークン使用量が上限" in result

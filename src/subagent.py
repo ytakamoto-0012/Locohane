@@ -516,9 +516,15 @@ async def run_subagent(
     config.subagent_token_guard_enabled が True（かつ track_token_usage が
     True）の場合、応答の usage_metadata.total_tokens を監視し、
     subagent_token_guard_soft_threshold 到達時に一度だけ注意メッセージを
-    注入し、それでも subagent_token_guard_hard_threshold まで超過が続いた
-    場合は max_iterations 到達時と同じ要約フォーマットで打ち切る
-    （LLM自身は自分のトークン使用量を認識できないため、コード側で判定する）。
+    注入する。subagent_token_guard_hard_threshold 到達はソフト警告発行の
+    前提を問わず単独で判定し（急速なトークン爆発でソフト警告を飛び越えて
+    一気にhardへ到達した場合でもその場で捕捉するため。以前はソフト警告
+    発行済みであることが前提の判定だったため、この飛び越えケースで
+    ガードが効かずサブエージェントが打ち切られない事象があった）、
+    到達時は on_cancelled が渡されていればそれも呼び出して会話履歴を
+    スクラッチノートへ退避してから、max_iterations 到達時と同じ要約
+    フォーマットで打ち切る（LLM自身は自分のトークン使用量を認識できない
+    ため、コード側で判定する）。
     上記ソフト警告が発動しない場合のみ、[context_compaction.subagent]の
     pre_note_threshold到達を判定し write_thread_note を促す（メインエージェント
     側のsrc/graph.pyと同じ排他方針。詳細はmaybe_append_precompact_note_nudge参照）。
@@ -542,10 +548,14 @@ async def run_subagent(
             バックグラウンドタスクとして動き続けるため、より大きい値を渡して
             耐性を上げる（_invoke_with_timeout_retry 参照）。
         on_cancelled: 停止ボタン等による asyncio.CancelledError 検知時、
-            その時点までの messages（会話履歴）を渡して呼ぶ同期コールバック
+            または subagent_token_guard_hard_threshold 到達時、その時点
+            までの messages（会話履歴）を渡して呼ぶ同期コールバック
             （省略可）。dispatch_agent がこの内容をスクラッチノートへ緊急
             退避するために使う（_dispatch_agent_job.py 参照）。戻り値は
-            無視し、例外を送出しても CancelledError の伝播は妨げない。
+            無視する。CancelledError検知時は例外を送出しても伝播を妨げない。
+            hard_threshold到達時はCancelledErrorを使わず通常のreturnで
+            打ち切るため、このコールバック自体の例外はここで捕捉して
+            握りつぶし、打ち切り処理を継続する。
 
     Returns:
         サブエージェントの最終回答テキスト。
@@ -657,7 +667,6 @@ async def run_subagent(
 
             if (
                 token_guard_enabled
-                and soft_warning_issued
                 and total_tokens is not None
                 and total_tokens >= config.subagent_token_guard_hard_threshold
             ):
@@ -667,6 +676,11 @@ async def run_subagent(
                     iteration,
                     total_tokens,
                 )
+                if on_cancelled is not None:
+                    try:
+                        on_cancelled(messages)
+                    except Exception:  # noqa: BLE001 - 退避処理の失敗で打ち切り自体を妨げない
+                        logger.exception("subagent: token_guard hard_threshold到達時の退避コールバック実行に失敗しました")
                 return _build_truncation_message(
                     "トークン使用量が上限" f"({config.subagent_token_guard_hard_threshold}トークン)に達した",
                     messages,
