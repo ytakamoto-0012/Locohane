@@ -18,6 +18,7 @@ import httpx
 from langchain_openai import ChatOpenAI
 
 from ..config import Config
+from .dialect import build_extra_body, extract_reasoning, history_reasoning_keys
 from .diagnostics import (
     _DebugResponseLogger,
     _log_first_chunk_latency,
@@ -49,13 +50,14 @@ def init_llm_concurrency(max_concurrent_requests: int) -> None:
 
 
 class ChatLlamaCpp(ChatOpenAI):
-    """llama.cpp server（reasoning_format=deepseek）向けの ChatOpenAI 拡張。
+    """llama.cpp server / vLLM 向けの ChatOpenAI 拡張。
 
-    llama-server は Qwen3 系の <think> ブロックを OpenAI 非標準の
-    delta.reasoning_content フィールドで返す（reasoning_in_content=false）。
+    推論サーバーは <think> ブロックを OpenAI 非標準のフィールドで返す
+    （llama-server は reasoning_content、vLLM 0.20以降は reasoning）。
     ChatOpenAI はこの拡張フィールドを読み捨てる仕様（本家 docstring 参照）
-    のため、ここで additional_kwargs["reasoning_content"] に拾い上げて
-    UI 側（app.py）で思考過程として表示できるようにする。
+    のため、ここでどちらのフィールドも additional_kwargs["reasoning_content"]
+    に正規化して拾い上げ、UI 側（app.py）で思考過程として表示できるように
+    する（dialect.extract_reasoning 参照）。
 
     あわせて、ストリーミング中の応答（thinking/本文）が反復ループに陥って
     いないかを _ThinkingLoopDetector で監視し、検知したら ThinkingLoopDetected
@@ -69,6 +71,39 @@ class ChatLlamaCpp(ChatOpenAI):
     loop_guard_confirm_count: int = 2
     loop_guard_max_history_chars: int = 4000
     loop_guard_match_ratio_threshold: float = 0.2
+    # True なら履歴の AIMessage.additional_kwargs["reasoning_content"] を
+    # リクエストの assistant メッセージへ載せ直す（[llm].reasoning_preserve
+    # 由来、build_model() が注入する）。
+    preserve_reasoning_content: bool = False
+    # 送信先の LLMEndpoint.provider。載せ直す際のキー名の決定に使う
+    # （dialect.history_reasoning_keys 参照、build_model() が注入する）。
+    reasoning_dialect: str = "llama_cpp"
+
+    def _get_request_payload(self, input_: Any, *, stop: list[str] | None = None, **kwargs: Any) -> dict:
+        """reasoning_preserve 有効時、履歴の thinking をリクエストへ戻す。
+
+        langchain_openai の _convert_message_to_dict は additional_kwargs の
+        reasoning_content を読み捨てるため、サーバー側で preserve を有効に
+        しても過去の thinking が届かず効果が出ない。親が作った
+        payload["messages"] は入力メッセージと1対1で並ぶので、同じ位置の
+        AIMessage から補う。キー名は送信先の方言に合わせる（llama-server は
+        reasoning_content、vLLM は reasoning しか読まない）。
+        """
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if not self.preserve_reasoning_content:
+            return payload
+        payload_messages = payload.get("messages")
+        messages = self._convert_input(input_).to_messages()
+        if not isinstance(payload_messages, list) or len(payload_messages) != len(messages):
+            return payload
+        for message, message_dict in zip(messages, payload_messages):
+            if message_dict.get("role") != "assistant":
+                continue
+            reasoning = extract_reasoning(message.additional_kwargs)
+            if reasoning:
+                for key in history_reasoning_keys(self.reasoning_dialect):
+                    message_dict[key] = reasoning
+        return payload
 
     def _convert_chunk_to_generation_chunk(
         self,
@@ -81,10 +116,24 @@ class ChatLlamaCpp(ChatOpenAI):
             return generation_chunk
         choices = chunk.get("choices") or []
         if choices:
-            reasoning = (choices[0].get("delta") or {}).get("reasoning_content")
+            reasoning = extract_reasoning(choices[0].get("delta"))
             if reasoning:
                 generation_chunk.message.additional_kwargs["reasoning_content"] = reasoning
         return generation_chunk
+
+    def _create_chat_result(self, response: Any, generation_info: dict | None = None) -> Any:
+        """非ストリーム応答の thinking も additional_kwargs["reasoning_content"] に拾い上げる。
+
+        現状は streaming=True 固定のため通らないが、_agenerate 経由で
+        stream=False が使われた場合に thinking が失われないようにする。
+        """
+        result = super()._create_chat_result(response, generation_info)
+        response_dict = response if isinstance(response, dict) else response.model_dump(warnings=False)
+        for generation, choice in zip(result.generations, response_dict.get("choices") or []):
+            reasoning = extract_reasoning(choice.get("message"))
+            if reasoning:
+                generation.message.additional_kwargs["reasoning_content"] = reasoning
+        return result
 
     def _make_loop_detector(self) -> _ThinkingLoopDetector:
         return _ThinkingLoopDetector(
@@ -293,7 +342,9 @@ async def build_model(
     パラメータのため、model_kwargs では openai SDK の Completions.create() が
     未知のキーワード引数として例外を起こしてしまう。extra_body（openai SDK の
     正式な予約引数）に載せることで、HTTP リクエストボディのトップレベルに
-    マージされ llama-server に届く。
+    マージされ llama-server に届く。拡張パラメータの名前・有無は推論サーバー
+    ごとに異なるため、選ばれた接続先の provider に応じて
+    dialect.build_extra_body() が組み立てる。
 
     Args:
         config: main_endpoints/main_routing_strategy（role="main"時）または
@@ -302,7 +353,7 @@ async def build_model(
             max_tokens / dry_multiplier / dry_base / dry_allowed_length /
             dry_penalty_last_n / dry_sequence_breakers / enable_thinking /
             reasoning_format / reasoning_budget / reasoning_budget_message /
-            track_token_usage / request_timeout_seconds / thinking_loop_guard_*
+            reasoning_effort / reasoning_preserve / track_token_usage / request_timeout_seconds / thinking_loop_guard_*
             を含むアプリ設定。
             未指定（None）の項目はリクエストに含めず llama-server 側の
             デフォルトに委ねる。thinking_loop_guard_* は ChatLlamaCpp の
@@ -365,29 +416,7 @@ async def build_model(
         describe_current_task(),
     )
 
-    extra_body: dict[str, Any] = {}
-    if config.top_k is not None:
-        extra_body["top_k"] = config.top_k
-    if config.repeat_penalty is not None:
-        extra_body["repeat_penalty"] = config.repeat_penalty
-    if config.dry_multiplier is not None:
-        extra_body["dry_multiplier"] = config.dry_multiplier
-    if config.dry_base is not None:
-        extra_body["dry_base"] = config.dry_base
-    if config.dry_allowed_length is not None:
-        extra_body["dry_allowed_length"] = config.dry_allowed_length
-    if config.dry_penalty_last_n is not None:
-        extra_body["dry_penalty_last_n"] = config.dry_penalty_last_n
-    if config.dry_sequence_breakers is not None:
-        extra_body["dry_sequence_breakers"] = config.dry_sequence_breakers
-    if config.enable_thinking is not None:
-        extra_body["chat_template_kwargs"] = {"enable_thinking": config.enable_thinking}
-    if config.reasoning_format is not None:
-        extra_body["reasoning_format"] = config.reasoning_format
-    if config.reasoning_budget is not None:
-        extra_body["reasoning_budget"] = config.reasoning_budget
-    if config.reasoning_budget_message is not None:
-        extra_body["reasoning_budget_message"] = config.reasoning_budget_message
+    extra_body = build_extra_body(config, endpoint.provider)
 
     # keep-alive接続を無効化する: 思考ループ検知時にストリームを正しく
     # クローズできなかった場合（cancel scopeのtask不一致等）、壊れた接続が
@@ -463,4 +492,6 @@ async def build_model(
         loop_guard_confirm_count=config.thinking_loop_guard_confirm_count,
         loop_guard_max_history_chars=config.thinking_loop_guard_max_history_chars,
         loop_guard_match_ratio_threshold=config.thinking_loop_guard_match_ratio_threshold,
+        preserve_reasoning_content=bool(config.reasoning_preserve),
+        reasoning_dialect=endpoint.provider,
     )

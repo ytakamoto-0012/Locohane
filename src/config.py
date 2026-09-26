@@ -32,10 +32,13 @@ LLM_ROUTING_STRATEGIES = frozenset({"round_robin", "random", "priority_failover"
 # LLMEndpoint.provider が取りうる値。"llama_cpp" のみ、round_robin戦略が
 # 選択候補にする際 GET /slots で実際に空きスロットがあるか確認する対象になる
 # （src/llm/routing.py の _probe_llama_cpp_slots_available() 参照）。
-LLM_PROVIDERS = frozenset({"openai_compatible", "llama_cpp"})
+LLM_PROVIDERS = frozenset({"openai_compatible", "llama_cpp", "vllm"})
 
 # reasoning_format が取りうる値（llama-server の --reasoning-format と同じ）。
 LLM_REASONING_FORMATS = frozenset({"none", "deepseek", "deepseek-legacy"})
+
+# reasoning_effort が取りうる値（llama-server の --reasoning-effort と同じ）。
+LLM_REASONING_EFFORTS = frozenset({"none", "default", "minimal", "low", "medium", "high", "xhigh", "max"})
 
 # [main_agent_tool_guard].visibility_mode が取りうる値。main_agent_tool_guard_mode
 # （呼び出し制限そのもののON/OFF/範囲）とは独立した「一覧の見せ方」の軸であり、
@@ -80,8 +83,12 @@ class LLMEndpoint:
             指定は不可。両方 None の場合は常時使用可能。start > end の場合は
             日をまたぐ範囲（例: start=22, end=6 なら22:00〜翌6:00）として扱う。
         end: この接続先が使用可能でなくなる時刻（start参照）。
-        provider: "openai_compatible"（既定）または "llama_cpp"。
-            "llama_cpp" の場合のみ、round_robin戦略が選択候補にする際
+        provider: "openai_compatible"（既定）/ "llama_cpp" / "vllm"。
+            送信する拡張パラメータ名と、履歴へ戻す thinking のフィールド名を
+            推論サーバーの方言に合わせる（src/llm/dialect.py 参照）。
+            "openai_compatible" は llama-server と同じパラメータを送り、
+            thinking は reasoning_content / reasoning の両方で送る。
+            また "llama_cpp" の場合のみ、round_robin戦略が選択候補にする際
             GET /slots で実際に空きスロットがあるか確認する（空きが無ければ
             スキップして次点へ、全滅なら空きが出るまで待機する。
             src/llm/routing.py の _probe_llama_cpp_slots_available() 参照）。
@@ -191,11 +198,26 @@ class Config:
         reasoning_budget: 思考に使えるトークン数の上限（llama.cpp拡張、
             extra_body 経由。llama-server起動時の --reasoning-budget に相当）。
             -1=無制限、0=即座に終了、N>0=上限トークン数。None なら未指定で
-            llama-server既定（-1）に委ねる。
+            llama-server既定（-1）に委ねる。リクエスト上のフィールド名は
+            llama-server が reasoning_budget_tokens、vLLM が
+            thinking_token_budget（dialect.build_extra_body が変換する）。
+            llama-server はリクエストでの 0 を無視する（実測）ため、thinking
+            を止めるには reasoning_effort=none か enable_thinking=false を使う。
         reasoning_budget_message: reasoning_budget を使い切った際に思考終了
             タグの直前へ挿入するメッセージ（llama.cpp拡張、extra_body 経由。
             llama-server起動時の --reasoning-budget-message に相当）。None
             なら未指定（挿入しない）。
+        reasoning_effort: chat template へ渡す推論努力レベル（llama.cpp拡張、
+            extra_body 経由。llama-server起動時の --reasoning-effort に相当）。
+            LLM_REASONING_EFFORTS のいずれか。"none" は thinking 無効化。
+            None なら未指定（llama-server既定に委ねる）。
+        reasoning_preserve: 過去の assistant メッセージの thinking を履歴に
+            残して送るか（llama-server起動時の --reasoning-preserve に相当）。
+            True/False を extra_body の chat_template_kwargs
+            （preserve_reasoning / preserve_thinking）で送る。True の場合は
+            さらに ChatLlamaCpp が履歴の AIMessage の reasoning_content を
+            リクエストへ載せ直す（langchain_openai は既定で読み捨てるため）。
+            None なら未指定（llama-server既定に委ねる）。
         track_token_usage: LLM応答のトークン使用量（入力/出力/合計）を
             取得するかどうか。True の場合 build_model（src/llm.py）が
             ChatOpenAI の stream_usage=True を有効化し、app.py・eval側で
@@ -784,6 +806,8 @@ class Config:
     reasoning_format: str | None
     reasoning_budget: int | None
     reasoning_budget_message: str | None
+    reasoning_effort: str | None
+    reasoning_preserve: bool | None
     track_token_usage: bool
     request_timeout_seconds: float
     stream_chunk_timeout_seconds: float
@@ -1206,6 +1230,28 @@ def _as_optional_reasoning_format(value: str | None) -> str | None:
     if text not in LLM_REASONING_FORMATS:
         choices = "/".join(sorted(LLM_REASONING_FORMATS))
         raise ValueError(f"[llm].reasoning_format は {choices} のいずれかを指定してください（現在値: {text!r}）")
+    return text
+
+
+def _as_optional_reasoning_effort(value: str | None) -> str | None:
+    """[llm].reasoning_effort の値を検証する。
+
+    Args:
+        value: config.ini から得た値、または環境変数から得た文字列。
+
+    Returns:
+        前後の空白を除いた文字列（LLM_REASONING_EFFORTS のいずれか）。
+        空欄・None なら None（未指定、llama-server既定に委ねる）。
+
+    Raises:
+        ValueError: LLM_REASONING_EFFORTS に無い値が指定された場合。
+    """
+    text = _as_optional_str(value)
+    if text is None:
+        return None
+    if text not in LLM_REASONING_EFFORTS:
+        choices = "/".join(sorted(LLM_REASONING_EFFORTS))
+        raise ValueError(f"[llm].reasoning_effort は {choices} のいずれかを指定してください（現在値: {text!r}）")
     return text
 
 
@@ -2071,6 +2117,8 @@ def load_config(config_path: Path | None = None) -> Config:
         reasoning_budget_message=_as_optional_str(
             os.getenv("LLM_REASONING_BUDGET_MESSAGE", llm.get("reasoning_budget_message", ""))
         ),
+        reasoning_effort=_as_optional_reasoning_effort(os.getenv("LLM_REASONING_EFFORT", llm.get("reasoning_effort", ""))),
+        reasoning_preserve=_as_optional_bool(os.getenv("LLM_REASONING_PRESERVE", llm.get("reasoning_preserve", ""))),
         track_token_usage=_as_bool(os.getenv("LLM_TRACK_TOKEN_USAGE", llm.get("track_token_usage", True))),
         request_timeout_seconds=float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", llm.get("request_timeout_seconds", 300))),
         stream_chunk_timeout_seconds=float(

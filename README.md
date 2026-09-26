@@ -839,26 +839,28 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 
 | セクション | キー | 意味 | 対応する環境変数 |
 |-----------|------|------|------------------|
-| `[llm]` | `main_url` | メインエージェント用のLLM接続先リスト（`[{"base_url":...,"api_key":...,"model":...}]` のJSON/Python風リスト形式、複数指定可。各要素に任意で `start`/`end`（使用可能時間帯、単位は時間、分は小数、必ずセットで指定）、`provider`（`openai_compatible`既定/`llama_cpp`。`round_robin`戦略が選ぶ前にGET /slotsで空き確認する対象を指定する）を追加でき、リスト全体で最低1件は`start`/`end`両方省略した常時使用可能な接続先が必要） | `LLM_MAIN_URL` |
+| `[llm]` | `main_url` | メインエージェント用のLLM接続先リスト（`[{"base_url":...,"api_key":...,"model":...}]` のJSON/Python風リスト形式、複数指定可。各要素に任意で `start`/`end`（使用可能時間帯、単位は時間、分は小数、必ずセットで指定）、`provider`（`openai_compatible`既定/`llama_cpp`/`vllm`。推論サーバーの種類で、拡張パラメータ名とthinkingのフィールド名をサーバーに合わせる（`src/llm/dialect.py`）。`llama_cpp`は`round_robin`戦略が選ぶ前にGET /slotsで空き確認する対象にもなる）を追加でき、リスト全体で最低1件は`start`/`end`両方省略した常時使用可能な接続先が必要） | `LLM_MAIN_URL` |
 | `[llm]` | `main_routing_strategy` | `main_url` が複数件のときの選び方（`round_robin`/`random`/`priority_failover`。`round_robin`はprovider="llama_cpp"の接続先を選ぶ前にGET /slotsで空きを確認し、無ければスキップ、全滅なら待機する） | `LLM_MAIN_ROUTING_STRATEGY` |
 | `[llm]` | `sub_url` | サブエージェント（`dispatch_agent`）用のLLM接続先リスト。形式は `main_url` と同じ | `LLM_SUB_URL` |
 | `[llm]` | `sub_routing_strategy` | `sub_url` が複数件のときの選び方。形式は `main_routing_strategy` と同じ | `LLM_SUB_ROUTING_STRATEGY` |
 | `[llm]` | `temperature` | 生成のばらつき | `LLM_TEMPERATURE` |
 | `[llm]` | `top_p` | 累積確率上位のみサンプリング（空欄で未指定） | `LLM_TOP_P` |
-| `[llm]` | `top_k` | 上位k候補のみサンプリング（llama.cpp拡張、空欄で未指定） | `LLM_TOP_K` |
-| `[llm]` | `repeat_penalty` | 直近トークンの再出現抑制（llama.cpp拡張、空欄で未指定）。thinking内の同一文言ループ抑制に有効 | `LLM_REPEAT_PENALTY` |
+| `[llm]` | `top_k` | 上位k候補のみサンプリング（llama.cpp/vLLM拡張、空欄で未指定） | `LLM_TOP_K` |
+| `[llm]` | `repeat_penalty` | 直近トークンの再出現抑制（llama.cpp拡張、`provider=vllm`へは`repetition_penalty`として送信、空欄で未指定）。thinking内の同一文言ループ抑制に有効 | `LLM_REPEAT_PENALTY` |
 | `[llm]` | `frequency_penalty` | 出現済みトークン全体への一律ペナルティ（空欄で未指定） | `LLM_FREQUENCY_PENALTY` |
 | `[llm]` | `presence_penalty` | 一度でも出現したトークンへの一律ペナルティ（空欄で未指定） | `LLM_PRESENCE_PENALTY` |
 | `[llm]` | `max_tokens` | 1リクエストあたりの最大生成トークン数（空欄で無制限） | `LLM_MAX_TOKENS` |
-| `[llm]` | `dry_multiplier` | DRYサンプラーの強度（llama.cpp拡張、空欄で無効）。フレーズ単位の反復に効く | `LLM_DRY_MULTIPLIER` |
+| `[llm]` | `dry_multiplier` | DRYサンプラーの強度（llama.cpp拡張、`dry_*`は`provider=vllm`へは送らない、空欄で無効）。フレーズ単位の反復に効く | `LLM_DRY_MULTIPLIER` |
 | `[llm]` | `dry_base` | DRYサンプラーの反復長に対するペナルティ指数増加率（空欄で未指定） | `LLM_DRY_BASE` |
 | `[llm]` | `dry_allowed_length` | DRYサンプラーがこの文字数以下の反復を許容する閾値（空欄で未指定） | `LLM_DRY_ALLOWED_LENGTH` |
 | `[llm]` | `dry_penalty_last_n` | DRYサンプラーが反復検出に遡って見るトークン数（空欄で未指定） | `LLM_DRY_PENALTY_LAST_N` |
 | `[llm]` | `dry_sequence_breakers` | DRYサンプラーの反復検出リセット区切り文字（カンマ区切り、空欄で既定値） | `LLM_DRY_SEQUENCE_BREAKERS` |
-| `[llm]` | `enable_thinking` | Qwen3系モデルのthinking（reasoning、`<think>`ブロック）モードのON/OFF（llama.cpp拡張、空欄なら未指定でモデル・llama-server既定に委ねる） | `LLM_ENABLE_THINKING` |
-| `[llm]` | `reasoning_format` | thinkingブロックの出力形式（`none`/`deepseek`/`deepseek-legacy`。llama.cpp拡張。空欄なら未指定でllama-server既定の`auto`に委ねる） | `LLM_REASONING_FORMAT` |
-| `[llm]` | `reasoning_budget` | thinkingに使えるトークン数上限（llama.cpp拡張、`-1`=無制限・`0`=即座に終了・`N>0`=上限。空欄なら未指定でllama-server既定の`-1`に委ねる） | `LLM_REASONING_BUDGET` |
-| `[llm]` | `reasoning_budget_message` | 上記`reasoning_budget`を使い切った際にthinking終了タグ直前へ挿入するメッセージ（空欄なら挿入しない） | `LLM_REASONING_BUDGET_MESSAGE` |
+| `[llm]` | `enable_thinking` | Qwen3系モデルのthinking（reasoning、`<think>`ブロック）モードのON/OFF（llama.cpp/vLLM共通、`chat_template_kwargs`で送信、空欄なら未指定でモデル・llama-server既定に委ねる） | `LLM_ENABLE_THINKING` |
+| `[llm]` | `reasoning_format` | thinkingブロックの出力形式（`none`/`deepseek`/`deepseek-legacy`。llama.cpp拡張、`provider=vllm`へは送らない。空欄なら未指定でllama-server既定の`auto`に委ねる） | `LLM_REASONING_FORMAT` |
+| `[llm]` | `reasoning_budget` | thinkingに使えるトークン数上限（`-1`=無制限・`N>0`=上限。llama-serverへは`reasoning_budget_tokens`、vLLMへは`thinking_token_budget`として送信。llama-serverはリクエストでの`0`を無視するため、thinkingを止めるなら`reasoning_effort=none`か`enable_thinking=false`を使う。空欄なら未指定でllama-server既定の`-1`に委ねる） | `LLM_REASONING_BUDGET` |
+| `[llm]` | `reasoning_budget_message` | 上記`reasoning_budget`を使い切った際にthinking終了タグ直前へ挿入するメッセージ（`provider=vllm`へは送らない。空欄なら挿入しない） | `LLM_REASONING_BUDGET_MESSAGE` |
+| `[llm]` | `reasoning_effort` | chat templateへ渡す推論努力レベル（`none`/`default`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`。llama.cpp拡張、llama.cpp/vLLM共通、`none`はthinking無効化（`enable_thinking=true`より優先して`enable_thinking=false`も送る）、`default`は送らないのと同じ。受け付ける値はモデルのテンプレート次第で対応外はリクエストエラー。空欄なら未指定でサーバー既定に委ねる） | `LLM_REASONING_EFFORT` |
+| `[llm]` | `reasoning_preserve` | 過去のassistantメッセージのthinkingを履歴に残して送るか（`chat_template_kwargs`の`preserve_reasoning`/`preserve_thinking`で送信。`true`時は保持中の過去応答のthinkingもリクエストに含める（フィールド名は`llama_cpp`=`reasoning_content`、`vllm`=`reasoning`、`openai_compatible`=両方）。空欄なら未指定でllama-server既定に委ねる） | `LLM_REASONING_PRESERVE` |
 | `[llm]` | `track_token_usage` | トークン使用量の取得を有効にする（Chainlit UI表示・eval結果に反映） | `LLM_TRACK_TOKEN_USAGE` |
 | `[llm]` | `request_timeout_seconds` | LLMサーバーへの応答待ちタイムアウト秒数（read/write/pool） | `LLM_REQUEST_TIMEOUT_SECONDS` |
 | `[llm]` | `stream_chunk_timeout_seconds` | ストリーミング中にチャンクが届かない場合のタイムアウト秒数 | `LLM_STREAM_CHUNK_TIMEOUT_SECONDS` |
@@ -997,6 +999,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[websocket]` | `ping_timeout_seconds` | 直近pingへの応答をこの秒数待っても受信できない場合に切断とみなす。LLM応答待ちでイベントループがブロッキング気味の時間帯（`dispatch_agent`の長時間実行中等）に短すぎると誤切断しやすい | `WEBSOCKET_PING_TIMEOUT_SECONDS` |
 
 環境変数が設定されていれば `config.ini` の値より優先される（詳細は `src/config.py` を参照）。
+
+`provider` ごとの reasoning 系パラメータの対応表は `src/llm/dialect.py` の `build_extra_body()` を参照。対応表は `tools/probe_reasoning_dialect.py` で実測済み（llama-server b10437 / Qwen3.8、vLLM 0.30.0 / Qwen3.5-9B-AWQ）。サーバーのバージョンやモデルを変えたときは、`python tools/probe_reasoning_dialect.py --base-url <URL>/v1 --model <モデル名> --provider <llama_cpp|vllm>` で確認できる。
 
 ## ログイン認証の設定
 

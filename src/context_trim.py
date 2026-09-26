@@ -142,7 +142,8 @@ def trim_old_ai_messages(
     messages: list[BaseMessage], *, keep_recent_iterations: int, max_chars: int
 ) -> list[BaseMessage]:
     """直近 keep_recent_iterations 反復分の AIMessage は全文保持し、それより
-    古いものは content と tool_calls の引数を先頭 max_chars 文字に切り詰める。
+    古いものは content と tool_calls の引数を先頭 max_chars 文字に切り詰め、
+    thinking（additional_kwargs["reasoning_content"]）を取り除く。
 
     境界の決め方は trim_old_tool_messages() と同じ find_iteration_cut_index()
     を使う（keep_recent_iterations はこちらの独自の値を渡せるため、tool側と
@@ -154,6 +155,11 @@ def trim_old_ai_messages(
     処理で1リクエストあたり24,833→128,000トークンまで単調増加し、コンテキスト
     上限に張り付いて処理が停止した）。その経路を塞ぐための関数。
 
+    thinking は [llm].reasoning_preserve=true の場合のみ ChatLlamaCpp が
+    リクエストへ載せ直すが、そのままだと古い反復の thinking まで全量送られ
+    続けるため、本文と同じく保持範囲外では落とす（false の場合はもともと
+    送られないので影響しない）。
+
     Args:
         messages: state["messages"]（元の全履歴。書き換えない）。
         keep_recent_iterations: 全文保持する直近の反復数
@@ -161,7 +167,8 @@ def trim_old_ai_messages(
         max_chars: 切り詰め後に残す本文の最大文字数（マーカー文言は含まない）。
 
     Returns:
-        content / tool_calls.args だけ差し替えたコピーを含むメッセージ列。
+        content / tool_calls.args / additional_kwargs だけ差し替えたコピーを
+        含むメッセージ列。
         書き換え不要なメッセージは元のオブジェクトをそのまま含む。
     """
     cut_index = find_iteration_cut_index(messages, keep_recent_iterations)
@@ -182,6 +189,8 @@ def trim_old_ai_messages(
             new_calls = _trim_tool_call_args(tool_calls, max_chars)
             if new_calls is not None:
                 update["tool_calls"] = new_calls
+        if "reasoning_content" in m.additional_kwargs:
+            update["additional_kwargs"] = {k: v for k, v in m.additional_kwargs.items() if k != "reasoning_content"}
         result.append(m.model_copy(update=update) if update else m)
     return result
 
