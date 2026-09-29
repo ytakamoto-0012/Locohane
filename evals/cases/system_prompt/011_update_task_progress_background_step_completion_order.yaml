@@ -4,7 +4,6 @@ auto_approve: true
 env:
   SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS: "2"
   SCRIPT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS: "0"
-  PLAN_REQUIRE_PLANNER_DISPATCH: "false"
 turns:
   - >-
     5秒待ってから done と表示するだけのPythonコードをバックグラウンドで
@@ -47,9 +46,7 @@ judge: |
   場合）は、2・3は評価対象外とし、4のみで判定せよ。
 notes: >-
   work_dirは指定せず config.ini の [default_workdir].dir を使う。
-  PLAN_REQUIRE_PLANNER_DISPATCH を false にして、このケースの検証対象
-  （update_task_progressの完了タイミング）に無関係な planner 委譲の往復を
-  省略し、transcriptを読みやすくしている。check_script_job/
+  check_script_job/
   check_dispatch_agent_job/update_task_progress/ask_user_choice の4ツールは
   docstring削減前まで呼び出し精度を検証するevalケースが1件も無かったため、
   削減の安全網として本ケース含む4件を新設した（009〜012）。009番の動作

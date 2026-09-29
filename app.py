@@ -1726,7 +1726,7 @@ async def _setup() -> None:
     )
     # エージェント種別（agents/*.md、ClaudeCode の .claude/agents/*.md 相当）を走査し、
     # 各種別のシステムプロンプトにも {{skills}}/{{agent_types}} を差し込む
-    # （planner が dispatch_agent の委譲先一覧を steps 設計に使えるようにするため）。
+    # （本文で {{agent_types}} を使う種別が dispatch_agent の委譲先一覧を参照できるようにするため）。
     # agents_dir と locohane_agents_dirs をマージ（同名は locohane 側優先）。
     agent_type_defs = scan_agent_types([_config.agents_dir, *_config.locohane_agents_dirs])
     skills_block = render_skills_block(skills)
@@ -1812,7 +1812,6 @@ async def _setup() -> None:
         plans_dir=_config.plans_dir,
         allow_sandbox_dirs=_config.allow_sandbox_dirs,
         plan_reset_approval_on_recreate=_config.plan_reset_approval_on_recreate,
-        plan_require_planner_dispatch=_config.plan_require_planner_dispatch,
         plan_auto_approve=_config.plan_auto_approve,
         path_memory_search_min_score=_config.path_memory_search_min_score,
         path_memory_search_filename_weight=_config.path_memory_search_filename_weight,

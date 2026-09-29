@@ -312,26 +312,6 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
             cl.user_session.set("main_agent_tool_guard_call_count", None)
 
 
-_PLANNER_INFO_INSUFFICIENT_MARKER = "情報不足"
-# agents/planner.md の「1. steps候補」「2. detail_markdown草案」の見出し文言。
-# 実際に計画草案を返した回答にはこのいずれかが含まれる。
-_PLANNER_PLAN_STRUCTURE_MARKERS = ("steps候補", "detail_markdown")
-
-
-def _is_planner_info_insufficient(result: str) -> bool:
-    """plannerの最終回答が「情報不足」応答（steps/detail_markdown省略）かを判定する。
-
-    単純な `"情報不足" in result` だと、成果物の内容に「情報不足」という語句
-    （例: 「情報不足の項目に注意喚起を追加する」）がたまたま含まれる正常な
-    計画草案まで誤って「情報不足応答」と判定してしまう。agents/planner.md は
-    情報不足時、steps/detail_markdown を省略すると明記しているため、
-    その見出し文言が一切含まれていない場合に限り情報不足応答とみなす。
-    """
-    if _PLANNER_INFO_INSUFFICIENT_MARKER not in result:
-        return False
-    return not any(marker in result for marker in _PLANNER_PLAN_STRUCTURE_MARKERS)
-
-
 def _finalize_dispatch_agent_job_result(job: "_DispatchAgentJob", job_id: str) -> str:
     """終端状態（completed/killed/error）のジョブを最終結果文字列へ整形し、レジストリから取り除く。
 
@@ -341,21 +321,6 @@ def _finalize_dispatch_agent_job_result(job: "_DispatchAgentJob", job_id: str) -
     """
     if job.status == "completed":
         result = job.result or ""
-        if job.agent_type == "planner":
-            # create_plan の直前チェック（_state._PLAN_REQUIRE_PLANNER_DISPATCH）が
-            # 消費するフラグ。ここで完了を記録しておくことで、dispatch_agent
-            # が安全上限内に即応した場合・check_dispatch_agent_job経由で
-            # 後続ターンに完了を取得した場合の両方をカバーする。
-            # ただしplannerが情報不足（agents/planner.mdの指示で「情報不足」と
-            # 明記して返す）でsteps/detail_markdownの草案を返さなかった場合は
-            # フラグを立てず、メインエージェントがこの回答を無視して
-            # create_planを呼んでもガードで止められるようにする。
-            if _is_planner_info_insufficient(result):
-                cl.user_session.set("planner_dispatched_since_plan", False)
-                cl.user_session.set("planner_info_insufficient", True)
-            else:
-                cl.user_session.set("planner_dispatched_since_plan", True)
-                cl.user_session.set("planner_info_insufficient", False)
     elif job.status == "killed":
         result = f"stop_dispatch_agent_job により強制終了されました。\n{job.result or '（強制終了時点で最終回答は未生成でした）'}"
     else:  # "error"

@@ -394,7 +394,6 @@ async def _run(case: EvalCase) -> dict:
             agent_type_run_script_allowlist=config.script_agent_type_run_script_allowlist,
             plan_badge_allow_unlock=config.plan_badge_allow_unlock,
             plan_reset_approval_on_recreate=config.plan_reset_approval_on_recreate,
-            plan_require_planner_dispatch=config.plan_require_planner_dispatch,
             plan_auto_approve=config.plan_auto_approve,
             allow_sandbox_dirs=config.allow_sandbox_dirs,
         )

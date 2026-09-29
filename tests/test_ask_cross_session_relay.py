@@ -24,8 +24,7 @@ import src.tools as tools
 
 
 class _FakeUserSession:
-    """cl.user_session の差し替え。tests/test_tools_create_plan_planner_guard.py と
-    同じパターンで、thread_id だけ既定値として引ける最小限のスタブ。
+    """cl.user_session の差し替え。thread_id だけ既定値として引ける最小限のスタブ。
     """
 
     def __init__(self, thread_id: str):

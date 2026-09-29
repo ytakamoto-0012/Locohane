@@ -267,7 +267,6 @@ _ASK_USER_QUESTION_TIMEOUT_SECONDS: int = 60
 _ASK_USER_CHOICE_TIMEOUT_SECONDS: int = 90
 _PLAN_BADGE_ALLOW_UNLOCK: bool = True
 _PLAN_RESET_APPROVAL_ON_RECREATE: bool = True
-_PLAN_REQUIRE_PLANNER_DISPATCH: bool = True
 _PLAN_AUTO_APPROVE: bool = False
 
 # run_script は本来「書き込み系ツール」として一律に計画承認を要求するが、
@@ -327,7 +326,6 @@ def init_tools(
     agent_type_run_script_allowlist: Iterable[tuple[str, str | tuple[str, str]]] | None = None,
     plans_dir: Path | None = None,
     plan_reset_approval_on_recreate: bool = True,
-    plan_require_planner_dispatch: bool = True,
     plan_auto_approve: bool = False,
     allow_sandbox_dirs: Iterable[SandboxDirEntry] = (),
     path_memory_search_min_score: float = 0.3,
@@ -496,11 +494,6 @@ def init_tools(
             維持したまま steps だけ差し替える（未承認状態からの呼び出しは
             この設定に関わらず常に Plan Mode のまま）。
             （config.ini の [plan].reset_approval_on_recreate 由来）。
-        plan_require_planner_dispatch: create_plan を呼ぶ前に、同一ターンで
-            dispatch_agent(agent_type="planner") が完了していることを必須に
-            するか。True（既定）なら未実施の場合 create_plan はエラーを返す。
-            create_plan が成功するたびにフラグは消費される。
-            （config.ini の [plan].require_planner_dispatch 由来）。
         plan_auto_approve: True の場合、approve_plan 呼び出し時にユーザーへの
             確認（承認/却下ボタンの表示・応答待ち）を一切行わず、その場で
             自動的に承認済み扱いにする。False（既定）なら従来通りユーザーの
@@ -538,7 +531,6 @@ def init_tools(
     global _ASK_USER_CHOICE_TIMEOUT_SECONDS
     global _PLAN_BADGE_ALLOW_UNLOCK
     global _PLAN_RESET_APPROVAL_ON_RECREATE
-    global _PLAN_REQUIRE_PLANNER_DISPATCH
     global _PLAN_AUTO_APPROVE
     global _DISPATCH_AGENT_MAX_PARALLEL
     global _TOOL_CALL_MAX_PARALLEL
@@ -587,7 +579,6 @@ def init_tools(
     _ASK_USER_CHOICE_TIMEOUT_SECONDS = ask_user_choice_timeout_seconds
     _PLAN_BADGE_ALLOW_UNLOCK = plan_badge_allow_unlock
     _PLAN_RESET_APPROVAL_ON_RECREATE = plan_reset_approval_on_recreate
-    _PLAN_REQUIRE_PLANNER_DISPATCH = plan_require_planner_dispatch
     _PLAN_AUTO_APPROVE = plan_auto_approve
     _DISPATCH_AGENT_MAX_PARALLEL = dispatch_agent_max_parallel
     _TOOL_CALL_MAX_PARALLEL = graph_tool_max_parallel

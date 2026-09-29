@@ -56,7 +56,7 @@ read_memory, search_memory, list_memories
 ```
 
 - メモリー系6ツールは `_SUBAGENT_TOOLS` に含まれてはいるが、実際に各サブエージェントへ渡るかは `agents/*.md` 側の `tools:` 次第。`explore` は読み込み系（`read_memory`/`search_memory`/`list_memories`）のみ、`worker` は全6ツール（フルアクセス）、`verifier` は含めていない。
-- **`write_scratch_note` は全サブエージェント種別に共通で付与する必須ツール**（既存4種別＝`explore`/`worker`/`verifier`/`planner` すべてに付与済み）。`system_prompt/subagent_common.md`（4節参照）がトークン上限による打ち切り対策として `write_scratch_note` の使い方を**全エージェント共通の注意事項として無条件に**説明する構成になっているため、`tools:` に含めないエージェント種別を作ると、本文には登場するのに実際には呼べないツールについてのガイダンスだけが渡ることになる。新規に種別を追加する場合も `tools:` に必ず含めること（8節参照）。
+- **`write_scratch_note` は全サブエージェント種別に共通で付与する必須ツール**（既存3種別＝`explore`/`worker`/`verifier` すべてに付与済み）。`system_prompt/subagent_common.md`（4節参照）がトークン上限による打ち切り対策として `write_scratch_note` の使い方を**全エージェント共通の注意事項として無条件に**説明する構成になっているため、`tools:` に含めないエージェント種別を作ると、本文には登場するのに実際には呼べないツールについてのガイダンスだけが渡ることになる。新規に種別を追加する場合も `tools:` に必ず含めること（8節参照）。
 
 - `Read`/`Glob`/`Grep` のように大文字始まりでfrontmatterに書く名前は、Python側の関数名（`read_tool`等）とは別に `@tool("Read")` のようにデコレータ引数で明示された `.name` 属性。frontmatterには **`.name` の方**（`Read`/`Glob`/`Grep`）を書く。
 - `_resolve_agent_types()`（`src/tools/_state.py` 603-642行）が `tool_lookup = {t.name: t for t in registry._SUBAGENT_TOOLS}`（620行）を作り、frontmatterの `tools:` に書かれた名前と突き合わせて解決する。**未知のツール名は例外を出さず警告してスキップ**（630-634行）— 誤字に気づきにくいので、追加・変更時はアプリ起動ログを必ず確認すること。
@@ -65,7 +65,7 @@ read_memory, search_memory, list_memories
 ## 4. `{{skills}}`/`{{agent_types}}` プレースホルダーと共通注意事項の自動連結
 
 - `app.py` 525-527行。`scan_agent_types()` の後、`render_skills_block(skills)`（`src/skills.py`、`name: description` 形式のスキル一覧）を各エージェントの `system_prompt` 内の `{{skills}}` へ `str.replace` で差し込む（`dataclasses.replace` でイミュータブルに更新）。**スキルの本文そのものは含まれず、一覧のみ**（skills側の progressive disclosure 第1段階と同じ扱い）。
-- 同じ箇所で `render_agent_types_block(agent_type_defs)`（`src/agent_types.py`、`name: description` 形式のエージェント種別一覧。メインの `system_prompt.md` に差し込む `{{agent_types}}` と同じブロックを使い回す）を各エージェントの `system_prompt` 内の `{{agent_types}}` へも差し込む。ただし実際に本文で `{{agent_types}}` を使うのは `agents/planner.md` のみ（`create_plan` に渡す `steps` 候補を設計する際、`dispatch_agent` の委譲先一覧と「1ステップ=1回の委譲」の粒度を突き合わせるため）。他のエージェント種別は `dispatch_agent` を持たず孫委譲できないため `{{agent_types}}` を本文に書く必要はない。
+- 同じ箇所で `render_agent_types_block(agent_type_defs)`（`src/agent_types.py`、`name: description` 形式のエージェント種別一覧。メインの `system_prompt.md` に差し込む `{{agent_types}}` と同じブロックを使い回す）を各エージェントの `system_prompt` 内の `{{agent_types}}` へも差し込む。ただし現状、本文で `{{agent_types}}` を使うエージェント種別は無い（旧 `planner` 種別のみが使っていたが2026-09-29に廃止）。サブエージェントは `dispatch_agent` を持たず孫委譲できないため `{{agent_types}}` を本文に書く必要はない。
 - `app.py` 550行。`system_prompt/subagent_common.md`（作業量・トークン上限に達した際の振る舞いに加え、`write_scratch_note` での途中経過の書き残し方・最終回答を生データの羅列にせず簡潔にまとめる指示を含む共通文）を**全エージェントの system_prompt 末尾に自動連結**する。個々の `agents/*.md` 側で同様の注意書きを重複して書く必要はない。
 
 ## 5. メインエージェントからの呼び出し方法
@@ -142,7 +142,7 @@ read_memory, search_memory, list_memories
 1. `agents/<agent-name>.md` を作成（frontmatter必須、`name` はファイル名(stem)と一致）。
 
    **名前は既存種別と接頭辞を共有させない**: 新しいagent_type名は、既存の
-   名前（`explore`/`planner`/`verifier`/`worker`）のいずれとも
+   名前（`explore`/`verifier`/`worker`）のいずれとも
    文字列としての接頭辞関係を持たないようにする。理由: (a)
    `_guard_main_agent_tool_limit`（`src/tools/tool_node.py` 169行、メインエージェント
    自身が書き込み系ツールを直接呼んでブロックされた際のエラーメッセージ）は
@@ -154,7 +154,7 @@ read_memory, search_memory, list_memories
    重大な誤選択を引き起こした事例がある（2026-08-15、`explore-websearch`へ改名して対処。
    その後`explore-websearch`自体は廃止済み）。
 2. `tools:` に必要なツール名を `_SUBAGENT_TOOLS`（3節参照）の中から選んでカンマ区切りで列挙する（省略時は全ツール継承）。**`write_scratch_note`（run_id限定の自分用スクラッチ）と `write_thread_note`/`list_thread_notes`/`read_thread_note`（thread_id共有・他agent_typeやメインエージェントとも共有されるノート）は全種別共通の必須ツールなので、`tools:` を明示的に列挙する場合は必ず含めること**（省略して全ツール継承する場合は自動的に含まれるため対応不要）。thread note系3ツールは2026-08-20のthread note機能追加時に`agents/*.md`側への追加が漏れており、2026-08-21に全種別へ追加済み。
-3. 本文に、委譲元から見た役割・使ってよい/いけないツールの区別・手順・最終回答で書くべき内容（および書いてはいけない内容）を明記する。既存4種別（`explore`＝読み取り専用の汎用調査・オフィス文書/PDF調査、`verifier`＝成果物の検証専用、`worker`＝計画承認後の書き込み実作業、`planner`＝計画策定）を参考にする。
+3. 本文に、委譲元から見た役割・使ってよい/いけないツールの区別・手順・最終回答で書くべき内容（および書いてはいけない内容）を明記する。既存3種別（`explore`＝読み取り専用の汎用調査・オフィス文書/PDF調査、`verifier`＝成果物の検証専用、`worker`＝計画承認後の書き込み実作業）を参考にする。
 4. **アプリを再起動する**（`app.py` の `_setup()` は起動後1回しか `scan_agent_types()` を呼ばない冪等関数のため、ホットリロードは無い。新規チャットセッションを開いただけでは再スキャンされない）。起動ログの `エージェント種別発見: <name>` を確認する。
 5. 実際にチャットから、メインエージェントが `dispatch_agent(agent_type="<agent-name>", ...)` を正しく呼び出し、サブエージェントが意図した最終回答を返すことを確認する。
 
