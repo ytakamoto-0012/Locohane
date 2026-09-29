@@ -151,6 +151,12 @@ const STATE_LABELS = {
   error: "設定エラー",
 };
 
+const PROCESSING_LABELS = {
+  start: "起動中…",
+  stop: "停止中…",
+  restart: "再起動中…",
+};
+
 let instanceCache = [];
 
 async function renderInstances() {
@@ -187,15 +193,15 @@ async function refreshInstanceCards() {
     btnRestart.disabled = inst.state !== "running";
     btnDelete.disabled = inst.state === "running" || inst.state === "external" || inst.is_default;
 
-    btnStart.addEventListener("click", () => runInstanceAction(inst.name, "start"));
+    btnStart.addEventListener("click", () => runInstanceAction(inst.name, "start", card));
     btnStop.addEventListener("click", () => {
       if (confirm(`${inst.display_name} を停止します。生成中の処理は中断されます。よろしいですか？`)) {
-        runInstanceAction(inst.name, "stop");
+        runInstanceAction(inst.name, "stop", card);
       }
     });
     btnRestart.addEventListener("click", () => {
       if (confirm(`${inst.display_name} を再起動します。生成中の処理は中断されます。よろしいですか？`)) {
-        runInstanceAction(inst.name, "restart");
+        runInstanceAction(inst.name, "restart", card);
       }
     });
     btnDelete.addEventListener("click", async () => {
@@ -215,7 +221,14 @@ async function refreshInstanceCards() {
   }
 }
 
-async function runInstanceAction(name, action) {
+async function runInstanceAction(name, action, card) {
+  if (card) {
+    const dot = card.querySelector(".state-dot");
+    const label = card.querySelector(".state-label");
+    dot.classList.add("processing");
+    label.textContent = PROCESSING_LABELS[action] || label.textContent;
+    for (const btn of $$("button", card)) btn.disabled = true;
+  }
   try {
     await api(`/api/instances/${encodeURIComponent(name)}/${action}`, { method: "POST" });
   } catch (e) {

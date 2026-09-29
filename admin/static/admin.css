@@ -104,6 +104,12 @@ label.checkbox input { width: auto; }
 .state-dot.external { background: var(--warn); }
 .state-dot.crashed { background: var(--danger); }
 .state-dot.error { background: var(--danger); }
+.state-dot.processing { background: var(--accent); animation: state-dot-pulse 1s ease-in-out infinite; }
+
+@keyframes state-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
 .display-name { font-weight: 600; flex: 1; }
 .badge-default { font-size: 11px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; color: var(--text-dim); }
 .badge-default.hidden { display: none; }
