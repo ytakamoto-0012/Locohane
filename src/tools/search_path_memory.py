@@ -28,7 +28,7 @@ def search_path_memory(query: str = "", top_k: int = 5) -> str:
     Returns:
         `{"entries": [{"index", "path", "valid", "description", "score"}, ...]}`
         のJSON文字列（query ありは類似度順、空なら新しい順。空の場合 score は無い）。
-        `valid` が false の場合は登録後に削除・移動された可能性がある。
+        登録後に削除・移動されて現在存在しないパスは含まない。
         該当が無ければ `hint` を添える。
     """
     if _state._PATH_MEMORY_DIR is None:
@@ -44,7 +44,7 @@ def search_path_memory(query: str = "", top_k: int = 5) -> str:
             filename_weight=_state._PATH_MEMORY_SEARCH_FILENAME_WEIGHT,
         )
     else:
-        entries = path_memory.list_entries(thread_id, _state._PATH_MEMORY_DIR)[::-1][: max(top_k, 0)]
+        entries = path_memory.recent_entries(thread_id, _state._PATH_MEMORY_DIR, top_k=top_k)
     result: dict = {"entries": entries}
     if not entries:
         result["hint"] = "該当する登録はありません。Glob で探し直してください。"

@@ -421,8 +421,9 @@ class Config:
         path_memory_max_entries: パスメモリー1会話あたりの登録上限件数。
         path_memory_search_min_score: パスメモリー類似検索（search_path_memory・
             「見つかりません」エラー時の候補提示）で結果に出す類似度の下限。
-        path_memory_search_filename_weight: パスメモリー類似検索でファイル名
-            部分を重視する割合（残りはフルパス全体との類似度）。
+        path_memory_search_filename_weight: パスメモリー類似検索で、検索語が
+            フルパスの場合にファイル名部分を重視する割合（残りはフォルダ部分
+            同士の類似度）。
         script_timeout: run_script の実行タイムアウト秒数。
         script_python: run_script が .py スクリプトを起動する際に使う
             Python 実行ファイル。

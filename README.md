@@ -1033,7 +1033,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[path_memory]` | `cleanup_interval_hours` | パスメモリーの自動削除チェック間隔（時間） | `PATH_MEMORY_CLEANUP_INTERVAL_HOURS` |
 | `[path_memory]` | `max_entries` | 1会話あたりのパスメモリー登録上限件数 | `PATH_MEMORY_MAX_ENTRIES` |
 | `[path_memory]` | `search_min_score` | パスメモリー類似検索（`search_path_memory`・「見つかりません」エラー時の候補提示）で結果に出す類似度（0.0〜1.0）の下限（既定0.3） | `PATH_MEMORY_SEARCH_MIN_SCORE` |
-| `[path_memory]` | `search_filename_weight` | 類似度計算でファイル名部分を重視する割合（既定0.7、残りはフルパス全体との類似度） | `PATH_MEMORY_SEARCH_FILENAME_WEIGHT` |
+| `[path_memory]` | `search_filename_weight` | 検索語がフルパスの場合に、類似度計算でファイル名部分を重視する割合（既定0.7、残りはフォルダ部分同士の類似度） | `PATH_MEMORY_SEARCH_FILENAME_WEIGHT` |
 | `[auth]` | `enabled` | ログイン認証機能のON/OFF（`false`＝現状通りログイン不要） | `AUTH_ENABLED` |
 | `[auth]` | `require_password` | 認証ON時、パスワード一致を必須にするか（`false`＝ユーザー名のみで通す） | `AUTH_REQUIRE_PASSWORD` |
 | `[chat_log]` | `enabled` | 会話ログ（ユーザー発言・AI最終応答）のテキストファイル記録の有効/無効 | `CHAT_LOG_ENABLED` |

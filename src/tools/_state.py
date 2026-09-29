@@ -374,8 +374,9 @@ def init_tools(
             （config.ini の [path_memory].max_entries 由来）。
         path_memory_search_min_score: パスメモリー類似検索で結果に出す類似度の下限
             （config.ini の [path_memory].search_min_score 由来）。
-        path_memory_search_filename_weight: パスメモリー類似検索でファイル名部分を
-            重視する割合（config.ini の [path_memory].search_filename_weight 由来）。
+        path_memory_search_filename_weight: パスメモリー類似検索で、検索語がフルパスの
+            場合にファイル名部分を重視する割合（config.ini の
+            [path_memory].search_filename_weight 由来）。
         code_exec_enabled: execute_python_code ツール（LLMが生成した
             Pythonコードをその場で実行する）の有効/無効。False の場合、
             ツールは呼び出されてもエラー文字列を返すのみでコードは

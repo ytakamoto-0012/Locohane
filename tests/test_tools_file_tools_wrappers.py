@@ -410,10 +410,35 @@ class TestSearchPathMemory:
         result = tools.read_tool.func(file_path=str(file_tools_env / "月次報告署.txt"))
 
         assert result.startswith("エラー: ファイルが見つかりません")
-        assert f"@1（{target.resolve()}）" in result
+        assert f"@1（ファイル名違い: {target.resolve()}）" in result
+        assert "置き換えず" in result
 
     def test_read_not_found_without_similar_entry_has_no_hint(self, file_tools_env) -> None:
         result = tools.read_tool.func(file_path=str(file_tools_env / "missing.txt"))
 
         assert result.startswith("エラー: ファイルが見つかりません")
-        assert "パスメモリーに類似" not in result
+        assert "パスメモリーに似た登録" not in result
+
+    def test_read_not_found_does_not_suggest_deleted_registered_path(self, file_tools_env) -> None:
+        target = file_tools_env / "月次報告書.txt"
+        target.write_text("x\n", encoding="utf-8")
+        tools.read_tool.func(file_path=str(target))
+        target.unlink()
+
+        # 同一引数だと重複ガードに止められるため offset を変える
+        result = tools.read_tool.func(file_path=str(target), offset=1)
+
+        assert result.startswith("エラー: ファイルが見つかりません")
+        assert "パスメモリーに似た登録" not in result
+
+    def test_empty_query_excludes_deleted_entries(self, file_tools_env) -> None:
+        kept = file_tools_env / "a.txt"
+        gone = file_tools_env / "b.txt"
+        for f in (kept, gone):
+            f.write_text("x\n", encoding="utf-8")
+            tools.read_tool.func(file_path=str(f))
+        gone.unlink()
+
+        result = json.loads(tools.search_path_memory.func())
+
+        assert [e["index"] for e in result["entries"]] == [1]

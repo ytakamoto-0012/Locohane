@@ -222,19 +222,34 @@ async function refreshInstanceCards() {
 }
 
 async function runInstanceAction(name, action, card) {
+  // 一覧の再取得に失敗した場合に処理中表示のまま固まらないよう、元の表示を控えておく。
+  let restoreCard = () => {};
   if (card) {
     const dot = card.querySelector(".state-dot");
     const label = card.querySelector(".state-label");
+    const buttons = $$("button", card);
+    const prevLabel = label.textContent;
+    const prevDisabled = buttons.map((btn) => btn.disabled);
+    restoreCard = () => {
+      dot.classList.remove("processing");
+      label.textContent = prevLabel;
+      buttons.forEach((btn, i) => (btn.disabled = prevDisabled[i]));
+    };
     dot.classList.add("processing");
     label.textContent = PROCESSING_LABELS[action] || label.textContent;
-    for (const btn of $$("button", card)) btn.disabled = true;
+    for (const btn of buttons) btn.disabled = true;
   }
   try {
     await api(`/api/instances/${encodeURIComponent(name)}/${action}`, { method: "POST" });
   } catch (e) {
     alert(`操作に失敗しました: ${e.message}`);
   }
-  await refreshInstanceCards();
+  try {
+    await refreshInstanceCards();
+  } catch (e) {
+    restoreCard();
+    alert(`インスタンス一覧の更新に失敗しました: ${e.message}`);
+  }
 }
 
 function openCreateInstanceModal() {

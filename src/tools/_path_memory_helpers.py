@@ -44,6 +44,13 @@ def suggest_from_path_memory(query: str, top_k: int = 3) -> str:
 
     ローカルLLMがパスを記憶から手打ちして誤字を起こした場合に、正しい `@N` へ
     誘導するためのもの（`_file_tools_common.suggest_similar_dir` と同じ形式）。
+    候補は指定パスとは別のファイルなので、各候補に何が違うかを添え、
+    task・ユーザー指定のパスを候補で勝手に置き換えないよう文言で抑える
+    （別フォルダの同名ファイル＝旧版・バックアップ等を黙って使うと、
+    エラーにならないまま誤ったデータで処理が進むため）。
+
+    存在しないパスは search_entries 側で除外されるため、見つからなかった
+    パス自体（表記ゆれ違いを含む）が候補に出ることはない。
 
     Args:
         query: 見つからなかったパス文字列。
@@ -56,22 +63,21 @@ def suggest_from_path_memory(query: str, top_k: int = 3) -> str:
     if _state._PATH_MEMORY_DIR is None:
         return ""
     thread_id = cl.user_session.get("thread_id") or "_no_session"
-    hits = [
-        e
-        for e in path_memory.search_entries(
-            thread_id,
-            query,
-            _state._PATH_MEMORY_DIR,
-            top_k=top_k + 5,
-            min_score=_state._PATH_MEMORY_SEARCH_MIN_SCORE,
-            filename_weight=_state._PATH_MEMORY_SEARCH_FILENAME_WEIGHT,
-        )
-        if e["valid"] and e["path"] != query
-    ][:top_k]
+    hits = path_memory.search_entries(
+        thread_id,
+        query,
+        _state._PATH_MEMORY_DIR,
+        top_k=top_k,
+        min_score=_state._PATH_MEMORY_SEARCH_MIN_SCORE,
+        filename_weight=_state._PATH_MEMORY_SEARCH_FILENAME_WEIGHT,
+    )
     if not hits:
         return ""
-    candidates = ", ".join(f"@{e['index']}（{e['path']}）" for e in hits)
-    return f" パスメモリーに類似の登録があります: {candidates}。該当するならその @N を使ってください。"
+    candidates = ", ".join(f"@{e['index']}（{path_memory.difference_label(query, e['path'])}: {e['path']}）" for e in hits)
+    return (
+        f" パスメモリーに似た登録があります: {candidates}。"
+        "記憶から書いたパスの誤りならその @N を使う。task・ユーザーが指定したパスなら置き換えず、見つからないと報告する。"
+    )
 
 
 _PATH_MEMORY_TEXT_TOKEN_RE = re.compile(r"(?<![\w@])@(\d+)\b")

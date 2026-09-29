@@ -239,28 +239,119 @@ def _cosine(a: Counter[str], b: Counter[str]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def _split(normalized: str) -> tuple[str, str]:
+    """正規化済みパスを (フォルダ部分, ファイル名部分) に分ける（区切りが無ければフォルダ部分は空）。"""
+    folder, _, name = normalized.rpartition("/")
+    return folder, name
+
+
 def similarity(query: str, path: str, filename_weight: float = 0.7) -> float:
     """検索語と登録パスの類似度（0.0〜1.0）を返す。
 
-    ファイル名部分を重視したスコアと、フルパス全体のスコアの大きい方を採る
-    （検索語がファイル名だけでもフルパスでも機能させるため）。正規化後の
-    検索語がパスの部分文字列として含まれる場合は 1.0 とする。
+    - 完全一致（フルパスまたはファイル名）は 1.0。
+    - 部分文字列として含まれる場合は 0.8〜1.0 未満（検索語がファイル名・パスに
+      占める割合が大きいほど高い）。`report.xlsx` で `old_report.xlsx` より
+      `report.xlsx` 本体を上に並べるため、完全一致とは区別する。
+    - 検索語がフルパスなら「ファイル名同士×filename_weight + フォルダ同士×残り」。
+      フルパス全体で比べると、同じフォルダの無関係なファイルが共通の長い
+      フォルダ部分だけで高得点になり、別フォルダの同名ファイルより上に来てしまう。
+    - 検索語がファイル名・フォルダ名だけなら、ファイル名との類似度と
+      フォルダ名の各要素との類似度（ファイル名一致を優先するため 0.9 倍）の大きい方。
 
     Args:
         query: 検索語。
         path: 登録パス。
-        filename_weight: ファイル名との類似度に掛ける重み（残りはフルパス全体）。
+        filename_weight: 検索語がフルパスの場合に、ファイル名同士の類似度に掛ける
+            重み（残りはフォルダ部分同士の類似度）。
     """
     q = _normalize(query)
     p = _normalize(path)
     if not q or not p:
         return 0.0
-    if q in p:
+    p_folder, p_name = _split(p)
+    if q in (p, p_name):
         return 1.0
-    q_grams = _bigrams(q)
-    full = _cosine(q_grams, _bigrams(p))
-    base = _cosine(q_grams, _bigrams(p.rsplit("/", 1)[-1]))
-    return max(filename_weight * base + (1 - filename_weight) * full, full)
+    if q in p:
+        return 0.8 + 0.2 * len(q) / len(p_name if q in p_name else p)
+    q_folder, q_name = _split(q)
+    q_grams = _bigrams(q_name)
+    name_score = _cosine(q_grams, _bigrams(p_name))
+    if q_folder:
+        folder_score = _cosine(_bigrams(q_folder), _bigrams(p_folder))
+        return filename_weight * name_score + (1 - filename_weight) * folder_score
+    segment_score = max((_cosine(q_grams, _bigrams(s)) for s in p_folder.split("/") if s), default=0.0)
+    return max(name_score, segment_score * 0.9)
+
+
+def difference_label(query: str, path: str) -> str:
+    """検索語（見つからなかったパス）と候補パスの違いを短い説明にして返す。
+
+    エラー時の候補提示で、LLM が候補を指定パスの言い換えだと誤解して
+    そのまま置き換えないよう、何が違うかを明示するために使う。
+    """
+    q_folder, q_name = _split(_normalize(query))
+    p_folder, p_name = _split(_normalize(path))
+    folder_differs = bool(q_folder) and q_folder != p_folder
+    name_differs = q_name != p_name
+    if folder_differs and name_differs:
+        return "フォルダ・ファイル名違い"
+    if folder_differs:
+        return "フォルダ違い"
+    return "ファイル名違い"
+
+
+def _exists(path: str | None) -> bool | None:
+    """パスが実在するか。空パス・アクセス拒否等で判定できなければ None。"""
+    if not path:
+        return None
+    try:
+        return Path(path).exists()
+    except (OSError, ValueError):
+        return None
+
+
+def _take_existing(thread_id: str, path_memory_dir: Path, candidates: list[dict], top_k: int) -> list[dict]:
+    """candidates を先頭から実在確認し、実在するものだけを top_k 件まで返す。
+
+    登録時点の `valid` は古い可能性があるため、ここで改めて確認する。確認は
+    必要な件数がそろった時点で打ち切る（登録上限は数千件規模で、UNCパスの
+    存在確認は1件ずつ遅いことがあるため）。確認結果が登録内容と違えば
+    レジストリの `valid` を更新する。存在しない登録を削除しないのは、
+    削除すると以降の `@N` の番号が繰り上がり、会話履歴中の `@N` が別の
+    ファイルを指してしまうため。
+    """
+    result: list[dict] = []
+    changes: list[tuple[int, str, bool]] = []
+    for entry in candidates:
+        if len(result) >= top_k:
+            break
+        exists = _exists(entry["path"])
+        if exists is None:
+            continue
+        if exists != entry["valid"]:
+            changes.append((entry["index"], entry["path"], exists))
+        if exists:
+            result.append({**entry, "valid": True})
+    if changes:
+        _update_valid(thread_id, path_memory_dir, changes)
+    return result
+
+
+def _update_valid(thread_id: str, path_memory_dir: Path, changes: list[tuple[int, str, bool]]) -> None:
+    """(index, path, valid) の組で登録の `valid` を書き換える（path が一致する場合のみ）。"""
+    registry_path = _registry_path(thread_id, path_memory_dir)
+    lock_path = registry_path.parent / f"{registry_path.name}.lock"
+    with _locked(lock_path) as acquired:
+        if not acquired:
+            return
+        entries = _load(registry_path)
+        updated = False
+        for index, path, valid in changes:
+            if 1 <= index <= len(entries) and entries[index - 1].get("path") == path:
+                entries[index - 1]["valid"] = valid
+                updated = True
+        if updated:
+            _save(registry_path, entries)
 
 
 def search_entries(
@@ -271,7 +362,7 @@ def search_entries(
     min_score: float = 0.3,
     filename_weight: float = 0.7,
 ) -> list[dict]:
-    """登録済みパスを検索語との類似度順に返す。
+    """登録済みパスのうち実在するものを、検索語との類似度順に返す。
 
     Args:
         thread_id: 会話を識別する文字列。
@@ -283,14 +374,21 @@ def search_entries(
 
     Returns:
         `list_entries()` の各要素に `score`（小数2桁）を加えたもの（類似度の降順）。
+        現在存在しないパスは含まない（`_take_existing` 参照）。
     """
     scored = []
     for entry in list_entries(thread_id, path_memory_dir):
         score = similarity(query, entry["path"] or "", filename_weight)
         if score >= min_score:
-            scored.append({**entry, "score": round(score, 2)})
-    scored.sort(key=lambda e: e["score"], reverse=True)
-    return scored[: max(top_k, 0)]
+            scored.append((score, entry))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    candidates = [{**entry, "score": round(score, 2)} for score, entry in scored]
+    return _take_existing(thread_id, path_memory_dir, candidates, top_k)
+
+
+def recent_entries(thread_id: str, path_memory_dir: Path, top_k: int = 5) -> list[dict]:
+    """登録済みパスのうち実在するものを、新しい順に top_k 件返す。"""
+    return _take_existing(thread_id, path_memory_dir, list_entries(thread_id, path_memory_dir)[::-1], top_k)
 
 
 def exec_tmp_dir(category: str | None = None) -> Path:
