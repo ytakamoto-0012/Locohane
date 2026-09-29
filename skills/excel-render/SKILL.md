@@ -13,7 +13,7 @@ Excelシートを画像化してLLMに見せるスキル。`render_excel.py` を
 
 excel-readスキルは数値・テキストは取れても罫線・書式・グラフ・レイアウトは読み取れないため、シートの意図をより正確に把握したいときに画像で確認する。
 
-PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フィット印刷（`Zoom=False`+`FitToPagesWide=1`+`FitToPagesTall=1`）へ自動強制し、使用範囲が複数ページに分割される（画像が細切れになる）ことを防ぐ。`--print-as-is`を指定するとこの強制を行わず、シートに既に設定されている印刷範囲・拡大縮小率をそのまま使ってPDF化する。PDF→画像化は既定300DPIで行い、シートの縮尺が小さいほどキャプチャDPIを自動的に引き上げる（上限900DPI、`--print-as-is`指定時はブーストなし。代わりに`target_dpi`は150に下がる）。全シート（PDF化後の全ページ）を一度に画像化する。
+PDF化前に各シートの印刷設定を「横1ページ×縦1ページ」フィット印刷（`Zoom=False`+`FitToPagesWide=1`+`FitToPagesTall=1`）へ自動強制し、使用範囲が複数ページに分割される（画像が細切れになる）ことを防ぐ。`--print-as-is`を指定するとこの強制を行わず、シートに既に設定されている印刷範囲・拡大縮小率をそのまま使ってPDF化する。PDF→画像化は既定300DPIで行い、クロップ後の出力は`target_dpi`=150に縮小する。シートの縮尺が小さいほどキャプチャDPI・`target_dpi`を自動的に引き上げる（上限900DPI、`--print-as-is`指定時はブーストなし）。全シート（PDF化後の全ページ）を一度に画像化する。
 
 ## 呼び出し
 
@@ -34,7 +34,7 @@ python render_excel.py "C:\Users\me\book.xlsx" --print-as-is
 | 引数 | 必須/任意 | 値の型 | 既定値 | 説明 |
 |---|---|---|---|---|
 | `excel_path`（位置引数） | 必須 | 文字列（絶対パス） | - | 画像化対象の`.xlsx`/`.xlsm`/`.xls`ファイルパス。他拡張子はエラー |
-| `--print-as-is` | 任意 | フラグ | 指定なし（＝強制フィット） | 指定すると、各シートに既に設定されている印刷範囲・印刷の向き・拡大縮小率（Zoom/FitToPagesWide/FitToPagesTall）をそのまま使ってPDF化する。既定の「横1×縦1ページへの強制フィット」を行わないため、シート側の設定次第で複数ページに分割されることがある（この場合もDPIブースト・分割警告（10%下限）は行わない）。`target_dpi`も既定の300から150に下がる |
+| `--print-as-is` | 任意 | フラグ | 指定なし（＝強制フィット） | 指定すると、各シートに既に設定されている印刷範囲・印刷の向き・拡大縮小率（Zoom/FitToPagesWide/FitToPagesTall）をそのまま使ってPDF化する。既定の「横1×縦1ページへの強制フィット」を行わないため、シート側の設定次第で複数ページに分割されることがある（この場合もDPIブースト・分割警告（10%下限）は行わない） |
 
 ## 入出力の型
 
@@ -44,7 +44,7 @@ python render_excel.py "C:\Users\me\book.xlsx" --print-as-is
 
 ```json
 {"path": "C:\\foo\\book.xlsx", "tool": "excel", "total_pages": 5, "start_page": 1, "end_page": 5,
- "dpi": 300, "target_dpi": 300, "crop_applied": true,
+ "dpi": 300, "target_dpi": 150, "crop_applied": true,
  "images": [{"page": 1, "sheet": "Sheet1", "image_path": "C:\\...\\rendered\\1a2b3c4d_Sheet1_cropped.png", "original_dpi": 300, "cropped": true}, ...]}
 ```
 `images`には全ページ（=全シート、通常は`total_pages`件、非表示シートは除く）が含まれる。

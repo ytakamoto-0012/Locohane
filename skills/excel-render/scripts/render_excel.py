@@ -39,8 +39,8 @@ if str(_OFFICE_SHARED) not in sys.path:
 from excel_common import register_output_path, setup_utf8_stdio  # noqa: E402
 from _render import _TARGET_DPI, render_office_file  # noqa: E402
 
-# --print-as-is指定時は縮尺ブーストが働かないため、既定の_TARGET_DPI(300)のまま
-# キャプチャすると容量・処理時間が嵩みやすい。ターゲットDPIを下げて出力する。
+# --print-as-is指定時のターゲットDPI（縮尺ブーストは働かない）。
+# 現在は既定の_TARGET_DPIと同値。
 _PRINT_AS_IS_TARGET_DPI = 150
 
 

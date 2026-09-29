@@ -38,9 +38,9 @@ _PROG_ID = {
 # PDF→画像化キャプチャDPI（docx-render/pptx-renderと同じ基準値に統一）
 _CAPTURE_DPI = 300
 
-# 目標DPI（クロップ後の最終出力解像度）。既定ではキャプチャDPIと同値のため
-# ダウンスケールは事実上no-opになる（縮尺が必要なケースのみ_crop_imageが動く）。
-_TARGET_DPI = 300
+# 目標DPI（クロップ後の最終出力解像度）。キャプチャDPIの半分とし、
+# _crop_imageで高解像度キャプチャからダウンスケールして容量を抑える。
+_TARGET_DPI = 150
 
 # 白黒境界判定の閾値（ピクセル値。これ未満なら黒＝コンテンツとみなす）
 _DARK_PIXEL_THRESHOLD = 128
