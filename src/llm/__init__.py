@@ -23,6 +23,7 @@ ReAct ループ）の両方から使う。tools.py が subagent.py を import �
 from __future__ import annotations
 
 from .chat_model import ChatLlamaCpp, build_model, init_llm_concurrency
+from .dialect import mark_user_turn
 from .diagnostics import (
     _CancelScopeBreakageWatcher,
     _register_cancel_scope_watcher,
@@ -53,6 +54,7 @@ __all__ = [
     "get_current_session",
     "init_llm_concurrency",
     "mark_last_endpoint_failed",
+    "mark_user_turn",
     "pick_loop_nudge_message",
     "recent_cancel_scope_breakage",
     "set_current_session",

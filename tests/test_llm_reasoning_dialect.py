@@ -203,6 +203,26 @@ def test_request_payload_history_reasoning_keys(provider, keys):
         assert not ({"reasoning", "reasoning_content"} - keys) & m.keys()
 
 
+def test_request_payload_drops_reasoning_before_last_user_turn():
+    """最後のユーザー発話より前のターンの thinking は載せず、今のツールループ内は全件載せる。
+    nudge 等の目印なし HumanMessage は境界にならない。"""
+    messages = [
+        dialect.mark_user_turn(HumanMessage("q1")),
+        AIMessage("a1", additional_kwargs={"reasoning_content": "old"}),
+        dialect.mark_user_turn(HumanMessage("q2")),
+        AIMessage("", additional_kwargs={"reasoning_content": "t1"}, tool_calls=[{"name": "x", "args": {}, "id": "c1"}]),
+        ToolMessage("ok", tool_call_id="c1"),
+        HumanMessage("nudge"),
+        AIMessage("", additional_kwargs={"reasoning_content": "t2"}, tool_calls=[{"name": "x", "args": {}, "id": "c2"}]),
+        ToolMessage("ok", tool_call_id="c2"),
+    ]
+    payload = _model(preserve_reasoning_content=True)._get_request_payload(messages)
+    assistants = [m for m in payload["messages"] if m["role"] == "assistant"]
+    assert [m.get("reasoning_content") for m in assistants] == [None, "t1", "t2"]
+    for m in payload["messages"]:
+        assert dialect.USER_TURN_KWARG not in m
+
+
 def test_request_payload_without_preserve_has_no_reasoning():
     payload = _model(reasoning_dialect="openai_compatible")._get_request_payload(_history())
     for m in payload["messages"]:

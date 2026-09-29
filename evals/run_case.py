@@ -242,7 +242,7 @@ async def _run(case: EvalCase) -> dict:
     from src.agent_types import render_agent_types_block, scan_agent_types
     from src.config import expand_config_vars, load_config, render_agent_type_run_script_allowlist_block
     from src.graph import ainvoke_ensuring_final_text, build_graph
-    from src.llm import ThinkingLoopDetected
+    from src.llm import ThinkingLoopDetected, mark_user_turn
     from src.memory import render_memory_block
     from src.skills import build_system_prompt, render_skills_block, scan_skills
     from src.tools import get_all_tools, init_tools
@@ -442,7 +442,7 @@ async def _run(case: EvalCase) -> dict:
                     try:
                         result = await ainvoke_ensuring_final_text(
                             graph,
-                            {"messages": [HumanMessage(content=turn)]},
+                            {"messages": [mark_user_turn(HumanMessage(content=turn))]},
                             run_config,
                             max_retries=config.thinking_loop_guard_empty_response_max_retries,
                             nudge_messages=config.thinking_loop_guard_nudge_messages,

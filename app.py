@@ -121,6 +121,7 @@ from src.llm import (
     get_current_session,
     init_llm_concurrency,
     mark_last_endpoint_failed,
+    mark_user_turn,
     pick_loop_nudge_message,
     recent_cancel_scope_breakage,
     set_current_session,
@@ -2624,8 +2625,10 @@ def _build_human_message(user_text: str, saved_paths: list[str], work_dir_notice
         paths = "\n".join(f"- {p}" for p in other_paths)
         text += f"\n\n[アップロードされたファイルの保存先]\n{paths}"
 
+    # ユーザー自身の発話の目印（[llm].reasoning_preserve 有効時、thinking を
+    # 載せ直す範囲の境界になる。src/llm/dialect.py の mark_user_turn 参照）。
     if not image_paths:
-        return HumanMessage(content=text)
+        return mark_user_turn(HumanMessage(content=text))
 
     content: list[dict] = [{"type": "text", "text": text}]
     for p in image_paths:
@@ -2637,7 +2640,7 @@ def _build_human_message(user_text: str, saved_paths: list[str], work_dir_notice
             jpeg_quality=_config.image_jpeg_quality,
         )
         content.append({"type": "image_url", "image_url": {"url": url}})
-    return HumanMessage(content=content)
+    return mark_user_turn(HumanMessage(content=content))
 
 
 _TABLE_LINE_RE = re.compile(r"^[ \t]{0,3}\|")

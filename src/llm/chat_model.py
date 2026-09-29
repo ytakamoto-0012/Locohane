@@ -18,7 +18,7 @@ import httpx
 from langchain_openai import ChatOpenAI
 
 from ..config import Config
-from .dialect import build_extra_body, extract_reasoning, history_reasoning_keys
+from .dialect import build_extra_body, extract_reasoning, history_reasoning_keys, last_user_turn_index
 from .diagnostics import (
     _DebugResponseLogger,
     _log_first_chunk_latency,
@@ -88,6 +88,12 @@ class ChatLlamaCpp(ChatOpenAI):
         payload["messages"] は入力メッセージと1対1で並ぶので、同じ位置の
         AIMessage から補う。キー名は送信先の方言に合わせる（llama-server は
         reasoning_content、vLLM は reasoning しか読まない）。
+
+        載せ直すのは最後のユーザー発話（dialect.mark_user_turn の目印付き）
+        より後の assistant メッセージだけ。今のツールループ内の thinking の
+        連続性は保ちつつ、過去のユーザーターンの thinking を送り続けて
+        コンテキストを消費しないようにする。目印付きが無い履歴（目印導入前の
+        スレッド・サブエージェント）は全件載せ直す。
         """
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         if not self.preserve_reasoning_content:
@@ -96,7 +102,8 @@ class ChatLlamaCpp(ChatOpenAI):
         messages = self._convert_input(input_).to_messages()
         if not isinstance(payload_messages, list) or len(payload_messages) != len(messages):
             return payload
-        for message, message_dict in zip(messages, payload_messages):
+        start = last_user_turn_index(messages) or 0
+        for message, message_dict in zip(messages[start:], payload_messages[start:]):
             if message_dict.get("role") != "assistant":
                 continue
             reasoning = extract_reasoning(message.additional_kwargs)

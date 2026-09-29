@@ -12,6 +12,9 @@ llama-server と vLLM は、どちらも OpenAI 互換 API だが thinking ま�
 - 履歴へ戻す thinking: llama-server は `reasoning_content` のみ、vLLM は
   `reasoning` のみ反映し、もう一方は無視する。両方送っても重複・エラーは
   無い（両サーバーで実測）。
+- 履歴へ戻す範囲: 最後のユーザー発話（mark_user_turn の目印付き）より後の
+  assistant メッセージだけ。それより前のユーザーターンの thinking は送らない
+  （Qwen3/MiniMax のテンプレート・Claude/OpenAI 旧モデルと同じ切り方）。
 - 拡張パラメータ: 対応表は build_extra_body() の docstring 参照。
 
 送信側は接続先ごとの LLMEndpoint.provider で切り替える。"openai_compatible"
@@ -22,7 +25,10 @@ llama-server と vLLM は、どちらも OpenAI 互換 API だが thinking ま�
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
+
+from langchain_core.messages import BaseMessage, HumanMessage
 
 if TYPE_CHECKING:
     from ..config import Config
@@ -39,6 +45,13 @@ _HISTORY_REASONING_KEYS: dict[str, tuple[str, ...]] = {
     "vllm": ("reasoning",),
     "openai_compatible": ("reasoning_content", "reasoning"),
 }
+
+# ユーザー自身の入力から作った HumanMessage に付ける目印（additional_kwargs のキー）。
+# nudge・画像フォローアップ等アプリが差し込む HumanMessage と区別し、thinking を
+# 載せ直す範囲の境界に使う（ChatLlamaCpp._get_request_payload 参照）。
+# langchain_openai は HumanMessage の additional_kwargs を（name 以外）送らない
+# ため、LLM への入力には影響しない。
+USER_TURN_KWARG = "locohane_user_turn"
 
 # vLLM に相当パラメータが無いため送らない config 項目。
 _VLLM_UNSUPPORTED_KEYS = (
@@ -85,6 +98,36 @@ def history_reasoning_keys(provider: str) -> tuple[str, ...]:
         書き込むキーのタプル。未知の provider は "openai_compatible" 扱い。
     """
     return _HISTORY_REASONING_KEYS.get(provider, _HISTORY_REASONING_KEYS["openai_compatible"])
+
+
+def mark_user_turn(message: HumanMessage) -> HumanMessage:
+    """ユーザー自身の発話である目印（USER_TURN_KWARG）を付けて返す。
+
+    Args:
+        message: ユーザー入力から組み立てた HumanMessage（書き換える）。
+
+    Returns:
+        同じ message。
+    """
+    message.additional_kwargs[USER_TURN_KWARG] = True
+    return message
+
+
+def last_user_turn_index(messages: Sequence[BaseMessage]) -> int | None:
+    """目印付きの HumanMessage のうち最後のものの位置を返す。
+
+    Args:
+        messages: 会話履歴。
+
+    Returns:
+        位置。目印付きが1件も無ければ None（目印導入前のスレッド・
+        サブエージェント等）。
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if isinstance(m, HumanMessage) and m.additional_kwargs.get(USER_TURN_KWARG):
+            return i
+    return None
 
 
 def _warn_once(warn_key: tuple[str, str], message: str) -> None:
