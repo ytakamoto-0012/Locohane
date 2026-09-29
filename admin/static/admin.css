@@ -71,6 +71,8 @@ label.checkbox input { width: auto; }
   width: 320px;
 }
 .login-box h1 { font-size: 18px; margin: 0 0 8px; }
+/* セッション切れ時の再ログイン（ダッシュボードの上に重ねて表示し、入力内容を保持する） */
+.relogin-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.5); }
 
 /* Shell */
 .shell { display: flex; flex-direction: column; height: 100vh; }

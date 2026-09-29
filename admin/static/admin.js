@@ -17,12 +17,21 @@ async function api(path, opts) {
   const method = opts.method || "GET";
   const headers = { "Content-Type": "application/json" };
   if (method !== "GET") headers["X-Locohane-Admin"] = "1";
-  const res = await fetch(path, {
-    method,
-    headers,
-    credentials: "same-origin",
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-  });
+  const doFetch = () =>
+    fetch(path, {
+      method,
+      headers,
+      credentials: "same-origin",
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    });
+  let res = await doFetch();
+  // ダッシュボード表示中にセッションが切れた（放置によるタイムアウト・管理ツールの
+  // 再起動等）場合は、画面を残したまま再ログインさせ、元のリクエストを再送する。
+  // リロードさせると編集中の入力内容が失われるため。
+  if (res.status === 401 && mainEl && path !== "/api/login" && path !== "/api/logout") {
+    await promptRelogin();
+    res = await doFetch();
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -53,6 +62,7 @@ async function boot() {
 }
 
 function showLogin(message) {
+  mainEl = null;
   app.innerHTML = "";
   app.appendChild(clone("tpl-login"));
   if (message) $("#login-error").textContent = message;
@@ -72,6 +82,39 @@ function showLogin(message) {
 }
 
 let mainEl = null;
+// 再ログイン待ちの Promise。同時に複数のリクエストが 401 になっても、
+// オーバーレイは1つだけ出し、全員がそのログイン完了を待つ。
+let reloginPromise = null;
+
+function promptRelogin() {
+  if (reloginPromise) return reloginPromise;
+  reloginPromise = new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "relogin-overlay";
+    overlay.appendChild(clone("tpl-login"));
+    document.body.appendChild(overlay);
+    $(".hint", overlay).textContent = "セッションの有効期限が切れました。再度ログインしてください（入力中の内容は保持されます）。";
+    $("input[name=username]", overlay).value = $("#me-username") ? $("#me-username").textContent : "";
+    $("input[name=password]", overlay).focus();
+    $("form", overlay).addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const form = new FormData(ev.target);
+      try {
+        const result = await api("/api/login", {
+          method: "POST",
+          body: { username: form.get("username"), password: form.get("password") },
+        });
+        if ($("#me-username")) $("#me-username").textContent = result.username;
+        overlay.remove();
+        reloginPromise = null;
+        resolve();
+      } catch (e) {
+        $(".error", overlay).textContent = e.message || "ログインに失敗しました。";
+      }
+    });
+  });
+  return reloginPromise;
+}
 
 function showShell(username) {
   app.innerHTML = "";
