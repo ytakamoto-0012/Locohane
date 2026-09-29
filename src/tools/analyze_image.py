@@ -13,7 +13,7 @@ from ..images import to_data_url
 
 from . import _state
 from ._duplicate_guard import _record_and_check_duplicate
-from ._path_memory_helpers import _resolve_path_memory_token
+from ._path_memory_helpers import _resolve_path_memory_token, suggest_from_path_memory
 from ._state import _duplicate_guard_session_key
 from ._workdir import _foreign_tmp_dir_error
 from ._workdir import _resolve_workdir
@@ -100,7 +100,8 @@ def analyze_image(relative_path: str, show_in_chat: bool = False) -> tuple[str, 
     if tmp_error:
         return tmp_error, None
     if not path.is_file():
-        return f"エラー: ファイルが見つかりません: {relative_path}", None
+        hint = suggest_from_path_memory(str(path)) if not path.exists() else ""
+        return f"エラー: ファイルが見つかりません: {relative_path}{hint}", None
     if not is_image_file(path):
         return (
             f"エラー: 対応していない画像形式です（png/jpg/jpeg/gif/webp/bmpのみ）: {relative_path}",

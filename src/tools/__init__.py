@@ -17,7 +17,7 @@ LangChain の @tool として定義する。read_skill/read_skill_file/run_scrip
   任意の絶対パスに対する読込・ファイル名検索・全文検索（ロジック本体は
   各ファイル内に実装、ClaudeCode の同名ツールに合わせた名前）
 - json_query      … JSON/dictへのJMESPathクエリ（ロジック本体は json_query.py 内）
-- list_path_memory … 現在の会話のパスメモリー（@N）登録内容を一覧表示する
+- search_path_memory … 現在の会話のパスメモリー（@N）から似たパスを類似検索する
 - analyze_image   … 第3段階(Execute): 画像ファイルをVision対応モデルへ見せ、LLM自身が内容を解析する。
   `show_in_chat=True` を指定すると、解析と同時にチャットUIへもプレビュー表示する
   （表示だけして中身を見ない、という呼び方はできない。ユーザーへの「表示して」「見せて」もこちら）
@@ -100,7 +100,7 @@ from .registry import (  # noqa: F401
     grep_tool,
     json_query,
     list_memories,
-    list_path_memory,
+    search_path_memory,
     list_thread_notes,
     lock_plan_mode,
     provide_download,

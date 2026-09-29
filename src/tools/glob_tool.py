@@ -11,7 +11,7 @@ import re
 
 from ._duplicate_guard import _check_file_tools_duplicate
 from ._file_tools_common import looks_binary, read_text_with_fallback, suggest_similar_dir
-from ._path_memory_helpers import _dedupe_paths_with_path_memory, _register_path_memory
+from ._path_memory_helpers import _dedupe_paths_with_path_memory, _register_path_memory, suggest_from_path_memory
 from ._safe_path import _resolve_file_tools_path
 from ._workdir import _foreign_tmp_dir_names
 
@@ -206,7 +206,8 @@ def glob_tool(pattern: str, path: str = "", head_limit: int = 200) -> str:
     try:
         result = glob_search(base, pattern, head_limit=head_limit, exclude_names=_foreign_tmp_dir_names())
     except ValueError as e:
-        return f"エラー: {e}"
+        hint = suggest_from_path_memory(str(base)) if not base.exists() else ""
+        return f"エラー: {e}{hint}"
     path_memory = _register_path_memory([*result["files"], *[d["path"] for d in result["directories"]]])
     if path_memory:
         # フルパスの重複を `@N` へ畳んでから result に載せる（大量ファイル時に

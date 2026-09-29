@@ -419,6 +419,10 @@ class Config:
         path_memory_cleanup_interval_hours: パスメモリー自動削除のチェック
             間隔（時間）。起動時にも1回チェックする。
         path_memory_max_entries: パスメモリー1会話あたりの登録上限件数。
+        path_memory_search_min_score: パスメモリー類似検索（search_path_memory・
+            「見つかりません」エラー時の候補提示）で結果に出す類似度の下限。
+        path_memory_search_filename_weight: パスメモリー類似検索でファイル名
+            部分を重視する割合（残りはフルパス全体との類似度）。
         script_timeout: run_script の実行タイムアウト秒数。
         script_python: run_script が .py スクリプトを起動する際に使う
             Python 実行ファイル。
@@ -880,6 +884,8 @@ class Config:
     path_memory_retention_days: int
     path_memory_cleanup_interval_hours: float
     path_memory_max_entries: int
+    path_memory_search_min_score: float
+    path_memory_search_filename_weight: float
 
     # --- ログファイル（app_*.log）の行数ベースローテーション・自動削除 ---
     log_max_lines: int
@@ -1938,6 +1944,7 @@ def load_config(
       COMMON_DATA_DIR / SKILLS_DIR / AGENTS_DIR / PROJECT_LOCOHANE_DIR / SYSTEM_PROMPT_PATH / CHECKPOINT_DB / UPLOAD_DIR / LOG_DIR / LOG_LEVEL / LOG_CLEAR_ON_STARTUP / DEFAULT_WORKDIR / MEMORY_DIR / PLANS_DIR / HELP_PATH
       UPLOAD_RETENTION_DAYS / UPLOAD_CLEANUP_INTERVAL_HOURS
       PATH_MEMORY_DIR / PATH_MEMORY_RETENTION_DAYS / PATH_MEMORY_CLEANUP_INTERVAL_HOURS / PATH_MEMORY_MAX_ENTRIES
+      PATH_MEMORY_SEARCH_MIN_SCORE / PATH_MEMORY_SEARCH_FILENAME_WEIGHT
       SCRIPT_TIMEOUT / SCRIPT_PYTHON / SCRIPT_REQUIRE_APPROVAL
       CODE_EXECUTION_ENABLED / CODE_EXECUTION_REQUIRE_APPROVAL
       FILE_TOOLS_DUPLICATE_GUARD_ENABLED / FILE_TOOLS_DUPLICATE_GUARD_MAX_CALLS /
@@ -2285,6 +2292,10 @@ def load_config(
         path_memory_retention_days=int(os.getenv("PATH_MEMORY_RETENTION_DAYS", path_memory.get("retention_days", 1))),
         path_memory_cleanup_interval_hours=float(os.getenv("PATH_MEMORY_CLEANUP_INTERVAL_HOURS", path_memory.get("cleanup_interval_hours", 1))),
         path_memory_max_entries=int(os.getenv("PATH_MEMORY_MAX_ENTRIES", path_memory.get("max_entries", 500))),
+        path_memory_search_min_score=float(os.getenv("PATH_MEMORY_SEARCH_MIN_SCORE", path_memory.get("search_min_score", 0.3))),
+        path_memory_search_filename_weight=float(
+            os.getenv("PATH_MEMORY_SEARCH_FILENAME_WEIGHT", path_memory.get("search_filename_weight", 0.7))
+        ),
         log_max_lines=int(os.getenv("LOG_MAX_LINES", log_section.get("max_lines", 5000))),
         log_retention_days=int(os.getenv("LOG_RETENTION_DAYS", log_section.get("retention_days", 7))),
         log_cleanup_interval_hours=float(os.getenv("LOG_CLEANUP_INTERVAL_HOURS", log_section.get("cleanup_interval_hours", 1))),

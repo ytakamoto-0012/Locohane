@@ -259,6 +259,8 @@ _PLANS_DIR: Path | None = None
 _HELP_PATH: Path | None = None
 _PATH_MEMORY_DIR: Path | None = None
 _PATH_MEMORY_MAX_ENTRIES: int = 500
+_PATH_MEMORY_SEARCH_MIN_SCORE: float = 0.3
+_PATH_MEMORY_SEARCH_FILENAME_WEIGHT: float = 0.7
 _SRC_DIR: Path = Path(__file__).parent.parent  # src/ディレクトリ（path_memory.py 等がある。このファイルはsrc/tools/にあるため一段上）
 _APPROVAL_TIMEOUT_SECONDS: int = 300
 _ASK_USER_QUESTION_TIMEOUT_SECONDS: int = 60
@@ -328,6 +330,8 @@ def init_tools(
     plan_require_planner_dispatch: bool = True,
     plan_auto_approve: bool = False,
     allow_sandbox_dirs: Iterable[SandboxDirEntry] = (),
+    path_memory_search_min_score: float = 0.3,
+    path_memory_search_filename_weight: float = 0.7,
 ) -> None:
     """ツールが使う設定を注入する（app 起動時に一度だけ呼ぶ）。
 
@@ -368,6 +372,10 @@ def init_tools(
             run_script の @N 解決でも使う。
         path_memory_max_entries: パスメモリー1会話あたりの登録上限件数
             （config.ini の [path_memory].max_entries 由来）。
+        path_memory_search_min_score: パスメモリー類似検索で結果に出す類似度の下限
+            （config.ini の [path_memory].search_min_score 由来）。
+        path_memory_search_filename_weight: パスメモリー類似検索でファイル名部分を
+            重視する割合（config.ini の [path_memory].search_filename_weight 由来）。
         code_exec_enabled: execute_python_code ツール（LLMが生成した
             Pythonコードをその場で実行する）の有効/無効。False の場合、
             ツールは呼び出されてもエラー文字列を返すのみでコードは
@@ -524,6 +532,7 @@ def init_tools(
     global _PLANS_DIR
     global _HELP_PATH
     global _PATH_MEMORY_DIR, _PATH_MEMORY_MAX_ENTRIES
+    global _PATH_MEMORY_SEARCH_MIN_SCORE, _PATH_MEMORY_SEARCH_FILENAME_WEIGHT
     global _APPROVAL_TIMEOUT_SECONDS, _ASK_USER_QUESTION_TIMEOUT_SECONDS
     global _ASK_USER_CHOICE_TIMEOUT_SECONDS
     global _PLAN_BADGE_ALLOW_UNLOCK
@@ -570,6 +579,8 @@ def init_tools(
     _HELP_PATH = Path(help_path).resolve()
     _PATH_MEMORY_DIR = Path(path_memory_dir).resolve()
     _PATH_MEMORY_MAX_ENTRIES = path_memory_max_entries
+    _PATH_MEMORY_SEARCH_MIN_SCORE = path_memory_search_min_score
+    _PATH_MEMORY_SEARCH_FILENAME_WEIGHT = path_memory_search_filename_weight
     _APPROVAL_TIMEOUT_SECONDS = approval_timeout_seconds
     _ASK_USER_QUESTION_TIMEOUT_SECONDS = ask_user_question_timeout_seconds
     _ASK_USER_CHOICE_TIMEOUT_SECONDS = ask_user_choice_timeout_seconds

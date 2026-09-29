@@ -1,4 +1,4 @@
-"""Read/Glob/Grep/json_query/list_path_memory（src/tools.py の @tool ラッパー）の回帰テスト。
+"""Read/Glob/Grep/json_query/search_path_memory（src/tools.py の @tool ラッパー）の回帰テスト。
 
 旧 run_readonly_script 経由の file-tools スクリプトをネイティブツール化した
 （ISSUE-003）際の重要な仕様を固定化する:
@@ -49,7 +49,7 @@ def file_tools_env(tmp_path, monkeypatch):
 class TestPydanticSchema:
     @pytest.mark.parametrize(
         "tool_obj",
-        [tools.read_tool, tools.glob_tool, tools.grep_tool, tools.json_query, tools.list_path_memory],
+        [tools.read_tool, tools.glob_tool, tools.grep_tool, tools.json_query, tools.search_path_memory],
     )
     def test_schema_has_no_pydantic_placeholder_fields(self, tool_obj) -> None:
         schema = tool_obj.args
@@ -352,19 +352,68 @@ class TestGetToolSourceDuplicateGuard:
         assert "上限" in second
 
 
-class TestListPathMemory:
-    def test_lists_registered_entries(self, file_tools_env) -> None:
+class TestSearchPathMemory:
+    def test_empty_query_lists_recent_entries(self, file_tools_env) -> None:
         f = file_tools_env / "notes.txt"
         f.write_text("hello\n", encoding="utf-8")
         tools.read_tool.func(file_path=str(f))
 
-        result = json.loads(tools.list_path_memory.func())
+        result = json.loads(tools.search_path_memory.func())
 
         assert result["entries"] == [
             {"index": 1, "path": str(f.resolve()), "valid": True, "description": None}
         ]
 
     def test_empty_when_nothing_registered(self, file_tools_env) -> None:
-        result = json.loads(tools.list_path_memory.func())
+        result = json.loads(tools.search_path_memory.func())
 
-        assert result == {"entries": []}
+        assert result["entries"] == []
+        assert "Glob" in result["hint"]
+
+    def test_empty_query_returns_newest_first_limited_by_top_k(self, file_tools_env) -> None:
+        for name in ("a.txt", "b.txt", "c.txt"):
+            f = file_tools_env / name
+            f.write_text("x\n", encoding="utf-8")
+            tools.read_tool.func(file_path=str(f))
+
+        result = json.loads(tools.search_path_memory.func(top_k=2))
+
+        assert [e["index"] for e in result["entries"]] == [3, 2]
+
+    def test_query_finds_similar_path(self, file_tools_env) -> None:
+        target = file_tools_env / "月次報告書.txt"
+        other = file_tools_env / "notes.txt"
+        for f in (target, other):
+            f.write_text("x\n", encoding="utf-8")
+            tools.read_tool.func(file_path=str(f))
+
+        result = json.loads(tools.search_path_memory.func(query="月次報告署"))
+
+        assert result["entries"][0]["path"] == str(target.resolve())
+        assert all(e["path"] != str(other.resolve()) for e in result["entries"])
+
+    def test_min_score_from_config_is_applied(self, file_tools_env, monkeypatch) -> None:
+        f = file_tools_env / "月次報告書.txt"
+        f.write_text("x\n", encoding="utf-8")
+        tools.read_tool.func(file_path=str(f))
+        monkeypatch.setattr(tools._state, "_PATH_MEMORY_SEARCH_MIN_SCORE", 0.99)
+
+        result = json.loads(tools.search_path_memory.func(query="月次報告署"))
+
+        assert result["entries"] == []
+
+    def test_read_not_found_suggests_similar_registered_path(self, file_tools_env) -> None:
+        target = file_tools_env / "月次報告書.txt"
+        target.write_text("x\n", encoding="utf-8")
+        tools.read_tool.func(file_path=str(target))
+
+        result = tools.read_tool.func(file_path=str(file_tools_env / "月次報告署.txt"))
+
+        assert result.startswith("エラー: ファイルが見つかりません")
+        assert f"@1（{target.resolve()}）" in result
+
+    def test_read_not_found_without_similar_entry_has_no_hint(self, file_tools_env) -> None:
+        result = tools.read_tool.func(file_path=str(file_tools_env / "missing.txt"))
+
+        assert result.startswith("エラー: ファイルが見つかりません")
+        assert "パスメモリーに類似" not in result

@@ -35,8 +35,43 @@ def _resolve_path_memory_token(value: str) -> tuple[str, str | None]:
     thread_id = cl.user_session.get("thread_id") or "_no_session"
     resolved = path_memory.resolve(thread_id, value, _state._PATH_MEMORY_DIR)
     if resolved is None:
-        return value, (f"パスメモリー {value} は登録されていません。" "list_path_memory ツールで現在の登録内容を確認してください。")
+        return value, (f"パスメモリー {value} は登録されていません。" "search_path_memory にファイル名を渡すと登録済みの @N を探せます。")
     return resolved, None
+
+
+def suggest_from_path_memory(query: str, top_k: int = 3) -> str:
+    """見つからなかったパスに似た登録済みパスを、エラー文に追記するヒントとして返す。
+
+    ローカルLLMがパスを記憶から手打ちして誤字を起こした場合に、正しい `@N` へ
+    誘導するためのもの（`_file_tools_common.suggest_similar_dir` と同じ形式）。
+
+    Args:
+        query: 見つからなかったパス文字列。
+        top_k: 提示する最大件数。
+
+    Returns:
+        先頭に半角スペースを付けたヒント文字列。パスメモリーが使えない、
+        または実在する類似候補が無ければ空文字列。
+    """
+    if _state._PATH_MEMORY_DIR is None:
+        return ""
+    thread_id = cl.user_session.get("thread_id") or "_no_session"
+    hits = [
+        e
+        for e in path_memory.search_entries(
+            thread_id,
+            query,
+            _state._PATH_MEMORY_DIR,
+            top_k=top_k + 5,
+            min_score=_state._PATH_MEMORY_SEARCH_MIN_SCORE,
+            filename_weight=_state._PATH_MEMORY_SEARCH_FILENAME_WEIGHT,
+        )
+        if e["valid"] and e["path"] != query
+    ][:top_k]
+    if not hits:
+        return ""
+    candidates = ", ".join(f"@{e['index']}（{e['path']}）" for e in hits)
+    return f" パスメモリーに類似の登録があります: {candidates}。該当するならその @N を使ってください。"
 
 
 _PATH_MEMORY_TEXT_TOKEN_RE = re.compile(r"(?<![\w@])@(\d+)\b")

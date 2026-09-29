@@ -1814,6 +1814,8 @@ async def _setup() -> None:
         plan_reset_approval_on_recreate=_config.plan_reset_approval_on_recreate,
         plan_require_planner_dispatch=_config.plan_require_planner_dispatch,
         plan_auto_approve=_config.plan_auto_approve,
+        path_memory_search_min_score=_config.path_memory_search_min_score,
+        path_memory_search_filename_weight=_config.path_memory_search_filename_weight,
     )
 
     # チェックポインタ（会話状態の永続化）。接続はアプリ寿命で保持する。

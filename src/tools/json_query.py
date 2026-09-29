@@ -13,6 +13,7 @@ from jmespath.exceptions import JMESPathError
 
 from ._duplicate_guard import _check_file_tools_duplicate
 from ._file_tools_common import read_text_with_fallback
+from ._path_memory_helpers import suggest_from_path_memory
 from ._safe_path import _resolve_file_tools_path
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,7 @@ def json_query(query: str, file_path: str = "", json_text: str = "") -> str:
     try:
         result = query_json(query, file_path=resolved_path, json_text=json_text or None)
     except ValueError as e:
-        return f"エラー: {e}"
+        hint = suggest_from_path_memory(str(resolved_path)) if resolved_path and not resolved_path.exists() else ""
+        return f"エラー: {e}{hint}"
     logger.info("json_query: %s", query)
     return json.dumps(result, ensure_ascii=False)

@@ -16,7 +16,7 @@ from .read_tool import read_tool
 from .glob_tool import glob_tool
 from .grep_tool import grep_tool
 from .json_query import json_query
-from .list_path_memory import list_path_memory
+from .search_path_memory import search_path_memory
 from .run_script_background import run_script_background
 from .check_script_job import check_script_job
 from .stop_script_job import stop_script_job
@@ -56,7 +56,7 @@ _SUBAGENT_TOOLS: list = [
     glob_tool,
     grep_tool,
     json_query,
-    list_path_memory,
+    search_path_memory,
     write_scratch_note,
     write_thread_note,
     list_thread_notes,
@@ -90,7 +90,7 @@ _BASE_TOOLS: list[BaseTool] = [
     glob_tool,
     grep_tool,
     json_query,
-    list_path_memory,
+    search_path_memory,
     write_thread_note,
     list_thread_notes,
     read_thread_note,

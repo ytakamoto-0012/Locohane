@@ -49,7 +49,7 @@ run_script, run_script_background, check_script_job, stop_script_job,
 execute_python_code, execute_python_code_background, execute_python_code_readonly,
 get_tool_source, check_work_dir_status, analyze_image,
 read_tool(=Read), glob_tool(=Glob), grep_tool(=Grep),
-json_query, list_path_memory, write_scratch_note,
+json_query, search_path_memory, write_scratch_note,
 write_thread_note, list_thread_notes, read_thread_note,
 create_memory, update_memory, delete_memory,
 read_memory, search_memory, list_memories

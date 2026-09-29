@@ -6,7 +6,7 @@ Read/Glob/Grep 等のツールが返す長い絶対パスに、短い数値イ�
 またがって正確に再生成できずタイプミスを頻発させる問題への対策。
 
 src/tools.py が `from . import path_memory` で直接importし、Read/Glob/Grep/
-json_query/list_path_memory/analyze_image/run_script の @N 登録・解決に使う
+json_query/search_path_memory/analyze_image/run_script の @N 登録・解決に使う
 （旧 skills/path-memory/scripts/_registry.py。ISSUE-003 で SKILL.md を持つ
 Agent Skill としての公開をやめ、アプリ基盤側の内部実装モジュールとして
 src/ へ移設した）。動作パラメータ（thread_id・レジストリ保存先・登録上限）は
@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import msvcrt
 import os
 import re
 import time
+import unicodedata
+from collections import Counter
 from pathlib import Path
 
 _TOKEN_RE = re.compile(r"^@(\d+)$")
@@ -205,6 +208,89 @@ def list_entries(thread_id: str, path_memory_dir: Path) -> list[dict]:
         }
         for i, e in enumerate(entries)
     ]
+
+
+def _normalize(s: str) -> str:
+    """類似度比較用にパス文字列を正規化する（全角半角・大文字小文字・区切り文字の揺れを吸収）。"""
+    s = unicodedata.normalize("NFKC", s).casefold().replace("\\", "/")
+    return s.rstrip("/")
+
+
+def _bigrams(s: str) -> Counter[str]:
+    """正規化済み文字列を文字2-gramの出現頻度に変換する（1文字なら1-gram）。
+
+    Python の str は Unicode 単位で扱うため、2バイト文字も1文字として分解される。
+    文字コード値をそのままベクトル成分にする方式と違い、1文字の挿入・削除で
+    以降の全成分がずれることがなく、部分一致や表記ゆれにも反応する。
+    """
+    if len(s) < 2:
+        return Counter([s]) if s else Counter()
+    return Counter(s[i : i + 2] for i in range(len(s) - 1))
+
+
+def _cosine(a: Counter[str], b: Counter[str]) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(count * b[gram] for gram, count in a.items() if gram in b)
+    if dot == 0:
+        return 0.0
+    norm_a = math.sqrt(sum(c * c for c in a.values()))
+    norm_b = math.sqrt(sum(c * c for c in b.values()))
+    return dot / (norm_a * norm_b)
+
+
+def similarity(query: str, path: str, filename_weight: float = 0.7) -> float:
+    """検索語と登録パスの類似度（0.0〜1.0）を返す。
+
+    ファイル名部分を重視したスコアと、フルパス全体のスコアの大きい方を採る
+    （検索語がファイル名だけでもフルパスでも機能させるため）。正規化後の
+    検索語がパスの部分文字列として含まれる場合は 1.0 とする。
+
+    Args:
+        query: 検索語。
+        path: 登録パス。
+        filename_weight: ファイル名との類似度に掛ける重み（残りはフルパス全体）。
+    """
+    q = _normalize(query)
+    p = _normalize(path)
+    if not q or not p:
+        return 0.0
+    if q in p:
+        return 1.0
+    q_grams = _bigrams(q)
+    full = _cosine(q_grams, _bigrams(p))
+    base = _cosine(q_grams, _bigrams(p.rsplit("/", 1)[-1]))
+    return max(filename_weight * base + (1 - filename_weight) * full, full)
+
+
+def search_entries(
+    thread_id: str,
+    query: str,
+    path_memory_dir: Path,
+    top_k: int = 5,
+    min_score: float = 0.3,
+    filename_weight: float = 0.7,
+) -> list[dict]:
+    """登録済みパスを検索語との類似度順に返す。
+
+    Args:
+        thread_id: 会話を識別する文字列。
+        query: 検索語（ファイル名・フォルダ名の一部やフルパス）。
+        path_memory_dir: レジストリファイルの保存先ディレクトリ。
+        top_k: 返す最大件数。
+        min_score: この類似度未満の登録は返さない。
+        filename_weight: `similarity()` の同名引数。
+
+    Returns:
+        `list_entries()` の各要素に `score`（小数2桁）を加えたもの（類似度の降順）。
+    """
+    scored = []
+    for entry in list_entries(thread_id, path_memory_dir):
+        score = similarity(query, entry["path"] or "", filename_weight)
+        if score >= min_score:
+            scored.append({**entry, "score": round(score, 2)})
+    scored.sort(key=lambda e: e["score"], reverse=True)
+    return scored[: max(top_k, 0)]
 
 
 def exec_tmp_dir(category: str | None = None) -> Path:

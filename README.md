@@ -115,7 +115,7 @@
        │  (OpenAI 互換)          │   │  run_script / execute_python_code /│
        └─────────────────────────┘   │  get_tool_source / check_work_dir_status /│
                                       │  Read / Glob / Grep / json_query / │
-                                      │  list_path_memory / analyze_image /│
+                                      │  search_path_memory / analyze_image /│
                                       │  dispatch_agent / create_plan /    │
                                       │  approve_plan / update_task_progress/│
                                       │  get_plan_status / lock_plan_mode /│
@@ -216,7 +216,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `check_work_dir_status` | 現在の作業ディレクトリの実際のアクセス状況を確認する |
 | `Read` / `Glob` / `Grep` | ローカルファイルシステム上の任意の絶対パスに対する読込・ファイル名検索・全文検索（ClaudeCode の同名ツールに合わせた名前。読み取り専用のため計画未承認でも常に呼べる。ロジックは `src/tools/read_tool.py`/`glob_tool.py`/`grep_tool.py`、共通処理は `_file_tools_common.py`） |
 | `json_query` | JSON/dict に対する JMESPath クエリ（読み取り専用） |
-| `list_path_memory` | 現在の会話のパスメモリー（`@N`）登録内容を一覧表示する（読み取り専用） |
+| `search_path_memory` | 現在の会話のパスメモリー（`@N`）から、ファイル名等に似たパスを類似検索する（文字bigram＋コサイン類似度、読み取り専用） |
 | `provide_download` | 既存のファイルをチャット画面にダウンロードボタンとして提示する |
 | `analyze_image` | 画像ファイルをLLMへ視覚情報として見せ、LLM自身が内容を解析・説明・判断する（Vision対応モデル向け）。`show_in_chat=True` を指定すると、解析と同時にチャット画面へもプレビュー表示する（「表示して」「見せて」にはこちらを使う。表示だけして中身を見ない、という呼び方はできない）。回答本文（Markdownテーブルのセル等）の中に画像を組み込みたい場合は、ツールを使わず回答テキストへ直接 `![説明](絶対パス)` と書けばよい（送信直前に自動でブラウザから取得可能なURLへ変換される。`app.py` の `_embed_local_images_as_session_urls`） |
 | `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される。任意の `orchestrator_skill` 引数（複数SKILLを横断的に使うオーケストレーター役SKILL.mdのスキル名）を指定すると、そのSKILL.md本文全体がtaskの先頭へ機械的に注入され、必須ルール・禁止事項の要約時の脱落を防ぐ（詳細は `skills/SKILLS_README.md` 7節）。完了までの間、進捗（経過時間・反復回数）をチャットへ直接通知しながら待つため、LLM自身がポーリングする必要は無い。設定した安全上限（`[subagent].background_inline_wait_max_seconds`）を超えてもなお完了しない場合のみ `job_id` を返してターンを終える |
@@ -404,7 +404,7 @@ Locohane/
 │   ├── pptx-render/         # PowerPointスライドの画像化
 │   ├── office_shared/       # docx/excel/pptx各スキルのscripts/が共有するPython共通処理（SKILL.mdを持たずLLMには公開されない）
 │   └── web-search/          # Tavily APIによるWeb検索（要APIキー設定）
-│       # Read/Glob/Grep/json_query/list_path_memory はネイティブツール化済み
+│       # Read/Glob/Grep/json_query/search_path_memory はネイティブツール化済み
 │       # （src/tools/read_tool.py 等、src/path_memory.py）。
 ├── tests/                   # pytestテストケース
 │   ├── conftest.py
@@ -1032,6 +1032,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[path_memory]` | `retention_days` | パスメモリーのレジストリファイル保持日数 | `PATH_MEMORY_RETENTION_DAYS` |
 | `[path_memory]` | `cleanup_interval_hours` | パスメモリーの自動削除チェック間隔（時間） | `PATH_MEMORY_CLEANUP_INTERVAL_HOURS` |
 | `[path_memory]` | `max_entries` | 1会話あたりのパスメモリー登録上限件数 | `PATH_MEMORY_MAX_ENTRIES` |
+| `[path_memory]` | `search_min_score` | パスメモリー類似検索（`search_path_memory`・「見つかりません」エラー時の候補提示）で結果に出す類似度（0.0〜1.0）の下限（既定0.3） | `PATH_MEMORY_SEARCH_MIN_SCORE` |
+| `[path_memory]` | `search_filename_weight` | 類似度計算でファイル名部分を重視する割合（既定0.7、残りはフルパス全体との類似度） | `PATH_MEMORY_SEARCH_FILENAME_WEIGHT` |
 | `[auth]` | `enabled` | ログイン認証機能のON/OFF（`false`＝現状通りログイン不要） | `AUTH_ENABLED` |
 | `[auth]` | `require_password` | 認証ON時、パスワード一致を必須にするか（`false`＝ユーザー名のみで通す） | `AUTH_REQUIRE_PASSWORD` |
 | `[chat_log]` | `enabled` | 会話ログ（ユーザー発言・AI最終応答）のテキストファイル記録の有効/無効 | `CHAT_LOG_ENABLED` |

@@ -9,7 +9,7 @@ import logging
 
 from ._duplicate_guard import _check_file_tools_duplicate
 from ._file_tools_common import looks_binary, read_text_with_fallback
-from ._path_memory_helpers import _register_path_memory
+from ._path_memory_helpers import _register_path_memory, suggest_from_path_memory
 from ._safe_path import _resolve_file_tools_path
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,8 @@ def read_tool(file_path: str, offset: int = 0, limit: int = 10) -> str:
     try:
         result = read_file(path, offset=offset, limit=limit)
     except ValueError as e:
-        return f"エラー: {e}"
+        hint = suggest_from_path_memory(str(path)) if not path.exists() else ""
+        return f"エラー: {e}{hint}"
     path_memory = _register_path_memory([result["path"]])
     if path_memory:
         result["path_memory"] = path_memory

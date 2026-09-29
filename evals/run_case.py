@@ -368,6 +368,8 @@ async def _run(case: EvalCase) -> dict:
             help_path=config.help_path,
             path_memory_dir=config.path_memory_dir,
             path_memory_max_entries=config.path_memory_max_entries,
+            path_memory_search_min_score=config.path_memory_search_min_score,
+            path_memory_search_filename_weight=config.path_memory_search_filename_weight,
             code_exec_enabled=config.code_exec_enabled,
             approval_timeout_seconds=config.approval_timeout_seconds,
             ask_user_question_timeout_seconds=config.ask_user_question_timeout_seconds,
