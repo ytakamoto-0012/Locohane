@@ -2000,7 +2000,11 @@ def load_config(
     path = config_path or DEFAULT_CONFIG_PATH
     if not path.exists():
         raise FileNotFoundError(path)
-    parser = configparser.ConfigParser()
+    # interpolation=None: configparser 標準の %(...)s 補間は使っていない
+    # （${common_data_dir} 等は独自置換）。既定の BasicInterpolation のままだと
+    # 値に "%" を1つ含むだけで ValueError になり、管理ツールから「残り10%」の
+    # ような値を保存できなかった（2026-09-29 レビューで発見）。
+    parser = configparser.ConfigParser(interpolation=None)
     parser.read(path, encoding="utf-8")
 
     resolved_overrides_path = overrides_path or _resolve(

@@ -153,6 +153,30 @@ def test_delete_instance_keeps_data_dir_outside_project_data(root, tmp_path, mon
     assert (tmp_path / "data" / "test2").is_dir()
 
 
+def test_delete_instance_keeps_other_instances_data_dir(root, tmp_path, monkeypatch):
+    """common_data_dir が別インスタンスのデータディレクトリを指していても、そちらは消さない。"""
+    monkeypatch.setattr(inst, "PROJECT_ROOT", tmp_path)
+    inst.ensure_default_instance(root)
+    inst.create_instance(root, CONFIG_INI_PATH, name="test2")
+    default_data = tmp_path / "data" / "default"
+    default_data.mkdir(parents=True, exist_ok=True)
+    (default_data / "checkpoints.sqlite").write_bytes(b"x")
+    monkeypatch.delenv("COMMON_DATA_DIR")
+    inst.overrides_path(root, "test2").write_text(
+        json.dumps({"paths": {"common_data_dir": str(default_data)}}), encoding="utf-8"
+    )
+    inst.delete_instance(root, "test2", CONFIG_INI_PATH)
+    assert (default_data / "checkpoints.sqlite").is_file()
+
+
+@pytest.mark.parametrize("copy_from", ["..", "../..", "nope"])
+def test_create_instance_rejects_invalid_copy_from(root, copy_from):
+    inst.ensure_default_instance(root)
+    with pytest.raises(inst.InstanceError):
+        inst.create_instance(root, CONFIG_INI_PATH, name="test2", copy_from=copy_from)
+    assert "test2" not in inst.list_instance_names(root)
+
+
 def test_delete_default_rejected(root):
     inst.ensure_default_instance(root)
     with pytest.raises(inst.InstanceError):

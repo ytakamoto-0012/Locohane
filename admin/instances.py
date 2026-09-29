@@ -172,6 +172,25 @@ def _effective_checkpoint_db(config_ini_path: Path, ov_path: Path, name: str) ->
     return cfg.checkpoint_db
 
 
+def _check_data_dir_conflict(instances_root: Path, config_ini_path: Path, *, name: str, own_checkpoint_db: Path) -> None:
+    """他インスタンスとのデータ保存先（checkpoint_db）の重複だけを検出する（ポートは見ない）。
+
+    check_conflicts() と check_data_dir_conflict_for_overrides() の共通処理。
+
+    Raises:
+        InstanceError: 重複が見つかった場合。
+    """
+    for other_name in list_instance_names(instances_root):
+        if other_name == name:
+            continue
+        other_checkpoint_db = _effective_checkpoint_db(config_ini_path, overrides_path(instances_root, other_name), other_name)
+        if other_checkpoint_db == own_checkpoint_db:
+            raise InstanceError(
+                f"データ保存先がインスタンス {other_name!r} と重複しています（{own_checkpoint_db}）。"
+                "[paths].common_data_dir を分けてください。"
+            )
+
+
 def check_conflicts(
     instances_root: Path,
     config_ini_path: Path,
@@ -194,12 +213,27 @@ def check_conflicts(
         other_meta = read_instance(instances_root, other_name)
         if other_meta.app_host == app_host and other_meta.app_port == app_port:
             raise InstanceError(f"ポート {app_host}:{app_port} は既にインスタンス {other_name!r} が使用しています。")
-        other_checkpoint_db = _effective_checkpoint_db(config_ini_path, overrides_path(instances_root, other_name), other_name)
-        if other_checkpoint_db == own_checkpoint_db:
-            raise InstanceError(
-                f"データ保存先がインスタンス {other_name!r} と重複しています（{own_checkpoint_db}）。"
-                "[paths].common_data_dir を分けてください。"
-            )
+    _check_data_dir_conflict(instances_root, config_ini_path, name=name, own_checkpoint_db=own_checkpoint_db)
+
+
+def check_data_dir_conflict_for_overrides(
+    instances_root: Path, config_ini_path: Path, *, name: str, overrides_tmp_path: Path
+) -> None:
+    """config_overrides.json 保存前の一時ファイルを反映した checkpoint_db が、
+    他インスタンスと重複していないかを確認する。
+
+    admin/overrides.py の preview()/save()/restore() から、
+    load_config() 自体の検証が成功した直後に呼ぶ（2026-09-29 レビューで発見：
+    設定ダッシュボードで [paths].common_data_dir を書き換えて他インスタンスと
+    同じデータディレクトリを指す状態のまま保存でき、後にそのインスタンスを
+    削除すると相手のデータまで消えてしまう事故があった。保存時点でここを
+    塞ぐことで根本的に防ぐ）。
+
+    Raises:
+        InstanceError: 重複が見つかった場合。
+    """
+    cfg = load_config(config_path=config_ini_path, overrides_path=overrides_tmp_path, instance_name=name)
+    _check_data_dir_conflict(instances_root, config_ini_path, name=name, own_checkpoint_db=cfg.checkpoint_db)
 
 
 def create_instance(
@@ -231,6 +265,13 @@ def create_instance(
     validate_name(name)
     if instance_dir(instances_root, name).exists():
         raise InstanceError(f"インスタンス {name!r} は既に存在します。")
+    if copy_from:
+        # 未検証のまま instances_root / copy_from に使うと ".." 等で instances/ の
+        # 外（プロジェクト直下の .env 等）をコピーできてしまうため、名前として
+        # 検証し、実在するインスタンスに限る。
+        validate_name(copy_from)
+        if not instance_json_path(instances_root, copy_from).is_file():
+            raise InstanceError(f"複製元のインスタンス {copy_from!r} が見つかりません。")
     if app_port is None:
         app_port = suggest_port(instances_root, app_host, exclude_ports=set())
 
@@ -309,16 +350,22 @@ def update_instance_meta(
 def _deletable_data_dir(config_ini_path: Path, instances_root: Path, name: str) -> Path | None:
     """インスタンス削除時に一緒に消してよいデータディレクトリ（無ければ None）。
 
-    checkpoint_db の親（= 既定では common_data_dir）が <プロジェクト>/data の
-    真下のサブディレクトリである場合のみ対象にする。data/ 自体や、利用者が
-    任意の場所へ変更したディレクトリは誤削除を避けるため消さない。
+    checkpoint_db の親（= 既定では common_data_dir）が <プロジェクト>/data/<name>
+    （そのインスタン自身の名前のサブディレクトリ）である場合のみ対象にする。
+    data/ 自体や、利用者が任意の場所へ変更したディレクトリはもちろん、
+    [paths].common_data_dir の書き間違い等で別インスタンスのディレクトリ
+    （例: data/default）を指してしまっている場合も、他インスタンスのデータを
+    巻き込んで消してしまわないよう対象から外す（2026-09-29 レビューで発見：
+    旧実装は「data/ の直下かどうか」しか見ておらず、bのcommon_data_dirを
+    誤って ./data/default に向けた状態で b を削除すると default のデータが
+    消えた）。
     """
     try:
         cfg = load_config(config_path=config_ini_path, overrides_path=overrides_path(instances_root, name), instance_name=name)
     except Exception:  # noqa: BLE001 - 設定が壊れていてもインスタンス自体の削除は妨げない
         return None
     data_dir = cfg.checkpoint_db.parent
-    if data_dir.parent == (PROJECT_ROOT / "data").resolve() and data_dir.is_dir():
+    if data_dir.parent == (PROJECT_ROOT / "data").resolve() and data_dir.name == name and data_dir.is_dir():
         return data_dir
     return None
 

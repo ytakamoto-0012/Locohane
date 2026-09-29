@@ -88,7 +88,9 @@ class SessionStore:
         if session is None:
             return None
         if session.expires_at < time.monotonic():
-            del self._sessions[token]
+            # pop: 同じ期限切れトークンでの同時リクエスト（スレッドプールで並行実行）
+            # で del が KeyError になり、401 ではなく 500 を返すのを防ぐ。
+            self._sessions.pop(token, None)
             return None
         session.expires_at = time.monotonic() + self._timeout_seconds
         return session.username

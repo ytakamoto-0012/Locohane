@@ -83,3 +83,29 @@ def test_read_users_missing_file_returns_empty(tmp_path):
 
 def test_read_values_missing_file_returns_empty(tmp_path):
     assert env_files.read_values(tmp_path / "nope.env") == {}
+
+
+@pytest.mark.parametrize("password", ["pa #ss", "with space", 'quo"te', "back\slash", "日本語#パス"])
+def test_write_users_roundtrip_with_special_characters(tmp_path, password):
+    """空白・#・引用符を含むパスワードも途中で切れずに読み戻せる（quote_mode="always"）。"""
+    env_path = tmp_path / ".env"
+    env_files.write_users(env_path, {"alice": password})
+    assert env_files.read_users(env_path) == {"alice": password}
+
+
+def test_write_extra_var_roundtrip_with_hash(tmp_path):
+    env_path = tmp_path / ".env"
+    env_files.write_extra_var(env_path, "MY_VAR", "a #b")
+    assert env_files.read_extra_vars(env_path) == {"MY_VAR": "a #b"}
+
+
+@pytest.mark.parametrize("key", sorted(env_files.UNTRACKABLE_KEYS) + ["common_data_dir"])
+def test_write_extra_var_rejects_untrackable_keys(tmp_path, key):
+    """管理ツールの重複チェック・稼働判定と食い違うキーはインスタンス .env に設定させない。"""
+    with pytest.raises(env_files.EnvFileError):
+        env_files.write_extra_var(tmp_path / ".env", key, "x")
+
+
+def test_write_extra_var_rejects_non_ascii_key(tmp_path):
+    with pytest.raises(env_files.EnvFileError):
+        env_files.write_extra_var(tmp_path / ".env", "変数", "x")

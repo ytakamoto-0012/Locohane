@@ -26,6 +26,16 @@ CHAINLIT_AUTH_SECRET_KEY = "CHAINLIT_AUTH_SECRET"
 # .env 上でこれらは admin/server.py の専用エンドポイント経由でのみ操作する
 # （env の汎用キー一覧編集エンドポイントからは隠す。誤って二重管理しない）。
 MANAGED_KEYS = frozenset({AUTH_USERS_KEY, CHAINLIT_AUTH_SECRET_KEY})
+# インスタンス .env に置くと管理ツール側の判定と食い違うため、汎用の環境変数
+# 編集からは設定させないキー。インスタンス .env は app.py が起動後に
+# override=True で読むが、管理ツール（ポート・データ保存先の重複チェック、
+# app.lock による稼働判定、削除時のデータディレクトリ判定）は .env を読まずに
+# load_config() するため、これらで保存先やインスタンス名を変えると検知・保護が
+# 効かなくなる（2026-09-29 レビューで発見）。データ保存先は設定画面の
+# [paths] から変更させる（そちらは重複チェックされる）。
+UNTRACKABLE_KEYS = frozenset(
+    {"LOCOHANE_INSTANCE", "LOCOHANE_INSTANCE_ENV", "CONFIG_OVERRIDES_PATH", "COMMON_DATA_DIR", "CHECKPOINT_DB"}
+)
 
 
 class EnvFileError(Exception):
@@ -66,7 +76,12 @@ def write_users(path: Path, users: dict[str, str]) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     if users:
-        dotenv.set_key(str(path), AUTH_USERS_KEY, _serialize_users(users), quote_mode="never")
+        # quote_mode="always": "never"（クォート無し）だと、パスワードに " "（空白）や
+        # "#"（コメント開始と誤認）を含む場合、python-dotenv の再パース時に値が
+        # 途中で切れてしまう（2026-09-29 レビューで発見・実機検証済み。例:
+        # "pa #ss" が "pa" までしか読み戻せなかった）。常にクォートすることで
+        # 空白・#・改行・引用符を含む値でも安全にラウンドトリップする。
+        dotenv.set_key(str(path), AUTH_USERS_KEY, _serialize_users(users), quote_mode="always")
     else:
         if path.is_file():
             dotenv.unset_key(str(path), AUTH_USERS_KEY)
@@ -80,7 +95,9 @@ def read_auth_secret(path: Path) -> str:
 def write_auth_secret(path: Path, secret: str) -> None:
     """CHAINLIT_AUTH_SECRET を書き換える。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    dotenv.set_key(str(path), CHAINLIT_AUTH_SECRET_KEY, secret, quote_mode="never")
+    # quote_mode="always" の理由は write_users() 参照（secrets.token_urlsafe()
+    # 由来の値のため実害は薄いが、統一しておく）。
+    dotenv.set_key(str(path), CHAINLIT_AUTH_SECRET_KEY, secret, quote_mode="always")
 
 
 def read_extra_vars(path: Path) -> dict[str, str]:
@@ -93,10 +110,16 @@ def write_extra_var(path: Path, key: str, value: str) -> None:
     """MANAGED_KEYS 以外の任意の環境変数を1つ設定する。"""
     if key in MANAGED_KEYS:
         raise EnvFileError(f"{key} は専用のエンドポイントから操作してください。")
-    if not key or not key.replace("_", "").isalnum() or key[0].isdigit():
+    if not key or not key.isascii() or not key.replace("_", "").isalnum() or key[0].isdigit():
         raise EnvFileError(f"環境変数名として不正です: {key!r}")
+    if key.upper() in UNTRACKABLE_KEYS:
+        raise EnvFileError(
+            f"{key} はインスタンスの .env では設定できません（管理ツールの重複チェック・稼働判定と"
+            "食い違うため）。データ保存先は設定画面の [paths] から変更してください。"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
-    dotenv.set_key(str(path), key, value, quote_mode="never")
+    # quote_mode="always" の理由は write_users() 参照。
+    dotenv.set_key(str(path), key, value, quote_mode="always")
 
 
 def delete_extra_var(path: Path, key: str) -> None:

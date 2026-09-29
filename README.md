@@ -464,7 +464,9 @@ Locohane/
 
 ## データの保存場所と手動削除の手順
 
-すべて `data/` 配下（`config.ini` の `[paths]`/`[uploads]`/`[elements]`/`[log]`/`[default_workdir]` 等の `dir` 系キーで変更可）。`data/` は `.gitignore` 済み。保存先ルートをまとめて変更したい場合は、各キーを個別に書き換える代わりに `[paths] common_data_dir`（既定 `./data/${instance}`）だけを変更すればよい（対応するキーの値は `${common_data_dir}` を参照する形で書かれている）。`${instance}` は起動中のインスタンス名（`app.bat` で直接起動した場合は `default`）に置換されるため、既定ではインスタンスごとに `data/<インスタンス名>/` へ分かれる。
+すべて `data/` 配下（`config.ini` の `[paths]`/`[uploads]`/`[elements]`/`[log]`/`[default_workdir]` 等の `dir` 系キーで変更可）。`data/` は `.gitignore` 済み。保存先ルートをまとめて変更したい場合は、各キーを個別に書き換える代わりに `[paths] common_data_dir`（既定 `./data/${instance}`）だけを変更すればよい（対応するキーの値は `${common_data_dir}` を参照する形で書かれている）。`${instance}` は起動中のインスタンス名（`app.bat` で直接起動した場合は `default`）に置換されるため、既定ではインスタンスごとに `data/<インスタンス名>/` へ分かれる。下表の `data/` は、既定設定では `data/<インスタンス名>/`（例: `data/default/`）を指す。
+
+**旧バージョン（データを `data/` 直下に保存していた版）からの移行:** 既定の保存先が `./data` から `./data/${instance}` に変わったため、そのまま起動すると過去のスレッド・永続メモリー等が見えなくなる（消えてはいない）。アプリ停止中に、`data/` 直下のファイル・フォルダ（`checkpoints.sqlite`・`chat_threads.sqlite`・`memory/`・`logs/`・`uploads/`・`elements/`・`plans/`・`path_memory/`・`logs_chat/`・`temp/`・`app.lock` 等）を `data/default/` へ移動すれば引き継げる。移動せず旧来の場所を使い続けたい場合は、管理ツールの設定画面で default インスタンスの `[paths] common_data_dir` を `./data` にする。
 
 | パス | 中身 | 削除してよいタイミング | 削除方法 |
 |------|------|------------------------|----------|
@@ -478,7 +480,7 @@ Locohane/
 | `data/elements/<thread_id>/` | 添付ファイル（`provide_download`/`analyze_image`の`show_in_chat=True`等）・回答本文への画像埋め込みの永続化先。スレッド再開・プロセス再起動後も表示できるようここへ実体をコピー保存する（`[elements]`参照、`src/thread_store.py`） | 添付ファイルが不要になったとき | フォルダ内を削除 |
 | `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（送信直後のライブ表示にのみ使う一時配信。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
 | `data/app.lock` | 同一データディレクトリへの多重起動を防ぐプロセス排他ロック（`src/instance_lock.py`）。空ファイルにOSのファイルロックをかけるだけで中身は使わない | アプリ停止中、削除しても実害はない | ファイルを削除（アプリ起動中は削除不可） |
-| `instances/<name>/` | 設定ダッシュボード（管理ツール）が管理するインスタンス別ディレクトリ（`config_overrides.json`・`.env`・`settings/`・`backups/`・`app_stdout.log`。データ本体は`data/<name>/`） | インスタンス自体が不要になったとき | 管理ツールの削除機能を使う（稼働中・`default`は不可。詳細は「設定ダッシュボード」節） |
+| `instances/<name>/` | 設定ダッシュボード（管理ツール）が管理するインスタンス別ディレクトリ（`config_overrides.json`・`.env`・`settings/`・`backups/`・`app_stdout.log`。データ本体は`data/<name>/`） | インスタンス自体が不要になったとき | 管理ツールの削除機能を使う（稼働中・`default`は不可。データディレクトリは、それが `data/<そのインスタンス名>/` である場合に限り一緒に削除される。詳細は「設定ダッシュボード」節） |
 
 `data/uploads/` は `config.ini` の `[uploads] retention_days`（既定7日）を過ぎたファイルを
 `cleanup_interval_hours`（既定1時間）おきに自動削除する。`retention_days` を0以下にすると
@@ -1273,12 +1275,14 @@ config.ini 既定の `[paths] common_data_dir = ./data/${instance}` により
 場合は、`memory_dir` を `${instance}` を含まない固定パスに上書きすればよい。
 作成時に既存インスタンスの設定を複製することもできる（複製元に
 `common_data_dir` の上書きがあっても、それだけは引き継がない）。ポート・
-データ保存先が他インスタンスと重複する場合は、作成・起動時にエラーとして
-拒否される。
+データ保存先が他インスタンスと重複する場合は、作成・起動時と、設定画面での
+保存・バックアップ復元時にエラーとして拒否される。
 
 インスタンスの削除では `instances/<name>/` と `data/<name>/` を削除する
-（`common_data_dir` を `data/` 直下以外へ変更している場合、そのデータは
-誤削除防止のため残す）。稼働中のインスタンスと `default` は削除できない。
+（データ保存先が `data/<そのインスタンス名>/` 以外を指している場合、その
+データは他インスタンスの巻き込みを含む誤削除防止のため残す）。稼働中の
+インスタンスと `default` は削除できない。設定（`config_overrides.json`）が
+壊れていて状態を解決できないインスタンスは「設定エラー」と表示される。
 
 表示名・ホスト・ポート・自動起動の有無・下記の `headless`/`watch` は、
 作成後もインスタンスカードの「編集」から変更できる（ホスト・ポートの
@@ -1305,6 +1309,13 @@ config.ini 既定の `[paths] common_data_dir = ./data/${instance}` により
 `python-dotenv` の挙動を利用している）。そのため `app.bat` で直接起動して
 も `default` インスタンスの `.env` が使われ、管理ツール経由の起動と同じ
 挙動になる。
+
+「環境変数」タブでは、`LOCOHANE_INSTANCE`・`LOCOHANE_INSTANCE_ENV`・
+`CONFIG_OVERRIDES_PATH`・`COMMON_DATA_DIR`・`CHECKPOINT_DB` は設定できない
+（管理ツールは重複チェックや稼働判定の際にインスタンスの `.env` を読まない
+ため、これらで保存先やインスタンス名を変えると判定と食い違う。データ保存先は
+設定画面の `[paths]` から変更する）。値は常に引用符付きで書き込むため、
+空白や `#` を含むパスワード・値もそのまま保存できる。
 
 インスタンス専用のユーザーを1人も設定していない間は、プロジェクト直下
 `.env` の `AUTH_USERS` を継承しているものとしてUIに表示される。ユーザーを

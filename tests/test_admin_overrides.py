@@ -30,9 +30,17 @@ def workdir(tmp_path):
     return tmp_path
 
 
-def _save(workdir, catalog, updates=None, resets=None, base_mtime=None):
+# base_mtime を省略した場合は「直前に最新状態を読み込んだクライアント」
+# （admin.js は保存のたびに configMtime を取り直す）として現在の mtime を使う。
+_CURRENT_MTIME = object()
+
+
+def _save(workdir, catalog, updates=None, resets=None, base_mtime=_CURRENT_MTIME):
+    path = workdir / "config_overrides.json"
+    if base_mtime is _CURRENT_MTIME:
+        base_mtime = overrides.mtime_or_none(path)
     return overrides.save(
-        path=workdir / "config_overrides.json",
+        path=path,
         updates=updates or {},
         resets=resets or [],
         base_mtime=base_mtime,
@@ -91,6 +99,63 @@ def test_conflict_detection(workdir, catalog):
     _save(workdir, catalog, updates={("ui", "max_display_messages"): "77"})
     with pytest.raises(overrides.ConflictError):
         _save(workdir, catalog, updates={("ui", "max_display_messages"): "88"}, base_mtime=0.0)
+
+
+def test_conflict_detection_when_base_mtime_none_but_file_exists(workdir, catalog):
+    """未保存状態で画面を開いた（base_mtime=None）間に別タブが初回保存を済ませていたら競合。"""
+    _save(workdir, catalog, updates={("ui", "max_display_messages"): "77"})
+    with pytest.raises(overrides.ConflictError):
+        _save(workdir, catalog, updates={("ui", "max_display_messages"): "88"}, base_mtime=None)
+
+
+def test_value_with_percent_sign_can_be_saved(workdir, catalog):
+    """configparser の % 補間を無効化しているため、% を含む値も保存・読み込みできる。"""
+    result = _save(workdir, catalog, updates={("llm", "reasoning_budget_message"): "残り10%です"})
+    assert result == {"llm": {"reasoning_budget_message": "残り10%です"}}
+
+
+def _make_instance(instances_root: Path, name: str, overrides_data: dict | None = None) -> None:
+    d = instances_root / name
+    d.mkdir(parents=True)
+    (d / "instance.json").write_text("{}", encoding="utf-8")
+    if overrides_data is not None:
+        (d / "config_overrides.json").write_text(json.dumps(overrides_data), encoding="utf-8")
+
+
+def test_save_rejects_data_dir_shared_with_other_instance(tmp_path, catalog, monkeypatch):
+    """[paths].common_data_dir を他インスタンスと同じにする保存は拒否し、ファイルも作らない。"""
+    monkeypatch.delenv("COMMON_DATA_DIR")
+    instances_root = tmp_path / "instances"
+    _make_instance(instances_root, "a", {"paths": {"common_data_dir": str(tmp_path / "data" / "a")}})
+    _make_instance(instances_root, "b")
+    target = instances_root / "b" / "config_overrides.json"
+    with pytest.raises(overrides.ValidationError, match="重複"):
+        overrides.save(
+            path=target,
+            updates={("paths", "common_data_dir"): str(tmp_path / "data" / "a")},
+            resets=[],
+            base_mtime=None,
+            ini_catalog=catalog,
+            config_ini_path=CONFIG_INI_PATH,
+            backup_dir=instances_root / "b" / "backups",
+            backup_keep=5,
+            audit_log_path=tmp_path / "audit.log",
+            instance_name="b",
+            actor="alice",
+            remote_addr="127.0.0.1",
+            instances_root=instances_root,
+        )
+    assert not target.exists()
+    with pytest.raises(overrides.ValidationError, match="重複"):
+        overrides.preview(
+            path=target,
+            updates={("paths", "common_data_dir"): str(tmp_path / "data" / "a")},
+            resets=[],
+            ini_catalog=catalog,
+            config_ini_path=CONFIG_INI_PATH,
+            instance_name="b",
+            instances_root=instances_root,
+        )
 
 
 def test_backup_created_on_second_save(workdir, catalog):

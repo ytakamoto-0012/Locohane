@@ -105,6 +105,7 @@ const STATE_LABELS = {
   stopped: "停止中",
   external: "外部で起動中",
   crashed: "異常終了",
+  error: "設定エラー",
 };
 
 let instanceCache = [];

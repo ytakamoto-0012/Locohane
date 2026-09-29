@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import secrets as _secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -90,10 +91,26 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def require_login(request: Request, locohane_admin_session: str | None = Cookie(default=None)) -> str:
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        auth.SESSION_COOKIE_NAME,
+        token,
+        httponly=True,
+        samesite="strict",
+        max_age=_cfg.admin_session_timeout_minutes * 60,
+    )
+
+
+def require_login(
+    request: Request, response: Response, locohane_admin_session: str | None = Cookie(default=None)
+) -> str:
     username = _sessions.validate(locohane_admin_session)
     if username is None:
         raise HTTPException(status_code=401, detail="ログインが必要です。")
+    # サーバー側のスライディングタイムアウト（SessionStore.validate）に合わせて
+    # Cookie の max_age も毎回延ばす（2026-09-29 レビューで発見：ログイン時に
+    # 1回設定するだけだと、操作中でもログインから一定時間でCookieが失効していた）。
+    _set_session_cookie(response, locohane_admin_session)
     return username
 
 
@@ -125,13 +142,7 @@ def login(body: LoginBody, request: Request, response: Response):
         raise HTTPException(status_code=401, detail="ユーザー名またはパスワードが違います。")
     _throttle.record_success(ip)
     token = _sessions.create(body.username)
-    response.set_cookie(
-        auth.SESSION_COOKIE_NAME,
-        token,
-        httponly=True,
-        samesite="strict",
-        max_age=_cfg.admin_session_timeout_minutes * 60,
-    )
+    _set_session_cookie(response, token)
     return {"username": body.username}
 
 
@@ -329,7 +340,16 @@ def _config_key_view(name: str) -> dict[str, Any]:
     catalog = parse_ini_file(CONFIG_INI_PATH)
     ov_path = inst.overrides_path(INSTANCES_ROOT, name)
     ov = overrides.read(ov_path)
-    active_env = env_overrides.active_overrides(_env_var_mapping)
+    # 起動時の実際の優先度（app.py 参照）と同じ順で合成する:
+    # インスタンス .env（override=True）> OS環境変数 > プロジェクト直下 .env。
+    # 管理ツール自身の os.environ だけを見ると、.env 由来の上書きにバッジが
+    # 付かず「保存したのに反映されない」原因が分からなかった。
+    effective_env = {
+        **env_files.read_values(PROJECT_ENV_PATH),
+        **os.environ,
+        **env_files.read_values(inst.env_path(INSTANCES_ROOT, name)),
+    }
+    active_env = env_overrides.active_overrides(_env_var_mapping, effective_env)
     keys = []
     for info in catalog.keys:
         override_value = ov.get(info.section, {}).get(info.key)
@@ -390,6 +410,7 @@ def preview_instance_config(name: str, body: ConfigUpdateBody, user: str = Depen
             ini_catalog=catalog,
             config_ini_path=CONFIG_INI_PATH,
             instance_name=name,
+            instances_root=INSTANCES_ROOT,
         )
     except overrides.ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -420,6 +441,7 @@ def put_instance_config(
             instance_name=name,
             actor=user,
             remote_addr=_client_ip(request),
+            instances_root=INSTANCES_ROOT,
         )
     except overrides.ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -463,6 +485,7 @@ def restore_backup(
             instance_name=name,
             actor=user,
             remote_addr=_client_ip(request),
+            instances_root=INSTANCES_ROOT,
         )
     except overrides.ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

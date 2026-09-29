@@ -92,3 +92,22 @@ def test_has_csrf_header_present_and_absent():
     assert auth.has_csrf_header({"x-locohane-admin": "1"}) is True
     assert auth.has_csrf_header({}) is False
     assert auth.has_csrf_header({"x-locohane-admin": "0"}) is False
+
+
+def test_session_store_expired_token_validate_twice_does_not_raise():
+    """期限切れトークンの同時検証（2回目は既に掃除済み）でも KeyError にならない。"""
+    store = auth.SessionStore(timeout_minutes=60)
+    token = store.create("alice")
+    # sleep に頼ると Windows の monotonic 分解能（約15ms）で期限切れにならないことがある。
+    store._sessions[token].expires_at = time.monotonic() - 1
+
+    class _RacyDict(dict):
+        """get() は期限切れセッションを返すが、掃除の直前に別スレッドが消した状況を再現する。"""
+
+        def get(self, key, default=None):
+            value = super().get(key, default)
+            super().pop(key, None)
+            return value
+
+    store._sessions = _RacyDict(store._sessions)
+    assert store.validate(token) is None

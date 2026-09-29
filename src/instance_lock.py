@@ -19,7 +19,12 @@ OSが自動的に解放するため、PIDファイル方式のような「前回
 from __future__ import annotations
 
 import msvcrt
+import time
 from pathlib import Path
+
+# acquire() の再試行回数と間隔（is_locked() の一瞬のロックとの衝突を避ける用）。
+_ACQUIRE_ATTEMPTS = 3
+_ACQUIRE_RETRY_INTERVAL_SECONDS = 0.1
 
 # プロセス生存中、ハンドルを保持し続けるためのモジュールグローバル。
 # ローカル変数のままにすると関数を抜けた時点でGCされ、ロックが即座に
@@ -47,9 +52,22 @@ def acquire(lock_path: Path) -> None:
         # 到達しない（作成済みなら st_size>0 でスキップされる）ため競合しない。
         lock_path.write_bytes(b"0")
     f = open(lock_path, "r+b")
-    try:
-        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError as exc:
+    # 管理ツールの is_locked() は判定のために一瞬だけロックを取って手放すため、
+    # その瞬間と重なると未起動なのに取得に失敗しうる。数回だけ間を置いて
+    # 再試行し、本当に保持され続けている場合のみ多重起動とみなす
+    # （2026-09-29 レビューで発見）。
+    last_exc: OSError | None = None
+    for attempt in range(_ACQUIRE_ATTEMPTS):
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            last_exc = None
+            break
+        except OSError as exc:
+            last_exc = exc
+            if attempt + 1 < _ACQUIRE_ATTEMPTS:
+                time.sleep(_ACQUIRE_RETRY_INTERVAL_SECONDS)
+    if last_exc is not None:
+        exc = last_exc
         f.close()
         raise InstanceAlreadyRunningError(
             f"Locohane は既に別プロセスで起動中です（データディレクトリ: {lock_path.parent}）。"

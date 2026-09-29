@@ -11,15 +11,23 @@ import json
 import time
 from pathlib import Path
 
-# 値をマスクする対象と判定するキー名の断片（小文字比較）。
-_SENSITIVE_KEY_MARKERS = ("api_key", "password", "secret", "token")
+# 値をマスクする対象と判定するキー名の断片（小文字・部分一致）。
+_SENSITIVE_KEY_MARKERS = ("api_key", "apikey", "password", "passwd", "secret")
+# "token" は部分一致にすると max_tokens / track_token_usage /
+# reasoning_budget_tokens 等の非機密キーまで丸ごとマスクされ変更履歴が
+# 追えなくなる（2026-09-29 レビューで発見）。"_" 区切りの末尾の単語が
+# token（HF_TOKEN / ACCESS_TOKEN 等）の場合だけ機密とみなす。
+_SENSITIVE_LAST_WORDS = frozenset({"token"})
 # キー名そのものには上記の断片を含まないが、値の内部構造に機密情報を
-# 埋め込みうる既知のキー（完全一致で判定）。[llm].main_url/sub_url は
-# {"base_url":..., "api_key":..., "model":...} のリストで、api_key は
-# キー名ではなくJSON内のフィールド名として埋まるため、_SENSITIVE_KEY_MARKERS
-# の部分一致だけでは拾えない。値全体を丸ごとマスクする（部分マスクは
-# JSON構造を壊すリスクがあり割に合わないため）。
-_SENSITIVE_EXACT_KEYS = frozenset({"main_url", "sub_url"})
+# 埋め込みうる既知のキー（完全一致で判定）。[llm].main_url/sub_url
+# （環境変数では LLM_MAIN_URL/LLM_SUB_URL）は {"base_url":..., "api_key":...,
+# "model":...} のリストで、api_key はキー名ではなくJSON内のフィールド名として
+# 埋まるため、_SENSITIVE_KEY_MARKERS の部分一致だけでは拾えない。
+# AUTH_USERS/ADMIN_USERS は値にパスワードを含む。いずれも値全体を丸ごと
+# マスクする（部分マスクはJSON構造を壊すリスクがあり割に合わないため）。
+_SENSITIVE_EXACT_KEYS = frozenset(
+    {"main_url", "sub_url", "llm_main_url", "llm_sub_url", "auth_users", "admin_users"}
+)
 
 _MASKED = "***"
 
@@ -28,6 +36,8 @@ def is_sensitive_key(key: str) -> bool:
     """キー名（例: "main_url" や "AUTH_USERS"）が機密情報らしいかを判定する。"""
     lowered = key.lower()
     if lowered in _SENSITIVE_EXACT_KEYS:
+        return True
+    if lowered.rsplit("_", 1)[-1] in _SENSITIVE_LAST_WORDS:
         return True
     return any(marker in lowered for marker in _SENSITIVE_KEY_MARKERS)
 

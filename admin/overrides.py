@@ -18,6 +18,7 @@ from pathlib import Path
 from src.config import load_config
 
 from . import audit
+from . import instances as inst
 from .ini_catalog import IniCatalog
 
 # [admin] セクションは管理ツール自身の起動設定であり、インスタンス別の
@@ -127,6 +128,28 @@ def _build_new_data(
     return {section: kv for section, kv in new_data.items() if kv}
 
 
+def _check_data_dir_conflict(
+    instances_root: Path | None, config_ini_path: Path, *, instance_name: str | None, tmp_path: Path
+) -> None:
+    """instances_root が指定されていれば、他インスタンスとのデータ保存先重複を検証する（無ければ何もしない）。
+
+    load_config() 自体の検証（型・enum等）が成功した直後に呼ぶこと
+    （2026-09-29 レビューで発見：[paths].common_data_dir を他インスタンスと
+    同じ値に書き換えて保存できてしまい、後でそちらのインスタンスを削除すると
+    相手のデータごと消える事故があった。admin/instances.py の
+    check_data_dir_conflict_for_overrides() 参照）。instances_root は
+    テスト等でこのモジュールを単体利用する際の後方互換のため省略可能。
+    """
+    if instances_root is None or instance_name is None:
+        return
+    try:
+        inst.check_data_dir_conflict_for_overrides(
+            instances_root, config_ini_path, name=instance_name, overrides_tmp_path=tmp_path
+        )
+    except inst.InstanceError as exc:
+        raise ValidationError(str(exc)) from exc
+
+
 def preview(
     *,
     path: Path,
@@ -135,10 +158,15 @@ def preview(
     ini_catalog: IniCatalog,
     config_ini_path: Path,
     instance_name: str | None = None,
+    instances_root: Path | None = None,
 ) -> tuple[dict[str, dict[str, str]], list[dict]]:
     """保存せずに、適用結果の overrides dict と変更点の差分を返す（「変更を確認」用）。
 
     保存時と同じ load_config() 検証を行うが、ファイルは一切書き換えない。
+
+    Args:
+        instances_root: 指定すると、他インスタンスとのデータ保存先重複も検証する
+            （_check_data_dir_conflict() 参照）。
 
     Returns:
         (新しい overrides dict, _diff() と同形式の変更点リスト)。
@@ -158,6 +186,7 @@ def preview(
             load_config(config_path=config_ini_path, overrides_path=tmp_path, instance_name=instance_name)
         except Exception as exc:  # noqa: BLE001 - 原因をそのままUIへ伝える
             raise ValidationError(f"設定の検証に失敗しました: {exc}") from exc
+        _check_data_dir_conflict(instances_root, config_ini_path, instance_name=instance_name, tmp_path=tmp_path)
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -178,6 +207,7 @@ def save(
     instance_name: str,
     actor: str,
     remote_addr: str,
+    instances_root: Path | None = None,
 ) -> dict[str, dict[str, str]]:
     """updates/resets を既存の overrides に適用し、検証・保存・監査記録する。
 
@@ -190,17 +220,27 @@ def save(
         base_mtime: 編集開始時に取得した path の mtime。None は「競合チェック
             をしない」ではなく「新規作成（path が未作成である前提）」を意味する。
             実際の mtime と食い違えば ConflictError（他セッションが先に保存済み）。
+        instances_root: 指定すると、他インスタンスとのデータ保存先重複も検証する
+            （_check_data_dir_conflict() 参照）。
 
     Returns:
         保存後の overrides dict 全体（API レスポンス用）。
 
     Raises:
         ConflictError: 保存直前の実際の mtime が base_mtime と一致しない。
+            base_mtime が None（「新規作成のつもり」）でも、実際には既に
+            ファイルが存在していれば同様に競合とみなす（他セッションが
+            先に「初回保存」を済ませていた場合の検出漏れを防ぐ）。
         ValidationError: 存在しないキーが指定された、[admin] セクションが
             指定された、または新しい設定値で load_config() の検証が失敗した。
     """
     actual_mtime = mtime_or_none(path)
-    if base_mtime is not None and actual_mtime is not None and abs(actual_mtime - base_mtime) > 1e-6:
+    if base_mtime is None:
+        if actual_mtime is not None:
+            raise ConflictError(
+                "他のセッション/ブラウザタブで既に保存されています。画面を再読み込みしてから編集し直してください。"
+            )
+    elif actual_mtime is not None and abs(actual_mtime - base_mtime) > 1e-6:
         raise ConflictError(
             "他のセッション/ブラウザタブで既に保存されています。画面を再読み込みしてから編集し直してください。"
         )
@@ -223,6 +263,7 @@ def save(
             load_config(config_path=config_ini_path, overrides_path=tmp_path, instance_name=instance_name)
         except Exception as exc:  # noqa: BLE001 - 原因をそのままUIへ伝える
             raise ValidationError(f"設定の検証に失敗しました: {exc}") from exc
+        _check_data_dir_conflict(instances_root, config_ini_path, instance_name=instance_name, tmp_path=tmp_path)
 
         _backup(path, backup_dir, backup_keep)
         os.replace(tmp_path, path)
@@ -256,11 +297,16 @@ def restore(
     instance_name: str,
     actor: str,
     remote_addr: str,
+    instances_root: Path | None = None,
 ) -> dict[str, dict[str, str]]:
     """バックアップファイルの内容で config_overrides.json を丸ごと置き換える。
 
     復元前の現状も _backup() で退避してから上書きする（誤って古いバックアップを
     選んでも、直前の状態に戻せるようにするため）。
+
+    Args:
+        instances_root: 指定すると、他インスタンスとのデータ保存先重複も検証する
+            （_check_data_dir_conflict() 参照）。
 
     Raises:
         ValidationError: backup_file が存在しない、JSON構文が不正、
@@ -283,6 +329,7 @@ def restore(
             load_config(config_path=config_ini_path, overrides_path=tmp_path, instance_name=instance_name)
         except Exception as exc:  # noqa: BLE001
             raise ValidationError(f"バックアップの検証に失敗しました: {exc}") from exc
+        _check_data_dir_conflict(instances_root, config_ini_path, instance_name=instance_name, tmp_path=tmp_path)
 
         _backup(path, backup_dir, backup_keep)
         os.replace(tmp_path, path)

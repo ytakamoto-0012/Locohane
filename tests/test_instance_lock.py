@@ -92,3 +92,23 @@ async def test_on_app_startup_treats_any_instance_lock_failure_as_fatal(monkeypa
         await app._on_app_startup()
 
     assert exit_calls == [1]
+
+
+def test_acquire_retries_transient_lock_failure(tmp_path, monkeypatch):
+    """管理ツールの is_locked() が一瞬ロックを取った瞬間と重なって1回目が失敗しても、
+    再試行で取得できる（未起動なのに多重起動と誤判定しない）。"""
+    lock_path = tmp_path / "app.lock"
+    real_locking = msvcrt.locking
+    calls = {"n": 0}
+
+    def flaky_locking(fd, mode, nbytes):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("transient")
+        return real_locking(fd, mode, nbytes)
+
+    monkeypatch.setattr(instance_lock.msvcrt, "locking", flaky_locking)
+    monkeypatch.setattr(instance_lock, "_ACQUIRE_RETRY_INTERVAL_SECONDS", 0)
+    instance_lock.acquire(lock_path)
+    monkeypatch.setattr(instance_lock.msvcrt, "locking", real_locking)
+    assert calls["n"] == 2
