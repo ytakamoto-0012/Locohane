@@ -1049,6 +1049,13 @@ class Config:
     # 上記と同様、表示専用の間引きでありLLMへ渡す会話コンテキストや会話ログには
     # 影響しない（frontend/src/App.tsx / messageTree.ts 参照）。
     ui_max_display_side_steps: int
+    # 入力欄へこの文字数以上のテキストを貼り付けたら、入力欄へ展開せず
+    # 「貼り付けテキスト」添付（pasted-text-*.txt）として扱う（0以下で無効。
+    # frontend/src/components/Composer.tsx、app.py の _build_human_message 参照）。
+    ui_paste_as_attachment_threshold_chars: int
+    # 1回の送信で受け付ける最大文字数（本文＋貼り付けテキストの合計。0以下で
+    # 無制限）。フロントエンドで送信を止め、app.py の on_message でも拒否する。
+    ui_max_input_chars: int
     # トークン使用量カード（TokenUsageCard）の「リクエスト1回あたり」行で、
     # 直近1回のLLM呼び出しの合計トークン数（total）がこの値以上になったら、
     # 該当行をオレンジ太字で強調表示する（0以下で無効。frontend/src/components/
@@ -2659,6 +2666,12 @@ def load_config(
         ui_max_display_side_steps=int(
             os.getenv("UI_MAX_DISPLAY_SIDE_STEPS", ui.get("max_display_side_steps", 50))
         ),
+        ui_paste_as_attachment_threshold_chars=int(
+            os.getenv(
+                "UI_PASTE_AS_ATTACHMENT_THRESHOLD_CHARS", ui.get("paste_as_attachment_threshold_chars", 2000)
+            )
+        ),
+        ui_max_input_chars=int(os.getenv("UI_MAX_INPUT_CHARS", ui.get("max_input_chars", 30000))),
         ui_token_usage_warn_threshold=int(
             os.getenv("UI_TOKEN_USAGE_WARN_THRESHOLD", ui.get("token_usage_warn_threshold", 48000))
         ),

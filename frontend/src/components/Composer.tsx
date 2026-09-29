@@ -5,11 +5,27 @@ import type { IFileRef, IStep } from '@chainlit/react-client';
 import { WorkDirButton } from './WorkDirButton';
 import { PlanModeBadge } from './PlanModeBadge';
 import { Icon } from './Icon';
+import type { InputLimits } from '../utils/messageTree';
 
 export interface PendingAttachment {
   name: string;
   fileRef?: IFileRef;
   uploading: boolean;
+  // 入力欄への長文貼り付けから生成した添付の場合、その本文（カード表示・文字数
+  // カウント・askUser返信時の本文展開に使う）。通常のファイル添付では undefined。
+  pastedText?: string;
+}
+
+// 貼り付けテキストカードに表示する冒頭プレビューの最大文字数（全文を
+// DOMへ流し込むと貼り付け時と同じくブラウザが固まるため切り詰める）。
+const PASTED_PREVIEW_CHARS = 200;
+// 文字数カウンターを表示し始める、最大入力文字数に対する割合。
+const CHAR_COUNTER_SHOW_RATIO = 0.8;
+
+function countLines(text: string): number {
+  let lines = 1;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lines++;
+  return lines;
 }
 
 interface ComposerProps {
@@ -30,8 +46,12 @@ interface ComposerProps {
   // App.tsx側で保持し、controlled propsとして受け取る。
   attachments: PendingAttachment[];
   onAttach: (files: FileList | File[] | null) => void;
+  // 長文の貼り付けを textarea へ展開せず添付化する（App.tsx の handleAttachPastedText）。
+  onAttachPastedText: (text: string) => void;
   onRemoveAttachment: (index: number) => void;
   onAttachmentsSent: () => void;
+  // 貼り付けテキスト化の閾値・最大入力文字数（config.ini [ui]、app.py の INPUT_LIMITS_PREFIX）。
+  inputLimits: InputLimits;
 }
 
 export function Composer({
@@ -42,12 +62,15 @@ export function Composer({
   workDirEditable,
   attachments,
   onAttach,
+  onAttachPastedText,
   onRemoveAttachment,
-  onAttachmentsSent
+  onAttachmentsSent,
+  inputLimits
 }: ComposerProps) {
   const { askUser, disabled, loading } = useChatData();
   const { sendMessage, replyMessage, stopTask } = useChatInteract();
   const [value, setValue] = useState('');
+  const [pasteError, setPasteError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isReplying = askUser?.spec.type === 'text';
@@ -55,7 +78,18 @@ export function Composer({
   // 処理中の間は送信自体を止める。
   const inputBlocked = disabled || Boolean(remoteGenerating) || Boolean(blockedByOtherThread);
 
+  // 最大入力文字数の判定対象は、入力欄の本文＋貼り付けテキストの合計
+  // （app.py の _check_input_length と同じ数え方）。
+  const { pasteAsAttachmentThresholdChars, maxInputChars } = inputLimits;
+  const pastedChars = attachments.reduce((sum, a) => sum + (a.pastedText?.length ?? 0), 0);
+  const totalChars = value.length + pastedChars;
+  const overLimit = maxInputChars > 0 && totalChars > maxInputChars;
+  const showCharCounter = maxInputChars > 0 && totalChars >= maxInputChars * CHAR_COUNTER_SHOW_RATIO;
+  // アップロード完了前に送信すると fileRef の無い添付が黙って落ちるため待たせる。
+  const uploading = attachments.some((a) => a.uploading);
+
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    setPasteError(null);
     const items = Array.from(e.clipboardData?.items ?? []);
     const imageFiles = items
       .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
@@ -67,13 +101,30 @@ export function Composer({
         const renamed = new File([file], `clipboard-${Date.now()}-${i}.${ext}`, { type: file.type });
         return renamed;
       });
-    if (imageFiles.length === 0) return;
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      onAttach(imageFiles);
+      return;
+    }
+
+    // 長文はブラウザの既定動作（textareaへの挿入）に任せると描画で固まるため、
+    // 既定動作を止めて「貼り付けテキスト」カードとして添付化する。
+    if (pasteAsAttachmentThresholdChars <= 0) return;
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    if (text.length < pasteAsAttachmentThresholdChars) return;
     e.preventDefault();
-    onAttach(imageFiles);
+    if (maxInputChars > 0 && totalChars + text.length > maxInputChars) {
+      setPasteError(
+        `貼り付けたテキスト（${text.length.toLocaleString()}文字）を追加すると上限` +
+          `（${maxInputChars.toLocaleString()}文字）を超えるため、追加しませんでした。`
+      );
+      return;
+    }
+    onAttachPastedText(text);
   };
 
   const submit = () => {
-    if (inputBlocked || (!value.trim() && attachments.length === 0)) return;
+    if (inputBlocked || overLimit || uploading || (!value.trim() && attachments.length === 0)) return;
 
     const message: IStep = {
       threadId: '',
@@ -86,6 +137,9 @@ export function Composer({
     };
 
     if (isReplying && askUser) {
+      // askUser への返信はファイル参照を送れないため、貼り付けテキストは本文へ展開する。
+      const pastedTexts = attachments.flatMap((a) => (a.pastedText !== undefined ? [a.pastedText] : []));
+      if (pastedTexts.length > 0) message.output = [value, ...pastedTexts].filter((t) => t).join('\n\n');
       replyMessage(message);
     } else {
       const fileReferences = attachments.filter((a) => a.fileRef).map((a) => ({ id: a.fileRef!.id }));
@@ -93,6 +147,7 @@ export function Composer({
     }
 
     setValue('');
+    setPasteError(null);
     onAttachmentsSent();
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -117,9 +172,39 @@ export function Composer({
           他の会話が処理中です。完了するまで新しい送信はできません。
         </div>
       ) : null}
-      {attachments.length > 0 ? (
+      {attachments.some((a) => a.pastedText !== undefined) ? (
+        <div className="composer-pasted-cards">
+          {attachments.map((a, i) =>
+            a.pastedText === undefined ? null : (
+              <div key={i} className="composer-pasted-card" title={a.name}>
+                <div className="composer-pasted-card-header">
+                  <span className="composer-pasted-card-title">
+                    {a.uploading ? <span className="attachment-chip-spinner" /> : null}
+                    貼り付けテキスト
+                  </span>
+                  <button
+                    type="button"
+                    className="composer-attachment-remove"
+                    title="貼り付けテキストを削除"
+                    onClick={() => onRemoveAttachment(i)}
+                  >
+                    <Icon name="x" size={10} />
+                  </button>
+                </div>
+                <div className="composer-pasted-card-preview">{a.pastedText.slice(0, PASTED_PREVIEW_CHARS)}</div>
+                <div className="composer-pasted-card-meta">
+                  {a.pastedText.length.toLocaleString()}文字 · {countLines(a.pastedText).toLocaleString()}行
+                </div>
+              </div>
+            )
+          )}
+        </div>
+      ) : null}
+      {pasteError ? <div className="composer-paste-error">{pasteError}</div> : null}
+      {attachments.some((a) => a.pastedText === undefined) ? (
         <div className="composer-attachments">
-          {attachments.map((a, i) => (
+          {attachments.map((a, i) =>
+            a.pastedText !== undefined ? null : (
             <span key={i} className="composer-attachment-chip">
               {a.uploading ? <span className="attachment-chip-spinner" /> : <Icon name="paperclip" size={12} />}
               {a.name}
@@ -132,7 +217,8 @@ export function Composer({
                 <Icon name="x" size={10} />
               </button>
             </span>
-          ))}
+            )
+          )}
         </div>
       ) : null}
       <div className="composer-box">
@@ -174,6 +260,14 @@ export function Composer({
             <WorkDirButton disabled={!workDirEditable} />
           </div>
           <div className="composer-toolbar-right">
+            {showCharCounter ? (
+              <span
+                className={`composer-char-counter${overLimit ? ' composer-char-counter--over' : ''}`}
+                title="入力欄と貼り付けテキストの合計文字数 / 上限"
+              >
+                {totalChars.toLocaleString()} / {maxInputChars.toLocaleString()}
+              </span>
+            ) : null}
             <PlanModeBadge step={plan} />
             {loading ? (
               <button type="button" className="composer-stop-button" onClick={stopTask}>
@@ -184,7 +278,13 @@ export function Composer({
                 停止
               </button>
             ) : (
-              <button type="button" className="composer-submit-button" onClick={submit} disabled={inputBlocked}>
+              <button
+                type="button"
+                className="composer-submit-button"
+                onClick={submit}
+                disabled={inputBlocked || overLimit || uploading}
+                title={overLimit ? '文字数の上限を超えています' : undefined}
+              >
                 送信
               </button>
             )}

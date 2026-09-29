@@ -18,6 +18,8 @@ export const STARTER_PREFIX = '🚀 定型文\n';
 export const MAX_DISPLAY_MESSAGES_PREFIX = '📏 表示件数上限\n';
 /** app.py の MAX_DISPLAY_SIDE_STEPS_PREFIX と一致させる（サイドパネルのStep一覧の表示件数上限）。 */
 export const MAX_DISPLAY_SIDE_STEPS_PREFIX = '🧰 サイドパネル表示件数上限\n';
+/** app.py の INPUT_LIMITS_PREFIX と一致させる（入力欄の貼り付けテキスト化の閾値・最大入力文字数）。 */
+export const INPUT_LIMITS_PREFIX = '📝 入力上限\n';
 /** app.py の SUBAGENT_MESSAGE_AUTHOR、src/tools.py の _SUBAGENT_MESSAGE_AUTHOR と一致させる
  *  （dispatch_agent＝サブエージェント由来のメッセージを識別する cl.Message author 名）。 */
 export const SUBAGENT_MESSAGE_AUTHOR = 'サブエージェント';
@@ -65,6 +67,10 @@ export function isMaxDisplaySideStepsMessage(step: IStep): boolean {
   return isPrefixedStatusMessage(step, MAX_DISPLAY_SIDE_STEPS_PREFIX);
 }
 
+export function isInputLimitsMessage(step: IStep): boolean {
+  return isPrefixedStatusMessage(step, INPUT_LIMITS_PREFIX);
+}
+
 /** メインカラムに表示する、ユーザー発言・アシスタントの最終回答・システムメッセージ。 */
 export function selectMainThread(messages: IStep[]): IStep[] {
   return flattenAll(messages).filter(
@@ -75,7 +81,8 @@ export function selectMainThread(messages: IStep[]): IStep[] {
       !isPlanMessage(s) &&
       !isStarterMessage(s) &&
       !isMaxDisplayMessagesMessage(s) &&
-      !isMaxDisplaySideStepsMessage(s)
+      !isMaxDisplaySideStepsMessage(s) &&
+      !isInputLimitsMessage(s)
   );
 }
 
@@ -164,5 +171,40 @@ export function selectLatestMaxDisplaySideSteps(messages: IStep[]): number | und
     return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : undefined;
   } catch {
     return undefined;
+  }
+}
+
+export interface InputLimits {
+  /** この文字数以上の貼り付けは入力欄へ展開せず添付化する（0以下で無効）。 */
+  pasteAsAttachmentThresholdChars: number;
+  /** 1回の送信の最大文字数（本文＋貼り付けテキストの合計。0以下で無制限）。 */
+  maxInputChars: number;
+}
+
+/** 入力上限メッセージが届いていない（この機能より前に作られたスレッドの再開等）場合の既定値。
+ *  貼り付けの添付化はブラウザが固まるのを防ぐためのものなので既定で有効にし、
+ *  文字数上限はバックエンド（app.py の _check_input_length）に任せる。 */
+export const DEFAULT_INPUT_LIMITS: InputLimits = {
+  pasteAsAttachmentThresholdChars: 2000,
+  maxInputChars: 0
+};
+
+/** 入力上限(cl.Messageとして届く、JSONオブジェクト)を1件だけ取り出す。取得不可なら DEFAULT_INPUT_LIMITS。 */
+export function selectLatestInputLimits(messages: IStep[]): InputLimits {
+  const limitMessages = flattenAll(messages).filter(isInputLimitsMessage);
+  const latest = limitMessages[limitMessages.length - 1];
+  if (!latest || typeof latest.output !== 'string') return DEFAULT_INPUT_LIMITS;
+  try {
+    const parsed = JSON.parse(latest.output.slice(INPUT_LIMITS_PREFIX.length));
+    const pick = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+    return {
+      pasteAsAttachmentThresholdChars: pick(
+        parsed?.pasteAsAttachmentThresholdChars,
+        DEFAULT_INPUT_LIMITS.pasteAsAttachmentThresholdChars
+      ),
+      maxInputChars: pick(parsed?.maxInputChars, DEFAULT_INPUT_LIMITS.maxInputChars)
+    };
+  } catch {
+    return DEFAULT_INPUT_LIMITS;
   }
 }

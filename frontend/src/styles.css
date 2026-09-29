@@ -702,6 +702,77 @@
   margin-inline: auto;
 }
 
+/* 長文の貼り付けを添付化した「貼り付けテキスト」カード（Composer.tsx の onPaste）。 */
+.composer-pasted-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  max-width: 720px;
+  margin-inline: auto;
+}
+
+.composer-pasted-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 260px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+
+.composer-pasted-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.composer-pasted-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.composer-pasted-card-preview {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.composer-pasted-card-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.composer-paste-error {
+  max-width: 720px;
+  margin: 0 auto 8px;
+  font-size: 12px;
+  color: #e5484d;
+}
+
+.composer-char-counter {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-char-counter--over {
+  color: #e5484d;
+  font-weight: 600;
+}
+
 .composer-attachment-chip {
   display: inline-flex;
   align-items: center;

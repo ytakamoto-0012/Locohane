@@ -1285,6 +1285,16 @@ MAX_DISPLAY_MESSAGES_PREFIX = "📏 表示件数上限\n"
 # 会話ログには一切影響しない）。
 MAX_DISPLAY_SIDE_STEPS_PREFIX = "🧰 サイドパネル表示件数上限\n"
 
+# frontend/src/utils/messageTree.ts の INPUT_LIMITS_PREFIX と一致させる
+# （入力欄の貼り付けテキスト化の閾値・最大入力文字数をフロントエンドへ伝えるマーカー。
+# MAX_DISPLAY_MESSAGES_PREFIX と同じ方式。値は JSON オブジェクト）。
+INPUT_LIMITS_PREFIX = "📝 入力上限\n"
+
+# frontend/src/components/Composer.tsx が長文の貼り付けを添付化する際のファイル名
+# （pasted-text-<時刻>[-<連番>].txt）と一致させる。これに一致する添付は保存先パスでは
+# なく本文としてLLMへ渡す（_build_human_message 参照）。
+PASTED_TEXT_FILENAME_RE = re.compile(r"^pasted-text-\d+(?:-\d+)?\.txt$")
+
 
 # public/settings/welcome.md が存在しない場合のフォールバック（{skills} はスキル一覧に置換される）。
 _WELCOME_TEMPLATE_DEFAULT = (
@@ -2155,6 +2165,19 @@ async def on_chat_start() -> None:
         content=MAX_DISPLAY_SIDE_STEPS_PREFIX + json.dumps(_config.ui_max_display_side_steps)
     ).send()
 
+    # 入力欄の貼り付けテキスト化の閾値・最大入力文字数をフロントエンドへ伝える
+    # （0以下=無効/無制限も含め常に送信）。最大入力文字数は on_message 側でも
+    # _check_input_length() が最終防衛線として検査する。
+    await cl.Message(
+        content=INPUT_LIMITS_PREFIX
+        + json.dumps(
+            {
+                "pasteAsAttachmentThresholdChars": _config.ui_paste_as_attachment_threshold_chars,
+                "maxInputChars": _config.ui_max_input_chars,
+            }
+        )
+    ).send()
+
 
 if _config.thread_store_enabled:
 
@@ -2526,11 +2549,52 @@ def _save_uploads(message: cl.Message, username: str) -> list[str]:
     return saved
 
 
+def _is_pasted_text_file(path: str) -> bool:
+    """フロントエンドが長文の貼り付けから生成した添付（PASTED_TEXT_FILENAME_RE）か判定する。"""
+    return PASTED_TEXT_FILENAME_RE.match(Path(path).name) is not None
+
+
+def _read_pasted_text(path: str) -> str:
+    """貼り付けテキスト添付の本文を読む（フロントエンドは File([text]) で UTF-8 として送る）。"""
+    return Path(path).read_text(encoding="utf-8", errors="replace")
+
+
+def _check_input_length(message: cl.Message) -> str | None:
+    """送信内容が [ui].max_input_chars を超えていれば、ユーザーへ返す拒否メッセージを返す。
+
+    本文（message.content）と貼り付けテキスト添付（_is_pasted_text_file）の
+    合計文字数で判定する。フロントエンド（Composer.tsx）も同じ上限で送信を
+    止めるが、古いフロントエンドや直接のSocket.IO送信を想定した最終防衛線。
+
+    Args:
+        message: on_message で受け取った Chainlit のメッセージ。
+
+    Returns:
+        上限以内（または max_input_chars が0以下=無制限）なら None。
+        超過していれば拒否理由の文字列。
+    """
+    limit = _config.ui_max_input_chars
+    if limit <= 0:
+        return None
+    total = len(message.content or "")
+    for element in message.elements or []:
+        src = getattr(element, "path", None)
+        if src and _is_pasted_text_file(element.name or src):
+            total += len(_read_pasted_text(src))
+    if total <= limit:
+        return None
+    return f"入力が長すぎます（{total:,}文字 / 上限{limit:,}文字）。内容を減らして再送信してください。"
+
+
 def _build_human_message(user_text: str, saved_paths: list[str], work_dir_notice: str | None = None) -> HumanMessage:
     """アップロードファイルを踏まえて HumanMessage を組み立てる。
 
     画像ファイルは data URL 化して content のマルチモーダル要素として積み、
-    Vision対応モデルへ実際の視覚情報として渡す。それ以外のファイルは従来通り
+    Vision対応モデルへ実際の視覚情報として渡す。貼り付けテキスト添付
+    （_is_pasted_text_file。入力欄へ長文を貼り付けた際にフロントエンドが
+    添付化したもの）は、ユーザーが本文として入力したものと同じ扱いにするため
+    内容をテキストへ展開する（低パラメータモデルにファイル読み込みの
+    ツール呼び出しを強いないため）。それ以外のファイルは従来通り
     パスをテキストへ追記するのみ（run_script 等のツールにパスとして渡させるため）。
 
     Args:
@@ -2547,9 +2611,13 @@ def _build_human_message(user_text: str, saved_paths: list[str], work_dir_notice
         text + image_url のマルチモーダル content を持つ HumanMessage。
     """
     image_paths = [p for p in saved_paths if is_image_file(p)]
-    other_paths = [p for p in saved_paths if not is_image_file(p)]
+    pasted_paths = [p for p in saved_paths if _is_pasted_text_file(p)]
+    other_paths = [p for p in saved_paths if not is_image_file(p) and not _is_pasted_text_file(p)]
 
     text = user_text
+    for i, p in enumerate(pasted_paths, start=1):
+        # 保存先パスも添えておく（長文をスクリプトで処理させたい場合に渡せるように）。
+        text += f"\n\n[貼り付けテキスト{i}（保存先: {p}）]\n{_read_pasted_text(p)}\n[貼り付けテキスト{i} ここまで]"
     if work_dir_notice:
         text += f"\n\n{work_dir_notice}"
     if other_paths:
@@ -3336,6 +3404,10 @@ async def _on_message_impl(message: cl.Message) -> None:
         None。副作用として cl.Message / cl.Step の送信・更新を行う。
     """
     thread_id = cl.user_session.get("thread_id")
+    too_long_reason = _check_input_length(message)
+    if too_long_reason is not None:
+        await cl.Message(content=too_long_reason, type="system_message").send()
+        return
     # 計画承認は既定では「このユーザーメッセージへの応答で作られた計画の実行」に
     # 限定されたスコープであるべきなので、新しいメッセージを受け取るたびに
     # 前回（放置されて完了しなかった計画など）の承認状態を持ち越さない。

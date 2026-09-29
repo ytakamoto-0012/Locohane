@@ -35,7 +35,8 @@ import {
   selectLatestPlan,
   selectLatestStarters,
   selectLatestMaxDisplayMessages,
-  selectLatestMaxDisplaySideSteps
+  selectLatestMaxDisplaySideSteps,
+  selectLatestInputLimits
 } from './utils/messageTree';
 import './styles.css';
 
@@ -73,25 +74,42 @@ function App() {
   // 同じ添付が使われるようにするため）。
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
 
+  const uploadAttachment = useCallback(
+    (file: File, pastedText?: string) => {
+      const entry: PendingAttachment = { name: file.name, uploading: true, pastedText };
+      setAttachments((prev) => [...prev, entry]);
+      const { promise } = uploadFile(file, () => {});
+      promise
+        .then((fileRef) => {
+          setAttachments((prev) => prev.map((a) => (a === entry ? { ...a, fileRef, uploading: false } : a)));
+        })
+        .catch(() => {
+          setAttachments((prev) => prev.filter((a) => a !== entry));
+        });
+    },
+    [uploadFile]
+  );
+
   const handleAttach = useCallback(
     (files: FileList | File[] | null) => {
       if (!files) return;
-      Array.from(files).forEach((file) => {
-        const entry: PendingAttachment = { name: file.name, uploading: true };
-        setAttachments((prev) => [...prev, entry]);
-        const { promise } = uploadFile(file, () => {});
-        promise
-          .then((fileRef) => {
-            setAttachments((prev) =>
-              prev.map((a) => (a === entry ? { ...a, fileRef, uploading: false } : a))
-            );
-          })
-          .catch(() => {
-            setAttachments((prev) => prev.filter((a) => a !== entry));
-          });
-      });
+      Array.from(files).forEach((file) => uploadAttachment(file));
     },
-    [uploadFile]
+    [uploadAttachment]
+  );
+
+  // 入力欄へ長文が貼り付けられた場合、textareaへ展開せず .txt 添付として
+  // アップロードする（Composer.tsx の onPaste 参照）。ファイル名は app.py の
+  // PASTED_TEXT_FILENAME_RE と一致させること（一致した添付は保存先パスではなく
+  // 本文としてLLMへ渡される）。同一ミリ秒の連続貼り付けに備えて連番を付ける。
+  const pastedSeqRef = useRef(0);
+  const handleAttachPastedText = useCallback(
+    (text: string) => {
+      pastedSeqRef.current += 1;
+      const name = `pasted-text-${Date.now()}-${pastedSeqRef.current}.txt`;
+      uploadAttachment(new File([text], name, { type: 'text/plain' }), text);
+    },
+    [uploadAttachment]
   );
 
   const handleRemoveAttachment = useCallback((index: number) => {
@@ -264,6 +282,7 @@ function App() {
   const workDir = selectLatestWorkDir(messages);
   const plan = selectLatestPlan(messages);
   const starterPrompts = selectLatestStarters(messages);
+  const inputLimits = selectLatestInputLimits(messages);
 
   // 表示専用の間引き。会話コンテキスト(LangGraph側のstate)やログには一切影響しない。
   // 上限0または未取得（値未着信/パース失敗）の場合は無制限（従来どおり全件描画）。
@@ -314,8 +333,10 @@ function App() {
           workDirEditable={!hasSentMessage}
           attachments={attachments}
           onAttach={handleAttach}
+          onAttachPastedText={handleAttachPastedText}
           onRemoveAttachment={handleRemoveAttachment}
           onAttachmentsSent={handleAttachmentsSent}
+          inputLimits={inputLimits}
         />
       </div>
       <SidePanel sideSteps={displaySideSteps} tokenUsage={tokenUsage} workDir={workDir} plan={plan} />
