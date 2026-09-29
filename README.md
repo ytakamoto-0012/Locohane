@@ -1159,15 +1159,9 @@ admin.bat
 `default` のみ）を子プロセスとして起動する。管理ツールへは
 `http://127.0.0.1:8001` からログインする（下記「ログイン」参照）。
 
-管理ツール自身の待受ホスト・ポートは、引数で一時的に上書きできる
-（`config.ini` の `[admin]` セクションより優先。実体は `ADMIN_HOST`/
-`ADMIN_PORT` 環境変数）。
-
-```cmd
-admin.bat 8080             REM ポートのみ上書き（数字だけの引数はポート扱い）
-admin.bat 0.0.0.0          REM ホストのみ上書き
-admin.bat 0.0.0.0 8080     REM 両方上書き（順不同）
-```
+管理ツール自身の待受ホスト・ポートは `admin.bat` 内の `ADMIN_HOST`/
+`ADMIN_PORT` で指定する（`config.ini` の `[admin]` セクションより優先。
+変更したい場合は `admin.bat` をテキストエディタで開いてこの2行を書き換える）。
 
 従来通り `app.bat` で `default` インスタンスを単体起動することもできる
 （`instances/default/instance.json` のホスト/ポートに追従する）。ただし
