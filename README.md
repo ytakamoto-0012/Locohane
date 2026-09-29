@@ -280,9 +280,9 @@ Locohane/
 │   └── translations/       # 多言語翻訳ファイル
 ├── .claude/
 │   └── skills/             # Claude Code用スキル（開発支援。アプリ実行時には使わない）
-│       ├── setup-basic-config/    # 環境依存パス（config.ini等）の対話設定
-│       ├── tune-config-timeouts/  # timeout系設定の実測自動チューニング
 │       ├── tune-prompt/           # system_prompt.md等のプロンプト資産自動チューニング
+│       ├── create-eval-case/      # evals/cases/ へのevalケース新規作成
+│       ├── consolidate-memory/    # 全インスタンスの永続メモリーの重複統合（日次）
 │       └── monitor-app-log/       # app_*.log を定期監視し issue/ へ自動起票
 ├── .qwen/                  # Qwen Code用の `.claude/` 相当ディレクトリ（settings.json・skills/等）
 ├── .locohane/                # project_locohane_dir（既定）。配下を起動時に自動検知
@@ -591,9 +591,7 @@ vllm serve /path/to/model --served-model-name local-model --host 127.0.0.1 --por
 `config.ini` の `[llm] main_url`/`sub_url`・`[scripts].python`、
 `app.bat` の `PYTHON_DIR` を直接書き換えれば、管理ツールを介さず
 `app.bat` で単体起動できる（各項目の意味は後述の「設定リファレンス
-（config.ini）」参照）。Claude Code 上で `/setup-basic-config` を実行すると、
-これら（`CLAUDE.md` の2項目を含む）の現在値を提示した上で対話形式で
-まとめて更新してくれる（`.claude/skills/setup-basic-config/SKILL.md`）。
+（config.ini）」参照）。
 
 ### 4. アプリ起動
 
@@ -880,7 +878,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
   変更内容と理由を `evals/tuning_log.md` に追記する。git へのコミットは行わない。
 - 同じ仕組みを流用し、`config.ini` の timeout系設定（`request_timeout_seconds`
   等）を実行環境のスペックに応じて実測チューニングする `config_timeouts`
-  ターゲットもある（`.claude/skills/tune-config-timeouts/SKILL.md`）。
+  ターゲットもある（`evals/analyze_timing.py` で推奨値を算出し、適用は手動）。
 
 詳細は [`evals/README.md`](evals/README.md) を参照。
 

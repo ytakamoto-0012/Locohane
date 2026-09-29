@@ -1,14 +1,16 @@
 ---
 name: monitor-app-log
-description: Locohane の data/logs/app_*.log を5分おきに定期監視し、WARNING/ERROR/CRITICALログおよびコンテキスト圧縮（src.context_compaction）の発火を検知したら、issue/ ディレクトリ配下にケースごとのMarkdownファイルとして自動起票・追記する。スキル自身がCronCreateで5分間隔・durable:trueの自己スケジュールを登録し、以後はcron発火のたびに自分自身を再度呼び出す。「app.logを監視して」「ログからissueを起票して」「/monitor-app-log」等で使う。ユーザーが手動で /loop を回す運用ではなく、このスキル自身が定期実行を管理する点が他スキルと異なる。
+description: Locohane の data/<インスタンス名>/logs/app_*.log（監視対象インスタンスは手動起動時にユーザーへ質問して選ぶ）を5分おきに定期監視し、WARNING/ERROR/CRITICALログおよびコンテキスト圧縮（src.context_compaction）の発火を検知したら、issue/ ディレクトリ配下にケースごとのMarkdownファイルとして自動起票・追記する。スキル自身がCronCreateで5分間隔・durable:trueの自己スケジュールを登録し、以後はcron発火のたびに自分自身を再度呼び出す。「app.logを監視して」「ログからissueを起票して」「/monitor-app-log」等で使う。ユーザーが手動で /loop を回す運用ではなく、このスキル自身が定期実行を管理する点が他スキルと異なる。
 ---
 
 # monitor-app-log: app*.log の定期監視によるissue自動起票
 
-`Locohane` は `data/logs/app_YYYYMMDD_HHMMSS_N.log`（`config.ini` の
-`[log].dir`、既定 `./data/logs`）に
+`Locohane` は `<log_dir>/app_YYYYMMDD_HHMMSS_N.log` に
 `%(asctime)s %(levelname)s %(name)s: %(message)s` 形式でアプリログを出力する
-（`app.py` の `initialize()`、`src/log_rotation.py`）。このスキルは新規に
+（`app.py` の `initialize()`、`src/log_rotation.py`）。`log_dir` はインスタンス
+ごとに異なる（既定 `./data/<インスタンス名>/logs`。`config.ini` の
+`[paths] common_data_dir = ./data/${instance}` 由来で、管理ツールの
+`instances/<name>/config_overrides.json` で上書きされている場合もある）。このスキルは新規に
 出力されたログを5分おきに確認し、バグ・改善点・問題点をプロジェクト直下
 `issue/` ディレクトリに Markdown として書き残す。
 
@@ -23,15 +25,29 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 このパスが使われている。2026-08-12訂正）:
 
 ```json
-{"last_checked": "2026-08-01T22:50:00", "cron_job_id": "xxxxx"}
+{"last_checked": "2026-08-01T22:50:00", "cron_job_id": "xxxxx", "instances": ["default"]}
 ```
 
 - `last_checked`: 前回スキャン済みのログ時刻（ISO形式、ローカル時刻）。
   ファイルが無い/壊れている場合は**現在時刻**で初期化する
   （過去ログの一括バックフィルはしない。監視開始時点より先のみが対象）。
 - `cron_job_id`: このスキルが自己登録した `CronCreate` のジョブID。
+- `instances`: 監視対象のインスタンス名の一覧（手順0で決める）。
 
 ## 手順
+
+### 0. 監視対象インスタンスの決定
+
+- **ユーザーが手動で起動した場合**: `instances/` 直下のディレクトリ名
+  （`admin_changes.log` 等のファイルは除く。`instances/` が無ければ `default` のみ）
+  を選択肢にして、必ず `AskUserQuestion`（`multiSelect: true`）で監視対象を選ばせる。
+  `state.json` に `instances` があれば、その現在値も質問文に添える。
+  選ばれた一覧を `state.json` の `instances` に保存する。
+- **cron発火による自動起動の場合**: 質問しない（無人実行のため応答が返らない）。
+  `state.json` の `instances` をそのまま使う。`instances` が無い場合は
+  `["default"]` とみなす。
+- 保存済みのインスタンスが `instances/` から消えている（削除された）場合は、
+  そのインスタンスを飛ばす。
 
 ### 1. 自己スケジュールの確認・登録
 
@@ -55,10 +71,19 @@ Qwen Code はこれまで `issue.md`（単一ファイル）に「症状／発�
 
 ### 2. 設定読み込み
 
-`config.ini` の `[log].dir`（既定 `./data/logs`）を読み、プロジェクト
-ルート（このリポジトリのルート）基準の絶対パスに解決する。
+監視対象インスタンスごとに、実効の `log_dir` を次のコマンドで取得する
+（`config.ini`・`config_overrides.json`・`${instance}` の解決を
+`load_config()` に任せる。パスを手で組み立てない）。CLAUDE.md記載の
+Python実行環境を使い、プロジェクトルートで実行する:
+
+```
+LOCOHANE_INSTANCE=<name> CONFIG_OVERRIDES_PATH=instances/<name>/config_overrides.json "C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe" -c "from src.config import load_config; print(load_config().log_dir)"
+```
 
 ### 3. 新規ログ抽出
+
+以下は監視対象インスタンスごとに行う（抽出した行には、どのインスタンスの
+ログかを覚えておく）。
 
 1. `log_dir` 配下の `app_*.log` を対象に、`last_checked` より新しい
    タイムスタンプの行のうち **`WARNING` / `ERROR` / `CRITICAL`** を抽出する
@@ -140,7 +165,8 @@ issue起票時には、該当ログから `code` フィールドを抽出し、�
    ないか確認する（例外クラス名や特徴的なメッセージ断片で検索）。
 2. 一致するファイルがあれば、そのファイル末尾に
    `## 追記（YYYY-MM-DD HH:MM）` セクションを追加し、新しいログ引用と
-   経緯を追記する（既存 `issue.md` の運用を踏襲）。
+   経緯を追記する（既存 `issue.md` の運用を踏襲）。別インスタンスで同じ原因が
+   出た場合も、新規ファイルにせず追記し、追記内にインスタンス名を書く。
 3. 一致するファイルが無ければ、`issue/` ディレクトリが無ければ作成した上で
    `issue/YYYYMMDD_HHMMSS_<内容を表す短い英語slug>.md` として新規作成する。
 
@@ -151,7 +177,8 @@ issue起票時には、該当ログから `code` フィールドを抽出し、�
 
 - **区分**: バグ | 改善点 | 問題点
 - **検知日時**: YYYY-MM-DD HH:MM:SS
-- **対象ログファイル**: data/logs/app_YYYYMMDD_HHMMSS_N.log
+- **インスタンス**: <インスタンス名>
+- **対象ログファイル**: data/<インスタンス名>/logs/app_YYYYMMDD_HHMMSS_N.log（プロジェクトルート相対）
 
 ## 経緯
 
@@ -199,6 +226,7 @@ Traceback等の原文をそのまま貼る。改善点・問題点の場合は�
 - 該当ログが無いターンでは何も書き込まない（空のissueファイルを作らない）。
 - 同一原因の繰り返しは新規ファイルを乱立させず、既存ファイルへの追記で
   対応する（`issue/` の肥大化・重複を防ぐ）。
-- `issue/` 配下以外のファイル（アプリ本体のコード・`config.ini`等）は
-  一切変更しない。
+- `issue/` 配下以外のファイル（アプリ本体のコード・`config.ini`・
+  `instances/` 配下等）は一切変更しない（`state.json` の更新は除く）。
+- cron発火による自動起動時は `AskUserQuestion` を呼ばない。
 - git へのコミット・ステージングは行わない。

@@ -1,22 +1,31 @@
 ---
 name: create-eval-case
-description: Locohane の evals/cases/<target>/*.yaml に新しい eval ケースを追加する。既存ケース（evals/cases/system_prompt, system_prompt_scale, config_timeouts）の書き方・命名規則・judge指示文の型に沿わせつつ、turns（ユーザー発話文）は実行対象がローカルの低パラメータモデルであることを踏まえて端的に書く。「evalケースを追加して」「このバグの回帰テストを作って」「〜のシナリオをevalsに足して」「/create-eval-case」等で使う。ケース実行・チューニングループ自体は tune-prompt / tune-config-timeouts が担当し、このスキルはケースの新規作成専用。
+description: Locohane の evals/cases/<target>/*.yaml に新しい eval ケースを追加する。既存ケース（evals/cases/system_prompt, system_prompt_scale, config_timeouts）の書き方・命名規則・judge指示文の型に沿わせつつ、turns（ユーザー発話文）は実行対象がローカルの低パラメータモデルであることを踏まえて端的に書く。「evalケースを追加して」「このバグの回帰テストを作って」「〜のシナリオをevalsに足して」「/create-eval-case」等で使う。ケース実行・チューニングループ自体は tune-prompt が担当し、このスキルはケースの新規作成専用。
 ---
 
 # create-eval-case: evals ケースの新規作成
 
 `evals/cases/<target>/*.yaml` に新しい eval ケースを1件追加する。
-チューニングループ本体（`tune-prompt`/`tune-config-timeouts`）とは別物で、
+チューニングループ本体（`tune-prompt`）とは別物で、
 このスキルは「ケースを1件正しく書いて動作確認する」ところまでを担当する。
 
 ## 前提条件の確認
 
-1. `evals/README.md` と `evals/case_schema.py` を読み、yaml のフィールド・
+1. 必ず `AskUserQuestion` ツールを呼び、`instances/` 直下のディレクトリ名
+   （`admin_changes.log` 等のファイルは除く。`instances/` が無ければ
+   `default` のみ）を選択肢（`multiSelect: false`）にして、動作確認に使う
+   インスタンスを1つ選ばせる。以降、`<instance>` はこのインスタンス名を指す。
+2. `evals/README.md` と `evals/case_schema.py` を読み、yaml のフィールド・
    `expect`/`judge` の役割分担を確認する。
-2. llama.cpp server が起動しているか確認する（`config.ini` の
-   `[llm].main_url`に設定された接続先。既定値を仮定せず、実際に使われる
-   `base_url` は都度 `config.ini` を直接見て確認する）。手順6の動作確認で
-   実際に1件実行するため、未起動ならユーザーに起動を促す。
+3. 選んだインスタンスの実効設定を次のコマンドで取得する（CLAUDE.md記載の
+   Python実行環境を使い、プロジェクトルートで実行する。`config.ini` を
+   直接読んでも `instances/<instance>/config_overrides.json` の上書き分が
+   反映されないため、必ずこのコマンドを使う）:
+   ```
+   LOCOHANE_INSTANCE=<instance> CONFIG_OVERRIDES_PATH=instances/<instance>/config_overrides.json "C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe" -c "from src.config import load_config; c=load_config(); print([e.base_url for e in c.main_endpoints], c.log_dir, c.default_workdir)"
+   ```
+4. 表示されたLLM接続先で llama.cpp server が起動しているか確認する。
+   手順7の動作確認で実際に1件実行するため、未起動ならユーザーに起動を促す。
 
 ## 最重要1: turns は端的に書く。詳しく書くのは評価にならない
 
@@ -31,7 +40,7 @@ description: Locohane の evals/cases/<target>/*.yaml に新しい eval ケー�
 - 足りない情報（対象ファイル名、体裁の細部など）はあえて書かない。
   低パラメータモデルがそれをどう埋めるか（勝手に決め打ちするか、
   `ask_user_choice`で確認するか、探索して判断するか）自体が検証対象。
-- **例外**: 本番ログ（`data/logs/app_*.log`）で実際に観測された失敗を
+- **例外**: 本番ログ（`data/<インスタンス名>/logs/app_*.log`）で実際に観測された失敗を
   再現する回帰ケースは、ログ中の実際のユーザー発話をそのまま引用する
   （言い換えて丁寧にしない。実際に本番ユーザーが書いた文なので、
   長くても「詳しく書きすぎ」には当たらない）。
@@ -198,8 +207,9 @@ expect:
   （`generate_annual_schedule_fixture.py` 等）に倣い、**決定論的（seed固定）**
   な生成スクリプトを作る。手作業でファイルを置くのではなく、再生成コマンドを
   `notes` に書けるようにする。
-- `work_dir` を指定しないケースは `config.ini` の `[default_workdir].dir`
-  がそのまま使われる点に注意する。
+- `work_dir` を指定しないケースは、実行時インスタンスの `default_workdir`
+  （前提条件3で表示される値。既定 `data/<インスタンス名>/temp`）がそのまま
+  使われる点に注意する。
 
 ### 4. turnsを書く
 
@@ -226,8 +236,10 @@ expect:
 
 ### 7. 動作確認する
 
+必ず先頭に2つの環境変数を付けて実行する（付けないと `default`
+インスタンスの設定で動いてしまう）:
 ```
-python -m evals.run_case evals/cases/<target>/<ファイル名>.yaml
+LOCOHANE_INSTANCE=<instance> CONFIG_OVERRIDES_PATH=instances/<instance>/config_overrides.json python -m evals.run_case evals/cases/<target>/<ファイル名>.yaml
 ```
 
 - yaml の形式エラー（`case_schema.py` の `ValueError`）が出ないか確認する。
@@ -236,7 +248,7 @@ python -m evals.run_case evals/cases/<target>/<ファイル名>.yaml
 - 実行が完走し、`expect` があれば `rules_pass` の内容が意図通りか、
   `judge` があれば `transcript` が判定に必要な情報を含むかを確認する。
   ここではケースの**合否そのもの**は問わない（対象プロンプト資産の品質は
-  `tune-prompt`/`tune-config-timeouts` 側の仕事）。ケースが正しく動作する
+  `tune-prompt` 側の仕事）。ケースが正しく動作する
   ことだけを確認する。
 
 ### 8. 完了報告

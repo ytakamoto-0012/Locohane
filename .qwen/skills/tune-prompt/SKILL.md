@@ -14,32 +14,49 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
 - `system_prompt_scale` → 同上。実データ規模の重量級ケース専用。
   ユーザーが手順0で明示的に選んだ時だけ実行する。
 - `excel-skills` → `skills/excel-read/SKILL.md`
-- `config_timeouts` → このスキルの対象外。`tune-config-timeouts`スキルの
-  担当。手順0の選択肢には出さない。ユーザーが明示指定してきた場合も
-  `tune-config-timeouts`を使うよう伝えて終了する。
+- `config_timeouts` → このスキルの対象外（プロンプト資産ではなく
+  timeout数値の実測用）。手順0の選択肢には出さない。ユーザーが明示指定
+  してきた場合も対象外である旨を伝えて終了する。
 - （将来）`skill:<skill名>` → `skills/<skill名>/SKILL.md`
 - （将来）`tool_docstring` → `src/tools/`配下の各ツールファイル
 
 新しいケースの追加は`create-eval-case`スキルを使う
 （このスキルは実行・修正のみを担当し、ケース作成はしない）。
 
-## 手順0: 対象とケースを選ぶ（毎回必須・省略しない）
+## 手順0: 対象・インスタンス・ケースを選ぶ（毎回必須・省略しない）
+
+**スキル開始直後、他の作業（ファイル読み込み・疎通確認等）より先に行う。**
+ユーザーの依頼文で対象が指定されていても、必ず質問して確認する。
 
 1. `evals/cases/`直下のディレクトリ名を見る（`config_timeouts`は除く）。
 2. 必ず`AskUserQuestion`ツールを呼び、ディレクトリ名を選択肢
    （`multiSelect: true`）にして、チューニング対象を選ばせる。
-3. 選ばれた対象ごとに、必ず`AskUserQuestion`ツールを呼び、
+3. 必ず`AskUserQuestion`ツールを呼び、`instances/`直下のディレクトリ名
+   （`admin_changes.log`等のファイルは除く。`instances/`が無ければ
+   `default`のみ）を選択肢（`multiSelect: false`）にして、評価に使う
+   インスタンスを1つ選ばせる。選んだインスタンスの設定（LLM接続先・
+   token上限・timeout等の`config_overrides.json`による上書き）で評価が
+   動く。2と3は1回の`AskUserQuestion`呼び出しにまとめてよい。
+4. 選ばれた対象ごとに、必ず`AskUserQuestion`ツールを呼び、
    `evals/cases/<target>/*.yaml`のファイル名（拡張子抜き）と
    「全ケース実行」を選択肢（`multiSelect: true`）にしてケースを選ばせる。
-4. 対象が複数選ばれたら、1つ目の対象で「手順1」〜「手順2」を最後まで
+5. 対象が複数選ばれたら、1つ目の対象で「手順1」〜「手順2」を最後まで
    終えてから、2つ目の対象に進む（並行して進めない）。
+
+以降、`<instance>`は手順0-3で選んだインスタンス名を指す。
 
 ## 手順1: 前提を確認する
 
-1. `config.ini`の`[llm].main_url`を見て、llama.cpp serverが起動している
-   か確認する。起動していないと評価結果は`error: llm_unreachable`になる。
+1. 選んだインスタンスの実効設定を次のコマンドで取得する（CLAUDE.md記載の
+   Python実行環境を使い、プロジェクトルートで実行する。`config.ini`を
+   直接読んでも上書き分が反映されないため、必ずこのコマンドを使う）:
+   ```
+   LOCOHANE_INSTANCE=<instance> CONFIG_OVERRIDES_PATH=instances/<instance>/config_overrides.json "C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe" -c "from src.config import load_config; c=load_config(); print([e.base_url for e in c.main_endpoints], c.log_dir)"
+   ```
+2. 表示されたLLM接続先でllama.cpp serverが起動しているか確認する。
+   起動していないと評価結果は`error: llm_unreachable`になる。
    その場合はループに入らず、ユーザーにserver起動を頼んで終了する。
-2. `evals/README.md`を読み、ケース形式・実行方法を把握する。
+3. `evals/README.md`を読み、ケース形式・実行方法を把握する。
 
 ## 手順2: 評価ループ
 
@@ -50,19 +67,22 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
 
 - `evals/history/<target>/`が空なら、対象ファイルの現在の内容を
   `evals/history/<target>/iter00_baseline.md`にコピーする。
-- `data/logs/evals.log`があれば空にする
+- 手順1で表示された`log_dir`配下の`evals.log`があれば空にする
   （前回までのループのログと混ざらないようにするため）。
 
 ### 2-1. 評価を実行する
 
+必ず先頭に2つの環境変数を付けて実行する（付けないと`default`
+インスタンスの設定で動いてしまう）。
+
 全ケースが対象:
 ```
-python evals/run_all.py <target>
+LOCOHANE_INSTANCE=<instance> CONFIG_OVERRIDES_PATH=instances/<instance>/config_overrides.json python evals/run_all.py <target>
 ```
 
 個別ケースが対象（選ばれたケースIDを空白区切りで指定する）:
 ```
-python evals/run_all.py <target> <case_id1> <case_id2> ...
+LOCOHANE_INSTANCE=<instance> CONFIG_OVERRIDES_PATH=instances/<instance>/config_overrides.json python evals/run_all.py <target> <case_id1> <case_id2> ...
 ```
 
 出力サマリと`evals/results/<target>/<最新timestamp>/results.json`を見る。
@@ -114,6 +134,11 @@ python evals/run_all.py <target> <case_id1> <case_id2> ...
   `config.ini`側の数値（token上限・timeout等）だと分かった場合も、
   対象ファイルは直さずユーザーに報告して終了する（ユーザーから明示
   指示があれば`config.ini`を直してよいが、`tuning_log.md`に
-  「ユーザー指示によるconfig値調整」と明記する）。
+  「ユーザー指示によるconfig値調整」と明記する）。選んだインスタンスの
+  `config_overrides.json`に同じキーがあると`config.ini`の変更は効かない
+  ため、その場合は管理ツール（`admin.bat`）で直すよう案内する。
+  `instances/`配下は直接編集しない。
+- `evals/tuning_log.md`の各イテレーション見出しには、使ったインスタンス名
+  も書く（インスタンスごとに接続先モデルが違うと結果が比較できないため）。
 - 1イテレーションで複数箇所を同時に直さない（原因の切り分けと振動検知
   が効かなくなるため）。

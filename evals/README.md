@@ -135,5 +135,8 @@ ClaudeCode で `/tune-prompt system_prompt` のように実行する。
   現在値・実測最大値・推奨値・差分のテーブルを表示、
   同ディレクトリに `recommendations.json` を書き出す。**config.ini は
   直接書き換えない**（推奨値の提示のみ）。
-- 実際のチューニングループは `.claude/skills/tune-config-timeouts/SKILL.md`
-  を参照（イテレーション上限3回、`[user_response_timeouts]` セクションは対象外）。
+- 推奨値の適用は手動で行う（`[user_response_timeouts]` セクションは
+  人間の応答待ちでありハードウェアスペックと無関係なので対象外）。
+  管理ツールで運用しているインスタンスでは、`config.ini` ではなく
+  管理ツールから該当インスタンスの値を変更すること（`config_overrides.json`
+  に同じキーがあると `config.ini` の変更は反映されないため）。

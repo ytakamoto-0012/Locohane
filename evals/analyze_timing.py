@@ -9,8 +9,8 @@
 集計し、`config.ini` の現在値と比較した推奨値テーブルを標準出力へ表示する。
 
 このスクリプトは config.ini を直接書き換えない（推奨値の提示のみ）。実際の
-適用判断・編集は `.claude/skills/tune-config-timeouts/SKILL.md` の手順に従い
-ClaudeCode自身がEditツールで行う。
+適用判断・編集は人間が行う（管理ツールで運用中のインスタンスは、管理ツール
+から該当インスタンスの値を変更する）。
 """
 
 from __future__ import annotations

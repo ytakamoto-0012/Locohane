@@ -1,13 +1,15 @@
 ---
 name: consolidate-memory
-description: Locohane の永続メモリー（data/memory/{user,feedback,project,reference}/*.md）を1日1回棚卸しし、同一テーマ・重複する内容を1本に統合してマージすることで、似たタスクの改善案がバラバラなnameで分散するのを防ぐ。スキル自身がCronCreateで日次・durable:trueの自己スケジュールを登録し、以後はcron発火のたびに自分自身を再度呼び出す。「メモリーを整理して」「重複メモリーを統合して」「/consolidate-memory」等で使う。統合の要否はLLM自身が本文を読んで判断し、機械的な文字列一致だけでは統合しない。
+description: Locohane の永続メモリー（全インスタンスの data/<インスタンス名>/memory/{user,feedback,project,reference}/*.md）を1日1回棚卸しし、同一テーマ・重複する内容を1本に統合してマージすることで、似たタスクの改善案がバラバラなnameで分散するのを防ぐ。スキル自身がCronCreateで日次・durable:trueの自己スケジュールを登録し、以後はcron発火のたびに自分自身を再度呼び出す。「メモリーを整理して」「重複メモリーを統合して」「/consolidate-memory」等で使う。統合の要否はLLM自身が本文を読んで判断し、機械的な文字列一致だけでは統合しない。
 ---
 
 # consolidate-memory: Locohane永続メモリーの重複統合
 
-`Locohane` は `data/memory/{user,feedback,project,reference}/*.md`（`config.ini` の
-`[memory].memory_dir`、既定 `./data/memory`）に YAML frontmatter 付き Markdown として
-永続メモリーを保存する（`src/memory.py`）。Locohane側のエージェントは `search_memory`
+`Locohane` は `<memory_dir>/{user,feedback,project,reference}/*.md` に YAML frontmatter
+付き Markdown として永続メモリーを保存する（`src/memory.py`）。`memory_dir` は
+インスタンスごとに異なる（既定 `./data/<インスタンス名>/memory`。`config.ini` の
+`[paths] common_data_dir = ./data/${instance}` 由来で、管理ツールの
+`instances/<name>/config_overrides.json` で上書きされている場合もある）。Locohane側のエージェントは `search_memory`
 （キーワード部分一致のみ）で重複確認してから記録する運用だが、キーワードの言い換えや
 低パラメータモデルの判断ミスで、同じテーマの改善案が別 name のメモリーとして分散して
 しまうことがある。本スキルはこれをバックグラウンドで定期的に棚卸しし、重複・関連の強い
@@ -39,7 +41,7 @@ description: Locohane の永続メモリー（data/memory/{user,feedback,project
    - `cron`: `"22 4 * * *"`（毎日、深夜4時22分。0分/30分ちょうどを避ける）
    - `recurring`: `true`
    - `durable`: `true`
-   - `prompt`: `"/consolidate-memory を実行し、data/memory 配下の重複・関連メモリーを棚卸しして統合してください。"`
+   - `prompt`: `"/consolidate-memory を実行し、全インスタンスの永続メモリーの重複・関連を棚卸しして統合してください。"`
    - `reason`（分かればログ用に）: `"永続メモリーの重複統合のための自己スケジュール"`
 
 **制約**: durable recurring ジョブは登録から7日で自動失効する（ツール仕様の上限）。
@@ -49,12 +51,24 @@ Claude Code を開かない期間があると統合が止まるが、気づい�
 
 ### 2. 対象メモリーの列挙
 
-1. `config.ini` の `[memory].memory_dir`（既定 `./data/memory`）を読み、プロジェクト
-   ルート（このリポジトリのルート）基準の絶対パスに解決する。
-2. `memory_dir/{user,feedback,project,reference}/*.md` を全件 `Glob`/`Read` で列挙し、
+1. `instances/` 直下のディレクトリ名（`admin_changes.log` 等のファイルは除く）を
+   インスタンス一覧とする。`instances/` が無ければ `default` のみとする。
+2. インスタンスごとに、実効の `memory_dir` を次のコマンドで取得する（`config.ini`・
+   `config_overrides.json`・`${instance}` の解決を `load_config()` に任せる。パスを
+   手で組み立てない）。CLAUDE.md記載のPython実行環境を使い、プロジェクトルートで実行する:
+
+   ```
+   LOCOHANE_INSTANCE=<name> CONFIG_OVERRIDES_PATH=instances/<name>/config_overrides.json "C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe" -c "from src.config import load_config; print(load_config().memory_dir)"
+   ```
+
+   複数インスタンスが同じ `memory_dir` を指す場合（`${instance}` を含まない固定パスに
+   上書きして共有している場合）は、1回だけ処理する。存在しない `memory_dir` は飛ばす。
+3. 以降（この手順2の4〜5、および手順3〜5）は `memory_dir` ごとに独立して行う
+   （**インスタンスをまたいで統合しない**。インスタンスごとに利用者・用途が異なるため）。
+4. `memory_dir/{user,feedback,project,reference}/*.md` を全件 `Glob`/`Read` で列挙し、
    各ファイルの frontmatter（`name`/`description`/`type`/`created`/`updated`）と
    本文を読む。
-3. 対象が数十件を超える場合は、`state.json` の `last_consolidated` より `updated` が
+5. 対象が数十件を超える場合は、`state.json` の `last_consolidated` より `updated` が
    新しいメモリー（＝前回統合以降に新規作成・更新されたもの）を「起点」とし、それぞれ
    について同じ `type` の既存メモリー全件との類似性のみ確認する（type横断では統合しない。
    全件×全件の総当たりはしない）。`last_consolidated` が無い初回実行時は、type内で
@@ -90,18 +104,19 @@ Claude Code を開かない期間があると統合が止まるが、気づい�
 
 ### 5. 索引の再構築
 
-ファイル操作後は必ず `MEMORY.md` 索引を再構築する（Locohane本体の `src/memory.py` の
-`rebuild_index()` をそのまま呼ぶ。索引を手で書き直さない）。CLAUDE.md記載のPython実行
-環境を使い、プロジェクトルートで実行する:
+ファイル操作をした `memory_dir` ごとに、必ず `MEMORY.md` 索引を再構築する（Locohane
+本体の `src/memory.py` の `rebuild_index()` をそのまま呼ぶ。索引を手で書き直さない）。
+`<memory_dir>` には手順2で取得した絶対パスを入れる。CLAUDE.md記載のPython実行環境を
+使い、プロジェクトルートで実行する:
 
 ```
-"C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe" -c "from pathlib import Path; from src.memory import rebuild_index; rebuild_index(Path('data/memory'))"
+"C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe" -c "from pathlib import Path; from src.memory import rebuild_index; rebuild_index(Path(r'<memory_dir>'))"
 ```
 
 ### 6. 状態更新と報告
 
 1. `state.json` の `last_consolidated` を今回のチェック終了時刻（現在時刻）で更新する。
-2. 統合した件数・統合前後のname一覧を要約してユーザーへ報告する（手動起動時のみ。
+2. インスタンスごとに、統合した件数・統合前後のname一覧を要約してユーザーへ報告する（手動起動時のみ。
    cron発火による自動実行時は、統合が1件でもあった場合のみ簡潔に報告し、無ければ
    何も報告しなくてよい）。
 
@@ -114,7 +129,8 @@ Claude Code を開かない期間があると統合が止まるが、気づい�
 - 統合により情報が失われないことを優先する（両方の記述を統合後の本文に残す。片方を
   無条件に削除しない）。
 - 判断に迷うペアは統合せず見送る（1回の実行で無理に処理しきらない）。
-- `data/memory/` 配下以外のファイル（アプリ本体のコード・`config.ini`等）は一切
-  変更しない。
-- git へのコミット・ステージングは行わない（削除・統合の履歴はgit管理下のワーキング
-  ツリーの変更として残るため、必要ならユーザー自身が確認・コミットできる）。
+- 各インスタンスの `memory_dir` 配下以外のファイル（アプリ本体のコード・`config.ini`・
+  `instances/` 配下等）は一切変更しない。
+- インスタンスをまたいだ統合・移動はしない。
+- git へのコミット・ステージングは行わない（`data/` は `.gitignore` 済みのため、
+  統合・削除はgitでは復元できない。だからこそ判断に迷うペアは見送る）。
