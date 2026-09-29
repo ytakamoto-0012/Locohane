@@ -118,7 +118,7 @@ async def test_short_response_immediately_after_compaction_triggers_one_retry(mo
         call_state["n"] += 1
         return call_state["n"] == 1  # 最初のツール実行直後にだけ圧縮を発火させる
 
-    async def fake_maybe_compact(messages, model, config, *, role="sub"):
+    async def fake_maybe_compact(messages, model, config, *, role="sub", pinned_instruction=None):
         return [HumanMessage(content="[要約]圧縮済み")]
 
     monkeypatch.setattr(subagent, "should_compact", fake_should_compact)
@@ -159,7 +159,7 @@ async def test_second_short_response_is_accepted_without_infinite_retry(monkeypa
         call_state["n"] += 1
         return call_state["n"] == 1
 
-    async def fake_maybe_compact(messages, model, config, *, role="sub"):
+    async def fake_maybe_compact(messages, model, config, *, role="sub", pinned_instruction=None):
         return [HumanMessage(content="[要約]圧縮済み")]
 
     monkeypatch.setattr(subagent, "should_compact", fake_should_compact)
@@ -220,7 +220,7 @@ async def test_long_response_immediately_after_compaction_is_accepted_without_re
         call_state["n"] += 1
         return call_state["n"] == 1
 
-    async def fake_maybe_compact(messages, model, config, *, role="sub"):
+    async def fake_maybe_compact(messages, model, config, *, role="sub", pinned_instruction=None):
         return [HumanMessage(content="[要約]圧縮済み")]
 
     monkeypatch.setattr(subagent, "should_compact", fake_should_compact)

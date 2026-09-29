@@ -761,7 +761,13 @@ async def run_subagent(
                     # 保持する構造が異なる。除外せずに渡すと要約で先頭が切り捨てられた際に
                     # サブエージェントが以後システムプロンプト（役割・ツール方針等）を
                     # 失ってしまうため、常に保持対象として明示的に除外してから渡す。
-                    new_tail = await maybe_compact(messages[1:], summary_model, compaction_config, role="sub")
+                    # 一方 messages[1] の task（委譲時の指示）は要約対象に含まれる
+                    # ため、pinned_instruction で原文を要約結果の先頭へ毎回付け直す
+                    # （2回目以降の圧縮では前回の要約＝task付きが messages[1] に来るが、
+                    # 付け直すのは常に元の task 原文なので重複・劣化しない）。
+                    new_tail = await maybe_compact(
+                        messages[1:], summary_model, compaction_config, role="sub", pinned_instruction=task
+                    )
                     if new_tail is not None:
                         logger.info(
                             "subagent: 会話履歴を圧縮しました (iter=%d) [%s]",

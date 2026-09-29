@@ -173,7 +173,7 @@ async def test_compaction_excludes_leading_system_message(monkeypatch) -> None:
 
     captured_maybe_compact_args = {}
 
-    async def fake_maybe_compact(messages, model, config, *, role="sub"):
+    async def fake_maybe_compact(messages, model, config, *, role="sub", pinned_instruction=None):
         captured_maybe_compact_args["messages"] = list(messages)
         return [HumanMessage(content="[要約]圧縮済み")]
 
@@ -311,7 +311,7 @@ async def test_compaction_skipped_when_note_never_called(monkeypatch) -> None:
 
     compact_calls = {"count": 0}
 
-    async def fake_maybe_compact(messages, model, config, *, role="sub"):
+    async def fake_maybe_compact(messages, model, config, *, role="sub", pinned_instruction=None):
         compact_calls["count"] += 1
         return [HumanMessage(content="[要約]")]
 
@@ -369,7 +369,7 @@ async def test_force_write_thread_note_runs_before_skipping_compaction(monkeypat
 
     compact_inputs: list[list] = []
 
-    async def fake_maybe_compact(messages, model, config, *, role="sub"):
+    async def fake_maybe_compact(messages, model, config, *, role="sub", pinned_instruction=None):
         compact_inputs.append(list(messages))
         return [HumanMessage(content="[要約]")]
 
@@ -420,7 +420,7 @@ async def test_compaction_forced_after_max_skips(monkeypatch) -> None:
 
     compact_calls = {"count": 0}
 
-    async def fake_maybe_compact(messages, model, config, *, role="sub"):
+    async def fake_maybe_compact(messages, model, config, *, role="sub", pinned_instruction=None):
         compact_calls["count"] += 1
         return [HumanMessage(content="[要約]")]
 

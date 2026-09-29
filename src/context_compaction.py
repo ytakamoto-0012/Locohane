@@ -42,6 +42,7 @@ _THREAD_NOTE_STATUS_HEADER = (
     "要約に含まれていない具体的な事実（値・件数・該当箇所等）が必要になったら、"
     "ここに挙がっているtopic名を read_thread_note でそのまま読んでください]\n"
 )
+_PINNED_INSTRUCTION_HEADER = "[委譲元から指示されたタスク（原文）。要約とは無関係にコード側が機械的に付与しています]\n"
 _PRE_NOTE_MARKER = "[コンテキスト圧縮が近づいています]"
 _LOOP_NUDGE_TEXT = "直前の要約生成は同じ内容を繰り返すループに陥ったため打ち切りました。" "落ち着いて、要約対象の会話履歴を踏まえてもう一度簡潔に要約し直してください。"
 
@@ -356,6 +357,7 @@ async def maybe_compact(
     config: Config,
     *,
     role: Literal["main", "sub"] = "main",
+    pinned_instruction: str | None = None,
 ) -> list[BaseMessage] | None:
     """必要なら古い会話履歴を要約し、状態更新用のメッセージ列を返す。
 
@@ -390,6 +392,12 @@ async def maybe_compact(
             subagent_background_llm_timeout_max_retries）・クライアントの
             強制クローズ方針を build_model() のロールごとの接続先設定に
             合わせるために使う。
+        pinned_instruction: 要約LLMに頼らず、要約結果の先頭へ原文のまま
+            機械的に付与する指示（src/subagent.py が dispatch_agent の task を
+            渡す）。サブエージェントの task は履歴の先頭にしか無いため
+            _find_compaction_cut_index の直近ユーザー発話保護が効かず、
+            省略すると出力形式・調査範囲・禁止事項等の委譲時の指示が要約で
+            薄まり、圧縮を重ねるほど劣化していく。
 
     Returns:
         要約が実行された場合、「要約結果のHumanMessage」+「直近ターンの
@@ -517,6 +525,8 @@ async def maybe_compact(
         return None
 
     summary_content = _SUMMARY_HEADER + summary_text
+    if pinned_instruction:
+        summary_content = _PINNED_INSTRUCTION_HEADER + pinned_instruction + "\n\n" + summary_content
     # 要約LLMの読み取り精度に依存せず、圧縮のたびに100%正確な最新の計画状態・
     # thread noteの状態を機械的に追記する（要約対象の tool_calls 引数は
     # _messages_to_text に含まれず要約LLMからは元々見えないため、要約結果に
