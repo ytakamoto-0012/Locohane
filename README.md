@@ -16,12 +16,10 @@
 
 名前の由来：**Lo**cal（ローカル環境）+ 小羽（**cohane** / 軽量さ・和名っぽさ）
 
-## 中核使命
+## このプロジェクトの目的
 
 **このプロジェクトは、高性能な大規模パラメータモデルではなく、低パラメータモデルでも
-安定して Agent がタスクをこなせるようにすることを目指す。** 特に低パラメータモデルで
-起こりやすい、思考ループ・パス生成不具合・途中停止（無言のまま応答を終える等）の制御に
-全力を尽くす。この中核使命を支える技術は次の7点:
+安定して Agent がタスクをこなせるようにすることを目指す。** 
 
 - **パスメモリー機能**（`src/path_memory.py`、`system_prompt.md` の
   Tool Usage Guidelines）: `Glob`/`Grep`/`Read` の結果に短い参照番号 `@N`
@@ -504,7 +502,15 @@ Remove-Item -Recurse -Force .\data\*
 pip install -r requirements.txt
 ```
 
-### 2. llama-server（llama.cpp）の起動例
+### 2. 推論サーバー（llama.cpp / vLLM）の起動例
+
+LLM接続先はOpenAI互換エンドポイントであれば何でもよいが、`config.ini`の
+`[llm] main_url`/`sub_url`内の`provider`（`llama_cpp`/`vllm`/未指定＝
+`openai_compatible`）を実際のサーバー種別と揃えると、拡張パラメータ
+（`repeat_penalty`/`dry_*`/`reasoning_budget`等）の名称・送信可否を
+サーバーごとの方言に自動で合わせてくれる（`src/llm/dialect.py`）。
+
+**llama-server（llama.cpp）**
 
 OpenAI 互換エンドポイントを `http://localhost:8080/v1` で公開する:
 
@@ -513,15 +519,34 @@ llama-server --model C:\path\to\model.gguf --alias local-model --host 127.0.0.1 
 ```
 
 - `--alias` はモデル名。`config.ini` の `[llm] main_url` 内の `model` と揃える。
-- 接続先・モデル名は `config.ini`（または環境変数 `LLM_MAIN_URL` / `LLM_SUB_URL`）で切り替え可能。
 - サンプリング（`top_p`/`top_k`/`repeat_penalty`/`frequency_penalty`/`presence_penalty`/`max_tokens`）は
   `--repeat-penalty` 等の起動時 CLI オプションでも既定値を指定できるが、`config.ini` の
   `[llm]` 側で値を指定した場合はリクエストごとにその値が優先される（未指定＝空欄の項目のみ
   llama-server 起動時の既定値が使われる）。
 
+**vLLM**
+
+OpenAI 互換エンドポイントを `http://localhost:8000/v1` で公開する:
+
+```bash
+vllm serve /path/to/model --served-model-name local-model --host 127.0.0.1 --port 8000
+```
+
+- `--served-model-name` はモデル名。`config.ini` の `[llm] main_url` 内の `model` と揃える。
+- thinking（`<think>`ブロック）モデルを使う場合は、`--reasoning-parser`
+  （例: `deepseek_r1`）を起動時に指定する必要がある（vLLMはllama-serverと
+  異なり `reasoning_format` をリクエストでは切り替えられない）。
+- `dry_*`（DRYサンプラー）・`reasoning_format`・`reasoning_budget_message`は
+  vLLMには送られない（`src/llm/dialect.py`が自動で除外する）。
+
+接続先・モデル名は `config.ini`（または環境変数 `LLM_MAIN_URL` / `LLM_SUB_URL`）で切り替え可能。
+どちらのサーバーも、接続先・拡張パラメータは起動後に設定ダッシュボード
+（管理ツール）のUIから変更できる（「設定ダッシュボード（管理ツール）」節参照）。
+
 > **⚠️ 商用利用時のモデルライセンス**
-> llama.cpp 自体は MIT ですが、**動かす GGUF モデルのライセンスはモデルごとに異なります**
-> （基盤コードには含まれません）。商用利用時は必ず確認してください。
+> llama.cpp・vLLM自体はいずれもMITベースのライセンスですが、**動かすモデルの
+> ライセンスはモデルごとに異なります**（基盤コードには含まれません）。
+> 商用利用時は必ず確認してください。
 > - Qwen2.5 系 / Mistral 系 → Apache 2.0（商用可・推奨）
 > - Llama 系 → Meta Llama Community License（商用可だが月間7億MAU条項など独自制約あり）
 > - Gemma 系 → 独自の Gemma Terms of Use
@@ -529,60 +554,67 @@ llama-server --model C:\path\to\model.gguf --alias local-model --host 127.0.0.1 
 
 ### 3. 環境依存パスの最低限の設定
 
-llama-server を起動したら、環境依存で必ず実際の値に合わせる必要がある
-パス設定を行う。これらは `config.ini` だけでなく `app.bat` と
-プロジェクト直下の `CLAUDE.md` にも分散しているので注意する。
+推論サーバー（llama-server/vLLM）を起動したら、環境依存で必ず実際の値に合わせる必要がある
+パス設定を行う。設定ダッシュボード（管理ツール）を使う場合、
+**LLM接続先（`[llm] main_url`/`sub_url`）と `run_script`/`execute_python_code`
+が使うPython（`[scripts].python`）はログイン後にUIから設定できる**ため、
+起動前に `config.ini` を直接編集する必要はない。事前にテキストで
+用意しておく必要があるのは次の2ファイルだけ。
 
-**`config.ini`（LLM接続先・エージェントが実行時に使うPython）**
+**`.env`（管理ツールのログイン情報）**
 
-| セクション | キー | 設定する値 |
-|---|---|---|
-| `[llm]` | `main_url` | メインエージェント用のLLM接続先（1件のみ変更対象。`base_url`＝手順2で起動した llama-server の OpenAI 互換エンドポイント例: `http://localhost:8080/v1`、`api_key`＝llama.cpp は認証不要のため通常はダミー値のまま、`model`＝手順2の `--alias` と一致させるモデル名） |
-| `[llm]` | `sub_url` | サブエージェント（`dispatch_agent`）用のLLM接続先。形式は `main_url` と同じ。通常は `main_url` と同じ値にする |
-| `[scripts]` | `python` | `run_script`/`execute_python_code` ツール（LLMが実行時に呼び出す）が使う Python 実行ファイルの絶対パス |
+| キー | 設定する値 |
+|---|---|
+| `ADMIN_USERS` | 管理ツールへログインするユーザー名/パスワードの組。`.env.example` をコピーして `.env` を作成し設定する（未設定だと管理ツールは起動を拒否する） |
 
-**`app.bat`（アプリ本体＝chainlitサーバーを起動する仮想環境）**
+**`admin.bat`（管理ツール自身の起動設定）**
 
 | 変数 | 設定する値 |
 |---|---|
-| `PYTHON_DIR` | `chainlit run app.py` を実行する Python 仮想環境のディレクトリ（`Scripts` はこの変数からの相対で解決される） |
+| `PYTHON_DIR` | 管理ツール（`admin/server.py`）を実行する Python 仮想環境のディレクトリ。**管理ツールから起動する Locohane 本体の各インスタンスも同じ Python（`sys.executable`）で起動される**（`admin/supervisor.py` 参照）ため、`app.bat` 側を別途設定する必要はない |
+| `ADMIN_HOST` / `ADMIN_PORT` | 管理ツール自身の待受ホスト・ポート（既定 `127.0.0.1:8001` 相当）。ポートが他と競合する場合のみ変更する |
 
-**プロジェクト `CLAUDE.md`（Claude Code がこのプロジェクトを開発・テストする際に使う実行環境）**
+ここまで設定すれば `admin.bat` を起動でき、ログイン後はダッシュボードの
+「インスタンス」→ 対象インスタンスの「設定」→ `config.ini` タブから
+`main_url`/`sub_url`/`python` を検索して設定・保存し、インスタンスを
+再起動すれば反映される（詳細は「設定ダッシュボード（管理ツール）」節）。
+
+**プロジェクト `CLAUDE.md`（Claude Code がこのプロジェクトを開発・テストする際に使う実行環境。アプリの実行には不要）**
 
 | 見出し | 設定する値 |
 |---|---|
-| `Python実行環境` | Claude Code がスクリプト実行・動作確認に使う Python 実行ファイルの絶対パス（通常は `app.bat` の `PYTHON_DIR` と同じ仮想環境） |
+| `Python実行環境` | Claude Code がスクリプト実行・動作確認に使う Python 実行ファイルの絶対パス（通常は `admin.bat` の `PYTHON_DIR` と同じ仮想環境） |
 | `Node.jsパス` | `frontend/`（package.json あり）のビルド・テストに Claude Code が使う Node.js のディレクトリ |
 
-これら3ファイルは用途が異なるため、同じ値を指すこともあれば異なることもある。
-`config.ini` の `[scripts].python` はアプリ実行中にLLMが呼び出すスクリプト用、
-`app.bat` の `PYTHON_DIR` はアプリ本体の起動用、プロジェクト `CLAUDE.md` の
-2項目は開発時に Claude Code が使う用、という違いを意識して設定する。
+**管理ツールを使わず、テキストエディタで直接設定する場合**
 
-**方法A: `setup-basic-config` スキルを使う（推奨）**
-
-Claude Code 上で `/setup-basic-config` を実行すると、上記3ファイル・
-6項目の現在値を提示した上で対話形式で新しい値を確認し、まとめて
-更新してくれる（`.claude/skills/setup-basic-config/SKILL.md`）。
-
-**方法B: 各ファイルを直接編集する**
-
-エディタで `config.ini` を開き、`[llm]` セクションの
-`main_url`/`sub_url`、`[scripts]` セクションの
-`python` を直接書き換える。`app.bat` の `PYTHON_DIR` と、プロジェクト
-`CLAUDE.md` の「Python実行環境」「Node.jsパス」も同様に書き換える。
-各項目の意味は後述の「設定リファレンス（config.ini）」も参照。
+`config.ini` の `[llm] main_url`/`sub_url`・`[scripts].python`、
+`app.bat` の `PYTHON_DIR` を直接書き換えれば、管理ツールを介さず
+`app.bat` で単体起動できる（各項目の意味は後述の「設定リファレンス
+（config.ini）」参照）。Claude Code 上で `/setup-basic-config` を実行すると、
+これら（`CLAUDE.md` の2項目を含む）の現在値を提示した上で対話形式で
+まとめて更新してくれる（`.claude/skills/setup-basic-config/SKILL.md`）。
 
 ### 4. アプリ起動
 
-```bash
-cd C:\DT_Python\Locohane
-C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
+```cmd
+admin.bat
 ```
 
-（開発時のホットリロード起動。通常運用では `app.bat`、または設定を
-ブラウザから変更できる `admin.bat` から起動する。「設定ダッシュボード
-（管理ツール）」節参照）
+管理ツール（設定ダッシュボード）が起動し、`default` インスタンス
+（Locohane本体）を自動起動する。詳細は「設定ダッシュボード
+（管理ツール）」節を参照。
+
+開発時にホットリロードしながら単体で動かしたい場合は次のいずれか。
+
+```bash
+# 方法A: chainlitを直接起動
+cd C:\DT_Python\Locohane
+C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
+
+# 方法B: app.bat（instances/default/instance.json のホスト・ポートに追従）
+app.bat
+```
 
 ブラウザで開き、例えば「この Excel ファイルの中身を要約して」と送ると、
 `read_skill`（excel-read の本文読込）→ `run_script`（`read_excel.py` 実行）が
@@ -883,7 +915,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `track_token_usage` | トークン使用量の取得を有効にする（Chainlit UI表示・eval結果に反映） | `LLM_TRACK_TOKEN_USAGE` |
 | `[llm]` | `request_timeout_seconds` | LLMサーバーへの応答待ちタイムアウト秒数（read/write/pool） | `LLM_REQUEST_TIMEOUT_SECONDS` |
 | `[llm]` | `stream_chunk_timeout_seconds` | ストリーミング中にチャンクが届かない場合のタイムアウト秒数 | `LLM_STREAM_CHUNK_TIMEOUT_SECONDS` |
-| `[llm]` | `max_concurrent_requests` | llama-serverへの同時リクエスト数上限。1以上でSemaphore(N)ガード（既定1＝完全直列化）、0以下で無制限 | `LLM_MAX_CONCURRENT_REQUESTS` |
+| `[llm]` | `max_concurrent_requests` | 推論サーバーへの同時リクエスト数上限。1以上でSemaphore(N)ガード（既定1＝完全直列化）、0以下で無制限 | `LLM_MAX_CONCURRENT_REQUESTS` |
 | `[llm]` | `round_robin_slots_probe_timeout_seconds` | `round_robin`戦略がprovider="llama_cpp"の接続先を選ぶ前に送るGET /slots問い合わせ自体のタイムアウト秒数（既定3、確認できなければ空きありとみなすfail-safe） | `LLM_ROUND_ROBIN_SLOTS_PROBE_TIMEOUT_SECONDS` |
 | `[llm]` | `round_robin_busy_poll_interval_seconds` | `round_robin`戦略で候補の全接続先に空きスロットが無かった場合、再確認までに待機する秒数（既定2） | `LLM_ROUND_ROBIN_BUSY_POLL_INTERVAL_SECONDS` |
 | `[paths]` | `common_data_dir` | 各種データ保存先パスの共通ベースディレクトリ（既定 `./data/${instance}`）。本セクションの`checkpoint_db`/`memory_dir`/`plans_dir`、および`[uploads]`/`[log]`/`[default_workdir]`/`[path_memory]`/`[chat_log]`の`dir`系キーの値に`${common_data_dir}`と書くとここで指定した値に置換される（configparser標準の補間ではなくconfig.py側の独自置換）。`common_data_dir`自身とこれらのキーでは`${instance}`がインスタンス名（環境変数`LOCOHANE_INSTANCE`、未設定なら`default`）に置換される | `COMMON_DATA_DIR` |
@@ -1350,7 +1382,7 @@ favicon をそのまま使用しています。
 - LangChain の LangSmith トレーシング（`LANGCHAIN_TRACING_V2` / `LANGSMITH_TRACING` を false 化）
 
 唯一の外部通信は `config.ini` の `base_url`（既定 `http://localhost:8080` = ローカルの
-llama-server）への LLM 呼び出しのみです。
+llama-server。vLLMを使う場合も同様にローカルのエンドポイントを指す）への LLM 呼び出しのみです。
 
 MCPサーバー機能（`.locohane/settings.json`、上記「MCPサーバー接続」参照）を有効化した
 場合、そこに定義したコマンド（例: `npx` 経由のサードパーティ製MCPサーバー）が
@@ -1382,7 +1414,7 @@ LICENSEファイル・SKILL.mdのfrontmatter（`license`キー）を確認し、
 
 ### 商用利用時のチェックリスト
 
-- [ ] 使用する **GGUF モデルのライセンス** を確認する（→ 上記「llama-server 起動例」の注記）
+- [ ] 使用するモデル（GGUF/vLLM対応形式）の**ライセンス**を確認する（→ 上記「推論サーバー（llama.cpp / vLLM）の起動例」の注記）
 - [ ] 依存を追加・更新したら `tools/gen_licenses.py` で告知ファイルを再生成する
 - [ ] サードパーティ製Agent Skillsを追加した場合、そのスキル自体と追加依存
       パッケージのライセンスを個別に確認する（上記「サードパーティ製Agent
