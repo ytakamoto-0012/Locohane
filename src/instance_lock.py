@@ -60,6 +60,39 @@ def acquire(lock_path: Path) -> None:
     _lock_file = f
 
 
+def is_locked(lock_path: Path) -> bool:
+    """lock_path が別プロセスに保持されているかを、取得を試みてすぐ手放す形で判定する。
+
+    管理ツール（admin/supervisor.py）が、自分が子プロセスとして起動していない
+    インスタンスについて「app.bat 等で外部起動中かどうか」を判定するために使う
+    読み取り専用の確認。acquire() と異なり、成功してもロックを保持し続けない
+    （このプロセス自身の `_lock_file` グローバルには一切触れない。自プロセスが
+    acquire() 済みのロックの判定に使うことは想定していない）。
+
+    Returns:
+        True: 既に別プロセスが保持中（起動中とみなせる）。
+        False: 誰も保持していない（ファイルが存在しない場合も含む＝未起動）。
+    """
+    if not lock_path.exists() or lock_path.stat().st_size == 0:
+        return False
+    try:
+        f = open(lock_path, "r+b")
+    except OSError:
+        # ファイルを開けない（権限等）場合も、確実性を優先し「起動中」とみなす
+        # （安全側＝多重起動防止側に倒す）。
+        return True
+    try:
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        return True
+    else:
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        return False
+    finally:
+        f.close()
+
+
 def release() -> None:
     """保持中のロックを解放する（プロセス正常終了時のベストエフォート）。
 

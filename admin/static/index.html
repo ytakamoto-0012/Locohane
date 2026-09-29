@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Locohane 設定ダッシュボード</title>
+<link rel="stylesheet" href="/admin.css" />
+</head>
+<body>
+<div id="app">読み込み中...</div>
+
+<template id="tpl-login">
+  <div class="login-screen">
+    <form class="login-box" id="login-form">
+      <h1>Locohane 設定ダッシュボード</h1>
+      <p class="hint">管理者アカウントでログインしてください。</p>
+      <label>ユーザー名<input type="text" name="username" autocomplete="username" required /></label>
+      <label>パスワード<input type="password" name="password" autocomplete="current-password" required /></label>
+      <div class="error" id="login-error"></div>
+      <button type="submit">ログイン</button>
+    </form>
+  </div>
+</template>
+
+<template id="tpl-shell">
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">Locohane 設定ダッシュボード</div>
+      <nav class="tabs">
+        <button data-view="instances" class="tab-btn active">インスタンス</button>
+        <button data-view="settings" class="tab-btn">表示設定</button>
+        <button data-view="audit" class="tab-btn">変更履歴</button>
+      </nav>
+      <div class="topbar-right">
+        <span id="me-username"></span>
+        <button id="logout-btn" class="link-btn">ログアウト</button>
+      </div>
+    </header>
+    <main id="main"></main>
+  </div>
+</template>
+
+<template id="tpl-instances">
+  <div class="view-instances">
+    <div class="view-header">
+      <h2>インスタンス</h2>
+      <button id="add-instance-btn">＋ インスタンス追加</button>
+    </div>
+    <div id="instance-cards" class="instance-cards"></div>
+  </div>
+</template>
+
+<template id="tpl-instance-card">
+  <div class="instance-card">
+    <div class="card-top">
+      <span class="state-dot"></span>
+      <span class="display-name"></span>
+      <span class="badge-default">既定</span>
+    </div>
+    <div class="card-meta">
+      <span class="addr"></span>
+      <span class="state-label"></span>
+    </div>
+    <div class="card-actions">
+      <a class="open-link" target="_blank" rel="noopener">開く ↗</a>
+      <button class="btn-start">起動</button>
+      <button class="btn-stop">停止</button>
+      <button class="btn-restart">再起動</button>
+      <button class="btn-edit">編集</button>
+      <button class="btn-config">設定</button>
+      <button class="btn-delete">削除</button>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-create-instance">
+  <div class="modal-backdrop">
+    <div class="modal">
+      <h3>インスタンスを追加</h3>
+      <form id="create-instance-form">
+        <label>インスタンス名（半角英数字・_・- のみ）<input type="text" name="name" required pattern="[A-Za-z0-9_-]{1,32}" /></label>
+        <label>表示名<input type="text" name="display_name" /></label>
+        <label>ホスト<input type="text" name="app_host" value="127.0.0.1" /></label>
+        <label>ポート（空欄で自動提案）<input type="number" name="app_port" min="1024" max="65535" /></label>
+        <label class="checkbox"><input type="checkbox" name="autostart" /> 管理ツール起動時に自動起動する</label>
+        <label class="checkbox"><input type="checkbox" name="headless" checked /> ヘッドレス（起動時にブラウザを自動で開かない）</label>
+        <label class="checkbox"><input type="checkbox" name="watch" /> 自動リロード（-w、ファイル変更で再読込。本番運用では非推奨）</label>
+        <label>複製元（任意）
+          <select name="copy_from"><option value="">（複製しない）</option></select>
+        </label>
+        <div class="error" id="create-instance-error"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-cancel">キャンセル</button>
+          <button type="submit">作成</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-edit-instance">
+  <div class="modal-backdrop">
+    <div class="modal">
+      <h3>インスタンス設定を編集</h3>
+      <form id="edit-instance-form">
+        <p class="hint">インスタンス名: <strong class="edit-instance-name"></strong>（変更不可。ディレクトリ名・API識別子として使われるため）</p>
+        <label>表示名<input type="text" name="display_name" /></label>
+        <label>ホスト<input type="text" name="app_host" /></label>
+        <label>ポート<input type="number" name="app_port" min="1024" max="65535" required /></label>
+        <label class="checkbox"><input type="checkbox" name="autostart" /> 管理ツール起動時に自動起動する</label>
+        <label class="checkbox"><input type="checkbox" name="headless" /> ヘッドレス（起動時にブラウザを自動で開かない）</label>
+        <label class="checkbox"><input type="checkbox" name="watch" /> 自動リロード（-w、ファイル変更で再読込。本番運用では非推奨）</label>
+        <p class="hint">稼働中の場合、ホスト・ポートの変更は再起動後に反映されます。</p>
+        <div class="error" id="edit-instance-error"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-cancel">キャンセル</button>
+          <button type="submit">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-instance-detail">
+  <div class="view-instance-detail">
+    <div class="view-header">
+      <button class="back-btn">← インスタンス一覧</button>
+      <h2><span class="detail-name"></span> の設定</h2>
+    </div>
+    <nav class="subtabs">
+      <button data-subview="config" class="subtab-btn active">config.ini</button>
+      <button data-subview="users" class="subtab-btn">ユーザー</button>
+      <button data-subview="env" class="subtab-btn">環境変数</button>
+      <button data-subview="display" class="subtab-btn">表示設定</button>
+      <button data-subview="backups" class="subtab-btn">バックアップ</button>
+    </nav>
+    <div id="instance-subview"></div>
+  </div>
+</template>
+
+<template id="tpl-config-editor">
+  <div class="config-editor">
+    <div class="config-sidebar">
+      <input type="search" id="config-search" placeholder="キー名・説明で検索..." />
+      <label class="checkbox"><input type="checkbox" id="config-changed-only" /> 変更済みのみ</label>
+      <ul id="section-list" class="section-list"></ul>
+    </div>
+    <div class="config-main">
+      <div id="restart-banner" class="restart-banner hidden">この変更を反映するには、インスタンスの再起動が必要です。 <button id="restart-now-btn">今すぐ再起動</button></div>
+      <div id="config-keys"></div>
+      <div class="config-footer">
+        <span id="dirty-count"></span>
+        <button id="preview-btn">変更を確認</button>
+        <button id="save-btn" disabled>保存</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-key-row">
+  <div class="key-row">
+    <div class="key-row-head">
+      <span class="key-label"></span>
+      <span class="env-badge hidden" title="環境変数で上書き中のため、ここでの変更は反映されません">環境変数で上書き中</span>
+      <span class="changed-badge hidden">変更済み</span>
+      <button class="reset-btn hidden">既定値に戻す</button>
+    </div>
+    <div class="key-desc"></div>
+    <div class="key-input-wrap"></div>
+  </div>
+</template>
+
+<template id="tpl-preview-modal">
+  <div class="modal-backdrop">
+    <div class="modal modal-wide">
+      <h3>変更内容の確認</h3>
+      <div id="preview-diff" class="diff-list"></div>
+      <div class="error" id="preview-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-cancel">閉じる</button>
+        <button type="button" id="confirm-save-btn">この内容で保存</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-users">
+  <div class="view-users">
+    <p class="hint" id="users-inherited-note"></p>
+    <table class="data-table">
+      <thead><tr><th>ユーザー名</th><th>パスワード</th><th></th></tr></thead>
+      <tbody id="users-tbody"></tbody>
+    </table>
+    <form id="add-user-form" class="inline-form">
+      <input type="text" name="username" placeholder="新しいユーザー名" required />
+      <input type="password" name="password" placeholder="パスワード" required />
+      <button type="submit">追加</button>
+    </form>
+    <div class="error" id="users-error"></div>
+    <hr />
+    <div class="secret-row">
+      <span>JWT署名鍵（CHAINLIT_AUTH_SECRET）: <span id="secret-status"></span></span>
+      <button id="gen-secret-btn">生成し直す</button>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-env">
+  <div class="view-env">
+    <table class="data-table">
+      <thead><tr><th>キー</th><th>値</th><th></th></tr></thead>
+      <tbody id="env-tbody"></tbody>
+    </table>
+    <form id="add-env-form" class="inline-form">
+      <input type="text" name="key" placeholder="環境変数名" required />
+      <input type="text" name="value" placeholder="値" />
+      <button type="submit">追加/更新</button>
+    </form>
+    <div class="error" id="env-error"></div>
+  </div>
+</template>
+
+<template id="tpl-backups">
+  <div class="view-backups">
+    <table class="data-table">
+      <thead><tr><th>ファイル名</th><th>日時</th><th></th></tr></thead>
+      <tbody id="backups-tbody"></tbody>
+    </table>
+  </div>
+</template>
+
+<template id="tpl-settings">
+  <div class="view-settings">
+    <h2 id="settings-title">表示設定（全インスタンス共通）</h2>
+    <p class="hint" id="settings-target-hint"></p>
+    <section class="settings-section" data-text="header.md">
+      <h3>ヘッダー文言（header.md） <span class="setting-source"></span></h3>
+      <textarea rows="2"></textarea>
+      <button class="save-setting-btn">保存</button>
+      <button class="reset-setting-btn hidden">共通に戻す</button>
+    </section>
+    <section class="settings-section" data-text="tab_title.md">
+      <h3>タブタイトル（tab_title.md） <span class="setting-source"></span></h3>
+      <textarea rows="2"></textarea>
+      <button class="save-setting-btn">保存</button>
+      <button class="reset-setting-btn hidden">共通に戻す</button>
+    </section>
+    <section class="settings-section" data-text="welcome.md">
+      <h3>ウェルカムメッセージ（welcome.md） <span class="setting-source"></span></h3>
+      <p class="hint"><code>{skills}</code> はスキル一覧に置換されます。</p>
+      <textarea rows="6"></textarea>
+      <button class="save-setting-btn">保存</button>
+      <button class="reset-setting-btn hidden">共通に戻す</button>
+    </section>
+    <section class="settings-section" data-image="icon">
+      <h3>アイコン（icon.*） <span class="setting-source"></span></h3>
+      <p class="hint">現在: <span class="image-current"></span></p>
+      <input type="file" accept=".png,.svg,.jpg,.jpeg" />
+      <button class="upload-image-btn">アップロード</button>
+      <button class="reset-setting-btn hidden">共通に戻す</button>
+    </section>
+    <section class="settings-section" data-image="favicon">
+      <h3>favicon（favicon.*） <span class="setting-source"></span></h3>
+      <p class="hint">現在: <span class="image-current"></span></p>
+      <input type="file" accept=".png,.svg,.ico" />
+      <button class="upload-image-btn">アップロード</button>
+      <button class="reset-setting-btn hidden">共通に戻す</button>
+    </section>
+    <div class="error" id="settings-error"></div>
+  </div>
+</template>
+
+<template id="tpl-audit">
+  <div class="view-audit">
+    <h2>変更履歴</h2>
+    <table class="data-table">
+      <thead><tr><th>日時</th><th>インスタンス</th><th>操作</th><th>実行者</th><th>詳細</th></tr></thead>
+      <tbody id="audit-tbody"></tbody>
+    </table>
+  </div>
+</template>
+
+<script src="/admin.js"></script>
+</body>
+</html>

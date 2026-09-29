@@ -2,6 +2,11 @@
 # 何がどこに溜まるかは README.md「データ保存場所」を参照。
 data/
 
+# 設定ダッシュボード（管理ツール、admin/ パッケージ）が管理するインスタンス
+# ごとのディレクトリ（config_overrides.json・.env・data/・バックアップ・
+# 変更履歴ログ）。README.md「設定ダッシュボード」参照。
+instances/
+
 # eval ループの実行結果（再生成可能な生データ。evals/history/ と
 # evals/tuning_log.md はチューニング履歴として追跡対象に残す）。
 evals/results/

@@ -53,6 +53,24 @@ os.environ.setdefault("CHAINLIT_TELEMETRY_ENABLED", "false")  # 1.x 互換。2.x
 os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
 os.environ.setdefault("LANGSMITH_TRACING", "false")
 
+# 設定ダッシュボード（管理ツール、admin/ パッケージ）が複数インスタンスを子プロセス
+# として起動する場合、インスタンス別の .env（instances/<name>/.env。ログイン
+# ユーザー AUTH_USERS・JWT署名鍵 CHAINLIT_AUTH_SECRET 等）をここで読み込む。
+# 環境変数 LOCOHANE_INSTANCE_ENV は管理ツールが子プロセス起動時に設定する
+# （admin/supervisor.py 参照）。未設定（app.bat で直接起動した場合を含む）なら
+# instances/<LOCOHANE_INSTANCE、既定 default>/.env を使うため、app.bat 起動でも管理ツール
+# 経由の起動と同じ挙動になる（README.md「.envとユーザー管理」参照）。
+# 必ず `import chainlit as cl`（直後、chainlitが自身のモジュール読み込み時に
+# プロジェクト直下の .env を override=False で読む）より前に、override=True で
+# 読むこと。これにより「インスタンスの.env > OS環境変数 > プロジェクト直下.env」
+# の優先度になる。
+from dotenv import load_dotenv as _load_dotenv
+
+_INSTANCE_NAME = os.getenv("LOCOHANE_INSTANCE") or "default"
+_INSTANCE_DIR = Path(__file__).resolve().parent / "instances" / _INSTANCE_NAME
+_instance_env_path = os.getenv("LOCOHANE_INSTANCE_ENV") or str(_INSTANCE_DIR / ".env")
+_load_dotenv(_instance_env_path, override=True)
+
 import uuid
 
 import aiosqlite
@@ -1117,19 +1135,69 @@ async def _close_checkpointer_gracefully() -> None:
 # （custom_build の SPA とは別経路）ため、ここに置いたテキストファイルを編集すれば
 # フロントエンド/バックエンドの再ビルド無しで Welcome メッセージ・ヘッダー文言を変更できる。
 SETTINGS_DIR = Path(__file__).resolve().parent / "public" / "settings"
+# インスタンス専用の表示設定（管理ツールの「表示設定」でインスタンスを選んで
+# 保存したもの）。ここにあるファイルが public/settings/ より優先される。
+INSTANCE_SETTINGS_DIR = _INSTANCE_DIR / "settings"
+# icon.* / favicon.* は拡張子違いを1組として扱う（フロントエンドは拡張子を順に
+# 試すため、インスタンス側に1つでもあれば共通側の別拡張子を見せてはいけない）。
+_SETTINGS_IMAGE_KINDS = ("icon", "favicon")
+
+
+def _resolve_settings_file(filename: str) -> Path | None:
+    """表示設定ファイルの実体パス（インスタンス専用 > 共通）。無ければ None。"""
+    if not filename or Path(filename).name != filename:
+        return None
+    stem = filename.split(".", 1)[0]
+    if stem in _SETTINGS_IMAGE_KINDS:
+        base = INSTANCE_SETTINGS_DIR if any(INSTANCE_SETTINGS_DIR.glob(f"{stem}.*")) else SETTINGS_DIR
+        path = base / filename
+    else:
+        path = INSTANCE_SETTINGS_DIR / filename
+        if not path.is_file():
+            path = SETTINGS_DIR / filename
+    return path if path.is_file() else None
 
 
 def _load_settings_text(filename: str, default: str) -> str:
-    """public/settings/ 配下のユーザー編集用テキストファイルを読み込む。
+    """表示設定のテキストファイルを読み込む（インスタンス専用 > public/settings/）。
 
     ファイルが存在しない、または読み込めない場合は default を返す
     （ユーザーが直接編集する外部ファイルという境界を越える入力のため、
     欠落・破損時にアプリ起動を落とさないための最小限のフォールバック）。
     """
+    path = _resolve_settings_file(filename)
+    if path is None:
+        return default
     try:
-        return (SETTINGS_DIR / filename).read_text(encoding="utf-8").strip()
+        return path.read_text(encoding="utf-8").strip()
     except OSError:
         return default
+
+
+def _register_instance_settings_route() -> None:
+    """/public/settings/{filename} をインスタンス専用ファイル優先で配信するルートを登録する。
+
+    フロントエンド（Header.tsx/App.tsx/index.html）は /public/settings/ を直接
+    fetch するため、Chainlit 標準の /public/{filename:path} より手前（routes の
+    先頭）に差し込んで横取りする（catch-all との順序問題は
+    _reorder_locohane_routes_before_spa_catchall のコメント参照）。
+    """
+    from chainlit.server import app as _asgi_app
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    @_asgi_app.get("/public/settings/{filename}")
+    async def _serve_settings_file(filename: str):
+        path = _resolve_settings_file(filename)
+        if path is None:
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(path)
+
+    routes = _asgi_app.router.routes
+    routes.insert(0, routes.pop())
+
+
+_register_instance_settings_route()
 
 
 # usage_metadata（langchain-openai の UsageMetadata dict）のキー →

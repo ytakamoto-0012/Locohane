@@ -23,6 +23,13 @@ fastmcp==3.4.7                        # 非公式サードパーティ製ラッ�
 # --- UI ---
 chainlit==2.11.1
 
+# --- 設定ダッシュボード（管理ツール、admin/ パッケージ、admin.bat） ---
+# 3つともchainlitの推移的依存として環境には既に導入済みだが、admin/server.py
+# 等が直接importするため明記（バージョンは導入済みのものに固定）。
+fastapi==0.139.0
+uvicorn==0.51.0
+python-dotenv==1.2.2
+
 # --- テスト（app.py 側の cl.Step 管理ロジック等の回帰テスト。evals/ の
 #     ヘッドレスハーネスは src/graph.py を直接叩く経路のため app.py の
 #     on_message は経由しない。純粋関数レベルの検証はpytestで別途行う） ---

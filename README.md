@@ -249,8 +249,22 @@ Locohane/
 ├── config.ini              # 全設定（LLM接続・保存先パス・スクリプト実行・グラフ実装・サブエージェント）
 ├── requirements.txt        # pip 依存（バージョン固定）
 ├── app.py                  # Chainlit エントリ
-├── app.bat                 # Windows用起動バッチ
-├── Locohane.lnk            # 起動用ショートカット
+├── app.bat                 # Windows用起動バッチ（instances/default/のホスト/ポートに追従）
+├── admin.bat               # 設定ダッシュボード（管理ツール）起動バッチ
+├── admin/                  # 設定ダッシュボード本体（詳細は「設定ダッシュボード」節）
+│   ├── server.py            # FastAPIエントリー（`python -m admin.server`）
+│   ├── auth.py               # 管理ツール自身のログイン・セッション・CSRF
+│   ├── instances.py          # instances/ の作成・削除・複製・整合性チェック
+│   ├── supervisor.py         # インスタンスごとの子プロセス起動・停止・再起動
+│   ├── ini_catalog.py        # config.ini の読み取り専用パーサー（書き換えない）
+│   ├── overrides.py          # config_overrides.json の検証・保存・バックアップ・監査記録
+│   ├── env_files.py          # instances/<name>/.env の読み書き
+│   ├── env_overrides.py      # 環境変数で上書き中のキーの検出
+│   ├── settings_files.py     # 表示設定（public/settings/・instances/<name>/settings/）の読み書き
+│   ├── audit.py              # 変更履歴ログ（JSON Lines）
+│   └── static/                # フロントエンド（ビルド不要の素のHTML/JS）
+├── instances/               # 管理ツールが管理するインスタンス別ディレクトリ（.gitignore済み、実行時生成）
+├── Locohane.lnk            # 起動用ショートカット（admin.batへリンク）
 ├── chainlit.md             # Chainlit ウェルカム画面
 ├── CLAUDE.md               # プロジェクト固有の追加指示（Claude Code 形式）
 ├── QWEN.md                 # プロジェクト固有の追加指示（Qwen Code 形式、内容はCLAUDE.md参照の1行）
@@ -446,7 +460,7 @@ Locohane/
 
 ## データの保存場所と手動削除の手順
 
-すべて `data/` 配下（`config.ini` の `[paths]`/`[uploads]`/`[elements]`/`[log]`/`[default_workdir]` 等の `dir` 系キーで変更可）。`data/` は `.gitignore` 済み。保存先ルートをまとめて変更したい場合は、各キーを個別に書き換える代わりに `[paths] common_data_dir`（既定 `./data`）だけを変更すればよい（対応するキーの値は `${common_data_dir}` を参照する形で書かれている）。
+すべて `data/` 配下（`config.ini` の `[paths]`/`[uploads]`/`[elements]`/`[log]`/`[default_workdir]` 等の `dir` 系キーで変更可）。`data/` は `.gitignore` 済み。保存先ルートをまとめて変更したい場合は、各キーを個別に書き換える代わりに `[paths] common_data_dir`（既定 `./data/${instance}`）だけを変更すればよい（対応するキーの値は `${common_data_dir}` を参照する形で書かれている）。`${instance}` は起動中のインスタンス名（`app.bat` で直接起動した場合は `default`）に置換されるため、既定ではインスタンスごとに `data/<インスタンス名>/` へ分かれる。
 
 | パス | 中身 | 削除してよいタイミング | 削除方法 |
 |------|------|------------------------|----------|
@@ -460,6 +474,7 @@ Locohane/
 | `data/elements/<thread_id>/` | 添付ファイル（`provide_download`/`analyze_image`の`show_in_chat=True`等）・回答本文への画像埋め込みの永続化先。スレッド再開・プロセス再起動後も表示できるようここへ実体をコピー保存する（`[elements]`参照、`src/thread_store.py`） | 添付ファイルが不要になったとき | フォルダ内を削除 |
 | `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（送信直後のライブ表示にのみ使う一時配信。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
 | `data/app.lock` | 同一データディレクトリへの多重起動を防ぐプロセス排他ロック（`src/instance_lock.py`）。空ファイルにOSのファイルロックをかけるだけで中身は使わない | アプリ停止中、削除しても実害はない | ファイルを削除（アプリ起動中は削除不可） |
+| `instances/<name>/` | 設定ダッシュボード（管理ツール）が管理するインスタンス別ディレクトリ（`config_overrides.json`・`.env`・`settings/`・`backups/`・`app_stdout.log`。データ本体は`data/<name>/`） | インスタンス自体が不要になったとき | 管理ツールの削除機能を使う（稼働中・`default`は不可。詳細は「設定ダッシュボード」節） |
 
 `data/uploads/` は `config.ini` の `[uploads] retention_days`（既定7日）を過ぎたファイルを
 `cleanup_interval_hours`（既定1時間）おきに自動削除する。`retention_days` を0以下にすると
@@ -564,6 +579,10 @@ Claude Code 上で `/setup-basic-config` を実行すると、上記3ファイ�
 cd C:\DT_Python\Locohane
 C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
 ```
+
+（開発時のホットリロード起動。通常運用では `app.bat`、または設定を
+ブラウザから変更できる `admin.bat` から起動する。「設定ダッシュボード
+（管理ツール）」節参照）
 
 ブラウザで開き、例えば「この Excel ファイルの中身を要約して」と送ると、
 `read_skill`（excel-read の本文読込）→ `run_script`（`read_excel.py` 実行）が
@@ -867,7 +886,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `max_concurrent_requests` | llama-serverへの同時リクエスト数上限。1以上でSemaphore(N)ガード（既定1＝完全直列化）、0以下で無制限 | `LLM_MAX_CONCURRENT_REQUESTS` |
 | `[llm]` | `round_robin_slots_probe_timeout_seconds` | `round_robin`戦略がprovider="llama_cpp"の接続先を選ぶ前に送るGET /slots問い合わせ自体のタイムアウト秒数（既定3、確認できなければ空きありとみなすfail-safe） | `LLM_ROUND_ROBIN_SLOTS_PROBE_TIMEOUT_SECONDS` |
 | `[llm]` | `round_robin_busy_poll_interval_seconds` | `round_robin`戦略で候補の全接続先に空きスロットが無かった場合、再確認までに待機する秒数（既定2） | `LLM_ROUND_ROBIN_BUSY_POLL_INTERVAL_SECONDS` |
-| `[paths]` | `common_data_dir` | 各種データ保存先パスの共通ベースディレクトリ（既定 `./data`）。本セクションの`checkpoint_db`/`memory_dir`/`plans_dir`、および`[uploads]`/`[log]`/`[default_workdir]`/`[path_memory]`/`[chat_log]`の`dir`系キーの値に`${common_data_dir}`と書くとここで指定した値に置換される（configparser標準の補間ではなくconfig.py側の独自置換） | `COMMON_DATA_DIR` |
+| `[paths]` | `common_data_dir` | 各種データ保存先パスの共通ベースディレクトリ（既定 `./data/${instance}`）。本セクションの`checkpoint_db`/`memory_dir`/`plans_dir`、および`[uploads]`/`[log]`/`[default_workdir]`/`[path_memory]`/`[chat_log]`の`dir`系キーの値に`${common_data_dir}`と書くとここで指定した値に置換される（configparser標準の補間ではなくconfig.py側の独自置換）。`common_data_dir`自身とこれらのキーでは`${instance}`がインスタンス名（環境変数`LOCOHANE_INSTANCE`、未設定なら`default`）に置換される | `COMMON_DATA_DIR` |
 | `[paths]` | `skills_dir` | スキルフォルダ | `SKILLS_DIR` |
 | `[paths]` | `agents_dir` | エージェント種別定義フォルダ（`dispatch_agent` の `agent_type`） | `AGENTS_DIR` |
 | `[paths]` | `project_locohane_dir` | プロジェクト固有の拡張ディレクトリ（ClaudeCode の `.claude/` 相当）。配下の `skills/`（`skills_dir` にマージ走査、同名は優先）・`agents/`（`agents_dir` にマージ走査、同名は優先）・`LOCOHANE.md`（プロジェクト固有指示、存在しなくてもエラーにならない）を自動検知する。`nudge_messages` と同じリスト形式で複数ディレクトリ指定可 | `PROJECT_LOCOHANE_DIR` |
@@ -991,6 +1010,11 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[mcp]` | `settings_path` | `.locohane/settings.json` のパス | `MCP_SETTINGS_PATH` |
 | `[mcp]` | `connect_timeout_seconds` | 1サーバーあたりの起動（プロセス起動+initialize+tools/list）のタイムアウト秒数 | `MCP_CONNECT_TIMEOUT_SECONDS` |
 | `[mcp]` | `call_timeout_seconds` | MCPツール（tools/call）1回あたりのタイムアウト秒数 | `MCP_CALL_TIMEOUT_SECONDS` |
+| `[admin]` | `host` | 設定ダッシュボード（管理ツール）自身の待受ホスト。`instances/<name>/config_overrides.json` の上書き対象外 | `ADMIN_HOST` |
+| `[admin]` | `port` | 管理ツール自身の待受ポート | `ADMIN_PORT` |
+| `[admin]` | `session_timeout_minutes` | 管理ツールへのログインセッションの有効時間（分） | `ADMIN_SESSION_TIMEOUT_MINUTES` |
+| `[admin]` | `backup_keep` | インスタンスごとの設定バックアップの保持世代数 | `ADMIN_BACKUP_KEEP` |
+| `[admin]` | `stop_apps_on_exit` | 管理ツール終了時に、子プロセスとして起動した本体インスタンスも道連れで停止するか | `ADMIN_STOP_APPS_ON_EXIT` |
 | `[ui]` | `max_display_messages` | チャット画面に描画するメッセージの最大件数（表示専用の間引き、`0`で無制限） | `UI_MAX_DISPLAY_MESSAGES` |
 | `[ui]` | `max_display_side_steps` | サイドパネルに描画するツール呼び出し等のStepの最大件数（表示専用の間引き、`0`で無制限） | `UI_MAX_DISPLAY_SIDE_STEPS` |
 | `[ui]` | `token_usage_warn_threshold` | トークン使用量カードの「リクエスト1回あたり」行の合計トークン数がこの値以上でオレンジ太字表示（`0`以下で無効） | `UI_TOKEN_USAGE_WARN_THRESHOLD` |
@@ -1108,6 +1132,183 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
   判定結果は `check_work_dir_status` ツールでも確認できる。
 - **スコープ**: `cl.user_session`（会話単位）に保存されるだけで、
   `config.ini` 自体は変更されない。他の会話・他ユーザーには影響しない。
+
+---
+
+## 設定ダッシュボード（管理ツール）
+
+`config.ini`（`[admin]` を除く全セクション）・`public/settings/`（ヘッダー・
+タブタイトル・ウェルカムメッセージ・アイコン）・ログインユーザーを、
+テキストエディタを使わずブラウザのUIから変更できる独立した管理ツール
+（`admin/` パッケージ、既定で `http://127.0.0.1:8001`）。Locohane本体
+（`app.py`、既定で `http://127.0.0.1:8000`）とは別プロセス・別ポートで動く。
+
+さらに、Locohane本体を**複数のインスタンスとして同時に起動・停止・
+再起動**できる（例: 別のモデル・別の接続先で動く2つ目のインスタンスを
+追加する等）。各インスタンスは会話履歴・永続メモリー・アップロード等の
+データ、設定の上書き差分、ログインユーザーが完全に分離される。
+
+### 起動方法
+
+```cmd
+admin.bat
+```
+
+起動すると `instances/default/` が無ければ自動的に作られ（`app.bat` と
+同じ `127.0.0.1:8000`）、`autostart=true` のインスタンス（既定では
+`default` のみ）を子プロセスとして起動する。管理ツールへは
+`http://127.0.0.1:8001` からログインする（下記「ログイン」参照）。
+
+管理ツール自身の待受ホスト・ポートは、引数で一時的に上書きできる
+（`config.ini` の `[admin]` セクションより優先。実体は `ADMIN_HOST`/
+`ADMIN_PORT` 環境変数）。
+
+```cmd
+admin.bat 8080             REM ポートのみ上書き（数字だけの引数はポート扱い）
+admin.bat 0.0.0.0          REM ホストのみ上書き
+admin.bat 0.0.0.0 8080     REM 両方上書き（順不同）
+```
+
+従来通り `app.bat` で `default` インスタンスを単体起動することもできる
+（`instances/default/instance.json` のホスト/ポートに追従する）。ただし
+その場合、管理ツールからは「外部で起動中」と表示され、そこからの
+再起動・停止はできない（多重起動によるデータ破損を防ぐ排他ロック
+`src/instance_lock.py` の制約による）。
+
+### ログイン
+
+管理ツールへのログインは、Locohane本体のログインユーザー（後述）とは
+別の名前空間で、**常にパスワード必須**（本体の `[auth].require_password`
+の設定には左右されない）。プロジェクト直下の `.env` に
+
+```
+ADMIN_USERS=[["admin", "変更してください"]]
+```
+
+の形式（`AUTH_USERS` と同じ `[["ユーザー名","パスワード"], ...]` 形式）で
+設定する（`.env.example` 参照）。未設定のままだと管理ツールは起動を拒否
+する。同一IPからのログイン失敗が既定5回に達すると一時的にロックアウトする。
+
+### 設定値の優先度と保存先
+
+**config.ini は既定値として扱い、管理ツールは config.ini 自体を一切
+書き換えない。** UIで変更した値は、インスタンスごとの
+`instances/<インスタンス名>/config_overrides.json`
+（`{"<セクション>": {"<キー>": "<config.iniに書くのと同じ形式の文字列>"}}`
+のJSON。管理ツールで一度も保存していない間は存在しない）に記録する。
+
+優先度（高い順）: **環境変数 > `config_overrides.json` > config.ini（既定値）**
+
+（`.locohane/settings.json` の `"mcp"` ブロックは、これとは別に
+`[mcp]` セクションの実効値をさらに上書きする、従来からの最優先設定）
+
+`src/config.py` の `load_config()` が起動時にこの優先度で解決する
+（`CONFIG_OVERRIDES_PATH` 環境変数で `config_overrides.json` のパスを
+明示的に指定することもできる。省略時は `instances/default/
+config_overrides.json`）。`[admin]` セクション（管理ツール自身の設定）
+だけは上書き対象外で、常に config.ini の値を使う。
+
+保存前には `load_config()` 本体の型変換・バリデーションで実際に検証し、
+失敗する値は保存されない。保存のたびに変更前の内容を
+`instances/<name>/backups/` へバックアップし（`[admin].backup_keep`
+世代まで保持）、UIから復元できる。
+
+### インスタンス
+
+`instances/<インスタンス名>/` 配下に、インスタンスごとの以下を持つ
+（`.gitignore` 済み）。
+
+```
+instances/
+├── default/                     # 既定インスタンス（削除不可）
+│   ├── instance.json            # 表示名・ホスト・ポート・自動起動の有無
+│   ├── config_overrides.json    # config.iniとの差分（初回保存時に生成）
+│   ├── .env                     # インスタンス専用のログインユーザー等（任意）
+│   ├── settings/                # インスタンス専用の表示設定（任意。下記参照）
+│   ├── backups/                 # 保存・復元前のスナップショット
+│   └── app_stdout.log           # 本体プロセスの標準出力
+├── <他のインスタンス名>/
+│   └── ...（同上）
+└── admin_changes.log            # 全インスタンス共通の変更履歴（JSON Lines）
+```
+
+データ本体（会話履歴 `checkpoints.sqlite`・スレッド一覧・永続メモリー・
+アップロード・ログ等。「データの保存場所と手動削除の手順」参照）は、
+config.ini 既定の `[paths] common_data_dir = ./data/${instance}` により
+`data/<インスタンス名>/` へ自動的に分かれる。管理ツールは子プロセス起動時に
+環境変数 `LOCOHANE_INSTANCE=<インスタンス名>` を渡し、`app.bat` で直接
+起動した場合は `default` になる。永続メモリーだけ全インスタンスで共有したい
+場合は、`memory_dir` を `${instance}` を含まない固定パスに上書きすればよい。
+作成時に既存インスタンスの設定を複製することもできる（複製元に
+`common_data_dir` の上書きがあっても、それだけは引き継がない）。ポート・
+データ保存先が他インスタンスと重複する場合は、作成・起動時にエラーとして
+拒否される。
+
+インスタンスの削除では `instances/<name>/` と `data/<name>/` を削除する
+（`common_data_dir` を `data/` 直下以外へ変更している場合、そのデータは
+誤削除防止のため残す）。稼働中のインスタンスと `default` は削除できない。
+
+表示名・ホスト・ポート・自動起動の有無・下記の `headless`/`watch` は、
+作成後もインスタンスカードの「編集」から変更できる（ホスト・ポートの
+変更は、稼働中の場合は再起動後に反映される）。
+
+- **ヘッドレス**（`chainlit run` の `-h`/`--headless`。既定で有効）:
+  管理ツール経由でインスタンスを起動するたびにブラウザタブが自動で
+  開かないようにする。無効にすると起動のたびにブラウザが開く。
+- **自動リロード**（`-w`/`--watch`。既定で無効）: ファイル変更を検知して
+  自動リロードする開発用オプション。本番運用では無効のままにすること。
+
+### ユーザー管理（.env）
+
+| ファイル | 用途 | 管理ツールでの編集 |
+|---|---|---|
+| プロジェクト直下 `.env` | 管理ツール自身のログイン情報（`ADMIN_USERS`）と、全インスタンス共通の環境変数 | 不可（手動編集） |
+| `instances/<name>/.env` | そのインスタンスのログインユーザー（`AUTH_USERS`）・JWT署名鍵（`CHAINLIT_AUTH_SECRET`）・任意の環境変数 | 可（「ユーザー」「環境変数」タブ） |
+
+優先度は **`instances/<name>/.env` > OS環境変数 > プロジェクト直下 `.env`**。
+`app.py` の先頭で、環境変数 `LOCOHANE_INSTANCE_ENV`（管理ツールが子プロセス
+起動時に設定。未設定時は `instances/default/.env`）が指す `.env` を
+`override=True` で読み込んでから、Chainlit自身がプロジェクト直下 `.env` を
+`override=False` で読む（後から読む方が「未設定のキーだけ補う」動作になる
+`python-dotenv` の挙動を利用している）。そのため `app.bat` で直接起動して
+も `default` インスタンスの `.env` が使われ、管理ツール経由の起動と同じ
+挙動になる。
+
+インスタンス専用のユーザーを1人も設定していない間は、プロジェクト直下
+`.env` の `AUTH_USERS` を継承しているものとしてUIに表示される。ユーザーを
+追加すると、そのインスタンス専用の設定に切り替わる（以後は継承しない）。
+
+### 表示設定（共通 + インスタンス別）
+
+header.md・tab_title.md・welcome.md・icon・favicon は、トップの「表示設定」
+タブで **共通**（`public/settings/`）を、インスタンス詳細画面の「表示設定」
+サブタブで **そのインスタンス専用**（`instances/<name>/settings/`）を
+編集する。各インスタンスは、自分の `settings/` にあるファイルを優先し、
+無い項目は共通設定を使う（icon・favicon は拡張子違いを1組として扱い、
+インスタンス側に1つでもあれば共通側は使わない）。インスタンス専用の設定は
+「共通に戻す」で削除できる。
+
+`app.py` が `/public/settings/{ファイル名}` を Chainlit 標準の静的配信より
+手前で処理して、この優先順位で返す。変更は **再起動不要** で、ブラウザの
+再読み込み（welcome.md は次のチャット開始）で反映される。
+
+### 変更履歴（監査ログ）
+
+`instances/admin_changes.log`（JSON Lines）に、設定変更・インスタンスの
+作成/削除/起動/停止/再起動・ユーザー操作等を1操作1行で記録する。日時・
+実行者・接続元IP・操作種別・（設定変更なら）変更前後の値を記録するが、
+キー名に `api_key`/`password`/`secret`/`token` を含む値、および
+`[llm].main_url`/`sub_url`（`api_key` をネストしたJSONとして含みうる）は
+マスクして記録する。管理ツールの「変更履歴」タブから閲覧できる。
+
+### セキュリティ上の注意
+
+管理ツールはHTTPS化していない。`[admin].host` を `0.0.0.0` にしてLAN上に
+公開すると、ログインパスワードや設定値が平文でネットワークを流れる
+（社内LAN等、経路上の盗聴リスクを許容できる場合を除き変更しないこと）。
+また `[scripts].python` や `[llm]` の接続先を変更できることは、実質的に
+任意のコード実行・任意のLLMサーバーへの接続を許可することと同義であり、
+管理ツールへログインできる人（`ADMIN_USERS`）の範囲には注意すること。
 
 ---
 

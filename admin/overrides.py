@@ -1,0 +1,305 @@
+"""インスタンス別 config_overrides.json の読み書き・検証・バックアップ・監査記録。
+
+config.ini は既定値として扱い、このモジュールは書き換えない。UIでの変更は
+instances/<name>/config_overrides.json（{"<section>": {"<key>": "<値>"}}の
+JSON）にのみ記録する。優先度は 環境変数 > config_overrides.json > config.ini
+（詳細は src/config.py の load_config() docstring 参照）。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import tempfile
+import time
+from pathlib import Path
+
+from src.config import load_config
+
+from . import audit
+from .ini_catalog import IniCatalog
+
+# [admin] セクションは管理ツール自身の起動設定であり、インスタンス別の
+# 上書き対象外（src/config.py の _apply_config_overrides も同じ理由で無視する。
+# ここでは無視するのではなく、保存時点で明示的なエラーとして拒否する）。
+_EXEMPT_SECTION = "admin"
+
+
+class OverridesError(Exception):
+    """overrides.py の操作失敗の基底クラス。"""
+
+
+class ConflictError(OverridesError):
+    """他のセッションが先に保存しており、base_mtime が古い。"""
+
+
+class ValidationError(OverridesError):
+    """新しい設定値で load_config() の検証が失敗した、または不正な入力。"""
+
+
+def read(path: Path) -> dict[str, dict[str, str]]:
+    """config_overrides.json を読む。ファイルが無ければ空dict。"""
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValidationError(f"{path}: トップレベルはオブジェクトである必要があります。")
+    return data
+
+
+def mtime_or_none(path: Path) -> float | None:
+    """path の mtime。存在しなければ None（「まだ一度も保存されていない」)。"""
+    return path.stat().st_mtime if path.is_file() else None
+
+
+def _backup(path: Path, backup_dir: Path, keep: int) -> None:
+    """path の保存前スナップショットを backup_dir へコピーし、古い世代を削除する。
+
+    path が未作成（初回保存前）なら何もしない。
+    """
+    if not path.is_file():
+        return
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    dest = backup_dir / f"config_overrides_{stamp}.json"
+    counter = 1
+    while dest.exists():
+        dest = backup_dir / f"config_overrides_{stamp}_{counter}.json"
+        counter += 1
+    shutil.copy2(path, dest)
+    if keep > 0:
+        backups = sorted(backup_dir.glob("config_overrides_*.json"), key=lambda p: p.stat().st_mtime)
+        for old in backups[:-keep]:
+            old.unlink(missing_ok=True)
+
+
+def _diff(old: dict, new: dict) -> list[dict]:
+    """old→new の変更点を [{"section","key","old","new"}] の形で返す（機密値はマスク済み）。"""
+    changes: list[dict] = []
+    for section in sorted(set(old) | set(new)):
+        old_section = old.get(section, {})
+        new_section = new.get(section, {})
+        for key in sorted(set(old_section) | set(new_section)):
+            old_value = old_section.get(key)
+            new_value = new_section.get(key)
+            if old_value != new_value:
+                changes.append(
+                    {
+                        "section": section,
+                        "key": key,
+                        "old": audit.mask(key, old_value),
+                        "new": audit.mask(key, new_value),
+                    }
+                )
+    return changes
+
+
+def _build_new_data(
+    existing: dict[str, dict[str, str]],
+    updates: dict[tuple[str, str], str],
+    resets: list[tuple[str, str]],
+    ini_catalog: IniCatalog,
+) -> dict[str, dict[str, str]]:
+    """既存の overrides に updates/resets を適用した、新しい overrides dict を組み立てる（未保存）。
+
+    Raises:
+        ValidationError: 存在しないキーが指定された、または [admin] セクションが指定された。
+    """
+    new_data: dict[str, dict[str, str]] = {section: dict(kv) for section, kv in existing.items()}
+    key_index = {(info.section, info.key): info for info in ini_catalog.keys}
+
+    for (section, key), value in updates.items():
+        if section == _EXEMPT_SECTION:
+            raise ValidationError("[admin] セクションは管理ツールからは変更できません（config.ini を直接編集してください）。")
+        info = key_index.get((section, key))
+        if info is None:
+            raise ValidationError(f"[{section}].{key} は config.ini に存在しないキーです。")
+        if value == info.default_value:
+            new_data.get(section, {}).pop(key, None)
+        else:
+            new_data.setdefault(section, {})[key] = value
+
+    for section, key in resets:
+        new_data.get(section, {}).pop(key, None)
+
+    # 空になったセクションは書き出さない。
+    return {section: kv for section, kv in new_data.items() if kv}
+
+
+def preview(
+    *,
+    path: Path,
+    updates: dict[tuple[str, str], str],
+    resets: list[tuple[str, str]],
+    ini_catalog: IniCatalog,
+    config_ini_path: Path,
+    instance_name: str | None = None,
+) -> tuple[dict[str, dict[str, str]], list[dict]]:
+    """保存せずに、適用結果の overrides dict と変更点の差分を返す（「変更を確認」用）。
+
+    保存時と同じ load_config() 検証を行うが、ファイルは一切書き換えない。
+
+    Returns:
+        (新しい overrides dict, _diff() と同形式の変更点リスト)。
+
+    Raises:
+        ValidationError: save() と同じ検証エラー。
+    """
+    existing = read(path)
+    new_data = _build_new_data(existing, updates, resets, ini_catalog)
+
+    fd, tmp_name = tempfile.mkstemp(prefix=".config_overrides_preview_", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(new_data, f, ensure_ascii=False, indent=2, sort_keys=True)
+        try:
+            load_config(config_path=config_ini_path, overrides_path=tmp_path, instance_name=instance_name)
+        except Exception as exc:  # noqa: BLE001 - 原因をそのままUIへ伝える
+            raise ValidationError(f"設定の検証に失敗しました: {exc}") from exc
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    return new_data, _diff(existing, new_data)
+
+
+def save(
+    *,
+    path: Path,
+    updates: dict[tuple[str, str], str],
+    resets: list[tuple[str, str]],
+    base_mtime: float | None,
+    ini_catalog: IniCatalog,
+    config_ini_path: Path,
+    backup_dir: Path,
+    backup_keep: int,
+    audit_log_path: Path,
+    instance_name: str,
+    actor: str,
+    remote_addr: str,
+) -> dict[str, dict[str, str]]:
+    """updates/resets を既存の overrides に適用し、検証・保存・監査記録する。
+
+    Args:
+        updates: {(section, key): 新しい値の文字列, ...}。値が config.ini の
+            既定値と一致する場合は、上書きとして記録せず overrides から
+            該当キーを削除する（既定値のまま持たせない）。
+        resets: [(section, key), ...]。「既定値に戻す」ボタンで、対応する
+            エントリを問答無用で overrides から削除する。
+        base_mtime: 編集開始時に取得した path の mtime。None は「競合チェック
+            をしない」ではなく「新規作成（path が未作成である前提）」を意味する。
+            実際の mtime と食い違えば ConflictError（他セッションが先に保存済み）。
+
+    Returns:
+        保存後の overrides dict 全体（API レスポンス用）。
+
+    Raises:
+        ConflictError: 保存直前の実際の mtime が base_mtime と一致しない。
+        ValidationError: 存在しないキーが指定された、[admin] セクションが
+            指定された、または新しい設定値で load_config() の検証が失敗した。
+    """
+    actual_mtime = mtime_or_none(path)
+    if base_mtime is not None and actual_mtime is not None and abs(actual_mtime - base_mtime) > 1e-6:
+        raise ConflictError(
+            "他のセッション/ブラウザタブで既に保存されています。画面を再読み込みしてから編集し直してください。"
+        )
+
+    existing = read(path)
+    new_data = _build_new_data(existing, updates, resets, ini_catalog)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".config_overrides_", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(new_data, f, ensure_ascii=False, indent=2, sort_keys=True)
+        try:
+            # load_config() 本体の型変換・enumバリデーション等をそのまま
+            # 検証に使う（新しいconfig.iniキーが増えても個別対応不要）。
+            # common_data_dir 配下のディレクトリ作成という副作用が起きるが、
+            # このインスタンスがいずれ起動すればどのみち必要になるディレクトリ
+            # なので実害はない。
+            load_config(config_path=config_ini_path, overrides_path=tmp_path, instance_name=instance_name)
+        except Exception as exc:  # noqa: BLE001 - 原因をそのままUIへ伝える
+            raise ValidationError(f"設定の検証に失敗しました: {exc}") from exc
+
+        _backup(path, backup_dir, backup_keep)
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    changes = _diff(existing, new_data)
+    if changes:
+        audit.append(
+            audit_log_path,
+            {
+                "instance": instance_name,
+                "actor": actor,
+                "remote_addr": remote_addr,
+                "action": "config_update",
+                "changes": changes,
+            },
+        )
+    return new_data
+
+
+def restore(
+    *,
+    path: Path,
+    backup_file: Path,
+    config_ini_path: Path,
+    backup_dir: Path,
+    backup_keep: int,
+    audit_log_path: Path,
+    instance_name: str,
+    actor: str,
+    remote_addr: str,
+) -> dict[str, dict[str, str]]:
+    """バックアップファイルの内容で config_overrides.json を丸ごと置き換える。
+
+    復元前の現状も _backup() で退避してから上書きする（誤って古いバックアップを
+    選んでも、直前の状態に戻せるようにするため）。
+
+    Raises:
+        ValidationError: backup_file が存在しない、JSON構文が不正、
+            またはその内容で load_config() の検証が失敗した場合。
+    """
+    if not backup_file.is_file():
+        raise ValidationError(f"バックアップが見つかりません: {backup_file}")
+    new_data = json.loads(backup_file.read_text(encoding="utf-8"))
+    if not isinstance(new_data, dict):
+        raise ValidationError(f"{backup_file}: トップレベルはオブジェクトである必要があります。")
+
+    existing = read(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".config_overrides_restore_", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(new_data, f, ensure_ascii=False, indent=2, sort_keys=True)
+        try:
+            load_config(config_path=config_ini_path, overrides_path=tmp_path, instance_name=instance_name)
+        except Exception as exc:  # noqa: BLE001
+            raise ValidationError(f"バックアップの検証に失敗しました: {exc}") from exc
+
+        _backup(path, backup_dir, backup_keep)
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    changes = _diff(existing, new_data)
+    audit.append(
+        audit_log_path,
+        {
+            "instance": instance_name,
+            "actor": actor,
+            "remote_addr": remote_addr,
+            "action": "config_restore",
+            "backup_file": backup_file.name,
+            "changes": changes,
+        },
+    )
+    return new_data

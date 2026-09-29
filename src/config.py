@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import configparser
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, fields, replace
@@ -21,9 +22,22 @@ from pathlib import Path
 
 from . import memory
 
+logger = logging.getLogger(__name__)
+
 # プロジェクトルート（このファイルは <root>/src/config.py なので 2 つ上がルート）。
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.ini"
+# 管理ツール（admin/ パッケージ）でUIから変更した設定値の上書き差分の既定パス。
+# load_config() の呼び出し元が overrides_path を明示しない場合、環境変数
+# CONFIG_OVERRIDES_PATH（管理ツールが子プロセス起動時に設定する）→ この既定値
+# の順で使う。app.bat で直接起動した場合もこの既定値が使われるため、
+# instances/default/ に対する管理ツールでの変更が app.bat 起動時にも反映される
+# （README.md「設定ダッシュボード」参照）。
+DEFAULT_INSTANCE_NAME = "default"
+DEFAULT_OVERRIDES_PATH = PROJECT_ROOT / "instances" / DEFAULT_INSTANCE_NAME / "config_overrides.json"
+# [admin] セクションは、上記のインスタンス別上書きの対象外（管理ツール自身の
+# 起動設定を、管理ツールで変更できてしまう循環を避けるため）。
+_ADMIN_OVERRIDE_EXEMPT_SECTION = "admin"
 
 # main_routing_strategy / sub_routing_strategy が取りうる値。
 # src/llm/routing.py の _select_endpoint() がこの文字列で分岐する。
@@ -1050,6 +1064,15 @@ class Config:
     websocket_ping_interval_seconds: int
     websocket_ping_timeout_seconds: int
 
+    # --- 設定ダッシュボード（管理ツール、[admin]、admin/ パッケージ） ---
+    # 管理ツール自身の設定。インスタンス別の config_overrides.json による上書きの
+    # 対象外（admin/overrides.py が [admin] セクションへの上書きを拒否する）。
+    admin_host: str
+    admin_port: int
+    admin_session_timeout_minutes: int
+    admin_backup_keep: int
+    admin_stop_apps_on_exit: bool
+
 
 def _resolve(base: Path, value: str) -> Path:
     """config.ini 内の相対パスをプロジェクトルート基準の絶対パスへ解決する。
@@ -1067,8 +1090,13 @@ def _resolve(base: Path, value: str) -> Path:
     return p if p.is_absolute() else (base / p).resolve()
 
 
-def _sub_common_data_dir(value: str, common_data_dir: Path) -> str:
-    """値中の ${common_data_dir} プレースホルダーを解決済みパスへ置換する。
+def _sub_instance(value: str, instance_name: str) -> str:
+    """値中の ${instance} プレースホルダーをインスタンス名へ置換する。"""
+    return value.replace("${instance}", instance_name)
+
+
+def _sub_common_data_dir(value: str, common_data_dir: Path, instance_name: str) -> str:
+    """値中の ${common_data_dir} / ${instance} プレースホルダーを置換する。
 
     [paths].common_data_dir を使った、configparser標準の補間機能に頼らない
     独自のセクション横断プレースホルダー置換（BasicInterpolationは同一
@@ -1078,11 +1106,12 @@ def _sub_common_data_dir(value: str, common_data_dir: Path) -> str:
     Args:
         value: config.ini または環境変数から得た生の文字列。
         common_data_dir: 解決済み（絶対パス化済み）の共通データディレクトリ。
+        instance_name: ${instance} に入るインスタンス名（load_config() 参照）。
 
     Returns:
-        "${common_data_dir}" を含んでいれば置換した文字列、含んでいなければ
-        value をそのまま返す。
+        プレースホルダーを置換した文字列（含んでいなければ value のまま）。
     """
+    value = _sub_instance(value, instance_name)
     if "${common_data_dir}" not in value:
         return value
     return value.replace("${common_data_dir}", str(common_data_dir))
@@ -1881,8 +1910,17 @@ def render_agent_type_run_script_allowlist_block(agent_type: str, entries: froze
     return "\n".join(_format(t) for t in sorted(targets, key=_sort_key))
 
 
-def load_config(config_path: Path | None = None) -> Config:
-    """config.ini を読み、環境変数で上書きした Config を返す。
+def load_config(
+    config_path: Path | None = None,
+    overrides_path: Path | None = None,
+    instance_name: str | None = None,
+) -> Config:
+    """config.ini を読み、config_overrides.json・環境変数で上書きした Config を返す。
+
+    優先度（高い順）: 環境変数 > overrides_path（管理ツールでの変更） >
+    config.ini（既定値）。overrides_path省略時は、環境変数
+    CONFIG_OVERRIDES_PATH → DEFAULT_OVERRIDES_PATH（instances/default/
+    config_overrides.json）の順で決める（_apply_config_overrides() 参照）。
 
     環境変数（設定されていれば config.ini より優先）:
       LLM_MAIN_URL / LLM_MAIN_ROUTING_STRATEGY / LLM_SUB_URL / LLM_SUB_ROUTING_STRATEGY
@@ -1928,13 +1966,20 @@ def load_config(config_path: Path | None = None) -> Config:
     checkpoint_db/upload_dir/log_dir/default_workdir/memory_dir/plans_dir/
     path_memory_dir/chat_log_dir の値に "${common_data_dir}" という文字列が
     含まれる場合は、[paths].common_data_dir（環境変数 COMMON_DATA_DIR で
-    上書き可能。既定 "./data"）の解決済み絶対パスへ置換してから _resolve()
-    する（_sub_common_data_dir() 参照）。データ保存先ルートを一括で変更
-    したい場合に、各キーを個別に書き換えなくて済むようにするための仕組み。
+    上書き可能。既定 "./data/${instance}"）の解決済み絶対パスへ置換してから
+    _resolve() する（_sub_common_data_dir() 参照）。データ保存先ルートを一括で
+    変更したい場合に、各キーを個別に書き換えなくて済むようにするための仕組み。
+    common_data_dir 自身を含むこれらの値中の "${instance}" は、インスタンス名
+    （引数 instance_name、省略時は環境変数 LOCOHANE_INSTANCE、それも無ければ
+    "default"）に置換される。
 
     Args:
         config_path: 読み込む config.ini のパス。省略時は
             <プロジェクトルート>/config.ini（DEFAULT_CONFIG_PATH）を使う。
+        overrides_path: config_overrides.json のパス。省略時は環境変数
+            CONFIG_OVERRIDES_PATH、それも無ければ DEFAULT_OVERRIDES_PATH。
+        instance_name: ${instance} に入るインスタンス名。省略時は環境変数
+            LOCOHANE_INSTANCE、それも無ければ DEFAULT_INSTANCE_NAME。
 
     Returns:
         LLM 接続情報・各種保存先パス・run_script 実行設定を集約した
@@ -1950,6 +1995,11 @@ def load_config(config_path: Path | None = None) -> Config:
         raise FileNotFoundError(path)
     parser = configparser.ConfigParser()
     parser.read(path, encoding="utf-8")
+
+    resolved_overrides_path = overrides_path or _resolve(
+        PROJECT_ROOT, os.getenv("CONFIG_OVERRIDES_PATH", str(DEFAULT_OVERRIDES_PATH))
+    )
+    _apply_config_overrides(parser, resolved_overrides_path)
 
     llm = parser["llm"] if parser.has_section("llm") else {}
     paths = parser["paths"] if parser.has_section("paths") else {}
@@ -2056,8 +2106,15 @@ def load_config(config_path: Path | None = None) -> Config:
     checkpointer = parser["checkpointer"] if parser.has_section("checkpointer") else {}
     ui = parser["ui"] if parser.has_section("ui") else {}
     websocket = parser["websocket"] if parser.has_section("websocket") else {}
+    admin = parser["admin"] if parser.has_section("admin") else {}
 
-    common_data_dir = _resolve(PROJECT_ROOT, os.getenv("COMMON_DATA_DIR", paths.get("common_data_dir", "./data")))
+    resolved_instance_name = instance_name or os.getenv("LOCOHANE_INSTANCE") or DEFAULT_INSTANCE_NAME
+    common_data_dir = _resolve(
+        PROJECT_ROOT,
+        _sub_instance(
+            os.getenv("COMMON_DATA_DIR", paths.get("common_data_dir", "./data/${instance}")), resolved_instance_name
+        ),
+    )
 
     project_locohane_dirs = _as_path_list(
         os.getenv("PROJECT_LOCOHANE_DIR", paths.get("project_locohane_dir", "./.locohane")),
@@ -2157,26 +2214,26 @@ def load_config(config_path: Path | None = None) -> Config:
         project_instructions_paths=[d / "LOCOHANE.md" for d in project_locohane_dirs],
         checkpoint_db=_resolve(
             PROJECT_ROOT,
-            _sub_common_data_dir(os.getenv("CHECKPOINT_DB", paths.get("checkpoint_db", "${common_data_dir}/checkpoints.sqlite")), common_data_dir),
+            _sub_common_data_dir(os.getenv("CHECKPOINT_DB", paths.get("checkpoint_db", "${common_data_dir}/checkpoints.sqlite")), common_data_dir, resolved_instance_name),
         ),
         upload_dir=_resolve(
-            PROJECT_ROOT, _sub_common_data_dir(os.getenv("UPLOAD_DIR", uploads.get("dir", "${common_data_dir}/uploads")), common_data_dir)
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("UPLOAD_DIR", uploads.get("dir", "${common_data_dir}/uploads")), common_data_dir, resolved_instance_name)
         ),
         log_dir=_resolve(
-            PROJECT_ROOT, _sub_common_data_dir(os.getenv("LOG_DIR", log_section.get("dir", "${common_data_dir}/logs")), common_data_dir)
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("LOG_DIR", log_section.get("dir", "${common_data_dir}/logs")), common_data_dir, resolved_instance_name)
         ),
         log_level=os.getenv("LOG_LEVEL", log_section.get("level", "info")).strip().lower(),
         log_clear_on_startup=_as_bool(os.getenv("LOG_CLEAR_ON_STARTUP", log_section.get("clear_on_startup", False))),
         default_workdir=_resolve(
             PROJECT_ROOT,
-            _sub_common_data_dir(os.getenv("DEFAULT_WORKDIR", default_workdir_section.get("dir", "${common_data_dir}/temp")), common_data_dir),
+            _sub_common_data_dir(os.getenv("DEFAULT_WORKDIR", default_workdir_section.get("dir", "${common_data_dir}/temp")), common_data_dir, resolved_instance_name),
         ),
         allow_sandbox_dirs=allow_sandbox_dirs,
         memory_dir=_resolve(
-            PROJECT_ROOT, _sub_common_data_dir(os.getenv("MEMORY_DIR", paths.get("memory_dir", "${common_data_dir}/memory")), common_data_dir)
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("MEMORY_DIR", paths.get("memory_dir", "${common_data_dir}/memory")), common_data_dir, resolved_instance_name)
         ),
         plans_dir=_resolve(
-            PROJECT_ROOT, _sub_common_data_dir(os.getenv("PLANS_DIR", paths.get("plans_dir", "${common_data_dir}/plans")), common_data_dir)
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("PLANS_DIR", paths.get("plans_dir", "${common_data_dir}/plans")), common_data_dir, resolved_instance_name)
         ),
         help_path=_resolve(PROJECT_ROOT, os.getenv("HELP_PATH", paths.get("help_path", "./system_prompt/help.md"))),
         upload_retention_days=int(os.getenv("UPLOAD_RETENTION_DAYS", uploads.get("retention_days", 7))),
@@ -2187,7 +2244,7 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         elements_dir=_resolve(
             PROJECT_ROOT,
-            _sub_common_data_dir(os.getenv("ELEMENTS_DIR", elements_section.get("dir", "${common_data_dir}/elements")), common_data_dir),
+            _sub_common_data_dir(os.getenv("ELEMENTS_DIR", elements_section.get("dir", "${common_data_dir}/elements")), common_data_dir, resolved_instance_name),
         ),
         elements_retention_days=int(os.getenv("ELEMENTS_RETENTION_DAYS", elements_section.get("retention_days", 0))),
         elements_cleanup_interval_hours=float(
@@ -2212,7 +2269,7 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         path_memory_dir=_resolve(
             PROJECT_ROOT,
-            _sub_common_data_dir(os.getenv("PATH_MEMORY_DIR", path_memory.get("dir", "${common_data_dir}/path_memory")), common_data_dir),
+            _sub_common_data_dir(os.getenv("PATH_MEMORY_DIR", path_memory.get("dir", "${common_data_dir}/path_memory")), common_data_dir, resolved_instance_name),
         ),
         path_memory_retention_days=int(os.getenv("PATH_MEMORY_RETENTION_DAYS", path_memory.get("retention_days", 1))),
         path_memory_cleanup_interval_hours=float(os.getenv("PATH_MEMORY_CLEANUP_INTERVAL_HOURS", path_memory.get("cleanup_interval_hours", 1))),
@@ -2222,11 +2279,11 @@ def load_config(config_path: Path | None = None) -> Config:
         log_cleanup_interval_hours=float(os.getenv("LOG_CLEANUP_INTERVAL_HOURS", log_section.get("cleanup_interval_hours", 1))),
         chat_log_enabled=_as_bool(os.getenv("CHAT_LOG_ENABLED", chat_log.get("enabled", False))),
         chat_log_dir=_resolve(
-            PROJECT_ROOT, _sub_common_data_dir(os.getenv("CHAT_LOG_DIR", chat_log.get("dir", "${common_data_dir}/logs_chat")), common_data_dir)
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("CHAT_LOG_DIR", chat_log.get("dir", "${common_data_dir}/logs_chat")), common_data_dir, resolved_instance_name)
         ),
         thread_store_enabled=_as_bool(os.getenv("THREAD_STORE_ENABLED", thread_store.get("enabled", True))),
         thread_store_db=_resolve(
-            PROJECT_ROOT, _sub_common_data_dir(os.getenv("THREAD_STORE_DB", thread_store.get("db", "${common_data_dir}/chat_threads.sqlite")), common_data_dir)
+            PROJECT_ROOT, _sub_common_data_dir(os.getenv("THREAD_STORE_DB", thread_store.get("db", "${common_data_dir}/chat_threads.sqlite")), common_data_dir, resolved_instance_name)
         ),
         thread_store_retention_days=int(os.getenv("THREAD_STORE_RETENTION_DAYS", thread_store.get("retention_days", 0))),
         thread_store_cleanup_interval_hours=float(
@@ -2614,6 +2671,15 @@ def load_config(config_path: Path | None = None) -> Config:
         websocket_ping_timeout_seconds=int(
             os.getenv("WEBSOCKET_PING_TIMEOUT_SECONDS", websocket.get("ping_timeout_seconds", 20))
         ),
+        admin_host=os.getenv("ADMIN_HOST", admin.get("host", "127.0.0.1")),
+        admin_port=int(os.getenv("ADMIN_PORT", admin.get("port", 8001))),
+        admin_session_timeout_minutes=int(
+            os.getenv("ADMIN_SESSION_TIMEOUT_MINUTES", admin.get("session_timeout_minutes", 60))
+        ),
+        admin_backup_keep=int(os.getenv("ADMIN_BACKUP_KEEP", admin.get("backup_keep", 20))),
+        admin_stop_apps_on_exit=_as_bool(
+            os.getenv("ADMIN_STOP_APPS_ON_EXIT", admin.get("stop_apps_on_exit", False))
+        ),
     )
 
     # .locohane/settings.json の "mcp" ブロックがあれば、config.ini/環境変数由来の
@@ -2666,6 +2732,73 @@ def _load_mcp_global_overrides(path: Path) -> dict:
         return {}
     data = json.loads(path.read_text(encoding="utf-8"))
     return data.get("mcp", {}) if isinstance(data, dict) else {}
+
+
+def _apply_config_overrides(parser: configparser.ConfigParser, path: Path) -> None:
+    """管理ツール（admin/ パッケージ）が書き出した config_overrides.json を
+    configparser の値へ適用する（config.ini のパース直後、他の全読み込みより
+    前に呼ぶこと）。
+
+    JSON の形は ``{"<section>": {"<key>": "<config.ini に書くのと同じ文字列>"}}``
+    （admin/overrides.py 参照）。値は必ず文字列として扱う（bool/数値が
+    渡ってきた場合は str() で変換する。JSON側の型が揺れても configparser
+    自体はどのみち全部文字列として扱うため実害はない）。
+
+    この関数はここで parser の値を書き換えるだけで、以降の型変換・
+    バリデーション・環境変数による上書き（load_config() 本体の
+    `os.getenv(ENV, section.get(key, default))` 呼び出し群）はすべて
+    既存のコードパスがそのまま担う。そのため162キーそれぞれに個別対応する
+    必要がない（新しいconfig.iniキーを追加した場合も自動的に上書き対象になる）。
+
+    [admin] セクションは上書き対象から除外する（管理ツール自身の起動設定を
+    管理ツールから変更できてしまう循環を避けるため）。
+
+    Args:
+        parser: config.ini を読み込み済みの ConfigParser（このオブジェクトを
+            in-place で書き換える）。
+        path: config_overrides.json のパス。存在しなければ何もしない
+            （管理ツールで一度も保存していない状態が既定であり、これは
+            エラーではない）。
+
+    Raises:
+        json.JSONDecodeError: JSON構文が不正な場合（config.ini同様、
+            設定ミスを起動時に検出するためfail fastする）。
+        ValueError: トップレベル、またはセクションの値がdictでない場合。
+    """
+    if not path.is_file():
+        return
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: トップレベルはオブジェクト（セクション名をキーとするdict）である必要があります。")
+    for section, section_values in data.items():
+        if not isinstance(section_values, dict):
+            raise ValueError(f"{path}: セクション {section!r} の値はオブジェクト（キー名をキーとするdict）である必要があります。")
+        if section == _ADMIN_OVERRIDE_EXEMPT_SECTION:
+            logger.warning(
+                "%s: [%s] セクションは上書き対象外のため無視します（管理ツール自身の起動設定は "
+                "config.ini を直接編集してください）。",
+                path,
+                section,
+            )
+            continue
+        if not parser.has_section(section):
+            logger.warning(
+                "%s: config.ini に存在しないセクション [%s] が指定されているため無視します"
+                "（タイプミス、または廃止されたキーの可能性があります）。",
+                path,
+                section,
+            )
+            continue
+        for key, value in section_values.items():
+            if not parser.has_option(section, key):
+                logger.warning(
+                    "%s: config.ini に存在しないキー [%s].%s が指定されているため無視します。",
+                    path,
+                    section,
+                    key,
+                )
+                continue
+            parser.set(section, key, str(value))
 
 
 _CONFIG_VAR_PATTERN = re.compile(r"\$\{(\w+)\}")
