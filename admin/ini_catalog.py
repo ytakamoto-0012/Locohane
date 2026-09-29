@@ -16,9 +16,11 @@ configparser の継続行（値の1行目の次の行以降、行頭が空白/�
 
 from __future__ import annotations
 
+import ast
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 # セクションヘッダ: "[section]"（前後の空白は許容、行末は改行のみ）。
 _SECTION_RE = re.compile(r"^\[([^\]]+)\]\s*$")
@@ -48,8 +50,120 @@ class KeyInfo:
     # このキーが属するグループ見出し（直近の "# --- xxx ---" 行の xxx 部分）。
     # 見出しが一度も出ていない場合は None。
     group_heading: str | None
-    # フォームでの表現形の推定: "bool" | "multiline" | "text"。
+    # フォームでの表現形の推定: "bool" | "choice" | "list" | "multiline" | "text"。
     ui_kind: str
+    # ui_kind="choice" のときの選択肢（表示順）。空文字列は「未指定（空欄）」を表す。
+    choices: tuple[str, ...] = ()
+    # ui_kind="list" のとき、値の構造（下記 _KEY_SCHEMAS 参照）。None なら
+    # 要素の型を自由に編集する汎用エディタで表示する。
+    # （dict はハッシュ不可のため hash の対象から外す）
+    schema: dict[str, Any] | None = field(default=None, hash=False)
+
+
+# 固有キーワードのいずれかしか受け付けないキーの選択肢（表示順）。
+# 値の集合は src/config.py の各定数（LLM_ROUTING_STRATEGIES 等）と一致させること
+# （tests/test_admin_ini_catalog.py で突き合わせている）。frozenset は順序を
+# 持たないため、UIでの表示順はここで決める。先頭の "" は「空欄＝未指定」を
+# 許容するキー（src/config.py 側で None 扱いになるもの）にだけ置く。
+_ROUTING_STRATEGY_CHOICES = ("round_robin", "random", "priority_failover")
+_KEY_CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("llm", "main_routing_strategy"): _ROUTING_STRATEGY_CHOICES,
+    ("llm", "sub_routing_strategy"): _ROUTING_STRATEGY_CHOICES,
+    ("llm", "reasoning_format"): ("", "none", "deepseek", "deepseek-legacy"),
+    ("llm", "reasoning_effort"): ("", "none", "default", "minimal", "low", "medium", "high", "xhigh", "max"),
+    ("main_agent_tool_guard", "mode"): ("false", "tools_skills_only", "all"),
+    ("main_agent_tool_guard", "visibility_mode"): ("strict", "hint", "all"),
+    ("log", "level"): ("info", "debug", "none"),
+}
+
+
+# リスト値の構造定義。管理画面で「文字/数値」等の型を選ばせず、意味のある
+# 名前付きの入力欄で編集させるために使う（admin/static/admin.js の
+# buildSchemaEditor が解釈する）。形式は src/config.py の各パーサー
+# （_as_llm_endpoints / _parse_plan_approval_exempt_scripts 等）に合わせること。
+#   {"type": "string", "placeholder": ..., "default": 追加時の初期値（省略時は ""）}
+#   {"type": "number", "placeholder": ..., "default": 追加時の初期値（省略時は 0）}
+#   {"type": "choice", "choices": [...]}
+#   {"type": "list", "item": <schema>}              要素を追加/削除できるリスト
+#   {"type": "tuple", "items": [{"label", "schema"}]} 位置で意味が決まる固定長リスト
+#   {"type": "dict", "fields": [{"name", "schema", "optional"}]}
+#       optional=True のフィールドは空欄なら辞書から取り除く
+#   {"type": "oneof", "variants": [{"label", "schema"}]} いずれかの形を選ぶ
+#   {"type": "grouped", "group_label", "group_placeholder", "item": <schema>}
+#       [[グループ名, item], ...] のリスト。画面ではグループ名ごとのパネルに
+#       まとめて表示し、保存時は同じ形のリストへ戻す（グループ順に並び替わる
+#       ため、要素の順序に意味が無い集合的なキーにだけ使う）
+def _str(placeholder: str = "") -> dict[str, Any]:
+    return {"type": "string", "placeholder": placeholder}
+
+
+_SKILL_SCRIPT = {
+    "type": "tuple",
+    "items": [
+        {"label": "スキル名", "schema": _str("例: excel-read")},
+        {"label": "スクリプトファイル名", "schema": _str("例: read_excel.py")},
+    ],
+}
+# ビルトインツール名、または [スキル名, スクリプトファイル名]
+# （[main_agent_tool_guard].allow_entries / [default_workdir].allow_sandbox_dir の対象）。
+_TOOL_OR_SKILL_SCRIPT = {
+    "type": "oneof",
+    "variants": [
+        {"label": "ツール名", "schema": _str("例: dispatch_agent")},
+        {"label": "スキルのスクリプト", "schema": _SKILL_SCRIPT},
+    ],
+}
+_LLM_URL = {
+    "type": "list",
+    "item": {
+        "type": "dict",
+        "fields": [
+            {"name": "base_url", "schema": _str("例: http://localhost:8080/v1")},
+            {"name": "api_key", "schema": {**_str("dummy-not-used"), "default": "dummy-not-used"}},
+            {"name": "model", "schema": _str("llama-server の --alias と同じ名前")},
+            {"name": "provider", "schema": {"type": "choice", "choices": ["openai_compatible", "llama_cpp", "vllm"]}, "optional": True},
+            {"name": "start", "schema": {"type": "number", "placeholder": "使用開始時刻 0〜24（常時使用なら空欄）"}, "optional": True},
+            {"name": "end", "schema": {"type": "number", "placeholder": "使用終了時刻 0〜24（常時使用なら空欄）"}, "optional": True},
+        ],
+    },
+}
+_KEY_SCHEMAS: dict[tuple[str, str], dict[str, Any]] = {
+    ("llm", "main_url"): _LLM_URL,
+    ("llm", "sub_url"): _LLM_URL,
+    ("scripts", "plan_approval_exempt_scripts"): {"type": "list", "item": _SKILL_SCRIPT},
+    ("scripts", "agent_type_run_script_allowlist"): {
+        "type": "grouped",
+        "group_label": "agent_type",
+        "group_placeholder": "例: explore",
+        "item": {
+            "type": "oneof",
+            "variants": [
+                {"label": "スキル全体", "schema": _str("スキル名")},
+                {"label": "スクリプト指定", "schema": _SKILL_SCRIPT},
+            ],
+        },
+    },
+    ("main_agent_tool_guard", "allow_entries"): {
+        "type": "list",
+        "item": {
+            "type": "tuple",
+            "items": [
+                {"label": "対象", "schema": _TOOL_OR_SKILL_SCRIPT},
+                {"label": "max_calls（-1=無制限）", "schema": {"type": "number", "placeholder": "-1", "default": -1}},
+            ],
+        },
+    },
+    ("default_workdir", "allow_sandbox_dir"): {
+        "type": "list",
+        "item": {
+            "type": "dict",
+            "fields": [
+                {"name": "dir", "schema": _str("例: E:/shared_output")},
+                {"name": "allow_entries", "schema": {"type": "list", "item": _TOOL_OR_SKILL_SCRIPT}},
+            ],
+        },
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -62,13 +176,25 @@ class IniCatalog:
     mtime: float
 
 
-def _infer_ui_kind(value: str) -> str:
+def _infer_ui_kind(section: str, key: str, value: str) -> str:
     """値の見た目から、フォームでの入力欄の種類を推定する。
 
     最終的な妥当性判定は src.config.load_config() 側のバリデーションに委ねる
     （ここでの推定はあくまでUI表示のヒント）。
+
+    "list" は src/config.py と同じく ast.literal_eval でリストとして解釈できる
+    値に限る（"[**システム通知: ...**]" のように "[" で始まるだけの文字列は
+    "multiline" のまま）。
     """
+    if (section, key) in _KEY_CHOICES:
+        return "choice"
     stripped = value.strip()
+    if stripped.startswith("["):
+        try:
+            if isinstance(ast.literal_eval(stripped), list):
+                return "list"
+        except (ValueError, SyntaxError):
+            pass
     if "\n" in value or stripped.startswith("[") or stripped.startswith("{"):
         return "multiline"
     if stripped.lower() in ("true", "false"):
@@ -140,7 +266,9 @@ def parse(text: str) -> IniCatalog:
                     default_value=value,
                     description="\n".join(pending_comment).strip(),
                     group_heading=current_heading,
-                    ui_kind=_infer_ui_kind(value),
+                    ui_kind=_infer_ui_kind(section, key, value),
+                    choices=_KEY_CHOICES.get((section, key), ()),
+                    schema=_KEY_SCHEMAS.get((section, key)),
                 )
             )
             pending_comment = []

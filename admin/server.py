@@ -343,6 +343,8 @@ def _config_key_view(name: str) -> dict[str, Any]:
                 "description": info.description,
                 "group_heading": info.group_heading,
                 "ui_kind": info.ui_kind,
+                "choices": list(info.choices),
+                "schema": info.schema,
                 "env_name": _env_var_mapping.get((info.section, info.key)),
                 "env_override_active": (info.section, info.key) in active_env,
                 "is_admin_section": info.section == "admin",

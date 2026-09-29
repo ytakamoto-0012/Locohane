@@ -414,12 +414,14 @@ function buildKeyRow(k) {
     wrap.appendChild(input);
     wrap.appendChild(document.createTextNode(" 有効にする"));
     inputWrap.appendChild(wrap);
+  } else if (k.ui_kind === "choice") {
+    const select = buildChoiceSelect(k.choices, value.trim(), (v) => setEdit(k, v));
+    select.classList.add("choice-select");
+    inputWrap.appendChild(select);
+  } else if (k.ui_kind === "list") {
+    buildListInput(k, value, inputWrap);
   } else if (k.ui_kind === "multiline") {
-    const textarea = document.createElement("textarea");
-    textarea.value = value;
-    textarea.rows = Math.min(16, Math.max(3, value.split("\n").length));
-    textarea.addEventListener("input", () => setEdit(k, textarea.value));
-    inputWrap.appendChild(textarea);
+    inputWrap.appendChild(buildRawTextarea(k, value));
   } else {
     const input = document.createElement("input");
     input.type = "text";
@@ -436,6 +438,812 @@ function buildKeyRow(k) {
   });
 
   return row;
+}
+
+function buildRawTextarea(k, value) {
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.rows = Math.min(16, Math.max(3, value.split("\n").length));
+  textarea.addEventListener("input", () => setEdit(k, textarea.value));
+  return textarea;
+}
+
+// 固有キーワードの選択肢から選ぶ select。現在値が選択肢に無い場合（手動編集等）は
+// その値も選択肢に残し、意図せず別の値へ書き換わらないようにする。
+function buildChoiceSelect(choices, current, onChange) {
+  const select = document.createElement("select");
+  const matched = choices.find((c) => c === current) ?? choices.find((c) => c.toLowerCase() === current.toLowerCase());
+  const options = matched === undefined ? [current, ...choices] : choices;
+  for (const c of options) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    if (c === "") opt.textContent = "（未指定）";
+    else if (matched === undefined && c === current) opt.textContent = `${c}（選択肢外の現在値）`;
+    else opt.textContent = c;
+    select.appendChild(opt);
+  }
+  select.value = matched === undefined ? current : matched;
+  select.addEventListener("change", () => onChange(select.value));
+  return select;
+}
+
+/* --- リスト値（[...]）の項目ごと編集 ---
+ * config.ini のリスト値は src/config.py で ast.literal_eval される Python リテラル
+ * なので、ここでもその部分集合（文字列・数値・True/False/None・リスト/タプル・
+ * 辞書・# コメント・末尾カンマ）をパース/シリアライズする。パースできない値は
+ * 従来どおりテキストで編集する。 */
+
+function parsePyLiteral(text) {
+  const s = text;
+  let i = 0;
+  const fail = (msg) => {
+    throw new Error(`${msg}（${i + 1}文字目付近）`);
+  };
+  const skip = () => {
+    for (;;) {
+      while (i < s.length && /\s/.test(s[i])) i++;
+      if (s[i] !== "#") return;
+      while (i < s.length && s[i] !== "\n") i++;
+    }
+  };
+  const ESC = { n: "\n", t: "\t", r: "\r", "\\": "\\", "'": "'", '"': '"', 0: "\0", a: "\x07", b: "\b", f: "\f", v: "\v" };
+  const parseStr = () => {
+    const q = s[i++];
+    let out = "";
+    while (i < s.length && s[i] !== q) {
+      let c = s[i++];
+      if (c === "\n") fail("文字列の途中で改行されています");
+      if (c !== "\\") {
+        out += c;
+        continue;
+      }
+      c = s[i++];
+      if (c === "\n") continue;
+      if (c === "x" || c === "u" || c === "U") {
+        const len = c === "x" ? 2 : c === "u" ? 4 : 8;
+        const hex = s.slice(i, i + len);
+        if (hex.length !== len || !/^[0-9a-fA-F]+$/.test(hex)) fail("不正なエスケープです");
+        out += String.fromCodePoint(parseInt(hex, 16));
+        i += len;
+      } else if (c in ESC) {
+        out += ESC[c];
+      } else {
+        out += "\\" + c;
+      }
+    }
+    if (s[i] !== q) fail("文字列が閉じていません");
+    i++;
+    return out;
+  };
+  const parseValue = () => {
+    skip();
+    const c = s[i];
+    if (c === "[" || c === "(") {
+      const close = c === "[" ? "]" : ")";
+      i++;
+      const arr = [];
+      for (;;) {
+        skip();
+        if (s[i] === close) break;
+        arr.push(parseValue());
+        skip();
+        if (s[i] === ",") i++;
+        else if (s[i] !== close) fail(`"," か "${close}" が必要です`);
+      }
+      i++;
+      return arr;
+    }
+    if (c === "{") {
+      i++;
+      const obj = {};
+      for (;;) {
+        skip();
+        if (s[i] === "}") break;
+        const key = parseValue();
+        if (typeof key !== "string") fail("辞書のキーは文字列にしてください");
+        skip();
+        if (s[i] !== ":") fail('":" が必要です');
+        i++;
+        obj[key] = parseValue();
+        skip();
+        if (s[i] === ",") i++;
+        else if (s[i] !== "}") fail('"," か "}" が必要です');
+      }
+      i++;
+      return obj;
+    }
+    if (c === '"' || c === "'") {
+      let out = parseStr();
+      // Python の暗黙の文字列連結（"a" "b"）
+      for (;;) {
+        const save = i;
+        skip();
+        if (s[i] === '"' || s[i] === "'") {
+          out += parseStr();
+        } else {
+          i = save;
+          return out;
+        }
+      }
+    }
+    const m = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/.exec(s.slice(i));
+    if (m) {
+      i += m[0].length;
+      return Number(m[0]);
+    }
+    for (const [word, val] of [["True", true], ["False", false], ["None", null]]) {
+      if (s.startsWith(word, i) && !/\w/.test(s[i + word.length] || "")) {
+        i += word.length;
+        return val;
+      }
+    }
+    fail("解釈できない値です");
+  };
+  const result = parseValue();
+  skip();
+  if (i < s.length) fail("余分な文字があります");
+  return result;
+}
+
+function toPyLiteral(v) {
+  if (v === null) return "None";
+  if (v === true) return "True";
+  if (v === false) return "False";
+  if (typeof v === "number") return String(v);
+  if (typeof v === "string") return JSON.stringify(v);
+  if (Array.isArray(v)) return "[" + v.map(toPyLiteral).join(", ") + "]";
+  return "{" + Object.entries(v).map(([key, x]) => `${JSON.stringify(key)}: ${toPyLiteral(x)}`).join(", ") + "}";
+}
+
+// config.ini と同じ「1要素1行・末尾カンマ・閉じ括弧はインデント付き」の形で書き出す。
+function serializePyList(arr) {
+  if (arr.length === 0) return "[]";
+  return "[\n" + arr.map((x) => `    ${toPyLiteral(x)},\n`).join("") + "    ]";
+}
+
+function parsePyList(text) {
+  const data = parsePyLiteral(text.trim() || "[]");
+  if (!Array.isArray(data)) throw new Error("リスト（[...]）形式ではありません");
+  return data;
+}
+
+const rawListIds = new Set();
+
+function rerenderKeyRow(k, inputWrap) {
+  inputWrap.closest(".key-row").replaceWith(buildKeyRow(k));
+}
+
+function buildListInput(k, value, inputWrap) {
+  const id = keyId(k);
+  const toolbar = document.createElement("div");
+  toolbar.className = "le-toolbar";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "le-btn";
+  const note = document.createElement("span");
+  note.className = "hint";
+  toolbar.append(toggle, note);
+  inputWrap.appendChild(toolbar);
+
+  let data = null;
+  let parseError = null;
+  if (!rawListIds.has(id)) {
+    try {
+      data = parsePyList(value);
+    } catch (e) {
+      parseError = e.message;
+    }
+  }
+
+  if (data === null) {
+    toggle.textContent = "項目ごとに編集";
+    if (parseError) {
+      note.classList.replace("hint", "error");
+      note.textContent = `項目ごとの編集に切り替えられません: ${parseError}`;
+    }
+    toggle.addEventListener("click", () => {
+      try {
+        parsePyList(effectiveValue(k));
+      } catch (e) {
+        note.classList.replace("hint", "error");
+        note.textContent = `項目ごとの編集に切り替えられません: ${e.message}`;
+        return;
+      }
+      rawListIds.delete(id);
+      rerenderKeyRow(k, inputWrap);
+    });
+    inputWrap.appendChild(buildRawTextarea(k, value));
+    return;
+  }
+
+  toggle.textContent = "テキストで編集";
+  toggle.addEventListener("click", () => {
+    rawListIds.add(id);
+    rerenderKeyRow(k, inputWrap);
+  });
+  if (/^\s*#/m.test(value)) {
+    note.textContent = "※ここで編集して保存すると、リスト内のコメント行は保存値に含まれません（config.ini 自体は変わりません）。";
+  }
+  let defaultCanon = null;
+  try {
+    defaultCanon = serializePyList(parsePyList(k.default));
+  } catch (e) {
+    // 既定値がパースできない場合は、既定値との一致判定をしない
+  }
+  const emit = () => {
+    const text = serializePyList(data);
+    // 書式だけが違う（中身は既定値と同じ）場合は「変更なし」として扱う
+    setEdit(k, text === defaultCanon ? k.default : text);
+  };
+  if (k.schema && schemaMatches(k.schema, data)) {
+    inputWrap.appendChild(
+      buildSchemaEditor(data, k.schema, (v) => {
+        data = v;
+        emit();
+      })
+    );
+    return;
+  }
+  if (k.schema) {
+    note.textContent = "※値が想定の形式と異なるため、要素の種類を選んで編集する形式で表示しています。";
+  }
+  inputWrap.appendChild(buildArrayEditor(data, emit, { depth: 0 }));
+}
+
+/* --- スキーマ付きリストの編集 ---
+ * admin/ini_catalog.py の _KEY_SCHEMAS で構造が決まっているキーは、型を選ばせず
+ * 「スキル名」「スクリプトファイル名」のような名前付きの入力欄で編集させる。 */
+
+function schemaDefault(schema) {
+  switch (schema.type) {
+    case "number":
+      return schema.default ?? 0;
+    case "choice":
+      return schema.choices[0];
+    case "list":
+    case "grouped":
+      return [];
+    case "tuple":
+      return schema.items.map((it) => schemaDefault(it.schema));
+    case "dict": {
+      const obj = {};
+      for (const f of schema.fields) if (!f.optional) obj[f.name] = schemaDefault(f.schema);
+      return obj;
+    }
+    case "oneof":
+      return schemaDefault(schema.variants[0].schema);
+    default:
+      return schema.default ?? "";
+  }
+}
+
+function schemaMatches(schema, v) {
+  switch (schema.type) {
+    case "number":
+      return typeof v === "number";
+    case "list":
+      return Array.isArray(v) && v.every((x) => schemaMatches(schema.item, x));
+    case "grouped":
+      return Array.isArray(v) && v.every((x) => Array.isArray(x) && x.length === 2 && typeof x[0] === "string" && schemaMatches(schema.item, x[1]));
+    case "tuple":
+      return Array.isArray(v) && v.length === schema.items.length && schema.items.every((it, i) => schemaMatches(it.schema, v[i]));
+    case "dict": {
+      if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+      const names = new Set(schema.fields.map((f) => f.name));
+      // 未知のキーがあると画面に出せず保存時に消えてしまうため、汎用エディタに任せる
+      if (Object.keys(v).some((key) => !names.has(key))) return false;
+      return schema.fields.every((f) => (f.name in v ? schemaMatches(f.schema, v[f.name]) : f.optional));
+    }
+    case "oneof":
+      return schema.variants.some((variant) => schemaMatches(variant.schema, v));
+    default:
+      // string / choice（選択肢外の値は選択肢に残して表示する）
+      return typeof v === "string";
+  }
+}
+
+// set(v) は親に「この値が v に変わった」ことを伝える。リスト・タプル・辞書は
+// 自分自身の中身を書き換えてから同じ参照で set する。
+function buildSchemaEditor(value, schema, set, optional = false) {
+  switch (schema.type) {
+    case "list":
+      return buildSchemaList(value, schema, set);
+    case "grouped":
+      return buildSchemaGrouped(value, schema, set);
+    case "tuple":
+      return buildSchemaTuple(value, schema, set);
+    case "dict":
+      return buildSchemaDict(value, schema, set);
+    case "oneof":
+      return buildSchemaOneOf(value, schema, set);
+    case "choice":
+      return buildChoiceSelect(optional ? ["", ...schema.choices] : schema.choices, value ?? "", set);
+    case "number": {
+      const input = document.createElement("input");
+      input.type = "number";
+      input.step = "any";
+      input.placeholder = schema.placeholder || "";
+      input.value = typeof value === "number" ? String(value) : "";
+      input.addEventListener("input", () => {
+        const text = input.value.trim();
+        if (text === "" && optional) {
+          input.classList.remove("invalid");
+          set(undefined);
+          return;
+        }
+        const n = Number(text);
+        const ok = text !== "" && Number.isFinite(n);
+        input.classList.toggle("invalid", !ok);
+        if (ok) set(n);
+      });
+      return input;
+    }
+    default: {
+      const text = value ?? "";
+      const long = text.length > 60 || text.includes("\n");
+      const input = document.createElement(long ? "textarea" : "input");
+      if (long) input.rows = Math.min(8, Math.max(2, Math.ceil(text.length / 80)));
+      else input.type = "text";
+      input.placeholder = schema.placeholder || "";
+      input.value = text;
+      input.addEventListener("input", () => set(input.value));
+      return input;
+    }
+  }
+}
+
+function buildSchemaList(arr, schema, set) {
+  const box = document.createElement("div");
+  box.className = "le-list";
+  const render = () => {
+    box.innerHTML = "";
+    arr.forEach((item, idx) => {
+      const itemEl = document.createElement("div");
+      itemEl.className = "le-item";
+      const body = document.createElement("div");
+      body.className = "le-item-body";
+      body.appendChild(
+        buildSchemaEditor(item, schema.item, (v) => {
+          arr[idx] = v;
+          set(arr);
+        })
+      );
+      const ctrl = document.createElement("div");
+      ctrl.className = "le-item-ctrl";
+      const swap = (a, b) => {
+        [arr[a], arr[b]] = [arr[b], arr[a]];
+        render();
+        set(arr);
+      };
+      ctrl.append(
+        smallBtn("↑", "上へ移動", idx === 0, () => swap(idx - 1, idx)),
+        smallBtn("↓", "下へ移動", idx === arr.length - 1, () => swap(idx, idx + 1)),
+        smallBtn("✕", "削除", false, () => {
+          arr.splice(idx, 1);
+          render();
+          set(arr);
+        })
+      );
+      itemEl.append(body, ctrl);
+      box.appendChild(itemEl);
+    });
+    const add = smallBtn("＋ 項目を追加", "項目を追加", false, () => {
+      arr.push(schemaDefault(schema.item));
+      render();
+      set(arr);
+    });
+    add.classList.add("le-add");
+    box.appendChild(add);
+  };
+  render();
+  return box;
+}
+
+// [[グループ名, item], ...] をグループ名ごとのパネルで編集する。画面上は
+// グループ単位の状態を持ち、変更のたびに元の形のリスト（arr）へ書き戻す。
+function buildSchemaGrouped(arr, schema, set) {
+  const groups = [];
+  for (const [name, item] of arr) {
+    let g = groups.find((x) => x.name === name);
+    if (!g) groups.push((g = { name, items: [] }));
+    g.items.push(item);
+  }
+  const flush = () => {
+    arr.length = 0;
+    for (const g of groups) for (const item of g.items) arr.push([g.name, item]);
+    set(arr);
+  };
+
+  const box = document.createElement("div");
+  box.className = "le-list";
+  const render = () => {
+    box.innerHTML = "";
+    groups.forEach((g, gi) => {
+      const panel = document.createElement("div");
+      panel.className = "le-group";
+      const head = document.createElement("div");
+      head.className = "le-group-head";
+      const label = document.createElement("span");
+      label.className = "le-sfield-label";
+      label.textContent = schema.group_label;
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.placeholder = schema.group_placeholder || "";
+      nameInput.value = g.name;
+      nameInput.addEventListener("input", () => {
+        g.name = nameInput.value;
+        flush();
+      });
+      const count = document.createElement("span");
+      count.className = "hint";
+      count.textContent = `${g.items.length} 件`;
+      head.append(
+        label,
+        nameInput,
+        count,
+        smallBtn("✕", `この${schema.group_label}をまとめて削除`, false, () => {
+          if (g.items.length > 0 && !confirm(`${schema.group_label}「${g.name}」の ${g.items.length} 件をまとめて削除しますか？`)) return;
+          groups.splice(gi, 1);
+          render();
+          flush();
+        })
+      );
+      panel.appendChild(head);
+      // グループ内の項目は通常のリストと同じ編集UI（並べ替え・削除・追加）
+      panel.appendChild(buildSchemaList(g.items, { type: "list", item: schema.item }, () => {
+        count.textContent = `${g.items.length} 件`;
+        flush();
+      }));
+      box.appendChild(panel);
+    });
+    const add = smallBtn(`＋ ${schema.group_label}を追加`, `${schema.group_label}を追加`, false, () => {
+      // 項目が0件のグループはリストに書き出せないため、空の項目を1件持たせる
+      groups.push({ name: "", items: [schemaDefault(schema.item)] });
+      render();
+      flush();
+    });
+    add.classList.add("le-add");
+    box.appendChild(add);
+  };
+  render();
+  return box;
+}
+
+function buildSchemaTuple(arr, schema, set) {
+  const box = document.createElement("div");
+  box.className = "le-tuple";
+  schema.items.forEach((it, idx) => {
+    const fieldEl = document.createElement("div");
+    fieldEl.className = it.schema.type === "number" ? "le-sfield le-sfield-narrow" : "le-sfield";
+    const label = document.createElement("span");
+    label.className = "le-sfield-label";
+    label.textContent = it.label;
+    fieldEl.append(
+      label,
+      buildSchemaEditor(arr[idx], it.schema, (v) => {
+        arr[idx] = v;
+        set(arr);
+      })
+    );
+    box.appendChild(fieldEl);
+  });
+  return box;
+}
+
+function buildSchemaDict(obj, schema, set) {
+  const box = document.createElement("div");
+  box.className = "le-dict";
+  for (const f of schema.fields) {
+    const row = document.createElement("div");
+    row.className = "le-field";
+    const label = document.createElement("span");
+    label.className = "le-field-name";
+    label.textContent = f.optional ? `${f.name}（任意）` : f.name;
+    const body = document.createElement("div");
+    body.className = "le-item-body";
+    body.appendChild(
+      buildSchemaEditor(
+        obj[f.name],
+        f.schema,
+        (v) => {
+          // 任意項目は空欄なら辞書から取り除く（src/config.py 側で「未指定」扱い）
+          if (v === undefined || (f.optional && v === "")) delete obj[f.name];
+          else obj[f.name] = v;
+          set(obj);
+        },
+        !!f.optional
+      )
+    );
+    row.append(label, body);
+    box.appendChild(row);
+  }
+  return box;
+}
+
+function buildSchemaOneOf(value, schema, set) {
+  const box = document.createElement("div");
+  box.className = "le-oneof";
+  let current = value;
+  const setCurrent = (v) => {
+    current = v;
+    set(v);
+  };
+  const select = document.createElement("select");
+  select.className = "le-type";
+  schema.variants.forEach((variant, i) => {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = variant.label;
+    select.appendChild(opt);
+  });
+  const body = document.createElement("div");
+  body.className = "le-oneof-body";
+  const renderBody = (i) => {
+    body.innerHTML = "";
+    body.appendChild(buildSchemaEditor(current, schema.variants[i].schema, setCurrent));
+  };
+  const initial = Math.max(0, schema.variants.findIndex((variant) => schemaMatches(variant.schema, value)));
+  select.value = String(initial);
+  select.addEventListener("change", () => {
+    // 形を切り替えても、入力済みの先頭の文字列（スキル名等）は引き継ぐ
+    const head = typeof current === "string" ? current : Array.isArray(current) && typeof current[0] === "string" ? current[0] : "";
+    const next = schemaDefault(schema.variants[Number(select.value)].schema);
+    if (typeof next === "string") setCurrent(head);
+    else {
+      if (Array.isArray(next) && typeof next[0] === "string") next[0] = head;
+      setCurrent(next);
+    }
+    renderBody(Number(select.value));
+  });
+  renderBody(initial);
+  box.append(select, body);
+  return box;
+}
+
+const VALUE_TYPES = [
+  ["string", "文字"],
+  ["number", "数値"],
+  ["bool", "真偽"],
+  ["list", "リスト"],
+];
+
+function valueType(v) {
+  if (Array.isArray(v)) return "list";
+  if (v !== null && typeof v === "object") return "dict";
+  if (typeof v === "number") return "number";
+  if (typeof v === "boolean") return "bool";
+  return "string";
+}
+
+function convertValue(v, type) {
+  if (type === "string") return typeof v === "string" ? v : v === null || typeof v === "object" ? "" : String(v);
+  if (type === "number") return Number.isFinite(Number(v)) && v !== "" && typeof v !== "object" ? Number(v) : 0;
+  if (type === "bool") return v === true;
+  if (type === "dict") return {};
+  if (Array.isArray(v)) return v;
+  return v === "" || v === null ? [] : [v];
+}
+
+function buildTypeSelect(current, onChange, withDict = false) {
+  const select = document.createElement("select");
+  select.className = "le-type";
+  select.title = "値の種類";
+  const types = withDict || current === "dict" ? [...VALUE_TYPES, ["dict", "辞書"]] : VALUE_TYPES;
+  for (const [value, label] of types) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    select.appendChild(opt);
+  }
+  select.value = current;
+  select.addEventListener("change", () => onChange(select.value));
+  return select;
+}
+
+function smallBtn(text, title, disabled, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "le-btn";
+  btn.textContent = text;
+  btn.title = title;
+  btn.disabled = disabled;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+// 追加する要素の雛形。直前の要素と同じ形で、文字列だけ空にする
+// （選択肢付きフィールドは有効な値のまま残す）。
+function blankLike(v) {
+  if (typeof v === "string") return "";
+  if (Array.isArray(v)) return v.map(blankLike);
+  if (v !== null && typeof v === "object") {
+    const obj = {};
+    for (const [key, x] of Object.entries(v)) obj[key] = blankLike(x);
+    return obj;
+  }
+  return v;
+}
+
+function buildValueEditor(value, set, notify, ctx) {
+  if (Array.isArray(value)) return buildArrayEditor(value, notify, ctx);
+  if (value !== null && typeof value === "object") return buildDictEditor(value, notify, ctx);
+  return buildScalarEditor(value, set);
+}
+
+// depth=0（キー直下のリスト）は1要素1行の縦並び、それより深いリスト
+// （["スキル名","スクリプト名"] 等の組）は横並びで表示する。
+function buildArrayEditor(arr, notify, ctx) {
+  const inline = ctx.depth > 0;
+  const box = document.createElement("div");
+  box.className = inline ? "le-list le-inline" : "le-list";
+  const childCtx = { depth: ctx.depth + 1 };
+  const render = () => {
+    box.innerHTML = "";
+    arr.forEach((item, idx) => {
+      const itemEl = document.createElement("div");
+      itemEl.className = "le-item";
+      if (inline) {
+        itemEl.appendChild(
+          buildTypeSelect(valueType(item), (type) => {
+            arr[idx] = convertValue(arr[idx], type);
+            render();
+            notify();
+          })
+        );
+      }
+      const body = document.createElement("div");
+      body.className = "le-item-body";
+      body.appendChild(
+        buildValueEditor(
+          item,
+          (v) => {
+            arr[idx] = v;
+            notify();
+          },
+          notify,
+          childCtx
+        )
+      );
+      itemEl.appendChild(body);
+      const ctrl = document.createElement("div");
+      ctrl.className = "le-item-ctrl";
+      if (!inline) {
+        const swap = (a, b) => {
+          [arr[a], arr[b]] = [arr[b], arr[a]];
+          render();
+          notify();
+        };
+        ctrl.appendChild(smallBtn("↑", "上へ移動", idx === 0, () => swap(idx - 1, idx)));
+        ctrl.appendChild(smallBtn("↓", "下へ移動", idx === arr.length - 1, () => swap(idx, idx + 1)));
+      }
+      ctrl.appendChild(
+        smallBtn("✕", "削除", false, () => {
+          arr.splice(idx, 1);
+          render();
+          notify();
+        })
+      );
+      itemEl.appendChild(ctrl);
+      box.appendChild(itemEl);
+    });
+    // 空リストには手本にする要素が無いため、追加する値の種類を選ばせる
+    const newTypeSelect = arr.length === 0 ? buildTypeSelect("string", () => {}, !inline) : null;
+    const add = smallBtn(inline ? "＋" : "＋ 項目を追加", "項目を追加", false, () => {
+      arr.push(newTypeSelect ? convertValue("", newTypeSelect.value) : blankLike(arr[arr.length - 1]));
+      render();
+      notify();
+    });
+    const addRow = document.createElement("div");
+    addRow.className = "le-add";
+    if (newTypeSelect) addRow.appendChild(newTypeSelect);
+    addRow.appendChild(add);
+    box.appendChild(addRow);
+  };
+  render();
+  return box;
+}
+
+function buildDictEditor(obj, notify, ctx) {
+  const box = document.createElement("div");
+  box.className = "le-dict";
+  const childCtx = { depth: ctx.depth + 1 };
+  const render = () => {
+    box.innerHTML = "";
+    for (const name of Object.keys(obj)) {
+      const row = document.createElement("div");
+      row.className = "le-field";
+      const label = document.createElement("span");
+      label.className = "le-field-name";
+      label.textContent = name;
+      const body = document.createElement("div");
+      body.className = "le-item-body";
+      body.appendChild(
+        buildValueEditor(
+          obj[name],
+          (v) => {
+            obj[name] = v;
+            notify();
+          },
+          notify,
+          childCtx
+        )
+      );
+      row.append(
+        label,
+        body,
+        smallBtn("✕", "この項目を削除", false, () => {
+          delete obj[name];
+          render();
+          notify();
+        })
+      );
+      box.appendChild(row);
+    }
+    const addRow = document.createElement("div");
+    addRow.className = "le-field le-field-add";
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.placeholder = "項目名";
+    const typeSelect = buildTypeSelect("string", () => {});
+    const addBtn = smallBtn("＋ 項目を追加", "項目を追加", false, () => {
+      const name = nameInput.value.trim();
+      if (!name || name in obj) {
+        nameInput.classList.add("invalid");
+        return;
+      }
+      obj[name] = convertValue("", typeSelect.value);
+      render();
+      notify();
+    });
+    addRow.append(nameInput, typeSelect, addBtn);
+    box.appendChild(addRow);
+  };
+  render();
+  return box;
+}
+
+function buildScalarEditor(value, set) {
+  if (typeof value === "boolean") {
+    const wrap = document.createElement("label");
+    wrap.className = "checkbox";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = value;
+    input.addEventListener("change", () => set(input.checked));
+    wrap.append(input, document.createTextNode(" True"));
+    return wrap;
+  }
+  if (typeof value === "number") {
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "any";
+    input.value = String(value);
+    input.addEventListener("input", () => {
+      const n = Number(input.value);
+      const ok = input.value.trim() !== "" && Number.isFinite(n);
+      input.classList.toggle("invalid", !ok);
+      if (ok) set(n);
+    });
+    return input;
+  }
+  if (value === null) {
+    const span = document.createElement("span");
+    span.className = "hint";
+    span.textContent = "None";
+    return span;
+  }
+  if (value.length > 60 || value.includes("\n")) {
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.rows = Math.min(8, Math.max(2, Math.ceil(value.length / 80) + value.split("\n").length - 1));
+    textarea.addEventListener("input", () => set(textarea.value));
+    return textarea;
+  }
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value;
+  input.addEventListener("input", () => set(input.value));
+  return input;
 }
 
 function setEdit(k, newValue) {
