@@ -1434,39 +1434,62 @@ async function renderUsers(container) {
   container.appendChild(clone("tpl-users"));
   const data = await api(`/api/instances/${encodeURIComponent(currentInstanceName)}/users`);
   $("#users-inherited-note").textContent = data.inherited_from_project_env
-    ? "プロジェクト直下 .env の AUTH_USERS を継承しています（このインスタンス専用のユーザーを追加すると、以後は専用のものだけが使われます）。"
+    ? "プロジェクト直下 .env の AUTH_USERS（管理者設定）を継承しています。この画面からは変更・削除できません（このインスタンス専用のユーザーを追加すると、以後は専用のものだけが使われます）。"
     : "このインスタンス専用のユーザー設定です。";
   const tbody = $("#users-tbody");
   tbody.innerHTML = "";
   for (const name of data.usernames) {
+    const inherited = data.inherited_from_project_env;
     const tr = document.createElement("tr");
+    if (inherited) tr.classList.add("row-inherited");
     const pwInput = document.createElement("input");
     pwInput.type = "password";
     pwInput.placeholder = "新しいパスワード";
+    pwInput.disabled = inherited;
     const pwBtn = document.createElement("button");
     pwBtn.textContent = "変更";
+    pwBtn.disabled = inherited;
     pwBtn.addEventListener("click", async () => {
       if (!pwInput.value) return;
-      await api(`/api/instances/${encodeURIComponent(currentInstanceName)}/users/${encodeURIComponent(name)}`, {
-        method: "PUT",
-        body: { password: pwInput.value },
-      });
+      try {
+        await api(`/api/instances/${encodeURIComponent(currentInstanceName)}/users/${encodeURIComponent(name)}`, {
+          method: "PUT",
+          body: { password: pwInput.value },
+        });
+      } catch (e) {
+        $("#users-error").textContent = e.message;
+        return;
+      }
       pwInput.value = "";
       alert("パスワードを変更しました。");
     });
     const delBtn = document.createElement("button");
     delBtn.textContent = "削除";
+    delBtn.disabled = inherited;
     delBtn.addEventListener("click", async () => {
       if (!confirm(`ユーザー "${name}" を削除しますか？`)) return;
-      await api(`/api/instances/${encodeURIComponent(currentInstanceName)}/users/${encodeURIComponent(name)}`, {
-        method: "DELETE",
-      });
+      try {
+        await api(`/api/instances/${encodeURIComponent(currentInstanceName)}/users/${encodeURIComponent(name)}`, {
+          method: "DELETE",
+        });
+      } catch (e) {
+        $("#users-error").textContent = e.message;
+        return;
+      }
       const fresh = $("#instance-subview");
       fresh.innerHTML = "";
       renderUsers(fresh);
     });
     const tdName = document.createElement("td");
     tdName.textContent = name;
+    if (inherited) {
+      const badge = document.createElement("span");
+      badge.className = "badge-default";
+      badge.textContent = "プロジェクト直下 .env（管理者設定）";
+      badge.title = "プロジェクト直下の .env で設定されたユーザーです。変更は管理者が .env を直接編集してください。";
+      tdName.appendChild(document.createTextNode(" "));
+      tdName.appendChild(badge);
+    }
     const tdPw = document.createElement("td");
     tdPw.appendChild(pwInput);
     tdPw.appendChild(pwBtn);

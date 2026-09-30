@@ -552,6 +552,18 @@ def add_user(
     return {"usernames": sorted(users.keys())}
 
 
+def _reject_if_project_env_user(name: str, target_username: str) -> None:
+    """継承中のプロジェクト直下 .env のユーザーは管理者設定なので、画面からの変更・削除を拒否する。"""
+    own_values = env_files.read_values(inst.env_path(INSTANCES_ROOT, name))
+    if env_files.AUTH_USERS_KEY in own_values:
+        return
+    if target_username in env_files.read_users(PROJECT_ENV_PATH):
+        raise HTTPException(
+            status_code=403,
+            detail="プロジェクト直下 .env のユーザー（管理者設定）はこの画面から変更・削除できません。",
+        )
+
+
 class UserPasswordBody(BaseModel):
     password: str
 
@@ -566,6 +578,7 @@ def set_user_password(
     _csrf: None = Depends(require_csrf),
 ):
     _require_instance(name)
+    _reject_if_project_env_user(name, target_username)
     env_path = inst.env_path(INSTANCES_ROOT, name)
     users = env_files.read_users(env_path)
     if target_username not in users:
@@ -594,6 +607,7 @@ def delete_user(
     _csrf: None = Depends(require_csrf),
 ):
     _require_instance(name)
+    _reject_if_project_env_user(name, target_username)
     env_path = inst.env_path(INSTANCES_ROOT, name)
     users = env_files.read_users(env_path)
     if target_username not in users:

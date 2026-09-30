@@ -113,6 +113,7 @@ label.checkbox input { width: auto; }
 .display-name { font-weight: 600; flex: 1; }
 .badge-default { font-size: 11px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; color: var(--text-dim); }
 .badge-default.hidden { display: none; }
+.row-inherited td { color: var(--text-dim); opacity: 0.7; }
 .card-meta { color: var(--text-dim); font-size: 12px; margin-bottom: 10px; display: flex; justify-content: space-between; }
 .card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .card-actions a.open-link { color: var(--accent); font-size: 13px; align-self: center; margin-right: auto; }
