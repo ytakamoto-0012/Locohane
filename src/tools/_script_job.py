@@ -71,8 +71,23 @@ def _resolve_run_script_command(skill_name: str, script_filename: str, script_ar
 
     # .py は設定の Python で、それ以外はそのまま実行を試みる。
     if script_path.suffix == ".py":
-        return [_state._SCRIPT_PYTHON, str(script_path), *args]
+        return [_script_python_for(script_path), str(script_path), *args]
     return [str(script_path), *args]
+
+
+def _script_python_for(script_path: Path) -> str:
+    """スクリプトを起動する Python 実行ファイルを返す。
+
+    config.ini の [paths].project_locohane_dir で {"dir": ..., "python": ...}
+    形式により専用 Python が指定されたディレクトリの skills/ 配下にある
+    スクリプトはその Python を、それ以外は [scripts].python を使う。
+    """
+    cfg = _state._LLM_CONFIG
+    if cfg is not None:
+        for skills_dir, python in cfg.locohane_skills_pythons.items():
+            if script_path.is_relative_to(skills_dir.resolve()):
+                return python
+    return _state._SCRIPT_PYTHON
 
 
 def _prepare_script_execution(skill_name: str, script_filename: str, script_args: list[str] | None = None) -> tuple[list[str], Path] | str:

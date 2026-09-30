@@ -282,6 +282,13 @@ class Config:
             絶対パスのリスト（project_locohane_dirs の各要素 / "agents"）。
             同名定義が両方に存在する場合は後方（.locohane側）が優先される
             （scan_agent_types() 参照）。
+        locohane_skills_pythons: locohane_skills_dirs のうち、専用の Python
+            実行ファイルが指定されたもの（project_locohane_dir の要素を
+            {"dir": ..., "python": ...} 形式で書いた場合）の対応表
+            （skills ディレクトリの絶対パス → Python実行ファイル）。この配下の
+            .py スクリプトは run_script/run_script_background で script_python
+            の代わりにこの Python で起動される（src/tools/_script_job.py の
+            _script_python_for() 参照）。
         bin_path: run_script/execute_python_code のサブプロセスへ渡す PATH の
             先頭に追加するディレクトリの絶対パスのリスト（既定は空）。
             コマンド名を素の状態で叩く前提の外部バイナリをOS側のPATH登録なしで
@@ -831,6 +838,7 @@ class Config:
     project_locohane_dirs: list[Path]
     locohane_skills_dirs: list[Path]
     locohane_agents_dirs: list[Path]
+    locohane_skills_pythons: dict[Path, str]
     bin_path: list[Path]
     system_prompt_path: Path
     project_instructions_paths: list[Path]
@@ -1597,6 +1605,62 @@ def _as_path_list(value: str | None, base: Path) -> list[Path]:
     return [_resolve(base, item) for item in items]
 
 
+def _parse_project_locohane_dirs(value: str | None, base: Path) -> list[tuple[Path, str | None]]:
+    """config.ini の [paths].project_locohane_dir をパースする。
+
+    _as_path_list と同じ単一パス／リスト形式に加え、リストの各要素に
+    {"dir": ディレクトリ, "python": Python実行ファイル} の辞書も書ける
+    （allow_sandbox_dir と同じ ast.literal_eval による緩い記法）。
+    "python" を指定したディレクトリ配下の skills/ にある .py スクリプトは、
+    [scripts].python ではなくその Python で起動される
+    （src/tools/_script_job.py の _script_python_for() 参照）。
+    例: ["./.locohane", {"dir": "./.locohane_team", "python": "./.locohane_team/.venv/Scripts/python.exe"}]
+
+    Args:
+        value: config.ini または環境変数から得た生の文字列。
+        base: 相対パスの解決基準ディレクトリ（通常は PROJECT_ROOT）。
+
+    Returns:
+        (ディレクトリの絶対パス, Python実行ファイル or None) のリスト。
+        Python実行ファイルはパス区切りを含む場合のみ base 基準で絶対パス化し、
+        含まない場合（"python" 等のコマンド名）はそのまま返す。
+
+    Raises:
+        ValueError: リストとして解釈できない場合、要素が文字列でも辞書でも
+            ない場合、辞書の "dir" が空、または "python" が文字列でない場合。
+    """
+    text = str(value).strip() if value is not None else ""
+    if not text:
+        return []
+    if not text.startswith("["):
+        return [(_resolve(base, text), None)]
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(f"project_locohane_dir はPythonのリスト形式で指定してください: {text!r}") from e
+    if not isinstance(parsed, list):
+        raise ValueError(f"project_locohane_dir はリスト（配列）形式で指定してください: {text!r}")
+    result: list[tuple[Path, str | None]] = []
+    for item in parsed:
+        if isinstance(item, str):
+            if item.strip():
+                result.append((_resolve(base, item.strip()), None))
+            continue
+        if not isinstance(item, dict):
+            raise ValueError(f'project_locohane_dir の各要素は文字列、または {{"dir": ..., "python": ...}} の辞書にしてください: {item!r}')
+        dir_value = item.get("dir")
+        if not isinstance(dir_value, str) or not dir_value.strip():
+            raise ValueError(f"project_locohane_dir の dir は空でない文字列にしてください: {item!r}")
+        python_value = item.get("python")
+        if python_value is not None and not isinstance(python_value, str):
+            raise ValueError(f"project_locohane_dir の python は文字列にしてください: {item!r}")
+        python = python_value.strip() if python_value else ""
+        if python and ("/" in python or "\\" in python):
+            python = str(_resolve(base, python))
+        result.append((_resolve(base, dir_value.strip()), python or None))
+    return result
+
+
 def _parse_auth_users(value: str | None) -> dict[str, str]:
     """AUTH_USERS環境変数（Python風の [["user","pass"], ...] リテラル）を
     ユーザー名→パスワードの辞書へ変換する。
@@ -2153,10 +2217,11 @@ def load_config(
         ),
     )
 
-    project_locohane_dirs = _as_path_list(
+    project_locohane_entries = _parse_project_locohane_dirs(
         os.getenv("PROJECT_LOCOHANE_DIR", paths.get("project_locohane_dir", "./.locohane")),
         PROJECT_ROOT,
     )
+    project_locohane_dirs = [d for d, _ in project_locohane_entries]
     bin_path = _as_path_list(
         os.getenv("BIN_PATH", paths.get("bin_path", "")),
         PROJECT_ROOT,
@@ -2244,6 +2309,7 @@ def load_config(
         project_locohane_dirs=project_locohane_dirs,
         locohane_skills_dirs=[d / "skills" for d in project_locohane_dirs],
         locohane_agents_dirs=[d / "agents" for d in project_locohane_dirs],
+        locohane_skills_pythons={d / "skills": py for d, py in project_locohane_entries if py},
         bin_path=bin_path,
         system_prompt_path=_resolve(
             PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", paths.get("system_prompt_path", "./system_prompt/system_prompt.md"))

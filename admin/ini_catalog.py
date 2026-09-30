@@ -153,6 +153,27 @@ _KEY_SCHEMAS: dict[tuple[str, str], dict[str, Any]] = {
             ],
         },
     },
+    # 文字列（ディレクトリのみ）、または {"dir", "python"} の辞書
+    # （src/config.py の _parse_project_locohane_dirs 参照）。
+    ("paths", "project_locohane_dir"): {
+        "type": "list",
+        "item": {
+            "type": "oneof",
+            "variants": [
+                {"label": "ディレクトリのみ", "schema": _str("例: ./.locohane")},
+                {
+                    "label": "専用Python環境あり",
+                    "schema": {
+                        "type": "dict",
+                        "fields": [
+                            {"name": "dir", "schema": _str("例: ./.locohane_team")},
+                            {"name": "python", "schema": _str("例: ./.locohane_team/.venv/Scripts/python.exe"), "optional": True},
+                        ],
+                    },
+                },
+            ],
+        },
+    },
     ("default_workdir", "allow_sandbox_dir"): {
         "type": "list",
         "item": {

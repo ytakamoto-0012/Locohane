@@ -1058,12 +1058,15 @@ function buildSchemaOneOf(value, schema, set) {
   const initial = Math.max(0, schema.variants.findIndex((variant) => schemaMatches(variant.schema, value)));
   select.value = String(initial);
   select.addEventListener("change", () => {
-    // 形を切り替えても、入力済みの先頭の文字列（スキル名等）は引き継ぐ
-    const head = typeof current === "string" ? current : Array.isArray(current) && typeof current[0] === "string" ? current[0] : "";
-    const next = schemaDefault(schema.variants[Number(select.value)].schema);
+    // 形を切り替えても、入力済みの先頭の文字列（スキル名・ディレクトリ等）は引き継ぐ
+    const firstOf = (v) => (Array.isArray(v) ? v[0] : v && typeof v === "object" ? Object.values(v)[0] : v);
+    const head = typeof firstOf(current) === "string" ? firstOf(current) : "";
+    const nextSchema = schema.variants[Number(select.value)].schema;
+    const next = schemaDefault(nextSchema);
     if (typeof next === "string") setCurrent(head);
     else {
       if (Array.isArray(next) && typeof next[0] === "string") next[0] = head;
+      else if (nextSchema.type === "dict" && typeof next[nextSchema.fields[0].name] === "string") next[nextSchema.fields[0].name] = head;
       setCurrent(next);
     }
     renderBody(Number(select.value));

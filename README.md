@@ -926,7 +926,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[paths]` | `common_data_dir` | 各種データ保存先パスの共通ベースディレクトリ（既定 `./data/${instance}`）。本セクションの`checkpoint_db`/`memory_dir`/`plans_dir`、および`[uploads]`/`[log]`/`[default_workdir]`/`[path_memory]`/`[chat_log]`の`dir`系キーの値に`${common_data_dir}`と書くとここで指定した値に置換される（configparser標準の補間ではなくconfig.py側の独自置換）。`common_data_dir`自身とこれらのキーでは`${instance}`がインスタンス名（環境変数`LOCOHANE_INSTANCE`、未設定なら`default`）に置換される | `COMMON_DATA_DIR` |
 | `[paths]` | `skills_dir` | スキルフォルダ | `SKILLS_DIR` |
 | `[paths]` | `agents_dir` | エージェント種別定義フォルダ（`dispatch_agent` の `agent_type`） | `AGENTS_DIR` |
-| `[paths]` | `project_locohane_dir` | プロジェクト固有の拡張ディレクトリ（ClaudeCode の `.claude/` 相当）。配下の `skills/`（`skills_dir` にマージ走査、同名は優先）・`agents/`（`agents_dir` にマージ走査、同名は優先）・`LOCOHANE.md`（プロジェクト固有指示、存在しなくてもエラーにならない）を自動検知する。`nudge_messages` と同じリスト形式で複数ディレクトリ指定可 | `PROJECT_LOCOHANE_DIR` |
+| `[paths]` | `project_locohane_dir` | プロジェクト固有の拡張ディレクトリ（ClaudeCode の `.claude/` 相当）。配下の `skills/`（`skills_dir` にマージ走査、同名は優先）・`agents/`（`agents_dir` にマージ走査、同名は優先）・`LOCOHANE.md`（プロジェクト固有指示、存在しなくてもエラーにならない）を自動検知する。`nudge_messages` と同じリスト形式で複数ディレクトリ指定可。要素を `{"dir": ..., "python": ...}` の辞書で書くと、そのディレクトリの `skills/` 配下の `.py` スクリプトだけを専用のPython環境で起動する（`[scripts].python` より優先） | `PROJECT_LOCOHANE_DIR` |
 | `[paths]` | `system_prompt_path` | メインエージェント用システムプロンプトのテンプレート | `SYSTEM_PROMPT_PATH` |
 | `[paths]` | `bin_path` | 外部バイナリ実行ファイルの配置先ディレクトリ一覧（`project_locohane_dir`と同じリスト形式）。コマンド名を素の状態で叩くスキルがOS側PATH未登録でも呼び出せるようにする（`src/tools/_subprocess_env.py`参照） | `BIN_PATH` |
 | `[paths]` | `checkpoint_db` | 会話状態 SQLite | `CHECKPOINT_DB` |
