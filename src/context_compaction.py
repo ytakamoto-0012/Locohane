@@ -23,6 +23,7 @@ from .context_trim import (
     find_iteration_cut_index,
     find_last_user_message_cut_index,
     last_ai_total_tokens,
+    latest_skill_content_indices,
     trim_old_tool_messages,
 )
 from .llm import (
@@ -41,6 +42,10 @@ _THREAD_NOTE_STATUS_HEADER = (
     "[thread note の現在の状態。要約とは無関係にコード側が機械的に付与しています。"
     "要約に含まれていない具体的な事実（値・件数・該当箇所等）が必要になったら、"
     "ここに挙がっているtopic名を read_thread_note でそのまま読んでください]\n"
+)
+_SKILL_REATTACH_HEADER = (
+    "[圧縮前に read_skill で読み込んだスキル本文。要約とは無関係にコード側が機械的に付与しています。"
+    "ここにある本文は再読込不要です]\n"
 )
 _PINNED_INSTRUCTION_HEADER = "[委譲元から指示されたタスク（原文）。要約とは無関係にコード側が機械的に付与しています]\n"
 _PRE_NOTE_MARKER = "[コンテキスト圧縮が近づいています]"
@@ -227,6 +232,7 @@ async def force_write_thread_note(
         old_messages,
         keep_recent_iterations=0,
         max_chars=config.context_compaction_summary_source_max_chars,
+        protect_skill_content=False,
     )
     text = _messages_to_text(trimmed_old)
     prompt = (
@@ -339,6 +345,55 @@ def should_compact(
     return last_total >= config.context_compaction_single_request_token_threshold
 
 
+def _render_reattached_skills(
+    old_messages: list[BaseMessage],
+    kept_messages: list[BaseMessage],
+    *,
+    max_chars_per_skill: int,
+    total_max_chars: int,
+) -> str:
+    """要約で消える read_skill 結果（スキル本文）を、要約の後ろへ再添付する文字列にする。
+
+    plan_status / thread_note_status と同じく、要約LLMの精度に依存させず
+    原文を機械的に残す。スキル本文は作業全体を通じて守る手順書で、要約で
+    薄まると手順が欠けたまま作業が続くため（ClaudeCode の compaction も
+    起動済みスキルを要約の後ろへ再添付している）。
+
+    対象は old_messages 内の各スキルの最新の read_skill 結果。kept_messages
+    側に同じスキルの結果があればそちらが残るため除く。新しく読んだスキルから
+    順に詰め、1件あたり max_chars_per_skill・合計 total_max_chars を超える分は
+    切り詰める。合計に収まらなかったスキルは名前だけ列挙し再読込を促す。
+
+    Returns:
+        再添付する文字列。対象が無ければ空文字列。
+    """
+    kept_names = set(latest_skill_content_indices(kept_messages))
+    latest = latest_skill_content_indices(old_messages)
+    ordered = sorted(
+        ((i, name) for name, i in latest.items() if name not in kept_names),
+        reverse=True,
+    )
+    parts: list[str] = []
+    omitted: list[str] = []
+    remaining = total_max_chars
+    for i, name in ordered:
+        content = old_messages[i].content
+        if len(content) > max_chars_per_skill:
+            content = (
+                content[:max_chars_per_skill]
+                + f"\n...[スキル '{name}' の本文は先頭 {max_chars_per_skill} 文字のみ。続きが必要なら read_skill で再読込]"
+            )
+        if len(content) > remaining:
+            # 合計の残り枠に合わせて本文の切れ端だけを残しても手順として役に立たないため、名前だけにする。
+            omitted.append(name)
+            continue
+        parts.append(content)
+        remaining -= len(content)
+    if omitted:
+        parts.append("以下のスキルも読み込み済みでしたが本文は省略しました（必要なら read_skill で再読込）: " + "、".join(omitted))
+    return "\n\n".join(parts)
+
+
 def _messages_to_text(messages: list[BaseMessage]) -> str:
     """要約対象メッセージ列を、要約LLMへ渡すプレーンテキストへ変換する。"""
     lines = []
@@ -435,10 +490,13 @@ async def maybe_compact(
     # 同じ小さめの値を使うと、要約対象のツール結果がまとめて情報欠落し、
     # 要約が内容の薄いものになりうる（例: 大量ファイル処理タスクで
     # ファイル名の列挙しか残らない）。
+    # スキル本文は要約させず（要約LLMに手順を薄められないよう）、下記の
+    # _render_reattached_skills で原文のまま要約の後ろへ再添付する。
     trimmed_old = trim_old_tool_messages(
         old_messages,
         keep_recent_iterations=0,
         max_chars=config.context_compaction_summary_source_max_chars,
+        protect_skill_content=False,
     )
     text = _messages_to_text(trimmed_old)
     if not text.strip():
@@ -547,6 +605,14 @@ async def maybe_compact(
     note_status = thread_note_status_text()
     if note_status:
         summary_content += "\n\n" + _THREAD_NOTE_STATUS_HEADER + note_status
+    reattached_skills = _render_reattached_skills(
+        old_messages,
+        kept_messages,
+        max_chars_per_skill=config.context_compaction_skill_reattach_max_chars_per_skill,
+        total_max_chars=config.context_compaction_skill_reattach_total_max_chars,
+    )
+    if reattached_skills:
+        summary_content += "\n\n" + _SKILL_REATTACH_HEADER + reattached_skills
     summary_message = HumanMessage(content=summary_content)
     # kept_messages は同一の aupdate_state 呼び出し内で RemoveMessage と
     # 競合しないよう、新しい id を振った複製にする（add_messages リデューサは

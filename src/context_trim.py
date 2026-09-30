@@ -19,6 +19,8 @@ import copy
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
+from .skills import skill_content_name
+
 _MARKER_TEMPLATE = (
     "\n...[truncated: {original_len} chars total, first {limit} chars shown. "
     "Full text preserved in conversation history. "
@@ -37,12 +39,32 @@ _MARKER_TEMPLATE = (
 _DUPLICATE_GUARD_TOOL_NAMES = frozenset({"Read", "Glob", "Grep", "json_query", "analyze_image"})
 
 
+def latest_skill_content_indices(messages: list[BaseMessage]) -> dict[str, int]:
+    """スキル名ごとに、最後に読まれた read_skill 結果（ToolMessage）の位置を返す。
+
+    read_skill の成功結果は `<skill_content name="...">` で始まる
+    （src/skills.py の wrap_skill_content）。エラー応答はこの形式でないため
+    対象外になる。
+
+    Returns:
+        {スキル名: messages 内のインデックス}。
+    """
+    latest: dict[str, int] = {}
+    for i, m in enumerate(messages):
+        if isinstance(m, ToolMessage) and getattr(m, "name", None) == "read_skill":
+            name = skill_content_name(m.content)
+            if name:
+                latest[name] = i
+    return latest
+
+
 def trim_old_tool_messages(
     messages: list[BaseMessage],
     *,
     keep_recent_iterations: int,
     max_chars: int,
     guarded_tool_max_chars: int | None = None,
+    protect_skill_content: bool = True,
 ) -> list[BaseMessage]:
     """直近 keep_recent_iterations 反復分の ToolMessage は全文保持し、それより
     古いものは content を先頭 max_chars 文字に切り詰める。
@@ -65,6 +87,12 @@ def trim_old_tool_messages(
             ツール（Read/Glob/Grep/json_query/analyze_image）の ToolMessage
             にだけ適用する切り詰め文字数。None の場合は max_chars を使う
             （従来どおりの挙動）。
+        protect_skill_content: True の場合、スキル名ごとに最後に読まれた
+            read_skill 結果は切り詰めない。スキル本文は作業全体を通じて守る
+            手順書で、先頭だけ残すと手順が欠けたまま作業が続くため
+            （同じスキルの古い再読込分は従来どおり切り詰める）。
+            context_compaction が要約対象を作る際は False を渡す
+            （本文は要約させず、要約の後ろへ別途再添付するため）。
 
     Returns:
         content だけ差し替えたコピーを含むメッセージ列。書き換え不要な
@@ -72,10 +100,11 @@ def trim_old_tool_messages(
     """
     cut_index = find_iteration_cut_index(messages, keep_recent_iterations)
     keep_from = cut_index or 0
+    protected = set(latest_skill_content_indices(messages).values()) if protect_skill_content else set()
 
     result: list[BaseMessage] = []
     for i, m in enumerate(messages):
-        if i >= keep_from or not isinstance(m, ToolMessage) or not isinstance(m.content, str):
+        if i >= keep_from or i in protected or not isinstance(m, ToolMessage) or not isinstance(m.content, str):
             result.append(m)
             continue
         limit = max_chars

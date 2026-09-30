@@ -1818,6 +1818,7 @@ async def _setup() -> None:
         plan_auto_approve=_config.plan_auto_approve,
         path_memory_search_min_score=_config.path_memory_search_min_score,
         path_memory_search_filename_weight=_config.path_memory_search_filename_weight,
+        skill_names=[s.name for s in skills],
     )
 
     # チェックポインタ（会話状態の永続化）。接続はアプリ寿命で保持する。

@@ -164,6 +164,19 @@
 | 2. Read | LLM がスキルを選び、`read_skill` で本文全体を読む | `src/tools/read_skill.py` |
 | 3. Execute | 本文の指示に従い `read_skill_file`/`run_script` で必要時のみ読む・実行 | `src/tools/read_skill_file.py`/`src/tools/run_script.py` |
 
+第2段階の `read_skill` まわりの補足:
+
+- **スキル名の選択肢制約**: 起動時に `init_tools(skill_names=...)` が `read_skill` の `skill_name` 引数を
+  実在スキル名の `Literal` 型へ差し替える（`apply_skill_name_enum`）。LLM へ送る tools スキーマに
+  `"enum": [...]` が載り、一覧外の名前はツール本体に届く前に検証エラーとして LLM へ返る。
+- **返す内容**: frontmatter を除いた本文を `<skill_content name="...">` で囲み、`references/` があれば
+  ファイル一覧を `@N`（パスメモリー）付きで末尾に添える（中身は読まない）。`read_skill_file` は
+  この `@N` をそのまま受け付ける（skills ルート外を指す `@N` は拒否）。
+- **コンテキスト削減からの保護**: スキル名ごとに最後に読んだ `read_skill` 結果は `[context_trim]` で
+  切り詰めない（`src/context_trim.py`）。`[context_compaction]` で要約対象に入った場合も要約させず、
+  要約の後ろへ原文のまま再添付する（`src/context_compaction.py` の `_render_reattached_skills`、
+  上限は `skill_reattach_max_chars_per_skill`/`skill_reattach_total_max_chars`）。
+
 スキル読み込みは **すべて LangGraph のツールコール** として実装しており、グラフのトレースに乗り
 Chainlit 側で「今このスキルを読んでいます」等のステップとして可視化される。
 
@@ -1040,6 +1053,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[context_compaction]` | `min_messages_to_compact` | 会話全体のメッセージ数がこの件数未満なら圧縮しない安全弁 | `CONTEXT_COMPACTION_MIN_MESSAGES_TO_COMPACT` |
 | `[context_compaction]` | `compaction_prompt_path` | 要約を指示するプロンプト本文（Markdown）のパス | `CONTEXT_COMPACTION_PROMPT_PATH` |
 | `[context_compaction]` | `summary_source_max_chars` | 要約対象の古い`ToolMessage`を要約LLMへ渡す前に切り詰める文字数（`[context_trim]`とは別枠） | `CONTEXT_COMPACTION_SUMMARY_SOURCE_MAX_CHARS` |
+| `[context_compaction]` | `skill_reattach_max_chars_per_skill` | 要約対象に入った`read_skill`結果（スキル本文）を要約の後ろへ再添付する際の1スキルあたりの最大文字数（サブエージェントも共有） | `CONTEXT_COMPACTION_SKILL_REATTACH_MAX_CHARS_PER_SKILL` |
+| `[context_compaction]` | `skill_reattach_total_max_chars` | 上記の再添付全体の最大文字数。収まらない古いスキルは名前だけを列挙する | `CONTEXT_COMPACTION_SKILL_REATTACH_TOTAL_MAX_CHARS` |
 | `[context_compaction]` | `pre_note_threshold` | 圧縮発火前に`write_thread_note`への書き出しを促す注意メッセージを注入する、直近1回のLLM呼び出しのtotal_tokens閾値（0以下で無効化） | `CONTEXT_COMPACTION_PRE_NOTE_THRESHOLD` |
 | `[context_compaction]` | `pre_note_warning_text` | 上記閾値到達時に注入する注意メッセージの文言 | `CONTEXT_COMPACTION_PRE_NOTE_WARNING_TEXT` |
 | `[path_memory]` | `dir` | パスメモリー機能のレジストリファイル（`<thread_id>.json`）保存先 | `PATH_MEMORY_DIR` |

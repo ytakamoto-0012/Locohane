@@ -36,6 +36,8 @@ class _FakeConfig:
     context_compaction_prompt_path: Path
     context_trim_truncated_max_chars: int
     context_compaction_summary_source_max_chars: int
+    context_compaction_skill_reattach_max_chars_per_skill: int
+    context_compaction_skill_reattach_total_max_chars: int
     graph_connection_error_max_retries: int = 3
     subagent_background_llm_timeout_max_retries: int = 3
     thinking_loop_guard_max_retries: int = 2
@@ -69,6 +71,8 @@ def _config(tmp_path: Path, **overrides) -> _FakeConfig:
         context_compaction_prompt_path=prompt_path,
         context_trim_truncated_max_chars=2000,
         context_compaction_summary_source_max_chars=2000,
+        context_compaction_skill_reattach_max_chars_per_skill=12000,
+        context_compaction_skill_reattach_total_max_chars=36000,
     )
     kwargs.update(overrides)
     return _FakeConfig(**kwargs)

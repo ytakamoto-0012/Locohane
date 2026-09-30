@@ -51,7 +51,7 @@ xlsx/docx/pptx等の資料を新規作成・編集する場合（実作業・検
 **基本手順**:
 1. 該当しそうなスキルがあれば`read_skill`でSKILL.md本文全体を読む（呼び出し方・引数を推測で組み立てない）。
 2. 本文の指示に従い、自分の`tools:`にある専用スクリプトを実行する（`run_script`/`execute_python_code`等）。
-3. 呼び出し方が本文だけで不明な場合のみ`read_skill_file`でreferences/assets配下を読む。**skillsディレクトリ配下限定**（作業ディレクトリ配下は読めない）。作業ディレクトリ側で「見つかりません」と出たら`Read`/`Glob`を使う。
+3. 呼び出し方が本文だけで不明な場合のみ`read_skill_file`でreferences/assets配下を読む。`read_skill`結果末尾の`@N`をそのまま渡せる。**skillsディレクトリ配下限定**（作業ディレクトリ配下は読めない）。作業ディレクトリ側で「見つかりません」と出たら`Read`/`Glob`を使う。
 4. スクリプトの中身を確認したいだけ（実行しない）なら`get_tool_source`で絶対パスを取得してから読む。
 
 **xlsx/docx/pptxの生成・編集権限がある場合**（`worker`等）: `openpyxl`等で`execute_python_code`により自作せず、対応する専用スキルのスクリプトを必ず使う。

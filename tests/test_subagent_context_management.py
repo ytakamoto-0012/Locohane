@@ -47,6 +47,8 @@ class _FakeConfig:
     context_compaction_min_messages_to_compact: int = 0
     context_compaction_prompt_path: str | None = None
     context_compaction_summary_source_max_chars: int = 0
+    context_compaction_skill_reattach_max_chars_per_skill: int = 12000
+    context_compaction_skill_reattach_total_max_chars: int = 36000
     context_compaction_pre_note_threshold: int = 0
     context_compaction_pre_note_warning_text: str = ""
     context_compaction_subagent_enabled: bool = False

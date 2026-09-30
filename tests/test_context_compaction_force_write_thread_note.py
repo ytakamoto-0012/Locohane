@@ -22,6 +22,8 @@ from src.context_compaction import force_write_thread_note
 class _FakeConfig:
     context_compaction_keep_recent_iterations: int
     context_compaction_summary_source_max_chars: int
+    context_compaction_skill_reattach_max_chars_per_skill: int
+    context_compaction_skill_reattach_total_max_chars: int
     context_compaction_pre_note_warning_text: str
 
 
@@ -40,6 +42,8 @@ def _config() -> _FakeConfig:
     return _FakeConfig(
         context_compaction_keep_recent_iterations=1,
         context_compaction_summary_source_max_chars=2000,
+        context_compaction_skill_reattach_max_chars_per_skill=12000,
+        context_compaction_skill_reattach_total_max_chars=36000,
         context_compaction_pre_note_warning_text="[**システム通知: 書き出してください**]",
     )
 

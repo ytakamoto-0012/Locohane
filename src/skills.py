@@ -99,6 +99,48 @@ def _parse_frontmatter(text: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+# read_skill の戻り値を囲むタグ。context_trim（切り詰め保護）・context_compaction
+# （圧縮後の再添付）が「どのスキルの本文か」をこの開始タグから判定するため、
+# 書式は wrap_skill_content()/skill_content_name() の組でのみ扱う。
+_SKILL_CONTENT_OPEN_RE = re.compile(r'^<skill_content name="([^"]+)">')
+
+
+def wrap_skill_content(name: str, body: str) -> str:
+    """read_skill が返す本文を `<skill_content name="...">` タグで囲む。"""
+    return f'<skill_content name="{name}">\n{body}\n</skill_content>'
+
+
+def skill_content_name(text: object) -> str | None:
+    """wrap_skill_content() で囲まれた文字列ならスキル名を、そうでなければ None を返す。"""
+    if not isinstance(text, str):
+        return None
+    m = _SKILL_CONTENT_OPEN_RE.match(text)
+    return m.group(1) if m else None
+
+
+def strip_frontmatter(text: str) -> str:
+    """SKILL.md 全文から YAML frontmatter を除いた本文を返す。
+
+    read_skill が LLM へ返す本文から、Discovery 段階で既に提示済みの
+    name/description を含む frontmatter を除いてトークンを節約するために使う。
+    区切り方は _parse_frontmatter() と同じ（先頭の `---` から次の `---` まで）。
+
+    Args:
+        text: SKILL.md ファイルの全文。
+
+    Returns:
+        frontmatter を除き前後の空白を落とした本文。frontmatter が無い・
+        閉じられていない場合は text をそのまま返す。
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith("---"):
+        return text
+    parts = stripped.split("---", 2)
+    if len(parts) < 3:
+        return text
+    return parts[2].strip()
+
+
 def _validate(name: object, description: object, dir_name: str) -> str | None:
     """name / description を仕様に照らして検証する。
 

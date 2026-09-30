@@ -330,6 +330,7 @@ def init_tools(
     allow_sandbox_dirs: Iterable[SandboxDirEntry] = (),
     path_memory_search_min_score: float = 0.3,
     path_memory_search_filename_weight: float = 0.7,
+    skill_names: Sequence[str] = (),
 ) -> None:
     """ツールが使う設定を注入する（app 起動時に一度だけ呼ぶ）。
 
@@ -507,6 +508,9 @@ def init_tools(
             が許可される（allow_entries が空なら対象を問わず無制限に許可）。
             既定は空で、その場合従来通りの書き込みサンドボックス原則が
             そのまま適用される。
+        skill_names: scan_skills() が返した有効なスキル名の並び。read_skill の
+            skill_name 引数をこの選択肢（enum）に制約する（read_skill.py の
+            apply_skill_name_enum）。空の場合は制約しない。
 
     Returns:
         None。副作用としてモジュール globals を更新するのみ。
@@ -602,6 +606,12 @@ def init_tools(
             continue
         seen_tool_ids.add(id(tool_obj))
         tool_obj.description = expand_config_vars(tool_obj.description, llm_config)
+    # read_skill.py は _duplicate_guard 経由でこのモジュールを import するため、
+    # モジュール先頭で import すると循環 import になる（registry は import 済みの
+    # read_skill を参照するだけなので問題ない）。
+    from .read_skill import apply_skill_name_enum
+
+    apply_skill_name_enum(skill_names)
 
 def _resolve_agent_types(agent_type_defs: list[AgentType]) -> dict[str, ResolvedAgentType]:
     """AgentType のツール名一覧を実際の BaseTool へ解決する。

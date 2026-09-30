@@ -758,6 +758,12 @@ class Config:
             ツール結果の情報がまとめて失われ、要約が内容の薄いものに
             なりうる（大量ファイル処理タスクでファイル名の列挙しか
             残らない等）。
+        context_compaction_skill_reattach_max_chars_per_skill: 圧縮で要約対象に
+            入った read_skill 結果（スキル本文）を要約の後ろへ再添付する際の、
+            1スキルあたりの最大文字数（src/context_compaction.py の
+            _render_reattached_skills）。サブエージェントもこの値を共有する。
+        context_compaction_skill_reattach_total_max_chars: 上記の再添付全体の
+            最大文字数。収まらない古いスキルは名前だけを列挙する。
         context_compaction_pre_note_threshold: 圧縮が発火する前に
             write_thread_noteへの書き出しを促す注意メッセージを注入する、
             直近1回のLLM呼び出しの total_tokens の閾値
@@ -1011,6 +1017,8 @@ class Config:
     context_compaction_min_messages_to_compact: int
     context_compaction_prompt_path: Path
     context_compaction_summary_source_max_chars: int
+    context_compaction_skill_reattach_max_chars_per_skill: int
+    context_compaction_skill_reattach_total_max_chars: int
     context_compaction_pre_note_threshold: int
     context_compaction_pre_note_warning_text: str
     context_compaction_require_note_max_skips: int
@@ -2189,6 +2197,18 @@ def load_config(
             context_compaction.get("summary_source_max_chars", 2000),
         )
     )
+    _context_compaction_skill_reattach_max_chars_per_skill = int(
+        os.getenv(
+            "CONTEXT_COMPACTION_SKILL_REATTACH_MAX_CHARS_PER_SKILL",
+            context_compaction.get("skill_reattach_max_chars_per_skill", 12000),
+        )
+    )
+    _context_compaction_skill_reattach_total_max_chars = int(
+        os.getenv(
+            "CONTEXT_COMPACTION_SKILL_REATTACH_TOTAL_MAX_CHARS",
+            context_compaction.get("skill_reattach_total_max_chars", 36000),
+        )
+    )
     _context_compaction_pre_note_threshold = int(
         os.getenv("CONTEXT_COMPACTION_PRE_NOTE_THRESHOLD", context_compaction.get("pre_note_threshold", 40000))
     )
@@ -2685,6 +2705,8 @@ def load_config(
         context_compaction_min_messages_to_compact=_context_compaction_min_messages_to_compact,
         context_compaction_prompt_path=_context_compaction_prompt_path,
         context_compaction_summary_source_max_chars=_context_compaction_summary_source_max_chars,
+        context_compaction_skill_reattach_max_chars_per_skill=_context_compaction_skill_reattach_max_chars_per_skill,
+        context_compaction_skill_reattach_total_max_chars=_context_compaction_skill_reattach_total_max_chars,
         context_compaction_pre_note_threshold=_context_compaction_pre_note_threshold,
         context_compaction_pre_note_warning_text=_context_compaction_pre_note_warning_text,
         context_compaction_require_note_max_skips=_context_compaction_require_note_max_skips,

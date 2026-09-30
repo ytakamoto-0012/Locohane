@@ -23,6 +23,8 @@ class _FakeConfig:
     context_compaction_prompt_path: Path
     context_trim_truncated_max_chars: int
     context_compaction_summary_source_max_chars: int
+    context_compaction_skill_reattach_max_chars_per_skill: int
+    context_compaction_skill_reattach_total_max_chars: int
 
 
 class _CapturingModel:
@@ -57,6 +59,8 @@ async def test_summary_source_uses_dedicated_max_chars_not_context_trim(tmp_path
         # いないことを検証する。
         context_trim_truncated_max_chars=20,
         context_compaction_summary_source_max_chars=500,
+        context_compaction_skill_reattach_max_chars_per_skill=12000,
+        context_compaction_skill_reattach_total_max_chars=36000,
     )
     model = _CapturingModel()
 
