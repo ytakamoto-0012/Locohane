@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -114,6 +115,19 @@ def _exec_guard_roots() -> tuple[list[Path], list[Path]]:
     return roots, display_roots
 
 
+def _library_cache_roots() -> list[Path]:
+    """ガードの許可先・禁止先に関わらず、常に書き込みを許可するライブラリ内部のキャッシュ。
+
+    pywin32 の COM 型情報キャッシュ（`%TEMP%\\gen_py`、win32com/__init__.py の
+    __gen_path__）。`import win32com.client` 時にキャッシュ（dicts.dat）が
+    無いと再構築のため書き込むため、Temp の掃除等でキャッシュが消えていると
+    excel-render 等の COM を使うスキルが import 時点で必ずガードに阻まれる
+    （2026-10-01 発見）。ユーザー成果物の置き場ではないため、LLM へ案内する
+    display_roots には含めない。
+    """
+    return [Path(tempfile.gettempdir()) / "gen_py"]
+
+
 def _python_fs_guard_preamble(
     allowed_roots: Sequence[Path],
     tmp_dir_roots: Sequence[Path] = (),
@@ -193,6 +207,7 @@ def _python_fs_guard_preamble(
     allowed_repr = repr(tuple(str(p) for p in allowed_roots))
     tmp_roots_repr = repr(tuple(str(p) for p in tmp_dir_roots))
     display_repr = repr(tuple(str(p) for p in (display_roots if display_roots is not None else allowed_roots)))
+    lib_cache_repr = repr(tuple(str(p) for p in _library_cache_roots()))
     return f'''\
 import builtins as _guard_builtins
 import io as _guard_io
@@ -200,6 +215,7 @@ import os as _guard_os
 import shutil as _guard_shutil
 
 _GUARD_ALLOWED = [_guard_os.path.realpath(_p) for _p in {allowed_repr}]
+_GUARD_LIB_CACHE = [_guard_os.path.realpath(_p) for _p in {lib_cache_repr}]
 _GUARD_DISPLAY = list(dict.fromkeys(_guard_os.path.realpath(_p) for _p in {display_repr}))
 _GUARD_TMP_ROOTS = [_guard_os.path.realpath(_p) for _p in {tmp_roots_repr}]
 _GUARD_OWN_TMP_NAME = "_tmp_" + (_guard_os.environ.get("AGENT_EXEC_TMP_NAME") or _guard_os.environ.get("AGENT_THREAD_ID", "_no_session"))
@@ -231,7 +247,7 @@ def _guard_check(_path, _op):
         _target = _guard_os.path.realpath(_guard_os.fspath(_path))
     except TypeError:
         return
-    for _root in _GUARD_ALLOWED:
+    for _root in _GUARD_ALLOWED + _GUARD_LIB_CACHE:
         if _target == _root or _target.startswith(_root + _guard_os.sep):
             return
     if _GUARD_ALLOWED:

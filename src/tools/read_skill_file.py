@@ -14,6 +14,11 @@ from ._safe_path import _missing_skill_prefix_hint, _safe_path
 
 logger = logging.getLogger(__name__)
 
+_WORKDIR_FILE_HINT = (
+    "（read_skill_file は skills ディレクトリ配下限定です。作業ディレクトリ配下の"
+    "ファイルは Read ツールで読んでください。Read が使えなければ dispatch_agent で委譲してください）"
+)
+
 
 def _resolve_skill_file_path(relative_path: str) -> Path:
     """relative_path（skills ルートからの相対パス、または `@N`）を絶対パスへ解決する。
@@ -32,9 +37,7 @@ def _resolve_skill_file_path(relative_path: str) -> Path:
         raise ValueError(error)
     path = Path(resolved).resolve()
     if not any(path.is_relative_to(root) for root in _state._SKILLS_ROOTS or []):
-        raise ValueError(
-            f"{relative_path} は skills ディレクトリ外のファイルです。作業ディレクトリ側のファイルは Read ツールで読んでください。"
-        )
+        raise ValueError(f"{relative_path} は skills ディレクトリ外のファイルです")
     return path
 
 
@@ -60,16 +63,13 @@ def read_skill_file(relative_path: str) -> str:
     try:
         path = _resolve_skill_file_path(relative_path)
     except ValueError as e:
-        return f"エラー: {e}"
+        return f"エラー: {e}{_WORKDIR_FILE_HINT}"
     if not path.is_file():
+        # スキル名プレフィックス漏れか、作業ディレクトリのファイルを渡したのかは
+        # 区別できないため、両方の代替行動を示す（メインエージェントが作業
+        # ディレクトリのファイル名をそのまま渡す誤りが実際にあった）。
         hint = _missing_skill_prefix_hint(relative_path)
-        if hint:
-            return f"エラー: ファイルが見つかりません: {relative_path}{hint}"
-        return (
-            f"エラー: ファイルが見つかりません: {relative_path}"
-            "（read_skill_file は skills ディレクトリ配下限定です。作業ディレクトリ配下の"
-            "ファイルを読みたい場合は Read ツールを使ってください）"
-        )
+        return f"エラー: ファイルが見つかりません: {relative_path}{hint}{_WORKDIR_FILE_HINT}"
     dup_error = _check_file_tools_duplicate("read_skill_file", f"read_skill_file\x00{path}")
     if dup_error:
         return dup_error

@@ -195,6 +195,31 @@ def test_pip_install_blocked_message_hints_library_may_already_be_installed(tmp_
     assert "インストール済み" in result.stderr
 
 
+def test_library_cache_root_is_writable_outside_allowed_root(tmp_path, guard_dirs, monkeypatch):
+    """pywin32 の COM 型情報キャッシュ（%TEMP%\\gen_py）への書き込みは許可されることの回帰テスト。
+
+    背景（2026-10-01）: Temp の掃除等でキャッシュ（dicts.dat）が消えると、
+    `import win32com.client` が再構築のため %TEMP%\\gen_py へ書き込もうとして
+    ガードに阻まれ、excel-render 等の COM を使うスキルが100%失敗していた。
+    """
+    allowed_root, outside_root = guard_dirs
+    cache_root = outside_root / "gen_py"
+    monkeypatch.setattr(tools._python_fs_guard, "_library_cache_roots", lambda: [cache_root])
+    body = (
+        f'import os\nos.makedirs(r"{cache_root / "3.11"}", exist_ok=True)\n'
+        f'open(r"{cache_root / "3.11" / "dicts.dat"}", "wb").write(b"x")\n'
+        f'open(r"{outside_root / "other.txt"}", "w").write("x")\n'
+    )
+
+    result = _run_guarded(tmp_path, [allowed_root], body)
+
+    assert (cache_root / "3.11" / "dicts.dat").exists()
+    # キャッシュ以外の allowed_roots 外は従来どおりブロックされる
+    assert result.returncode != 0
+    assert "書き込みサンドボックスガード" in result.stderr
+    assert not (outside_root / "other.txt").exists()
+
+
 def test_read_outside_allowed_root_is_permitted(tmp_path, guard_dirs):
     allowed_root, outside_root = guard_dirs
     existing = outside_root / "README.md"

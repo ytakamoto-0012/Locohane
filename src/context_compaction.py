@@ -13,6 +13,7 @@ app.py の on_message から、そのターンの astream_events ループが完
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from typing import Literal
 
@@ -27,6 +28,7 @@ from .context_trim import (
     latest_skill_content_indices,
     trim_old_tool_messages,
 )
+from .skills import skill_content_name
 from .llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -48,6 +50,10 @@ _SKILL_REATTACH_HEADER = (
     "[圧縮前に read_skill で読み込んだスキル本文。要約とは無関係にコード側が機械的に付与しています。"
     "ここにある本文は再読込不要です]\n"
 )
+# 要約メッセージ内の再添付セクションの区切り（再添付は要約メッセージの末尾に置く）。
+_SKILL_REATTACH_SEPARATOR = "\n\n" + _SKILL_REATTACH_HEADER
+_OMITTED_SKILLS_PREFIX = "以下のスキルも読み込み済みでしたが本文は省略しました（必要なら read_skill で再読込）: "
+_REATTACHED_BLOCK_SPLIT_RE = re.compile(r'\n\n(?=<skill_content name=")')
 _PINNED_INSTRUCTION_HEADER = "[委譲元から指示されたタスク（原文）。要約とは無関係にコード側が機械的に付与しています]\n"
 _PRE_NOTE_MARKER = "[コンテキスト圧縮が近づいています]"
 _LOOP_NUDGE_TEXT = "直前の要約生成は同じ内容を繰り返すループに陥ったため打ち切りました。" "落ち着いて、要約対象の会話履歴を踏まえてもう一度簡潔に要約し直してください。"
@@ -229,11 +235,13 @@ async def force_write_thread_note(
 
     cut_index = find_iteration_cut_index(messages, config.context_compaction_keep_recent_iterations)
     old_messages = messages[:cut_index] if cut_index else messages
-    trimmed_old = trim_old_tool_messages(
-        old_messages,
-        keep_recent_iterations=0,
-        max_chars=config.context_compaction_summary_source_max_chars,
-        protect_skill_content=False,
+    trimmed_old = _without_reattached_skills(
+        trim_old_tool_messages(
+            old_messages,
+            keep_recent_iterations=0,
+            max_chars=config.context_compaction_summary_source_max_chars,
+            protect_skill_content=False,
+        )
     )
     text = _messages_to_text(trimmed_old)
     prompt = (
@@ -360,7 +368,10 @@ def _render_reattached_skills(
     薄まると手順が欠けたまま作業が続くため（ClaudeCode の compaction も
     起動済みスキルを要約の後ろへ再添付している）。
 
-    対象は old_messages 内の各スキルの最新の read_skill 結果。kept_messages
+    対象は old_messages 内の各スキルの最新の read_skill 結果。2回目以降の
+    圧縮では、前回の要約メッセージに再添付済みの本文（名前だけ列挙した分を
+    含む）も old_messages 側に入るため引き継ぐ（read_skill の ToolMessage
+    だけを見ると、圧縮が重なるたびにスキル本文が消える）。kept_messages
     側に同じスキルの結果があればそちらが残るため除く。新しく読んだスキルから
     順に詰め、1件あたり max_chars_per_skill・合計 total_max_chars を超える分は
     切り詰める。合計に収まらなかったスキルは名前だけ列挙し再読込を促す。
@@ -369,16 +380,29 @@ def _render_reattached_skills(
         再添付する文字列。対象が無ければ空文字列。
     """
     kept_names = set(latest_skill_content_indices(kept_messages))
-    latest = latest_skill_content_indices(old_messages)
+    # {スキル名: (新しさの順序キー, 本文 or None（名前だけ列挙済み）)}
+    latest: dict[str, tuple[tuple[int, int], str | None]] = {}
+    for i, m in enumerate(old_messages):
+        if isinstance(m, HumanMessage):
+            blocks, omitted_before = _parse_reattached_skills(m.content)
+            # 再添付セクション内は新しいスキルが先頭。
+            for j, (name, content) in enumerate(blocks):
+                latest[name] = ((i, -j), content)
+            for name in omitted_before:
+                latest.setdefault(name, ((i, -len(blocks)), None))
+    for name, i in latest_skill_content_indices(old_messages).items():
+        latest[name] = ((i, 0), old_messages[i].content)
     ordered = sorted(
-        ((i, name) for name, i in latest.items() if name not in kept_names),
+        ((order, name, content) for name, (order, content) in latest.items() if name not in kept_names),
         reverse=True,
     )
     parts: list[str] = []
     omitted: list[str] = []
     remaining = total_max_chars
-    for i, name in ordered:
-        content = old_messages[i].content
+    for _, name, content in ordered:
+        if content is None:
+            omitted.append(name)
+            continue
         if len(content) > max_chars_per_skill:
             content = (
                 content[:max_chars_per_skill]
@@ -391,8 +415,45 @@ def _render_reattached_skills(
         parts.append(content)
         remaining -= len(content)
     if omitted:
-        parts.append("以下のスキルも読み込み済みでしたが本文は省略しました（必要なら read_skill で再読込）: " + "、".join(omitted))
+        parts.append(_OMITTED_SKILLS_PREFIX + "、".join(omitted))
     return "\n\n".join(parts)
+
+
+def _parse_reattached_skills(content: object) -> tuple[list[tuple[str, str]], list[str]]:
+    """前回の圧縮で要約メッセージへ再添付したスキル本文を取り出す。
+
+    Returns:
+        ([(スキル名, 本文), ...], [名前だけ列挙したスキル名, ...])。
+        再添付セクションが無ければ ([], [])。
+    """
+    if not isinstance(content, str):
+        return [], []
+    _, sep, section = content.partition(_SKILL_REATTACH_SEPARATOR)
+    if not sep:
+        return [], []
+    omitted: list[str] = []
+    if section.startswith(_OMITTED_SKILLS_PREFIX):
+        section, omitted_text = "", section[len(_OMITTED_SKILLS_PREFIX) :]
+        omitted = omitted_text.split("、")
+    else:
+        section, _, omitted_text = section.partition("\n\n" + _OMITTED_SKILLS_PREFIX)
+        omitted = omitted_text.split("、") if omitted_text else []
+    blocks: list[tuple[str, str]] = []
+    for block in _REATTACHED_BLOCK_SPLIT_RE.split(section):
+        name = skill_content_name(block)
+        if name:
+            blocks.append((name, block))
+    return blocks, [name for name in omitted if name]
+
+
+def _without_reattached_skills(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """要約メッセージ末尾の再添付スキル本文を除いたメッセージ列を返す（要約LLMへ渡す用）。"""
+    result: list[BaseMessage] = []
+    for m in messages:
+        if isinstance(m, HumanMessage) and isinstance(m.content, str) and _SKILL_REATTACH_SEPARATOR in m.content:
+            m = m.model_copy(update={"content": m.content.partition(_SKILL_REATTACH_SEPARATOR)[0]})
+        result.append(m)
+    return result
 
 
 def _messages_to_text(messages: list[BaseMessage]) -> str:
@@ -493,11 +554,14 @@ async def maybe_compact(
     # ファイル名の列挙しか残らない）。
     # スキル本文は要約させず（要約LLMに手順を薄められないよう）、下記の
     # _render_reattached_skills で原文のまま要約の後ろへ再添付する。
-    trimmed_old = trim_old_tool_messages(
-        old_messages,
-        keep_recent_iterations=0,
-        max_chars=config.context_compaction_summary_source_max_chars,
-        protect_skill_content=False,
+    # 前回の圧縮で要約メッセージへ再添付したスキル本文も同様に要約させない。
+    trimmed_old = _without_reattached_skills(
+        trim_old_tool_messages(
+            old_messages,
+            keep_recent_iterations=0,
+            max_chars=config.context_compaction_summary_source_max_chars,
+            protect_skill_content=False,
+        )
     )
     text = _messages_to_text(trimmed_old)
     if not text.strip():

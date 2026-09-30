@@ -14,7 +14,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src import tools
-from src.context_compaction import _render_reattached_skills, maybe_compact
+from src.context_compaction import _SKILL_REATTACH_SEPARATOR, _render_reattached_skills, maybe_compact
 from src.context_trim import trim_old_tool_messages
 from src.skills import wrap_skill_content
 
@@ -97,6 +97,31 @@ class TestRenderReattachedSkills:
         assert "先頭 200 文字のみ" in text
         assert "a" * 1000 not in text
 
+    def test_previous_reattachment_is_carried_over(self) -> None:
+        # 2回目の圧縮: 前回の要約メッセージに再添付済みの本文・名前だけの列挙を引き継ぐ
+        first = _render_reattached_skills(
+            [*_round_trip("read_skill", _skill("skill-a", 300), "c1"), *_round_trip("read_skill", _skill("skill-b", 300), "c2")],
+            [],
+            max_chars_per_skill=10_000,
+            total_max_chars=400,
+        )
+        summary = HumanMessage(content="[自動要約]\n要約" + _SKILL_REATTACH_SEPARATOR + first)
+        old = [summary, *_round_trip("read_skill", _skill("skill-c", 100), "c3")]
+
+        text = _render_reattached_skills(old, [], max_chars_per_skill=10_000, total_max_chars=10_000)
+
+        assert text.startswith('<skill_content name="skill-c">')
+        assert _skill("skill-b", 300) in text
+        assert text.endswith("省略しました（必要なら read_skill で再読込）: skill-a")
+
+    def test_newer_read_overrides_previous_reattachment(self) -> None:
+        summary = HumanMessage(content="要約" + _SKILL_REATTACH_SEPARATOR + wrap_skill_content("skill-a", "old"))
+        old = [summary, *_round_trip("read_skill", wrap_skill_content("skill-a", "new"), "c1")]
+
+        text = _render_reattached_skills(old, [], max_chars_per_skill=10_000, total_max_chars=10_000)
+
+        assert text == wrap_skill_content("skill-a", "new")
+
     def test_no_skill_returns_empty(self) -> None:
         old = _round_trip("Read", "content", "c1")
 
@@ -159,3 +184,15 @@ async def test_maybe_compact_reattaches_skill_instead_of_summarizing(monkeypatch
     # 要約LLMへは切り詰めた分しか渡さず、要約メッセージには原文を再添付する
     assert "a" * 1000 not in model.prompts[0]
     assert skill in result[0].content
+
+    # 2回目の圧縮: 前回の再添付は要約LLMへ渡さず、再度そのまま再添付する
+    second = [
+        *result,
+        HumanMessage(content="q3"),
+        AIMessage(content="ok3"),
+    ]
+    result2 = await maybe_compact(second, model, config)
+
+    assert result2 is not None
+    assert "a" * 1000 not in model.prompts[1]
+    assert skill in result2[0].content
