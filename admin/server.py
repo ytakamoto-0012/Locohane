@@ -178,7 +178,9 @@ def _instance_summary(name: str) -> dict[str, Any]:
         "state": status.state.value,
         "pid": status.pid,
         "exit_code": status.exit_code,
-        "url": f"http://{meta.app_host}:{meta.app_port}",
+        # 「開く」リンク用。app_host が 0.0.0.0（全インターフェースで待受）だと
+        # ブラウザから http://0.0.0.0:port は開けないため、ホストは 127.0.0.1 固定。
+        "url": f"http://127.0.0.1:{meta.app_port}",
         "is_default": name == inst.DEFAULT_INSTANCE_NAME,
     }
 
