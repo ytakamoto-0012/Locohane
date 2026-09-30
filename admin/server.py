@@ -23,7 +23,7 @@ from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from src.config import PROJECT_ROOT, load_config
+from src.config import PROJECT_ROOT, load_config, resolve_instances_root
 
 from . import audit, auth, env_files, env_overrides, overrides, settings_files, supervisor
 from . import instances as inst
@@ -33,7 +33,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 CONFIG_INI_PATH = PROJECT_ROOT / "config.ini"
-INSTANCES_ROOT = PROJECT_ROOT / "instances"
+# [admin].instances_dir（環境変数 INSTANCES_DIR）で変更可能。
+INSTANCES_ROOT = resolve_instances_root(CONFIG_INI_PATH)
 PROJECT_ENV_PATH = PROJECT_ROOT / ".env"
 AUDIT_LOG_PATH = INSTANCES_ROOT / "admin_changes.log"
 SETTINGS_DIR = PROJECT_ROOT / "public" / "settings"

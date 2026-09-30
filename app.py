@@ -64,10 +64,13 @@ os.environ.setdefault("LANGSMITH_TRACING", "false")
 # プロジェクト直下の .env を override=False で読む）より前に、override=True で
 # 読むこと。これにより「インスタンスの.env > OS環境変数 > プロジェクト直下.env」
 # の優先度になる。
+# instances/ の場所は config.ini の [admin].instances_dir（環境変数 INSTANCES_DIR）で変更できる。
 from dotenv import load_dotenv as _load_dotenv
 
+from src.config import resolve_instances_root as _resolve_instances_root
+
 _INSTANCE_NAME = os.getenv("LOCOHANE_INSTANCE") or "default"
-_INSTANCE_DIR = Path(__file__).resolve().parent / "instances" / _INSTANCE_NAME
+_INSTANCE_DIR = _resolve_instances_root() / _INSTANCE_NAME
 _instance_env_path = os.getenv("LOCOHANE_INSTANCE_ENV") or str(_INSTANCE_DIR / ".env")
 _load_dotenv(_instance_env_path, override=True)
 

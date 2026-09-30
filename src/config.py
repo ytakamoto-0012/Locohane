@@ -27,14 +27,16 @@ logger = logging.getLogger(__name__)
 # プロジェクトルート（このファイルは <root>/src/config.py なので 2 つ上がルート）。
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.ini"
-# 管理ツール（admin/ パッケージ）でUIから変更した設定値の上書き差分の既定パス。
+# 管理ツール（admin/ パッケージ）でUIから変更した設定値の上書き差分の既定パスは
+# <instances_dir>/default/config_overrides.json（default_overrides_path() 参照）。
 # load_config() の呼び出し元が overrides_path を明示しない場合、環境変数
 # CONFIG_OVERRIDES_PATH（管理ツールが子プロセス起動時に設定する）→ この既定値
 # の順で使う。app.bat で直接起動した場合もこの既定値が使われるため、
 # instances/default/ に対する管理ツールでの変更が app.bat 起動時にも反映される
 # （README.md「設定ダッシュボード」参照）。
 DEFAULT_INSTANCE_NAME = "default"
-DEFAULT_OVERRIDES_PATH = PROJECT_ROOT / "instances" / DEFAULT_INSTANCE_NAME / "config_overrides.json"
+# インスタンス別ディレクトリのルート（[admin].instances_dir）の既定値。
+DEFAULT_INSTANCES_DIR = "./instances"
 # [admin] セクションは、上記のインスタンス別上書きの対象外（管理ツール自身の
 # 起動設定を、管理ツールで変更できてしまう循環を避けるため）。
 _ADMIN_OVERRIDE_EXEMPT_SECTION = "admin"
@@ -1074,6 +1076,8 @@ class Config:
     admin_session_timeout_minutes: int
     admin_backup_keep: int
     admin_stop_apps_on_exit: bool
+    # インスタンス別ディレクトリのルート（resolve_instances_root() 参照）。
+    admin_instances_dir: Path
 
 
 def _resolve(base: Path, value: str) -> Path:
@@ -1090,6 +1094,32 @@ def _resolve(base: Path, value: str) -> Path:
     """
     p = Path(value)
     return p if p.is_absolute() else (base / p).resolve()
+
+
+def resolve_instances_root(config_path: Path | None = None) -> Path:
+    """インスタンス別ディレクトリのルート（[admin].instances_dir）を絶対パスで返す。
+
+    環境変数 INSTANCES_DIR > config.ini の [admin].instances_dir >
+    DEFAULT_INSTANCES_DIR の順で決める。config_overrides.json 自体がこの
+    ディレクトリ配下にあるため、load_config() を経由せず（上書き差分を適用せず）
+    config.ini だけを読む。app.py が chainlit の import 前にインスタンス別 .env を
+    探すのにも使うため、軽量に呼べるようにしてある。
+
+    Args:
+        config_path: 読み込む config.ini のパス。省略時は DEFAULT_CONFIG_PATH。
+            ファイルが無ければ既定値を使う。
+    """
+    raw = os.getenv("INSTANCES_DIR")
+    if not raw:
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read(config_path or DEFAULT_CONFIG_PATH, encoding="utf-8")
+        raw = parser.get("admin", "instances_dir", fallback=DEFAULT_INSTANCES_DIR)
+    return _resolve(PROJECT_ROOT, raw)
+
+
+def default_overrides_path(config_path: Path | None = None) -> Path:
+    """default インスタンスの config_overrides.json のパスを返す。"""
+    return resolve_instances_root(config_path) / DEFAULT_INSTANCE_NAME / "config_overrides.json"
 
 
 def _sub_instance(value: str, instance_name: str) -> str:
@@ -1921,8 +1951,8 @@ def load_config(
 
     優先度（高い順）: 環境変数 > overrides_path（管理ツールでの変更） >
     config.ini（既定値）。overrides_path省略時は、環境変数
-    CONFIG_OVERRIDES_PATH → DEFAULT_OVERRIDES_PATH（instances/default/
-    config_overrides.json）の順で決める（_apply_config_overrides() 参照）。
+    CONFIG_OVERRIDES_PATH → default_overrides_path()（<[admin].instances_dir>/
+    default/config_overrides.json）の順で決める（_apply_config_overrides() 参照）。
 
     環境変数（設定されていれば config.ini より優先）:
       LLM_MAIN_URL / LLM_MAIN_ROUTING_STRATEGY / LLM_SUB_URL / LLM_SUB_ROUTING_STRATEGY
@@ -1980,7 +2010,7 @@ def load_config(
         config_path: 読み込む config.ini のパス。省略時は
             <プロジェクトルート>/config.ini（DEFAULT_CONFIG_PATH）を使う。
         overrides_path: config_overrides.json のパス。省略時は環境変数
-            CONFIG_OVERRIDES_PATH、それも無ければ DEFAULT_OVERRIDES_PATH。
+            CONFIG_OVERRIDES_PATH、それも無ければ default_overrides_path()。
         instance_name: ${instance} に入るインスタンス名。省略時は環境変数
             LOCOHANE_INSTANCE、それも無ければ DEFAULT_INSTANCE_NAME。
 
@@ -2004,7 +2034,7 @@ def load_config(
     parser.read(path, encoding="utf-8")
 
     resolved_overrides_path = overrides_path or _resolve(
-        PROJECT_ROOT, os.getenv("CONFIG_OVERRIDES_PATH", str(DEFAULT_OVERRIDES_PATH))
+        PROJECT_ROOT, os.getenv("CONFIG_OVERRIDES_PATH") or str(default_overrides_path(path))
     )
     _apply_config_overrides(parser, resolved_overrides_path)
 
@@ -2694,6 +2724,7 @@ def load_config(
         admin_stop_apps_on_exit=_as_bool(
             os.getenv("ADMIN_STOP_APPS_ON_EXIT", admin.get("stop_apps_on_exit", False))
         ),
+        admin_instances_dir=resolve_instances_root(path),
     )
 
     # .locohane/settings.json の "mcp" ブロックがあれば、config.ini/環境変数由来の

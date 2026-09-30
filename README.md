@@ -1053,6 +1053,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[admin]` | `session_timeout_minutes` | 管理ツールへのログインセッションの有効時間（分） | `ADMIN_SESSION_TIMEOUT_MINUTES` |
 | `[admin]` | `backup_keep` | インスタンスごとの設定バックアップの保持世代数 | `ADMIN_BACKUP_KEEP` |
 | `[admin]` | `stop_apps_on_exit` | 管理ツール終了時に、子プロセスとして起動した本体インスタンスも道連れで停止するか | `ADMIN_STOP_APPS_ON_EXIT` |
+| `[admin]` | `instances_dir` | インスタンス別ディレクトリのルート（既定 `./instances`）。app.bat直接起動時のdefaultインスタンスの`.env`・`config_overrides.json`の読み込み先にも使われる。変更時は既存の中身を手動で移動する | `INSTANCES_DIR` |
 | `[ui]` | `max_display_messages` | チャット画面に描画するメッセージの最大件数（表示専用の間引き、`0`で無制限） | `UI_MAX_DISPLAY_MESSAGES` |
 | `[ui]` | `max_display_side_steps` | サイドパネルに描画するツール呼び出し等のStepの最大件数（表示専用の間引き、`0`で無制限） | `UI_MAX_DISPLAY_SIDE_STEPS` |
 | `[ui]` | `paste_as_attachment_threshold_chars` | 入力欄へこの文字数以上のテキストを貼り付けると、入力欄へ展開せず「貼り付けテキスト」カード（`pasted-text-*.txt` 添付）にする。送信時はパスではなく本文としてLLMへ渡す（`0`以下で無効） | `UI_PASTE_AS_ATTACHMENT_THRESHOLD_CHARS` |
