@@ -2,16 +2,17 @@
   "mcpServers": {
     "locohane-skills": {
       "type": "stdio",
-      "command": "C:\\DT_Python\\Python311\\env_local_agent_system\\Scripts\\python.exe",
+      "command": "cmd",
       "args": [
-        "C:\\DT_Python\\Locohane\\mcp_server\\server.py"
+        "/c",
+        "C:\\DT_Python\\Locohane\\mcp_server.bat"
       ],
       "env": {
         "LOCOHANE_MCP_SKILLS_NAME": "locohane-skills",
         "LOCOHANE_MCP_SKILLS_SRC": "",
         "LOCOHANE_MCP_SKILLS_WORKDIR": "",
         "LOCOHANE_MCP_SKILLS_SCRIPT_TIMEOUT_SECONDS": "",
-        "LOCOHANE_MCP_SKILLS_PYTHON": "C:\\DT_Python\\Python311\\env_local_agent_system\\Scripts\\python.exe"
+        "LOCOHANE_MCP_SKILLS_PYTHON": ""
       }
     }
   }

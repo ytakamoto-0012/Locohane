@@ -1,7 +1,8 @@
 # ローカルAIエージェント基盤 依存パッケージ（pip のみ / Windows ネイティブ）
 #
-# インストール:
-#   C:/DT_Python/Python311/env_claudecode/Scripts/python.exe -m pip install -r requirements.txt
+# インストール（python_env.bat の PYTHON_DIR の環境へ入れる。コマンドプロンプトで実行）:
+#   call python_env.bat
+#   python -m pip install -r requirements.txt
 #
 # バージョンは 2026-07 時点で相互に競合なく解決できる組み合わせに固定。
 

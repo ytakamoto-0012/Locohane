@@ -3,8 +3,9 @@
 requirements.txt の直接依存から到達する「実行時の推移的依存」を対象に、
 各パッケージのバージョン・ライセンス・URL を収集し、Markdown の告知ファイルを出力する。
 
-使い方（プロジェクトルートで実行）:
-    C:/DT_Python/Python311/env_claudecode/Scripts/python.exe tools/gen_licenses.py
+使い方（プロジェクトルートのコマンドプロンプトで実行）:
+    call python_env.bat
+    python tools/gen_licenses.py
 
 ライセンス検出は次の優先順で行う（新旧のメタデータ規約に対応）:
     1. License-Expression（PEP 639 の SPDX 式）
@@ -143,8 +144,9 @@ def main() -> None:
     out.append("")
     out.append("再生成:")
     out.append("")
-    out.append("```bash")
-    out.append("C:/DT_Python/Python311/env_claudecode/Scripts/python.exe tools/gen_licenses.py")
+    out.append("```cmd")
+    out.append("call python_env.bat")
+    out.append("python tools/gen_licenses.py")
     out.append("```")
     out.append("")
     out.append("## ライセンス種別サマリ")

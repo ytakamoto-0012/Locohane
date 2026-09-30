@@ -12,6 +12,7 @@ llama.cpp サーバーへ問い合わせる eval 実行）をバックグラウ�
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import uuid
@@ -21,9 +22,10 @@ from pathlib import Path
 # 動かすための Python 実行環境。config.ini の [scripts].python は
 # run_script 用の別環境（このファイル自身を実行している環境）であり、
 # evals.run_case 等 Locohane 本体のモジュールを import できるとは限らない
-# ため区別する。CLAUDE.md の「Python実行環境」に記載の値をデフォルトにし、
+# ため区別する。python_env.bat が設定する LOCOHANE_PYTHON（本体起動時に
+# 継承される）をデフォルトにし、未設定なら自身の Python を使う。
 # 各スクリプトは --python-exe で上書きできるようにする。
-DEFAULT_MAIN_PYTHON = r"C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe"
+DEFAULT_MAIN_PYTHON = os.environ.get("LOCOHANE_PYTHON") or sys.executable
 
 
 def project_root() -> Path:

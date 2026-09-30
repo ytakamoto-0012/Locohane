@@ -503,10 +503,24 @@ Remove-Item -Recurse -Force .\data\*
 
 ## セットアップと起動
 
-### 1. 依存インストール
+### 1. Python 環境の指定と依存インストール
 
-```bash
-pip install -r requirements.txt
+プロジェクトで使う Python 仮想環境は、プロジェクト直下の `python_env.bat` の
+`PYTHON_DIR` **1か所だけ**で指定する。最初にここを実際の環境に書き換える。
+
+```bat
+set PYTHON_DIR=C:\DT_Python\Python311\env_local_agent_system
+```
+
+| 変数 | 設定する値 |
+|---|---|
+| `PYTHON_DIR` | Locohane を実行する Python 仮想環境のディレクトリ。`admin.bat`・`app.bat`・`mcp_server.bat`（`.mcp.json` から起動）はこのファイルを `call` して使う。**管理ツールから起動する各インスタンスも同じ Python（`sys.executable`）で起動され**（`admin/supervisor.py` 参照）、`config.ini` の `[scripts].python` が空欄（既定）なら `run_script`/`execute_python_code` もこの Python を使う |
+
+続けて、その環境に依存パッケージをインストールする（コマンドプロンプトで実行）。
+
+```cmd
+call python_env.bat
+python -m pip install -r requirements.txt
 ```
 
 ### 2. 推論サーバー（llama.cpp / vLLM）の起動例
@@ -563,10 +577,10 @@ vllm serve /path/to/model --served-model-name local-model --host 127.0.0.1 --por
 
 推論サーバー（llama-server/vLLM）を起動したら、環境依存で必ず実際の値に合わせる必要がある
 パス設定を行う。設定ダッシュボード（管理ツール）を使う場合、
-**LLM接続先（`[llm] main_url`/`sub_url`）と `run_script`/`execute_python_code`
-が使うPython（`[scripts].python`）はログイン後にUIから設定できる**ため、
-起動前に `config.ini` を直接編集する必要はない。事前にテキストで
-用意しておく必要があるのは次の2ファイルだけ。
+**LLM接続先（`[llm] main_url`/`sub_url`）はログイン後にUIから設定できる**ため、
+起動前に `config.ini` を直接編集する必要はない。Python 環境は手順1の
+`python_env.bat` で指定済みなので、ここで事前にテキストで用意しておく
+必要があるのは次の2ファイルだけ。
 
 **`.env`（管理ツールのログイン情報）**
 
@@ -578,25 +592,26 @@ vllm serve /path/to/model --served-model-name local-model --host 127.0.0.1 --por
 
 | 変数 | 設定する値 |
 |---|---|
-| `PYTHON_DIR` | 管理ツール（`admin/server.py`）を実行する Python 仮想環境のディレクトリ。**管理ツールから起動する Locohane 本体の各インスタンスも同じ Python（`sys.executable`）で起動される**（`admin/supervisor.py` 参照）ため、`app.bat` 側を別途設定する必要はない |
 | `ADMIN_HOST` / `ADMIN_PORT` | 管理ツール自身の待受ホスト・ポート（既定 `127.0.0.1:8001` 相当）。ポートが他と競合する場合のみ変更する |
 
 ここまで設定すれば `admin.bat` を起動でき、ログイン後はダッシュボードの
 「インスタンス」→ 対象インスタンスの「設定」→ `config.ini` タブから
-`main_url`/`sub_url`/`python` を検索して設定・保存し、インスタンスを
+`main_url`/`sub_url` を検索して設定・保存し、インスタンスを
 再起動すれば反映される（詳細は「設定ダッシュボード（管理ツール）」節）。
+`run_script`/`execute_python_code` だけ別の Python で動かしたい場合は、
+同じ画面で `[scripts].python` を指定する（空欄なら `python_env.bat` の環境）。
 
 **プロジェクト `CLAUDE.md`（Claude Code がこのプロジェクトを開発・テストする際に使う実行環境。アプリの実行には不要）**
 
 | 見出し | 設定する値 |
 |---|---|
-| `Python実行環境` | Claude Code がスクリプト実行・動作確認に使う Python 実行ファイルの絶対パス（通常は `admin.bat` の `PYTHON_DIR` と同じ仮想環境） |
+| `Python実行環境` | Claude Code がスクリプト実行・動作確認に使う Python 実行ファイルの絶対パス（通常は `python_env.bat` の `PYTHON_DIR` と同じ仮想環境） |
 | `Node.jsパス` | `frontend/`（package.json あり）のビルド・テストに Claude Code が使う Node.js のディレクトリ |
 
 **管理ツールを使わず、テキストエディタで直接設定する場合**
 
-`config.ini` の `[llm] main_url`/`sub_url`・`[scripts].python`、
-`app.bat` の `PYTHON_DIR` を直接書き換えれば、管理ツールを介さず
+`config.ini` の `[llm] main_url`/`sub_url` を直接書き換えれば（Python 環境は
+手順1の `python_env.bat` で指定済み）、管理ツールを介さず
 `app.bat` で単体起動できる（各項目の意味は後述の「設定リファレンス
 （config.ini）」参照）。
 
@@ -612,12 +627,13 @@ admin.bat
 
 開発時にホットリロードしながら単体で動かしたい場合は次のいずれか。
 
-```bash
-# 方法A: chainlitを直接起動
+```cmd
+rem 方法A: chainlitを直接起動（python_env.bat の環境を読み込んでから）
 cd C:\DT_Python\Locohane
-C:/DT_Python/Python311/env_claudecode/Scripts/chainlit run app.py -w
+call python_env.bat
+chainlit run app.py -w
 
-# 方法B: app.bat（instances/default/instance.json のホスト・ポートに追従）
+rem 方法B: app.bat（instances/default/instance.json のホスト・ポートに追従）
 app.bat
 ```
 
@@ -947,7 +963,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[images]` | `inline_preview_jpeg_quality` | 上記プレビューの再エンコード品質（1-95） | `IMAGE_INLINE_PREVIEW_JPEG_QUALITY` |
 | `[images]` | `inline_preview_min_long_side_pixels` | 上記プレビューの長辺ピクセル数の下限。これより小さい画像はこの値まで拡大してから埋め込む（`0`で拡大なし） | `IMAGE_INLINE_PREVIEW_MIN_LONG_SIDE_PIXELS` |
 | `[scripts]` | `timeout` | `run_script`/`execute_python_code` 共通のタイムアウト秒 | `SCRIPT_TIMEOUT` |
-| `[scripts]` | `python` | `.py` 実行に使う Python | `SCRIPT_PYTHON` |
+| `[scripts]` | `python` | `.py` 実行に使う Python。空欄なら本体を起動している Python（`python_env.bat` の `PYTHON_DIR`） | `SCRIPT_PYTHON` |
 | `[scripts]` | `code_execution_enabled` | `execute_python_code` ツール自体の有効/無効 | `CODE_EXECUTION_ENABLED` |
 | `[scripts]` | `background_max_runtime_seconds` | `run_script_background` のジョブを強制終了するまでの上限秒 | `SCRIPT_BACKGROUND_MAX_RUNTIME_SECONDS` |
 | `[scripts]` | `background_job_retention_seconds` | `run_script_background` の完了済みジョブが `check_script_job` で未回収のまま残ってよい秒数 | `SCRIPT_BACKGROUND_JOB_RETENTION_SECONDS` |

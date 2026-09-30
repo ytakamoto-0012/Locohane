@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
@@ -2398,7 +2399,8 @@ def load_config(
         ),
         chat_starter_prompts=_as_message_list(os.getenv("CHAT_STARTER_PROMPTS", chat_starters.get("prompts", ""))),
         script_timeout=int(os.getenv("SCRIPT_TIMEOUT", scripts.get("timeout", 60))),
-        script_python=os.getenv("SCRIPT_PYTHON", scripts.get("python", "python")),
+        # 空欄なら本体を起動している Python（python_env.bat で指定した環境）を使う
+        script_python=os.getenv("SCRIPT_PYTHON", scripts.get("python", "")) or sys.executable,
         code_exec_enabled=_as_bool(os.getenv("CODE_EXECUTION_ENABLED", scripts.get("code_execution_enabled", True))),
         script_background_max_runtime_seconds=int(
             os.getenv(

@@ -1,7 +1,6 @@
 @echo off
 set SELF_DIR=%~dp0
-set PYTHON_DIR=C:\DT_Python\Python311\env_local_agent_system
-set PATH=%PYTHON_DIR%;%PYTHON_DIR%\Scripts;%PATH%
+call "%SELF_DIR%python_env.bat"
 cd %SELF_DIR%
 
 rem Starts the settings dashboard (admin tool) and auto-starts the
