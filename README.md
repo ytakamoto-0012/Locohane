@@ -1040,7 +1040,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[thinking_loop_guard]` | `empty_response_max_retries` | メインエージェントの空応答（tool_callsもcontentも無い応答）を検知した際の再試行最大回数 | `THINKING_LOOP_GUARD_EMPTY_RESPONSE_MAX_RETRIES` |
 | `[thinking_loop_guard]` | `nudge_messages` | ループ検知後に注入する注意メッセージ（複数指定可） | `THINKING_LOOP_GUARD_NUDGE_MESSAGES` |
 | `[context_trim]` | `enabled` | 古い `ToolMessage` を切り詰めてプリフィル遅延を抑える機能の有効/無効 | `CONTEXT_TRIM_ENABLED` |
-| `[context_trim]` | `trigger_total_tokens` | トリムを発動させる閾値（Claude APIのcontext editing、`clear_tool_uses_20250919`のtrigger.value相当）。直近1回のLLM呼び出しのtotal_tokensがこの値未満のうちは発動しない。0以下なら常に発動 | `CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS` |
+| `[context_trim]` | `trigger_total_tokens` | トリムを発動させる閾値（Claude APIのcontext editing、`clear_tool_uses_20250919`のtrigger.value相当）。LLM呼び出しのtotal_tokensがこの値未満のうちは発動しない。一度でも達したら、以後その会話ではトリムを継続する（解除・再トリムの繰り返しでプレフィックスキャッシュが毎回外れるのを防ぐため）。コンテキスト圧縮が走ると解除される。0以下なら常に発動 | `CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS` |
 | `[context_trim]` | `keep_recent_tool_iterations` | 全文保持する直近の反復数（1反復＝ReActループ1周＝LLM呼び出し1回。`AIMessage`の件数で数える。ユーザーの発話回数では数えない — 画像フォローアップや各種nudgeが`HumanMessage`として積まれるためずれる。並列tool_callsに対応する`ToolMessage`群は同じ反復内で分断されない） | `CONTEXT_TRIM_KEEP_RECENT_TOOL_ITERATIONS` |
 | `[context_trim]` | `trim_ai_messages` | `ToolMessage`だけでなく`AIMessage`（モデル自身の思考本文・tool_calls引数）も切り詰め対象にするか。`execute_python_code`のcode引数へファイル本文を書き写す使い方をすると`ToolMessage`側だけの切り詰めでは1リクエスト入力が膨らみ続けるため既定で有効 | `CONTEXT_TRIM_AI_MESSAGES` |
 | `[context_trim]` | `keep_recent_ai_iterations` | 全文保持する直近の反復数（`keep_recent_tool_iterations`と同じ判定方式・独立した値。`trim_ai_messages=true`の場合のみ意味を持つ） | `CONTEXT_TRIM_KEEP_RECENT_AI_ITERATIONS` |

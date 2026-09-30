@@ -378,13 +378,33 @@ def last_ai_total_tokens(messages: list[BaseMessage]) -> int | None:
     return None
 
 
+# maybe_compact()（src/context_compaction.py）が圧縮時に丸ごと保持した
+# AIMessage の複製へ付ける response_metadata のキー。複製の usage_metadata は
+# 圧縮前の（大きな）値のままのため、is_trigger_reached() はこの印の付いた
+# AIMessage を判定から除外する。response_metadata は langchain-openai が
+# リクエストへ含めないため、LLM への入力には影響しない。
+COMPACTION_KEPT_KEY = "locohane_compaction_kept"
+
+
 def is_trigger_reached(messages: list[BaseMessage], trigger_total_tokens: int) -> bool:
     """トリムを発動すべきか判定する（Claude API の context editing
     （clear_tool_uses_20250919）の trigger.value 相当）。
 
+    一度でも閾値に達したら、以後その会話ではトリムを継続する（履歴内の
+    いずれかの AIMessage の total_tokens が閾値以上なら True）。直近1件だけで
+    判定すると、トリムで入力が閾値未満に下がる→次の呼び出しでトリム解除→
+    閾値超過→再トリム、と呼び出しごとに入力の途中が入れ替わり、llama-server の
+    プレフィックスキャッシュが毎回外れて全量プリフィルし直しになる
+    （2026-09-30 のログで、10万トークン規模の読み直しに1回約3分かかっていた）。
+    トリム後の入力は古い側から順に確定していくため、継続していればキャッシュが効く。
+
+    コンテキスト圧縮（maybe_compact）が走ると圧縮前のメッセージは履歴から
+    消えるため、トリムも自然に解除される。圧縮時に保持された AIMessage の
+    複製（COMPACTION_KEPT_KEY 付き）は圧縮前の usage_metadata を持つため除外する。
+
     Args:
         messages: 判定対象の会話履歴（トリム前）。
-        trigger_total_tokens: 直近 AIMessage の total_tokens がこの値以上に
+        trigger_total_tokens: いずれかの AIMessage の total_tokens がこの値以上に
             なって初めてトリムを発動する閾値。0以下を指定すると、常に発動する
             （この閾値機能が無かった旧来の挙動と同じ）。
 
@@ -395,7 +415,10 @@ def is_trigger_reached(messages: list[BaseMessage], trigger_total_tokens: int) -
     """
     if trigger_total_tokens <= 0:
         return True
-    total = last_ai_total_tokens(messages)
-    if total is None:
-        return False
-    return total >= trigger_total_tokens
+    for message in messages:
+        if not isinstance(message, AIMessage) or message.response_metadata.get(COMPACTION_KEPT_KEY):
+            continue
+        usage = getattr(message, "usage_metadata", None)
+        if isinstance(usage, dict) and (usage.get("total_tokens") or 0) >= trigger_total_tokens:
+            return True
+    return False

@@ -704,9 +704,10 @@ class Config:
             それより古い AIMessage のみ切り詰め対象にする。
         context_trim_trigger_total_tokens: トリムを発動させる閾値
             （Claude API の context editing、clear_tool_uses_20250919 の
-            trigger.value 相当）。直近1回のLLM呼び出しの total_tokens
-            （src.context_trim.last_ai_total_tokens）がこの値未満のうちは
-            トリムを発動しない。0以下を指定すると常に発動する（この閾値機能が
+            trigger.value 相当）。会話履歴内のLLM呼び出しの total_tokens が
+            この値未満のうちはトリムを発動しない。一度でも達したら以後その
+            会話ではトリムを継続し、コンテキスト圧縮で解除される
+            （src.context_trim.is_trigger_reached）。0以下を指定すると常に発動する（この閾値機能が
             無かった旧来の挙動と同じ）。track_token_usage=false 等で
             total_tokens を取得できない場合は、閾値未到達とみなし発動しない。
         context_compaction_enabled: メインエージェントの累積トークン数、または

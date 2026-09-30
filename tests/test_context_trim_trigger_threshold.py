@@ -7,7 +7,7 @@ Claude API の context editing（clear_tool_uses_20250919）の trigger.value �
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.context_trim import is_trigger_reached, last_ai_total_tokens
+from src.context_trim import COMPACTION_KEPT_KEY, is_trigger_reached, last_ai_total_tokens
 
 
 def _ai_with_usage(total_tokens: int) -> AIMessage:
@@ -48,6 +48,32 @@ def test_missing_usage_metadata_does_not_trigger_when_threshold_positive() -> No
     messages = [HumanMessage(content="hi"), AIMessage(content="ok")]
 
     assert is_trigger_reached(messages, 1000) is False
+
+
+def test_stays_triggered_after_trimmed_request_drops_below_threshold() -> None:
+    # トリムで入力が閾値未満に下がっても解除しない（解除→再トリムの往復で
+    # llama-server のプレフィックスキャッシュが毎回外れるのを防ぐ）。
+    messages = [
+        HumanMessage(content="hi"),
+        _ai_with_usage(1200),
+        HumanMessage(content="次"),
+        _ai_with_usage(800),
+    ]
+
+    assert is_trigger_reached(messages, 1000) is True
+
+
+def test_compaction_kept_copy_is_ignored() -> None:
+    # 圧縮で保持された AIMessage の複製は圧縮前の usage_metadata を持つため、
+    # 判定から除外する（圧縮後はトリムを解除する）。
+    kept = _ai_with_usage(1500)
+    kept.response_metadata = {COMPACTION_KEPT_KEY: True}
+    messages = [HumanMessage(content="[自動要約]..."), kept, _ai_with_usage(600)]
+
+    assert is_trigger_reached(messages, 1000) is False
+
+    messages.append(_ai_with_usage(1100))
+    assert is_trigger_reached(messages, 1000) is True
 
 
 def test_last_ai_total_tokens_returns_most_recent_value() -> None:

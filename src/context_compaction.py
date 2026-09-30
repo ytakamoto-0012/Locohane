@@ -20,6 +20,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 
 from .config import Config
 from .context_trim import (
+    COMPACTION_KEPT_KEY,
     find_iteration_cut_index,
     find_last_user_message_cut_index,
     last_ai_total_tokens,
@@ -617,7 +618,19 @@ async def maybe_compact(
     # kept_messages は同一の aupdate_state 呼び出し内で RemoveMessage と
     # 競合しないよう、新しい id を振った複製にする（add_messages リデューサは
     # 既存stateに無いidのメッセージを渡された順に末尾へ追記する）。
-    kept_copies = [m.model_copy(update={"id": str(uuid.uuid4())}) for m in kept_messages]
+    # AIMessage の複製には COMPACTION_KEPT_KEY を付け、圧縮前の usage_metadata で
+    # トリムが継続しないようにする（context_trim.is_trigger_reached 参照）。
+    kept_copies = [
+        m.model_copy(
+            update={
+                "id": str(uuid.uuid4()),
+                "response_metadata": {**m.response_metadata, COMPACTION_KEPT_KEY: True},
+            }
+        )
+        if isinstance(m, AIMessage)
+        else m.model_copy(update={"id": str(uuid.uuid4())})
+        for m in kept_messages
+    ]
 
     logger.warning(
         "会話履歴を圧縮しました: %d件 -> 要約1件 + 直近%d件",
