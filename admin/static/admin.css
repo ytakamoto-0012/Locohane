@@ -208,3 +208,17 @@ select.le-type { width: auto; padding: 4px; font-size: 12px; flex-shrink: 0; }
 .reset-setting-btn.hidden { display: none; }
 .setting-source { font-size: 0.8em; font-weight: normal; color: #8b949e; }
 #settings-title.hidden { display: none; }
+
+/* APIリファレンス（admin/API_REFERENCE.md をHTML化したもの） */
+.markdown-body { max-width: 960px; line-height: 1.7; }
+.markdown-body h1 { font-size: 22px; margin: 0 0 12px; }
+.markdown-body h2 { font-size: 18px; margin: 28px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.markdown-body h3 { font-size: 15px; margin: 20px 0 8px; }
+.markdown-body a { color: var(--accent); }
+.markdown-body code { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; background: var(--panel-2); border-radius: 4px; padding: 1px 5px; }
+.markdown-body pre { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; overflow: auto; }
+.markdown-body pre code { background: none; padding: 0; }
+.markdown-body blockquote { margin: 12px 0; padding: 4px 14px; border-left: 3px solid var(--accent); color: var(--text-dim); }
+.markdown-body table { border-collapse: collapse; margin: 10px 0; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+.markdown-body th { background: var(--panel-2); }

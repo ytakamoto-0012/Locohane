@@ -139,6 +139,7 @@ function navigate(view) {
   if (view === "instances") return renderInstances();
   if (view === "settings") return renderSettings();
   if (view === "audit") return renderAudit();
+  if (view === "api-docs") return renderApiDocs();
 }
 
 /* ---------------------------------------------------- インスタンス一覧 */
@@ -1758,6 +1759,21 @@ function summarizeAuditEntry(entry) {
   if (entry.file) return `ファイル: ${entry.file}`;
   if (entry.key) return `キー: ${entry.key}`;
   return "";
+}
+
+/* ---------------------------------------------------- APIリファレンス */
+
+async function renderApiDocs() {
+  mainEl.innerHTML = "";
+  mainEl.appendChild(clone("tpl-api-docs"));
+  try {
+    // サーバー側で md をリクエストごとに読み直すので、キャッシュさせない。
+    const data = await api(`/api/docs/api-reference?t=${Date.now()}`);
+    // HTML はサーバー側（markdown-it-py、生HTML無効）で生成済み。
+    $("#api-docs-body").innerHTML = data.html;
+  } catch (e) {
+    $("#api-docs-error").textContent = e.message || "APIリファレンスの読み込みに失敗しました。";
+  }
 }
 
 /* ---------------------------------------------------------- 起動 */

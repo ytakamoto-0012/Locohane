@@ -1,0 +1,422 @@
+# APIリファレンス（curl で管理APIを直接操作する）
+
+設定ダッシュボードの画面操作は、すべて以下のHTTP APIで同じことができる。
+スクリプトからの一括操作や自動化に使う。
+
+> このファイル（`admin/API_REFERENCE.md`）はダッシュボードの「APIリファレンス」
+> メニューにそのまま表示される。ファイルを編集すれば、次に画面を開いたときに
+> 反映される（管理ツールの再起動は不要）。
+
+## 共通ルール
+
+- ベースURL: `http://127.0.0.1:8001`（`[admin].host`/`port`、または `admin.bat` の `ADMIN_HOST`/`ADMIN_PORT`）
+- **認証**: `POST /api/login` で受け取るCookie（`locohane_admin_session`）を以後のリクエストに付ける。
+  Cookieの有効期限はリクエストのたびに延長される（`[admin].session_timeout_minutes`）。
+- **CSRFヘッダ**: GET以外（POST/PUT/DELETE）には必ず `X-Locohane-Admin: 1` を付ける。
+  無いと `403` になる。
+- リクエストボディはJSON（`Content-Type: application/json`）。
+- エラー時は `{"detail": "エラー内容"}` が返る。
+
+| ステータス | 意味 |
+|---|---|
+| 400 | 入力値が不正（バリデーション失敗）。本文が UTF-8 のJSONとして読めない場合も `There was an error parsing the body` で400になる（cmd.exe で日本語を直接渡した場合など。下記参照） |
+| 401 | 未ログイン・セッション切れ |
+| 403 | CSRFヘッダ無し、または変更禁止の対象 |
+| 404 | インスタンス・ユーザーが存在しない |
+| 409 | 状態の競合（稼働中で削除できない、他セッションが先に保存した等） |
+| 422 | 必須項目の欠落・型違い |
+| 429 | ログイン失敗が続きロックアウト中 |
+
+## 準備（変数の定義）
+
+各例は **bash**（Git Bash 等）と **cmd**（Windows の cmd.exe）の両方を載せている。
+最初に以下の変数を定義しておき、以後の例で使い回す。
+
+bash:
+
+```bash
+BASE=http://127.0.0.1:8001
+C="curl -s -b cookies.txt -c cookies.txt"
+H='X-Locohane-Admin: 1'
+J='Content-Type: application/json'
+```
+
+cmd:
+
+```bat
+set BASE=http://127.0.0.1:8001
+set C=curl.exe -s -b cookies.txt -c cookies.txt
+set H="X-Locohane-Admin: 1"
+set J="Content-Type: application/json"
+```
+
+### cmd.exe での注意
+
+- `curl` ではなく `curl.exe` と書く（Windows 10 以降は標準搭載）。
+- JSON は全体を `"` で囲み、中の `"` を `\"` にする（例: `-d "{\"key\":\"value\"}"`）。
+  シングルクォート `'` は使えない。
+- URL に `&` を含む場合は URL 全体を `"` で囲む。
+- 行の途中で改行したい場合は行末に `^` を付ける。
+- **日本語など非ASCII文字を含むJSONは、コマンドラインに直接書かない。**
+  cmd.exe から curl.exe へは cp932（Shift_JIS）のまま渡り、`chcp 65001` をしても
+  サーバー側で UTF-8 として読めずエラーになる。UTF-8（BOMなし）で保存した
+  ファイルを `-d @ファイル名` で渡すこと（下記の各例を参照）。
+- `.bat` ファイルに書く場合、`for /f` の変数は `%i` ではなく `%%i` と書く。
+
+## ログイン・ログアウト
+
+### ログイン
+
+ユーザーはプロジェクト直下 `.env` の `ADMIN_USERS`。
+
+bash:
+
+```bash
+$C -X POST $BASE/api/login -H "$J" \
+  -d '{"username":"admin","password":"パスワード"}'
+# => {"username":"admin"}
+```
+
+cmd（パスワードがASCIIのみの場合）:
+
+```bat
+%C% -X POST %BASE%/api/login -H %J% -d "{\"username\":\"admin\",\"password\":\"password\"}"
+```
+
+cmd（パスワードに日本語を含む場合は、UTF-8で保存した `login.json` を渡す）:
+
+```bat
+%C% -X POST %BASE%/api/login -H %J% -d @login.json
+```
+
+### ログイン中のユーザー確認
+
+```bash
+$C $BASE/api/me
+# => {"username":"admin"}
+```
+
+```bat
+%C% %BASE%/api/me
+```
+
+### ログアウト
+
+```bash
+$C -X POST $BASE/api/logout -H "$H"
+```
+
+```bat
+%C% -X POST %BASE%/api/logout -H %H%
+```
+
+## インスタンス
+
+### 一覧
+
+```bash
+$C $BASE/api/instances
+```
+
+```bat
+%C% %BASE%/api/instances
+```
+
+各要素の主なフィールド: `name`, `display_name`, `app_host`, `app_port`,
+`autostart`, `headless`, `watch`, `state`（`running`/`stopped`/`external`/`crashed`）,
+`pid`, `url`, `is_default`。
+
+### 作成
+
+`name` 以外は省略可。`app_port` 省略時は空きポートを自動で選ぶ。
+`copy_from` に既存インスタンス名を指定すると設定を複製する。
+
+bash:
+
+```bash
+$C -X POST $BASE/api/instances -H "$H" -H "$J" -d '{
+  "name": "test2",
+  "display_name": "検証用",
+  "app_host": "127.0.0.1",
+  "app_port": 8002,
+  "autostart": false,
+  "headless": true,
+  "watch": false,
+  "copy_from": "default"
+}'
+```
+
+cmd（表示名が日本語なので、上の JSON を UTF-8 で `instance.json` に保存して渡す）:
+
+```bat
+%C% -X POST %BASE%/api/instances -H %H% -H %J% -d @instance.json
+```
+
+cmd（ASCIIのみなら直接書ける）:
+
+```bat
+%C% -X POST %BASE%/api/instances -H %H% -H %J% -d "{\"name\":\"test2\",\"app_port\":8002,\"copy_from\":\"default\"}"
+```
+
+### 設定変更（表示名・ホスト・ポート等）
+
+変更したい項目だけ送る。稼働中のホスト・ポート変更は再起動後に反映。
+
+```bash
+$C -X PUT $BASE/api/instances/test2 -H "$H" -H "$J" \
+  -d '{"display_name":"検証用2","autostart":true}'
+```
+
+```bat
+%C% -X PUT %BASE%/api/instances/test2 -H %H% -H %J% -d "{\"app_port\":8003,\"autostart\":true}"
+```
+
+### 削除
+
+稼働中は `409`。先に停止する。`default` は削除できない。
+
+```bash
+$C -X DELETE $BASE/api/instances/test2 -H "$H"
+```
+
+```bat
+%C% -X DELETE %BASE%/api/instances/test2 -H %H%
+```
+
+### 起動・停止・再起動
+
+```bash
+$C -X POST $BASE/api/instances/default/start   -H "$H"
+$C -X POST $BASE/api/instances/default/stop    -H "$H"
+$C -X POST $BASE/api/instances/default/restart -H "$H"
+# => {"state":"running","pid":12345}
+```
+
+```bat
+%C% -X POST %BASE%/api/instances/default/start   -H %H%
+%C% -X POST %BASE%/api/instances/default/stop    -H %H%
+%C% -X POST %BASE%/api/instances/default/restart -H %H%
+```
+
+## config.ini の上書き設定
+
+管理ツールは config.ini 自体を書き換えず、
+`instances/<name>/config_overrides.json` に差分を保存する。
+`[admin]` セクションは変更できない。
+
+### 現在値の取得
+
+```bash
+$C $BASE/api/instances/default/config
+```
+
+```bat
+%C% %BASE%/api/instances/default/config
+```
+
+`keys` に全キーの `section`, `key`, `default`（config.iniの値）,
+`override`（上書き値。無ければ null）, `effective`（実効値）,
+`env_override_active`（環境変数で上書き中か）等が入る。
+`mtime` は保存時の競合チェックに使う（下記）。
+
+### 変更内容の事前確認（保存しない）
+
+```bash
+$C -X POST $BASE/api/instances/default/config/preview -H "$J" -d '{
+  "updates": {"llm": {"temperature": "0.3"}},
+  "resets": [["subagent", "max_iterations"]]
+}'
+```
+
+```bat
+%C% -X POST %BASE%/api/instances/default/config/preview -H %J% -d "{\"updates\":{\"llm\":{\"temperature\":\"0.3\"}},\"resets\":[[\"subagent\",\"max_iterations\"]]}"
+```
+
+- `updates`: `{"セクション": {"キー": "config.iniに書くのと同じ形式の文字列"}}`
+- `resets`: 上書きを消して config.ini の値に戻すキーの `[セクション, キー]` の配列
+
+### 保存
+
+`base_mtime` には直前に取得した `mtime` をそのまま入れる
+（一度も保存していないインスタンスでは `null`）。他で先に保存されていると `409`。
+以下の例では `mtime` の取り出しに Python を使っている。
+
+bash:
+
+```bash
+MTIME=$($C $BASE/api/instances/default/config | python -c "import sys,json; print(json.dumps(json.load(sys.stdin)['mtime']))")
+$C -X PUT $BASE/api/instances/default/config -H "$H" -H "$J" -d "{
+  \"updates\": {\"llm\": {\"temperature\": \"0.3\"}},
+  \"resets\": [],
+  \"base_mtime\": $MTIME
+}"
+# => {"overrides":{...},"needs_restart":true,"mtime":...}
+```
+
+cmd（`.bat` に書く場合は `%i` を `%%i` にする）:
+
+```bat
+for /f "delims=" %i in ('%C% %BASE%/api/instances/default/config ^| python -c "import sys,json; print(json.dumps(json.load(sys.stdin)['mtime']))"') do set MTIME=%i
+%C% -X PUT %BASE%/api/instances/default/config -H %H% -H %J% -d "{\"updates\":{\"llm\":{\"temperature\":\"0.3\"}},\"resets\":[],\"base_mtime\":%MTIME%}"
+```
+
+`needs_restart` が `true` なら、反映にはインスタンスの再起動が必要。
+
+### バックアップ一覧・復元
+
+```bash
+$C $BASE/api/instances/default/backups
+$C -X POST $BASE/api/instances/default/backups/config_overrides_20260930_120000.json/restore -H "$H"
+```
+
+```bat
+%C% %BASE%/api/instances/default/backups
+%C% -X POST %BASE%/api/instances/default/backups/config_overrides_20260930_120000.json/restore -H %H%
+```
+
+## ログインユーザー（Locohane本体）
+
+`instances/<name>/.env` の `AUTH_USERS` を操作する。
+インスタンス側に未設定の間はプロジェクト直下 `.env` のユーザーを継承しており
+（`inherited_from_project_env: true`）、継承中のユーザーは変更・削除できない（`403`）。
+
+bash:
+
+```bash
+# 一覧
+$C $BASE/api/instances/default/users
+# 追加
+$C -X POST $BASE/api/instances/default/users -H "$H" -H "$J" \
+  -d '{"username":"alice","password":"secret"}'
+# パスワード変更
+$C -X PUT $BASE/api/instances/default/users/alice -H "$H" -H "$J" \
+  -d '{"password":"new-secret"}'
+# 削除
+$C -X DELETE $BASE/api/instances/default/users/alice -H "$H"
+# JWT署名鍵（CHAINLIT_AUTH_SECRET）の再生成
+$C -X POST $BASE/api/instances/default/auth-secret -H "$H"
+```
+
+cmd:
+
+```bat
+rem 一覧
+%C% %BASE%/api/instances/default/users
+rem 追加
+%C% -X POST %BASE%/api/instances/default/users -H %H% -H %J% -d "{\"username\":\"alice\",\"password\":\"secret\"}"
+rem パスワード変更
+%C% -X PUT %BASE%/api/instances/default/users/alice -H %H% -H %J% -d "{\"password\":\"new-secret\"}"
+rem 削除
+%C% -X DELETE %BASE%/api/instances/default/users/alice -H %H%
+rem JWT署名鍵（CHAINLIT_AUTH_SECRET）の再生成
+%C% -X POST %BASE%/api/instances/default/auth-secret -H %H%
+```
+
+## 環境変数（インスタンスの .env）
+
+`AUTH_USERS`/`CHAINLIT_AUTH_SECRET` 以外の任意の環境変数。
+一覧ではパスワード・キー等の値はマスクされる。
+
+bash:
+
+```bash
+# 一覧
+$C $BASE/api/instances/default/env
+# 追加・更新
+$C -X PUT $BASE/api/instances/default/env -H "$H" -H "$J" \
+  -d '{"key":"MY_VAR","value":"hello"}'
+# 削除
+$C -X DELETE $BASE/api/instances/default/env/MY_VAR -H "$H"
+```
+
+cmd:
+
+```bat
+rem 一覧
+%C% %BASE%/api/instances/default/env
+rem 追加・更新
+%C% -X PUT %BASE%/api/instances/default/env -H %H% -H %J% -d "{\"key\":\"MY_VAR\",\"value\":\"hello\"}"
+rem 削除
+%C% -X DELETE %BASE%/api/instances/default/env/MY_VAR -H %H%
+```
+
+## 表示設定（ヘッダー・タブタイトル・ウェルカムメッセージ・アイコン）
+
+`?instance=<name>` を付けるとそのインスタンス専用の設定、
+付けないと全インスタンス共通（`public/settings/`）が対象。
+
+テキストのファイル名は `header.md` / `tab_title.md` / `welcome.md`、
+画像の種別は `icon` / `favicon`。
+
+bash:
+
+```bash
+# 実効値の取得
+$C "$BASE/api/settings?instance=default"
+
+# テキストの保存（共通）
+$C -X PUT $BASE/api/settings/header.md -H "$H" -H "$J" \
+  -d '{"content":"社内AIアシスタント"}'
+
+# テキストの保存（インスタンス専用）
+$C -X PUT "$BASE/api/settings/welcome.md?instance=default" -H "$H" -H "$J" \
+  -d '{"content":"ようこそ。使えるスキル:\n{skills}"}'
+
+# インスタンス専用テキストを削除して共通に戻す（instance 必須）
+$C -X DELETE "$BASE/api/settings/welcome.md?instance=default" -H "$H"
+
+# 画像のアップロード（base64で送る）
+B64=$(base64 -w0 logo.png)
+$C -X PUT "$BASE/api/settings/images/icon?instance=default" -H "$H" -H "$J" \
+  -d "{\"filename\":\"logo.png\",\"content_base64\":\"$B64\"}"
+
+# インスタンス専用画像を削除して共通に戻す（instance 必須）
+$C -X DELETE "$BASE/api/settings/images/icon?instance=default" -H "$H"
+```
+
+cmd（テキストは日本語を含むことが多いので、`{"content":"..."}` を UTF-8 で
+`header.json` 等に保存して渡す。画像は PowerShell で base64 化した JSON を作って渡す）:
+
+```bat
+rem 実効値の取得
+%C% "%BASE%/api/settings?instance=default"
+
+rem テキストの保存（共通）
+%C% -X PUT %BASE%/api/settings/header.md -H %H% -H %J% -d @header.json
+
+rem テキストの保存（インスタンス専用）
+%C% -X PUT "%BASE%/api/settings/welcome.md?instance=default" -H %H% -H %J% -d @welcome.json
+
+rem インスタンス専用テキストを削除して共通に戻す（instance 必須）
+%C% -X DELETE "%BASE%/api/settings/welcome.md?instance=default" -H %H%
+
+rem 画像のアップロード（logo.png を base64 にした JSON を body.json に作ってから送る）
+powershell -NoProfile -Command "@{filename='logo.png'; content_base64=[Convert]::ToBase64String([IO.File]::ReadAllBytes('logo.png'))} | ConvertTo-Json | Set-Content -Encoding ascii body.json"
+%C% -X PUT "%BASE%/api/settings/images/icon?instance=default" -H %H% -H %J% -d @body.json
+
+rem インスタンス専用画像を削除して共通に戻す（instance 必須）
+%C% -X DELETE "%BASE%/api/settings/images/icon?instance=default" -H %H%
+```
+
+## 変更履歴
+
+新しい順に最大 `limit` 件（既定200）。`instance` で絞り込める。
+
+```bash
+$C "$BASE/api/audit?limit=50&instance=default"
+```
+
+```bat
+%C% "%BASE%/api/audit?limit=50&instance=default"
+```
+
+## このリファレンス自体
+
+```bash
+$C $BASE/api/docs/api-reference
+# => {"markdown":"...","html":"..."}
+```
+
+```bat
+%C% %BASE%/api/docs/api-reference
+```

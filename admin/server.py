@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from src.config import PROJECT_ROOT, load_config, resolve_instances_root
 
-from . import audit, auth, env_files, env_overrides, overrides, settings_files, supervisor
+from . import api_docs, audit, auth, env_files, env_overrides, overrides, settings_files, supervisor
 from . import instances as inst
 from .ini_catalog import parse_file as parse_ini_file
 
@@ -832,6 +832,19 @@ def delete_setting_text(
 @app.get("/api/audit")
 def get_audit(instance: str | None = None, limit: int = 200, user: str = Depends(require_login)):
     return {"entries": audit.read_recent(AUDIT_LOG_PATH, limit=limit, instance=instance)}
+
+
+# ---------------------------------------------------------------------------
+# APIリファレンス（admin/API_REFERENCE.md をリクエストごとに読み直して返す）
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/docs/api-reference")
+def get_api_reference(user: str = Depends(require_login)):
+    try:
+        return api_docs.render()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"{api_docs.API_REFERENCE_PATH.name} が見つかりません。") from exc
 
 
 # ---------------------------------------------------------------------------

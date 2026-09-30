@@ -1348,6 +1348,14 @@ header.md・tab_title.md・welcome.md・icon・favicon は、トップの「表�
 `[llm].main_url`/`sub_url`（`api_key` をネストしたJSONとして含みうる）は
 マスクして記録する。管理ツールの「変更履歴」タブから閲覧できる。
 
+### APIリファレンス（curl での直接操作）
+
+画面の操作はすべて HTTP API（`/api/...`）でも行える。curl での呼び出し方は
+[admin/API_REFERENCE.md](admin/API_REFERENCE.md) にまとめてあり、同じ内容を
+管理ツールの「APIリファレンス」タブでも表示する（表示のたびに md を読み直すため、
+md を編集すれば管理ツールを再起動せずに反映される）。API を追加・変更した場合は
+この md も更新すること。
+
 ### セキュリティ上の注意
 
 管理ツールはHTTPS化していない。`[admin].host` を `0.0.0.0` にしてLAN上に

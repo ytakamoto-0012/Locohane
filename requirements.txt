@@ -29,6 +29,7 @@ chainlit==2.11.1
 fastapi==0.139.0
 uvicorn==0.51.0
 python-dotenv==1.2.2
+markdown-it-py==4.2.0                # admin/api_docs.py: APIリファレンス（admin/API_REFERENCE.md）のHTML化。同じくchainlitの推移的依存として導入済み
 
 # --- テスト（app.py 側の cl.Step 管理ロジック等の回帰テスト。evals/ の
 #     ヘッドレスハーネスは src/graph.py を直接叩く経路のため app.py の

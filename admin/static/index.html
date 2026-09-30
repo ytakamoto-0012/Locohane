@@ -30,6 +30,7 @@
         <button data-view="instances" class="tab-btn active">インスタンス</button>
         <button data-view="settings" class="tab-btn">表示設定</button>
         <button data-view="audit" class="tab-btn">変更履歴</button>
+        <button data-view="api-docs" class="tab-btn">APIリファレンス</button>
       </nav>
       <div class="topbar-right">
         <span id="me-username"></span>
@@ -277,6 +278,14 @@
       <thead><tr><th>日時</th><th>インスタンス</th><th>操作</th><th>実行者</th><th>詳細</th></tr></thead>
       <tbody id="audit-tbody"></tbody>
     </table>
+  </div>
+</template>
+
+<template id="tpl-api-docs">
+  <div class="view-api-docs">
+    <p class="hint">admin/API_REFERENCE.md の内容を表示しています（ファイルを編集すると、このメニューを開き直した時点で反映されます）。</p>
+    <div class="error" id="api-docs-error"></div>
+    <article id="api-docs-body" class="markdown-body"></article>
   </div>
 </template>
 
