@@ -28,6 +28,7 @@ from .context_trim import (
     latest_skill_content_indices,
     trim_old_tool_messages,
 )
+from .images import IMAGE_REFS_KEY
 from .skills import skill_content_name
 from .llm import (
     LLM_CONNECTION_ERRORS,
@@ -456,12 +457,48 @@ def _without_reattached_skills(messages: list[BaseMessage]) -> list[BaseMessage]
     return result
 
 
+def content_to_text(content: object, image_refs: list[str] | None = None) -> str:
+    """メッセージの content をテキストにする。画像等の非テキスト部分は参照に置き換える。
+
+    analyze_image が履歴へ足す画像付き HumanMessage は content がリスト
+    （base64 の image_url を含む）で、str() するとbase64がそのまま要約LLMへ
+    渡り、1回の要約リクエストが1000万トークン規模になってコンテキスト長
+    超過で必ず失敗していた（2026-10-01、006 レシピ画像ケースで発覚）。
+
+    Args:
+        content: メッセージの content。
+        image_refs: content 内の画像ブロックと同じ順の参照（`@N 絶対パス` 等。
+            メッセージの additional_kwargs[images.IMAGE_REFS_KEY]）。画像は
+            `[画像: <参照>]` になり、参照が無い画像は `[画像]` になる。
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+    refs = iter(image_refs or [])
+    parts = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict) and block.get("type") == "text":
+            parts.append(str(block.get("text", "")))
+        else:
+            ref = next(refs, None)
+            parts.append(f"[画像: {ref}]" if ref else "[画像]")
+    return "\n".join(parts)
+
+
+def message_content_to_text(message: BaseMessage) -> str:
+    """content_to_text() に、メッセージが持つ画像の参照を渡して呼ぶ。"""
+    return content_to_text(message.content, message.additional_kwargs.get(IMAGE_REFS_KEY))
+
+
 def _messages_to_text(messages: list[BaseMessage]) -> str:
     """要約対象メッセージ列を、要約LLMへ渡すプレーンテキストへ変換する。"""
     lines = []
     for m in messages:
         role = getattr(m, "type", m.__class__.__name__)
-        content = m.content if isinstance(m.content, str) else str(m.content)
+        content = message_content_to_text(m)
         if not content.strip():
             continue
         lines.append(f"[{role}] {content}")

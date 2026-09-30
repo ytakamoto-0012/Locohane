@@ -8,12 +8,18 @@ import json
 import logging
 
 from ..images import image_followup_message
+from ..images import image_ref
 from ..images import is_image_file
 from ..images import to_data_url
 
 from . import _state
 from ._duplicate_guard import _record_and_check_duplicate
-from ._path_memory_helpers import _resolve_path_memory_token, suggest_from_path_memory
+from ._path_memory_helpers import (
+    _PATH_MEMORY_TOKEN_RE,
+    _register_path_memory,
+    _resolve_path_memory_token,
+    suggest_from_path_memory,
+)
 from ._state import _duplicate_guard_session_key
 from ._workdir import _foreign_tmp_dir_error
 from ._workdir import _resolve_workdir
@@ -133,12 +139,18 @@ def analyze_image(relative_path: str, show_in_chat: bool = False) -> tuple[str, 
     # 4032x3024 のような高解像度写真をそのまま渡すと数枚でトークン上限に達するため、
     # config.ini [images] の設定に従って縮小してから渡す（既定は縮小なし）。
     cfg = _state._LLM_CONFIG
+    # 要約等で画像をテキスト化する際の参照（images.IMAGE_REFS_KEY）。`@N` が
+    # 無ければパスメモリーへ登録して得る（登録済みなら同じ `@N` が返る）。
+    token = relative_path if _PATH_MEMORY_TOKEN_RE.match(relative_path) else None
+    if token is None:
+        token = next(iter(_register_path_memory([str(path)], description="analyze_image")), None)
     artifact = {
         "image_url": to_data_url(
             path,
             max_long_side=cfg.image_max_long_side_pixels if cfg else 0,
             jpeg_quality=cfg.image_jpeg_quality if cfg else 85,
-        )
+        ),
+        "ref": image_ref(path, token),
     }
     if show_in_chat:
         # このJSON形式は src/files.py の extract_generated_files() が汎用的に

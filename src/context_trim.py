@@ -69,6 +69,12 @@ def trim_old_tool_messages(
     """直近 keep_recent_iterations 反復分の ToolMessage は全文保持し、それより
     古いものは content を先頭 max_chars 文字に切り詰める。
 
+    HumanMessage 内の画像（analyze_image の画像フォローアップ）は切り詰めない。
+    古い画像を消すと、読み取った内容を書き出す前だった場合にモデルが再読込を
+    試み、analyze_image の重複ガードに拒否されて処理が欠落する（2026-10-01、
+    006 レシピ画像ケースで80枚が未処理になった）。画像による肥大化は
+    圧縮予告（write_thread_note への書き出し）→圧縮の流れで扱う。
+
     「1反復」の数え方と境界の選び方は find_iteration_cut_index() を参照
     （ReActループ1周＝AIMessage 1件を単位に数え、切断位置は必ず安全な
     切断点から選ぶ）。単純な ToolMessage 件数指定にしないのは、1回の

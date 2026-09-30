@@ -48,6 +48,7 @@ from .context_compaction import (
     is_compaction_blocked_by_missing_note,
     maybe_append_precompact_note_nudge,
     maybe_compact,
+    message_content_to_text,
     should_compact,
 )
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
@@ -855,7 +856,8 @@ def dump_messages_for_cancelled_rescue(messages: list, reason: str = RESCUE_REAS
         if isinstance(m, SystemMessage):
             continue
         role = type(m).__name__
-        content = str(m.content)
+        # 画像付きメッセージの base64 をそのまま退避しない（content_to_text 参照）。
+        content = message_content_to_text(m)
         parts.append(f"### {role}\n{content}")
         tool_calls = getattr(m, "tool_calls", None)
         if tool_calls:

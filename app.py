@@ -111,7 +111,7 @@ from src.context_compaction import (
 )
 from src.files import extract_generated_files
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
-from src.images import is_image_file, load_image_bytes, to_data_url
+from src.images import IMAGE_REFS_KEY, image_ref, is_image_file, load_image_bytes, to_data_url
 from src import instance_lock
 from src.llm import (
     LLM_CONNECTION_ERRORS,
@@ -159,6 +159,7 @@ from src.tools import (
     reset_call_history_guards_after_compaction,
     toggle_plan_mode_from_ui,
 )
+from src.tools._path_memory_helpers import _register_path_memory
 from src.tools._plan_render import _render_plan_payload
 from src.tools._workdir import _build_workdir_status_info
 from src.uploads import cleanup_old_uploads, run_cleanup_loop
@@ -2645,7 +2646,10 @@ def _build_human_message(user_text: str, saved_paths: list[str], work_dir_notice
             jpeg_quality=_config.image_jpeg_quality,
         )
         content.append({"type": "image_url", "image_url": {"url": url}})
-    return mark_user_turn(HumanMessage(content=content))
+    # 要約等で画像をテキスト化する際の参照（src/images.py の IMAGE_REFS_KEY）。
+    tokens = {path: token for token, path in _register_path_memory(image_paths, description="アップロード画像").items()}
+    refs = [image_ref(p, tokens.get(p)) for p in image_paths]
+    return mark_user_turn(HumanMessage(content=content, additional_kwargs={IMAGE_REFS_KEY: refs}))
 
 
 _TABLE_LINE_RE = re.compile(r"^[ \t]{0,3}\|")

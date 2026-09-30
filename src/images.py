@@ -185,19 +185,35 @@ def to_data_url(
     return f"data:{mime};base64,{b64}"
 
 
+# 画像付き HumanMessage の additional_kwargs に、content 内の画像ブロックと同じ順で
+# 元画像の参照（`@N 絶対パス` または絶対パス）を持たせるキー。HumanMessage の
+# additional_kwargs は langchain-openai がリクエストへ含めないため LLM への入力は
+# 変わらない。要約・緊急退避で画像をテキスト化する際に、base64 の代わりにこの
+# 参照を書き出す（src/context_compaction.py の content_to_text）。
+IMAGE_REFS_KEY = "locohane_image_refs"
+
+
+def image_ref(path: Path | str, token: str | None = None) -> str:
+    """画像の参照文字列（`@N 絶対パス`、token が無ければ絶対パスのみ）を返す。"""
+    return f"{token} {path}" if token else str(path)
+
+
 def image_followup_message(artifact: dict | None) -> HumanMessage | None:
     """artifact に画像URLがあれば、画像を content に持つ HumanMessage を返す。
 
     Args:
-        artifact: ツール実行結果の artifact（例: view_image が返す
-            {"image_url": "data:<mime>;base64,<...>"}）。None や
-            image_url を持たない dict の場合は None を返す。
+        artifact: ツール実行結果の artifact（例: analyze_image が返す
+            {"image_url": "data:<mime>;base64,<...>", "ref": "@N 絶対パス"}）。
+            None や image_url を持たない dict の場合は None を返す。
+            "ref" があれば IMAGE_REFS_KEY として HumanMessage に持たせる。
 
     Returns:
         画像付き HumanMessage、または該当なしの場合は None。
     """
     if isinstance(artifact, dict) and "image_url" in artifact:
+        ref = artifact.get("ref")
         return HumanMessage(
-            content=[{"type": "image_url", "image_url": {"url": artifact["image_url"]}}]
+            content=[{"type": "image_url", "image_url": {"url": artifact["image_url"]}}],
+            additional_kwargs={IMAGE_REFS_KEY: [ref]} if ref else {},
         )
     return None
