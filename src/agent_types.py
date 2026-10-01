@@ -202,9 +202,16 @@ def render_agent_types_block(agent_types: list[AgentType]) -> str:
         agent_types: scan_agent_types() が返した AgentType のリスト。
 
     Returns:
-        "- name: description" 形式の箇条書き。空リストの場合は
+        "- name: description" の下に使用可能ツール一覧を添えた箇条書き。
+        メインエージェントが委譲先のツール構成を知らずに試し呼びしてトークンを
+        浪費しないよう、frontmatter の tools も併記する（省略時は既定ツール一式を
+        継承する旨を記す、_resolve_agent_types() 参照）。空リストの場合は
         「利用可能なエージェント種別はありません」という旨の文言を返す。
     """
     if agent_types:
-        return "\n".join(f"- {a.name}: {a.description}" for a in agent_types)
+        lines = []
+        for a in agent_types:
+            tools = ", ".join(a.tool_names) if a.tool_names is not None else "（サブエージェント用の既定ツール一式）"
+            lines.append(f"- {a.name}: {a.description}\n  使用可能ツール: {tools}")
+        return "\n".join(lines)
     return "（利用可能なエージェント種別はありません）"
