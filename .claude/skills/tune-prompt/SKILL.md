@@ -51,7 +51,7 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
    Python実行環境を使い、プロジェクトルートで実行する。`config.ini`を
    直接読んでも上書き分が反映されないため、必ずこのコマンドを使う）:
    ```
-   LOCOHANE_INSTANCE=<instance> CONFIG_OVERRIDES_PATH=instances/<instance>/config_overrides.json "C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe" -c "from src.config import load_config; c=load_config(); print([e.base_url for e in c.main_endpoints], c.log_dir)"
+   "C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe" -m evals.instance <instance>
    ```
 2. 表示されたLLM接続先でllama.cpp serverが起動しているか確認する。
    起動していないと評価結果は`error: llm_unreachable`になる。
@@ -72,18 +72,20 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
 
 ### 2-1. 評価を実行する
 
-必ず先頭に2つの環境変数を付けて実行する（付けないと`default`
+必ず`--instance <instance>`を付けて実行する（付けないと`default`
 インスタンスの設定で動いてしまう）。
 
 全ケースが対象:
 ```
-LOCOHANE_INSTANCE=<instance> CONFIG_OVERRIDES_PATH=instances/<instance>/config_overrides.json python evals/run_all.py <target>
+python evals/run_all.py <target> --instance <instance>
 ```
 
 個別ケースが対象（選ばれたケースIDを空白区切りで指定する）:
 ```
-LOCOHANE_INSTANCE=<instance> CONFIG_OVERRIDES_PATH=instances/<instance>/config_overrides.json python evals/run_all.py <target> <case_id1> <case_id2> ...
+python evals/run_all.py <target> <case_id1> <case_id2> ... --instance <instance>
 ```
+
+サマリ先頭の`インスタンス:`行が選んだインスタンスになっていることを確認する。
 
 出力サマリと`evals/results/<target>/<最新timestamp>/results.json`を見る。
 

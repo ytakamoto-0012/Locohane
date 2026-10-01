@@ -3,10 +3,15 @@
 使い方:
     python evals/run_all.py system_prompt
     python evals/run_all.py system_prompt 001_annual_schedule_investigation_before_plan 005_glob_single_call_then_delegate
+    python evals/run_all.py system_prompt --instance <インスタンス名>
 
 第3引数以降にケースID（ファイル名から拡張子`.yaml`を除いたもの）を
 指定すると、そのケースのみを実行する（tune-promptスキルの対話選択で使用）。
 省略時は従来通り対象ディレクトリ配下の全ケースを実行する。
+
+--instance で設定ダッシュボードのインスタンス（instances/<name>/）を指定すると、
+全ケースをそのインスタンスの設定で実行する（省略時は環境変数
+LOCOHANE_INSTANCE、それも無ければ default。evals/instance.py 参照）。
 
 evals/cases/<target>/*.yaml を昇順に glob し、ケースごとに
 `<このプロセスと同じ python> -m evals.run_case <file>` をサブプロセスとして
@@ -18,6 +23,7 @@ results.json（全件の生データ）と summary.md（pass/fail 一覧 + judge
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 import sys
@@ -31,6 +37,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from evals.case_schema import load_case  # noqa: E402
+from evals.instance import resolve_instance_name  # noqa: E402
 # 無言終了時の自動リトライ（src/graph.py の ainvoke_ensuring_final_text、
 # 既定 max_retries=2）や大量画像を扱うケースはグラフの ainvoke が複数回・
 # 長時間かかることがあるため、600秒では単体実行なら成功するケースまで
@@ -77,11 +84,12 @@ def _iter_case_paths(target: str, case_ids: list[str] | None = None) -> list[Pat
     return [by_stem[cid] for cid in case_ids]
 
 
-def _run_one(case_path: Path) -> dict:
+def _run_one(case_path: Path, instance_name: str) -> dict:
     """1ケースを run_case.py のサブプロセスとして実行し、結果 dict を返す。
 
     Args:
         case_path: 実行する eval ケースの yaml パス。
+        instance_name: 実行対象インスタンス名（run_case.py の --instance へ渡す）。
 
     Returns:
         run_case.py が出力した結果 JSON をパースした dict。標準出力が空、
@@ -96,7 +104,7 @@ def _run_one(case_path: Path) -> dict:
     case = load_case(case_path)
     timeout = case.timeout_seconds or CASE_TIMEOUT_SECONDS
     proc = subprocess.run(
-        [sys.executable, "-m", "evals.run_case", str(case_path)],
+        [sys.executable, "-m", "evals.run_case", str(case_path), "--instance", instance_name],
         cwd=str(PROJECT_ROOT),
         capture_output=True,
         text=True,
@@ -110,6 +118,7 @@ def _run_one(case_path: Path) -> dict:
     if not stdout:
         return {
             "case_id": case_path.stem,
+            "instance": instance_name,
             "error": "no_output",
             "detail": f"標準出力が空でした（終了コード {proc.returncode}）。",
         }
@@ -118,22 +127,24 @@ def _run_one(case_path: Path) -> dict:
     except json.JSONDecodeError as e:
         return {
             "case_id": case_path.stem,
+            "instance": instance_name,
             "error": "invalid_json",
             "detail": f"結果のJSON解析に失敗しました: {e}",
         }
 
 
-def _render_summary(target: str, results: list[dict]) -> str:
+def _render_summary(target: str, instance_name: str, results: list[dict]) -> str:
     """結果一覧から人間可読な Markdown サマリを組み立てる。
 
     Args:
         target: チューニング対象カテゴリ名。
+        instance_name: 実行対象インスタンス名。
         results: _run_one() の戻り値のリスト。
 
     Returns:
         pass/fail/judge待ち/error の集計表 + judge待ちケースの詳細を含む Markdown。
     """
-    lines = [f"# eval 結果: {target}", ""]
+    lines = [f"# eval 結果: {target}", "", f"インスタンス: {instance_name}", ""]
     n_pass = n_fail = n_judge = n_error = 0
     token_total = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     n_token_measured = 0
@@ -201,28 +212,35 @@ def _render_summary(target: str, results: list[dict]) -> str:
 
 def main() -> int:
     """CLI エントリポイント。"""
-    if len(sys.argv) < 2:
-        print(
-            "使い方: python evals/run_all.py <target> [case_id ...]", file=sys.stderr
-        )
-        return 2
-    target = sys.argv[1]
-    case_ids = sys.argv[2:]
+    parser = argparse.ArgumentParser(prog="python evals/run_all.py")
+    parser.add_argument("target")
+    parser.add_argument("case_ids", nargs="*")
+    parser.add_argument(
+        "--instance",
+        help="実行対象インスタンス名（instances/<name>/。省略時は環境変数 LOCOHANE_INSTANCE、それも無ければ default）",
+    )
+    args = parser.parse_args()
+    target = args.target
+    # 全ケースを走らせる前に一度だけ解決・検証する（存在しないインスタンス名で
+    # 全ケースが同じエラーになるのを避ける）。
+    instance_name = resolve_instance_name(args.instance)
 
-    case_paths = _iter_case_paths(target, case_ids)
+    case_paths = _iter_case_paths(target, args.case_ids)
     if not case_paths:
         print(f"対象ケースが1件もありません: evals/cases/{target}/", file=sys.stderr)
         return 1
 
+    print(f"対象インスタンス: {instance_name}", file=sys.stderr)
     results = []
     for path in case_paths:
         print(f"実行中: {path.name}", file=sys.stderr)
         try:
-            results.append(_run_one(path))
+            results.append(_run_one(path, instance_name))
         except subprocess.TimeoutExpired as e:
             results.append(
                 {
                     "case_id": path.stem,
+                    "instance": instance_name,
                     "error": "timeout",
                     "detail": f"{e.timeout:.0f}秒でタイムアウトしました。",
                 }
@@ -234,7 +252,7 @@ def main() -> int:
     (out_dir / "results.json").write_text(
         json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    summary = _render_summary(target, results)
+    summary = _render_summary(target, instance_name, results)
     (out_dir / "summary.md").write_text(summary, encoding="utf-8")
 
     print(summary)

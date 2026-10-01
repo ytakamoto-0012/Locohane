@@ -908,6 +908,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
   自由記述の `judge`（transcript を読んで合否判断させる）を併用できる。
 - `python evals/run_all.py system_prompt` で全ケースを直列実行し、結果は
   `evals/results/<target>/<timestamp>/`（`.gitignore` 対象、再生成可能なデータ）へ出力。
+- `--instance <インスタンス名>` を付けると、設定ダッシュボードのインスタンス
+  （`config_overrides.json` とインスタンス別 `.env`）の設定で評価する（省略時は `default`）。
 - `evals/run_case.py` は Chainlit の UI 呼び出しを `evals/headless_chainlit.py` で
   スタブに差し替え、`src/graph.py` のグラフを直接 `ainvoke` する（Chainlit サーバー起動不要）。
 - チューニング時は編集前スナップショットを `evals/history/<target>/` に退避し、

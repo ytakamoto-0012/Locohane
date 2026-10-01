@@ -50,6 +50,33 @@ python evals/run_all.py system_prompt 001_annual_schedule_investigation_before_p
 python -m evals.run_case evals/cases/system_prompt/001_skill_routing_pdf.yaml
 ```
 
+### 実行対象インスタンスの指定（`--instance`）
+
+設定ダッシュボードで作ったインスタンス（`instances/<name>/`）の設定で評価する
+場合は、`run_all.py`・`run_case.py` のどちらにも `--instance <name>` を付ける:
+
+```
+python evals/run_all.py system_prompt --instance <name>
+python -m evals.run_case evals/cases/system_prompt/001_skill_routing_pdf.yaml --instance <name>
+```
+
+管理ツールがインスタンスを起動するときと同じく、`LOCOHANE_INSTANCE`・
+`CONFIG_OVERRIDES_PATH`・`LOCOHANE_INSTANCE_ENV` を設定し、インスタンス別
+`.env` を `override=True` で読み込んでから `load_config()` する
+（`evals/instance.py`）。そのため `config_overrides.json` の上書きだけでなく、
+インスタンス別 `.env` に書いた `LLM_MAIN_URL` 等の環境変数も反映される。
+ケース yaml の `env:` と、メモリー等の一時ディレクトリへの隔離はさらにその上から
+適用される。省略時は環境変数 `LOCOHANE_INSTANCE`、それも無ければ `default`。
+存在しないインスタンス名を指定するとケースを1件も実行せずにエラー終了する。
+どのインスタンスで実行したかは `summary.md` 先頭と `results.json` の各要素の
+`instance` に記録される。
+
+適用後の実効設定（LLM接続先・ログ出力先等）だけを確認したい場合:
+
+```
+python -m evals.instance <name>
+```
+
 ## ケースの書き方（`evals/cases/<target>/*.yaml`）
 
 ```yaml

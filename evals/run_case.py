@@ -2,6 +2,10 @@
 
 使い方:
     python -m evals.run_case evals/cases/system_prompt/001_xxx.yaml
+    python -m evals.run_case evals/cases/system_prompt/001_xxx.yaml --instance <インスタンス名>
+
+--instance で設定ダッシュボードのインスタンス（instances/<name>/ の
+config_overrides.json と .env）を適用してから実行する（evals/instance.py 参照）。
 
 Chainlit サーバーは起動しない。src.tools が依存する cl.* は
 evals.headless_chainlit.install() でスタブに差し替えてから
@@ -15,6 +19,7 @@ stdout は run_all.py が json.loads する1行専用にする。
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import json
@@ -48,6 +53,7 @@ if sys.platform == "win32":
 from evals.case_schema import EvalCase, Expect, load_case  # noqa: E402
 from evals.headless_chainlit import install as install_headless_chainlit  # noqa: E402
 from evals.headless_chainlit import patch_ask_relay  # noqa: E402
+from evals.instance import apply_instance, resolve_instance_name  # noqa: E402
 from evals.timing_callbacks import LatencyCallbackHandler  # noqa: E402
 
 
@@ -527,12 +533,21 @@ async def _run(case: EvalCase) -> dict:
 
 def main() -> int:
     """CLI エントリポイント。結果 JSON を1行 stdout に出す。"""
-    if len(sys.argv) != 2:
-        print("使い方: python -m evals.run_case <case.yaml>", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(prog="python -m evals.run_case")
+    parser.add_argument("case_path", type=Path)
+    parser.add_argument(
+        "--instance",
+        help="実行対象インスタンス名（instances/<name>/。省略時は環境変数 LOCOHANE_INSTANCE、それも無ければ default）",
+    )
+    args = parser.parse_args()
 
-    case_path = Path(sys.argv[1])
-    case = load_case(case_path)
+    instance_name = resolve_instance_name(args.instance)
+    # _run() 内で MEMORY_DIR 等の隔離用環境変数・ケースの env: を設定するより
+    # 前に適用する（インスタンス別 .env は override=True で読むため、後に
+    # 適用するとそれらを打ち消してしまう）。
+    apply_instance(instance_name)
+
+    case = load_case(args.case_path)
     install_headless_chainlit(case.auto_approve, case.scripted_text_answers)
 
     try:
@@ -544,6 +559,7 @@ def main() -> int:
             "error": "runtime_exception",
             "detail": f"{type(e).__name__}: {e}",
         }
+    result["instance"] = instance_name
     print(json.dumps(result, ensure_ascii=False))
     return 1 if result.get("error") else 0
 
