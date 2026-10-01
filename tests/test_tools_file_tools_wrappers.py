@@ -151,6 +151,30 @@ class TestGrepTool:
         lines = [m["line"] for m in result["matches"]]
         assert lines == [1, 2, 3]
 
+    def test_large_result_is_capped_by_total_chars(self, file_tools_env) -> None:
+        # head_limit を大きくしても、合計文字数上限で切り詰めてヒントを返す
+        # （006 で `.*` + head_limit=5000 の1回が45.9万トークンになり異常終了した）。
+        for i in range(30):
+            (file_tools_env / f"{i:02d}.md").write_text(("x" * 300 + "\n") * 100, encoding="utf-8")
+
+        raw = tools.grep_tool.func(pattern=".*", glob="*.md", head_limit=5000)
+        result = json.loads(raw)
+
+        assert result["truncated"] is True
+        assert result["total_matches"] == 3000
+        assert result["returned"] == len(result["matches"]) < 3000
+        assert "Glob" in result["hint"]
+        assert len(raw) < 40000
+
+    def test_long_line_is_truncated(self, file_tools_env) -> None:
+        (file_tools_env / "min.js").write_text("TODO" + "y" * 5000 + "\n", encoding="utf-8")
+
+        result = json.loads(tools.grep_tool.func(pattern="TODO"))
+
+        assert result["returned"] == 1
+        assert len(result["matches"][0]["text"]) < 1000
+        assert "hint" not in result
+
     def test_no_match_has_no_path_memory_key(self, file_tools_env) -> None:
         (file_tools_env / "a.py").write_text("nothing\n", encoding="utf-8")
 

@@ -93,11 +93,12 @@ def reset_call_history_guards_after_compaction() -> None:
     ガードだけが「既に呼び出し済み」として拒否し続けると、モデルは
     エラーの理由を理解できないまま同じような呼び出しを繰り返し、
     抜け出せないループに陥る。要約が確定した直後に呼ばれる想定
-    （app.py の圧縮成功パス。token_usage_cumulative_main のリセットと同様の
-    位置づけ）。
+    （app.py・src/subagent.py の圧縮成功パス。token_usage_cumulative_main の
+    リセットと同様の位置づけ）。記録先キーは _duplicate_guard_session_key() で
+    決まるため、サブエージェント内から呼ぶとそのサブエージェントの記録が消える。
     """
-    cl.user_session.set("file_tools_call_signatures", None)
-    cl.user_session.set("analyze_image_call_signatures", None)
+    cl.user_session.set(_duplicate_guard_session_key("file_tools_call_signatures"), None)
+    cl.user_session.set(_duplicate_guard_session_key("analyze_image_call_signatures"), None)
 
 
 _FAILURE_STREAK_THRESHOLD = 4

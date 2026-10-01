@@ -20,6 +20,36 @@ logger = logging.getLogger(__name__)
 
 _OUTPUT_MODES = ("files_with_matches", "content", "count")
 
+# Grep ツールが返す matches の合計文字数（パス＋行本文）の上限と、1行あたりの上限。
+# head_limit は件数しか絞れず、LLM が `pattern=".*", head_limit=5000` のように
+# 呼ぶと全ファイルの全行が1つの ToolMessage に載り、それだけでコンテキスト長を
+# 超えてサブエージェントが異常終了した（2026-10-01、006 で1回45.9万トークン）。
+_MAX_RESULT_CHARS = 20000
+_MAX_LINE_CHARS = 500
+
+
+def _cap_result_size(result: dict) -> None:
+    """content モードの結果の matches を合計・1行あたりの文字数上限に収める（in-place）。"""
+    kept = []
+    total = 0
+    for m in result["matches"]:
+        if len(m["text"]) > _MAX_LINE_CHARS:
+            m = {**m, "text": m["text"][:_MAX_LINE_CHARS] + "…"}
+        total += len(m["path"]) + len(m["text"])
+        if total > _MAX_RESULT_CHARS and kept:
+            break
+        kept.append(m)
+    if kept == result["matches"]:
+        return
+    if len(kept) < len(result["matches"]):
+        result["truncated"] = True
+        result["hint"] = (
+            f"結果が大きすぎるため先頭 {len(kept)} 件のみ返しました。"
+            "pattern・glob・path を絞って検索し直してください。ファイル名だけが必要なら Glob を使ってください。"
+        )
+    result["matches"] = kept
+    result["returned"] = len(kept)
+
 
 def grep_search(
     base: Path,
@@ -188,6 +218,7 @@ def grep_tool(
         hint = suggest_from_path_memory(str(base)) if not base.exists() else ""
         return f"エラー: {e}{hint}"
     if result["matched"]:
+        _cap_result_size(result)
         paths = list(dict.fromkeys(m["path"] for m in result["matches"]))
         path_memory = _register_path_memory(paths)
         if path_memory:

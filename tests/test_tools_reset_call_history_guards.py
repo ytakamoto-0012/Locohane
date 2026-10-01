@@ -39,6 +39,30 @@ def test_reset_clears_file_tools_and_image_call_signatures(monkeypatch) -> None:
     assert fake_session.get("analyze_image_call_signatures") is None
 
 
+def test_reset_inside_subagent_clears_subagent_scoped_keys(monkeypatch) -> None:
+    # carry_over_to_main=false ではサブエージェントごとに記録先キーが分かれる。
+    # サブエージェントの圧縮成功パス（src/subagent.py）から呼んだ場合に、その
+    # サブエージェントの記録が消えること（漏れていたため、圧縮で消えた画像の
+    # 読み直しが重複ガードに拒否され処理が欠落した。2026-10-01、006）。
+    fake_session = _FakeUserSession()
+    monkeypatch.setattr(tools.cl, "user_session", fake_session)
+    monkeypatch.setattr(
+        tools._state, "_LLM_CONFIG", type("Cfg", (), {"file_tools_duplicate_guard_carry_over_to_main": False})()
+    )
+    fake_session.set("analyze_image_call_signatures", {"main.png": 1})
+    fake_session.set("analyze_image_call_signatures_subagent_run-1", {"sub.png": 1})
+
+    token = tools._state._SUBAGENT_RUN_ID.set("run-1")
+    try:
+        tools.reset_call_history_guards_after_compaction()
+    finally:
+        tools._state._SUBAGENT_RUN_ID.reset(token)
+
+    assert fake_session.get("analyze_image_call_signatures_subagent_run-1") is None
+    # メインエージェント側の記録には触れない
+    assert fake_session.get("analyze_image_call_signatures") == {"main.png": 1}
+
+
 def test_duplicate_guard_allows_previously_blocked_call_after_reset(monkeypatch) -> None:
     fake_session = _FakeUserSession()
     monkeypatch.setattr(tools.cl, "user_session", fake_session)

@@ -27,6 +27,7 @@ import traceback
 from collections.abc import Callable
 from dataclasses import replace
 
+from chainlit.context import ChainlitContextException
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
@@ -779,6 +780,18 @@ async def run_subagent(
                         cumulative_tokens_sub = 0
                         note_skip_count = 0
                         just_compacted_or_nudged = True
+                        # app.py の圧縮成功パスと同じく重複ガードの履歴もリセットする。
+                        # 漏れていたため、圧縮で消えた画像の読み直しが analyze_image の
+                        # 重複ガードに拒否され処理が欠落した（2026-10-01、006）。
+                        # tools → subagent の循環 import を避けるため関数内で import する。
+                        # chainlit 文脈外（テスト等）では cl.user_session が例外を送出する
+                        # ため、リセットの失敗で圧縮自体を壊さないよう握りつぶす。
+                        from .tools import reset_call_history_guards_after_compaction
+
+                        try:
+                            reset_call_history_guards_after_compaction()
+                        except ChainlitContextException:
+                            pass
 
             if (
                 token_guard_enabled
