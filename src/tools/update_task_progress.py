@@ -21,8 +21,9 @@ async def update_task_progress(step_index: int, status: str) -> str:
 
     ステップの実行前に "in_progress"、完了後に "completed" を設定してユーザーに
     進捗を見せること。"in_progress" の間はチェックリスト上に content の代わりに
-    create_plan で渡した activeForm が表示される。同時に "in_progress" にする
-    ステップは1つまでにすること。全ステップが completed になると計画は完了した
+    create_plan で渡した activeForm が表示される。並列に dispatch_agent を出す
+    ステップは、全部を "in_progress" にしてから同じ応答で一括発行してよい
+    （同時に複数の "in_progress" 可）。全ステップが completed になると計画は完了した
     ものとみなし、承認状態を解除する（完了後の無関係な run_script/
     execute_python_code は再びブロックされる）。
 
