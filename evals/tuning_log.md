@@ -5405,3 +5405,31 @@ system_prompt_scale全件（001xlsx/002pptx/003docx/004pdf/006recipe images
 006はn=2で再現性確認済み（いずれも`calls_over_ceiling: 0`・完走）。
 
 最終スナップショット: `evals/history/system_prompt_scale/iter09_final.md`。
+
+## 並列発行チューニング（system_prompt_scale / 006、インスタンス: default、2026-10-02〜）
+
+目的: explore/worker/verifier の分割並列発行（1応答で複数dispatch_agent）。
+評価軸はLLMが並列発行しているかのみ（config.iniの並列数・実行時間は不問）。
+スナップショットは `par_iterNN_before.md` 命名。
+
+### par_iter01（instance: default）
+- 006: 不合格（並列は部分的）。create_plan 21ステップ（worker×20＋verifier、各15件）は良好。
+  ただし in_progress化/dispatchが 10→5→5 の3波に分割。さらにtask文にファイル名を
+  列挙した結果、後半4グループで実在しない連番ファイル名を捏造→空振り→照合・再委任で
+  4往復の逐次呼び出し。workerの返答にファイル名一覧表が含まれmain 1call最大74809
+  （calls_over_ceiling 6）。297件完走、所要1h42m。turn_cutoffsなし。
+- 修正: 「委譲は必ず並列で一括発行する」節に「10件超でも区切らず全グループを同じ応答で出す」を追加。
+
+### par_iter02（instance: default）
+- 006: 不合格（並列発行0回、worker×5を逐次）。調査なしでいきなり create_plan[2steps]
+  （「調査: workerに一覧取得させる」「実行: workerに解析・書出し」）。件数未確定のため
+  グループ分けされず。最終的に179/290件で終了（ダミー画像をスキップ）。iter01の修正箇所
+  （計画後の発行方法）とは無関係な段階での退行＝ばらつき。
+- 修正: 「2. create_plan」に「対象件数が分かるまでcreate_planを呼ばない／調査を計画ステップに入れない」を追加。
+
+### par_iter03（instance: default）
+- 006: 不合格（並列は2件ずつ）。explore→create_plan[21steps]は良好（iter02修正が効いた）。
+  ただし「utp(in_progress×2)→worker×2→utp(completed×2)」を10回繰り返し。各worker task文が
+  約950文字（共通の出力規則・フォーマットを毎回全文記載）で、20件同時だと約19000文字の出力に
+  なるのが阻害要因と推定。main 1call最大85122（calls_over_ceiling 17）。
+- 修正: 並列節に「共通指示は発行前にwrite_thread_noteへ1回書き、各task文はnote参照＋担当範囲の短文」を追加。
