@@ -35,11 +35,6 @@ logger = logging.getLogger(__name__)
 # （evals/tuning_log.md par_iter01）、ここで機械的に切り詰める。
 _GROUP_RESULT_PREVIEW_CHARS = 400
 
-# 1回の呼び出しで起動するグループ（=サブエージェントのジョブ）数の上限。
-# pattern="*" で大きなフォルダを指定した場合等に、確認なしで数百件のジョブが
-# 起動されるのを防ぐ（画像なら group_size=15 で750件まで）。
-_MAX_GROUPS = 50
-
 # 各グループのジョブを包む Runnable の run_name。app.py はこの名前の
 # on_chain_start/on_chain_end でグループごとの中間Stepを作り、配下のサブエージェントの
 # 思考・ツールStepをその下へ入れる（全グループが1つの「SUB: worker（一括）」の下に
@@ -88,7 +83,7 @@ def _list_target_files(base: Path, pattern: str) -> list[Path]:
     ocr_md のような入れ子構成で "**/ocr_md/*.md" を渡され、直下のみの探索で
     0件エラーになった本番実例（2026-10-02）への対応。Glob が直下限定なのは
     LLMが何度も呼ぶツールの応答時間を抑えるためで、1回呼ぶだけの本ツールには
-    当てはまらない（大量に一致した場合は _MAX_GROUPS が起動前に止める）。
+    当てはまらない（大量に一致した場合は [subagent].batch_max_groups が起動前に止める）。
     `{a,b}` のブレース展開と他セッションの一時ディレクトリ除外は Glob と揃える。
     """
     exclude_names = _foreign_tmp_dir_names()
@@ -275,7 +270,7 @@ async def dispatch_agent_batch(
         path: 対象フォルダの絶対パス（`@N` 可）。省略時は作業ディレクトリ。
         group_size: 1つのサブエージェントへ渡すファイル数（既定15。画像解析を
             伴うなら15以下）。1〜[subagent].max_iterations の範囲に丸める。
-            グループ数が50を超える場合は起動前にエラーになる。
+            グループ数が設定の上限を超える場合は起動前にエラーになる（上限はエラー文に示す）。
         orchestrator_skill: dispatch_agent と同じ（通常は省略）。
 
     Returns:
@@ -311,10 +306,14 @@ async def dispatch_agent_batch(
 
     size = max(1, min(group_size, _state._SUBAGENT_MAX_ITERATIONS))
     groups = [files[i : i + size] for i in range(0, len(files), size)]
-    if len(groups) > _MAX_GROUPS:
+    # 1回の呼び出しで起動するグループ（=サブエージェントのジョブ）数の上限
+    # （[subagent].batch_max_groups。0以下なら無制限）。pattern="*" で大きなフォルダを
+    # 指定した場合等に、確認なしで数百件のジョブが起動されるのを防ぐ。
+    max_groups = _state._DISPATCH_AGENT_BATCH_MAX_GROUPS
+    if max_groups > 0 and len(groups) > max_groups:
         return (
             f"エラー: {base} 配下で pattern '{pattern}' に一致する {len(files)} 件は "
-            f"{len(groups)} グループ（{size}件ずつ）になり、1回の上限（{_MAX_GROUPS}グループ）を超えます。"
+            f"{len(groups)} グループ（{size}件ずつ）になり、1回の上限（{max_groups}グループ）を超えます。"
             "pattern を絞り込むか、対象をサブフォルダ等に分けて複数回に分けて呼ぶこと（ジョブは起動していません）。"
         )
 

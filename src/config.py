@@ -969,6 +969,7 @@ class Config:
     subagent_background_inline_wait_max_seconds: int
     subagent_background_progress_push_interval_seconds: int
     subagent_background_llm_timeout_max_retries: int
+    subagent_batch_max_groups: int
 
     # --- ユーザー応答待ちタイムアウト（Chainlit の Ask*Message） ---
     approval_timeout_seconds: int
@@ -2624,6 +2625,12 @@ def load_config(
             os.getenv(
                 "SUBAGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES",
                 subagent.get("background_llm_timeout_max_retries", 3),
+            )
+        ),
+        subagent_batch_max_groups=int(
+            os.getenv(
+                "SUBAGENT_BATCH_MAX_GROUPS",
+                subagent.get("batch_max_groups", 50),
             )
         ),
         approval_timeout_seconds=int(os.getenv("APPROVAL_TIMEOUT_SECONDS", timeouts.get("approval_seconds", 300))),

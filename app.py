@@ -1832,6 +1832,7 @@ async def _setup() -> None:
         dispatch_agent_background_inline_wait_max_seconds=_config.subagent_background_inline_wait_max_seconds,
         dispatch_agent_background_progress_push_interval_seconds=_config.subagent_background_progress_push_interval_seconds,
         dispatch_agent_background_llm_timeout_max_retries=_config.subagent_background_llm_timeout_max_retries,
+        dispatch_agent_batch_max_groups=_config.subagent_batch_max_groups,
         plan_approval_exempt_scripts=_config.script_plan_approval_exempt_scripts,
         agent_type_run_script_allowlist=_config.script_agent_type_run_script_allowlist,
         plans_dir=_config.plans_dir,

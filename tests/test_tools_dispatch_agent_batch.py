@@ -215,7 +215,7 @@ async def test_batch_absolute_pattern_returns_error_instead_of_raising(monkeypat
 @pytest.mark.asyncio
 async def test_batch_rejects_too_many_groups_without_starting_jobs(monkeypatch, tmp_path) -> None:
     images, _ = _setup(monkeypatch, tmp_path, [f"f{i}.png" for i in range(4)])
-    monkeypatch.setattr(_BATCH_MODULE, "_MAX_GROUPS", 3)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BATCH_MAX_GROUPS", 3)
     captured = _capture_tasks(monkeypatch)
 
     result = await _invoke(task="t", agent_type="worker", pattern="*.png", path=str(images), group_size=1)
@@ -223,6 +223,18 @@ async def test_batch_rejects_too_many_groups_without_starting_jobs(monkeypatch, 
     assert result.startswith("エラー:") and "4 グループ" in result
     assert captured == []
     assert tools._dispatch_agent_job._DISPATCH_AGENT_JOBS == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_max_groups_zero_means_unlimited(monkeypatch, tmp_path) -> None:
+    images, _ = _setup(monkeypatch, tmp_path, [f"f{i}.png" for i in range(4)])
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BATCH_MAX_GROUPS", 0)
+    captured = _capture_tasks(monkeypatch)
+
+    result = await _invoke(task="t", agent_type="worker", pattern="*.png", path=str(images), group_size=1)
+
+    assert not result.startswith("エラー:")
+    assert len(captured) == 4
 
 
 @pytest.mark.asyncio

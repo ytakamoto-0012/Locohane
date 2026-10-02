@@ -254,6 +254,7 @@ _DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE: str = DEFAULT_DISPATCH_AGENT_BACKGR
 _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS: int = 1800
 _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS: int = 20
 _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES: int = 3
+_DISPATCH_AGENT_BATCH_MAX_GROUPS: int = 50
 _MEMORY_ROOT: Path | None = None
 _PLANS_DIR: Path | None = None
 _HELP_PATH: Path | None = None
@@ -322,6 +323,7 @@ def init_tools(
     dispatch_agent_background_inline_wait_max_seconds: int = 1800,
     dispatch_agent_background_progress_push_interval_seconds: int = 20,
     dispatch_agent_background_llm_timeout_max_retries: int = 3,
+    dispatch_agent_batch_max_groups: int = 50,
     plan_approval_exempt_scripts: Iterable[tuple[str, str]] = (),
     agent_type_run_script_allowlist: Iterable[tuple[str, str | tuple[str, str]]] | None = None,
     plans_dir: Path | None = None,
@@ -472,6 +474,9 @@ def init_tools(
             同じ反復を再試行する最大回数（config.ini の
             [subagent].background_llm_timeout_max_retries 由来）。dispatch_agent は
             常にこの設定を使う（旧・同期版が使っていた即時打ち切りは廃止済み）。
+        dispatch_agent_batch_max_groups: dispatch_agent_batch が1回の呼び出しで
+            起動してよいグループ数の上限。0以下なら無制限（config.ini の
+            [subagent].batch_max_groups 由来）。
         plan_approval_exempt_scripts: run_script/run_script_background の
             計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト。(skill_name, script_filename) の
@@ -523,7 +528,7 @@ def init_tools(
     global _DISPATCH_AGENT_BACKGROUND_JOB_RETENTION_SECONDS, _DISPATCH_AGENT_BACKGROUND_MIN_POLL_INTERVAL_SECONDS
     global _DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE
     global _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS, _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS
-    global _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES
+    global _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES, _DISPATCH_AGENT_BATCH_MAX_GROUPS
     global _DEFAULT_WORKDIR, _LLM_CONFIG, _AGENT_TYPES, _SUBAGENT_MAX_ITERATIONS
     global _ALLOW_SANDBOX_DIRS
     global _MEMORY_ROOT
@@ -557,6 +562,7 @@ def init_tools(
     _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS = dispatch_agent_background_inline_wait_max_seconds
     _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS = dispatch_agent_background_progress_push_interval_seconds
     _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES = dispatch_agent_background_llm_timeout_max_retries
+    _DISPATCH_AGENT_BATCH_MAX_GROUPS = dispatch_agent_batch_max_groups
     _PLAN_APPROVAL_EXEMPT_SCRIPTS = set(plan_approval_exempt_scripts)
     if agent_type_run_script_allowlist is not None:
         grouped: dict[str, set[str | tuple[str, str]]] = {}
