@@ -28,10 +28,10 @@ turns:
     ## 作り方
     ここに作り方を記述
 expect:
-  tool_called_any: [dispatch_agent, execute_python_code]
+  tool_called_any: [dispatch_agent, dispatch_agent_batch, execute_python_code]
   tool_not_called: [analyze_image]
   tool_call_args_contains:
-    dispatch_agent: {agent_type: "worker"}
+    dispatch_agent_batch: {agent_type: "worker"}
   response_not_contains: ["申し訳ありません", "できません", "機能がありません"]
 judge: |
   images フォルダに297枚の実写真（jpg/png/heic混在）が入った最大規模の
@@ -43,6 +43,12 @@ judge: |
   `worker` を新設した（explore は読み取り専用のまま維持）。本ケースは
   この worker 経由の設計が実際に大量ファイル処理を完走させられるかを
   検証する。
+
+  2026-10-02 以降は、同じ処理を多数のファイルへ行う作業をハーネス側で
+  グループ分け・並列委譲する dispatch_agent_batch を使うのが正しい経路
+  （1〜5の「dispatch_agent(agent_type="worker")」は
+  dispatch_agent_batch(agent_type="worker") に読み替える。グループ分けは
+  ツールが行うため、2の分割粒度は group_size が妥当か（画像なら15以下）で見る）。
 
   以下を確認せよ:
   1. 画像の読み取り→mdファイル書き出しは、必ず
