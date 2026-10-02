@@ -5538,3 +5538,19 @@ system_prompt.md は「同じ処理を多数のファイルへ行うなら dispa
   3グループへ並列委譲（完了3）＝サブフォルダ探索が本番相当の入れ子構成で機能。その後 create_plan[2steps] →
   worker で xlsx 作成 → verifier → provide_download。batch_iter05 の AskUserQuestion 無限ループは再現せず
   （ばらつき。ただしハーネス側の再質問ガードは引き続き提案中）。
+
+### batch_iter07（instance: default、llama-server --parallel 2・[subagent]/[graph].max_parallel=2・[llm].max_concurrent_requests=2）
+- 修正: system_prompt の batch 節の例が agent_type="worker" のみで、読取だけの作業（001の写真からの行事抽出）
+  まで worker で一括委譲していた（例へのアンカー）。agent_type の選び方（抽出・要約→explore／書出し→worker／
+  検証→verifier）を例付きで追加、計画例の「worker:」を「委譲先の表で選んだ種別」に変更、ツールdocstringにも追記。
+- 001 と 006 を実行。並列数2のため、ログ上で2グループが実際に同時実行されているかも確認する。
+- 結果:
+  - 001: 合格（rules PASS、main 1call最大64109・calls_over_ceiling 1）。utp×2＋**batch(worker, "**/ocr_md/*.md")＋
+    batch(explore, "**/*.png") を1応答で同時発行**（agent_type の使い分けが機能。md読取をworkerにしたのは
+    explore寄りが望ましいが許容）。1回目は path="annual_schedule_large"（作業ディレクトリの親フォルダ名）で
+    フォルダ無しエラー→2回目で正しいパスへ回復。xlsx作成→verifier→修正→再検証→provide_download。
+  - 006: 合格（create_plan[2steps]＝mdフォルダ作成＋batch、batch(worker)1回、main 1call最大38741、出力301件）。
+  - 並列数2の実効: evals.log 上でサブエージェントが同時に最大2件実行されていることを確認。
+- 追加修正（評価後）: フォルダが見つからない時に作業ディレクトリ直下のフォルダ一覧を添える。
+  各グループを BATCH_GROUP_RUN_NAME の名前付きRunnableで実行し、UIでグループごとの中間Stepを表示可能に
+  （app.py 側は出力元ごとの思考Step/回答Message管理に改修、並列時の思考の混線も解消）。
