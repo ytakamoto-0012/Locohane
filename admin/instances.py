@@ -347,47 +347,197 @@ def update_instance_meta(
     return new_meta
 
 
-def _deletable_data_dir(config_ini_path: Path, instances_root: Path, name: str) -> Path | None:
-    """インスタンス削除時に一緒に消してよいデータディレクトリ（無ければ None）。
+# インスタンス削除時に一緒に削除するか選択できる永続データ（Config のフィールド名, 表示名）。
+# common_data_dir を先頭に置くのは、選択されていればその配下の項目は
+# まとめて消えるため（delete_instance() は存在しなくなった項目を飛ばす）。
+DATA_PATH_FIELDS: tuple[tuple[str, str], ...] = (
+    ("common_data_dir", "[paths] common_data_dir（データディレクトリ全体）"),
+    ("checkpoint_db", "[paths] checkpoint_db（会話状態）"),
+    ("thread_store_db", "[thread_store] db（スレッド一覧）"),
+    ("memory_dir", "[paths] memory_dir（永続メモリー）"),
+    ("plans_dir", "[paths] plans_dir（実行計画）"),
+    ("log_dir", "[log] dir（アプリログ）"),
+    ("chat_log_dir", "[chat_log] dir（会話ログ）"),
+    ("upload_dir", "[uploads] dir（アップロードファイル）"),
+    ("elements_dir", "[elements] dir（添付・埋め込み画像）"),
+    ("path_memory_dir", "[path_memory] dir（パスメモリー）"),
+    ("default_workdir", "[default_workdir] dir（既定の作業ディレクトリ）"),
+)
 
-    checkpoint_db の親（= 既定では common_data_dir）が <プロジェクト>/data/<name>
-    （そのインスタン自身の名前のサブディレクトリ）である場合のみ対象にする。
-    data/ 自体や、利用者が任意の場所へ変更したディレクトリはもちろん、
-    [paths].common_data_dir の書き間違い等で別インスタンスのディレクトリ
-    （例: data/default）を指してしまっている場合も、他インスタンスのデータを
-    巻き込んで消してしまわないよう対象から外す（2026-09-29 レビューで発見：
-    旧実装は「data/ の直下かどうか」しか見ておらず、bのcommon_data_dirを
-    誤って ./data/default に向けた状態で b を削除すると default のデータが
-    消えた）。
+# SQLite ファイル本体と一緒に消す付随ファイル（WALモードのジャーナル等）。
+_SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+@dataclass
+class DataPathEntry:
+    """インスタンス削除時のデータ削除候補1件。"""
+
+    key: str
+    label: str
+    path: Path
+    exists: bool
+    # False の場合は reason に理由を入れる（UIでは選択不可として表示）。
+    deletable: bool
+    reason: str = ""
+    # UIの初期チェック状態。<プロジェクト>/data/<name>/ 配下（既定の保存先）のみ True。
+    default_selected: bool = False
+
+    def to_json(self) -> dict:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "path": str(self.path),
+            "exists": self.exists,
+            "deletable": self.deletable,
+            "reason": self.reason,
+            "default_selected": self.default_selected,
+        }
+
+
+def _overlaps(a: Path, b: Path) -> bool:
+    """a と b が同一、またはどちらかがもう一方の配下にあるか（Windowsでは大文字小文字を区別しない）。"""
+    return a == b or a.is_relative_to(b) or b.is_relative_to(a)
+
+
+def _protected_paths(cfg) -> list[Path]:
+    """そのインスタンスが使う、データ以外の（共有されうる）パス。"""
+    paths = [cfg.skills_dir, cfg.agents_dir, *cfg.project_locohane_dirs, *cfg.bin_path]
+    paths += [entry.dir for entry in cfg.allow_sandbox_dirs]
+    return [p.resolve() for p in paths]
+
+
+def list_data_paths(instances_root: Path, config_ini_path: Path, name: str) -> list[DataPathEntry]:
+    """インスタンス削除時に一緒に削除できる永続データの候補一覧を返す。
+
+    各候補は、次のいずれかに当たる場合は削除不可（deletable=False）にする。
+    他インスタンスのデータを巻き込んで消す事故を防ぐため（2026-09-29 レビューで
+    発見：common_data_dir を誤って ./data/default に向けた状態で b を削除すると
+    default のデータが消えた）。
+
+    - ドライブのルート・ホームディレクトリ・プロジェクトルート・instances_root
+      自体か、その上位ディレクトリ
+    - プロジェクト内にあるが <プロジェクト>/data/<name>/ の配下ではない（skills/
+      等の本体ファイルや、data/ 自体・data/<他インスタンス名>/ を消さないため）
+    - 他インスタンスのデータパスや、自他の skills_dir/agents_dir/
+      project_locohane_dir/bin_path/allow_sandbox_dir と同一・包含関係にある
+    - 他インスタンスの設定が読めず、重複を確認できない
+
+    Raises:
+        InstanceError: そのインスタンス自身の設定が読めない。
     """
     try:
         cfg = load_config(config_path=config_ini_path, overrides_path=overrides_path(instances_root, name), instance_name=name)
-    except Exception:  # noqa: BLE001 - 設定が壊れていてもインスタンス自体の削除は妨げない
-        return None
-    data_dir = cfg.checkpoint_db.parent
-    if data_dir.parent == (PROJECT_ROOT / "data").resolve() and data_dir.name == name and data_dir.is_dir():
-        return data_dir
-    return None
+    except Exception as exc:  # noqa: BLE001
+        raise InstanceError(f"インスタンス {name!r} の設定を読み込めないため、データの保存先を特定できません: {exc}") from exc
+
+    project_root = PROJECT_ROOT.resolve()
+    own_default_data = project_root / "data" / name
+    guard_roots = [project_root, Path.home().resolve(), instances_root.resolve()]
+
+    # 他インスタンスのデータパス・共有パスと、自インスタンスの共有パス（重複検出用）。
+    others: list[tuple[str, Path]] = [(f"インスタンス {name!r} 自身の共有パス", p) for p in _protected_paths(cfg)]
+    unreadable: list[str] = []
+    for other_name in list_instance_names(instances_root):
+        if other_name == name:
+            continue
+        try:
+            other_cfg = load_config(
+                config_path=config_ini_path, overrides_path=overrides_path(instances_root, other_name), instance_name=other_name
+            )
+        except Exception:  # noqa: BLE001
+            unreadable.append(other_name)
+            continue
+        for key, _ in DATA_PATH_FIELDS:
+            others.append((f"インスタンス {other_name!r} の {key}", getattr(other_cfg, key).resolve()))
+        others += [(f"インスタンス {other_name!r} の共有パス", p) for p in _protected_paths(other_cfg)]
+
+    entries: list[DataPathEntry] = []
+    for key, label in DATA_PATH_FIELDS:
+        path = getattr(cfg, key).resolve()
+        entry = DataPathEntry(key=key, label=label, path=path, exists=path.exists(), deletable=False)
+        entries.append(entry)
+        if not entry.exists:
+            entry.reason = "存在しません"
+            continue
+        if path == Path(path.anchor) or any(root.is_relative_to(path) for root in guard_roots):
+            entry.reason = "ドライブのルート・ホーム・プロジェクト等の上位ディレクトリのため削除できません"
+            continue
+        if path.is_relative_to(project_root) and not path.is_relative_to(own_default_data):
+            entry.reason = f"プロジェクト内の data/{name}/ 配下ではないため削除できません"
+            continue
+        if unreadable:
+            entry.reason = f"インスタンス {', '.join(unreadable)} の設定を読み込めず、重複を確認できないため削除できません"
+            continue
+        conflict = next((desc for desc, other in others if _overlaps(path, other)), None)
+        if conflict is not None:
+            entry.reason = f"{conflict} と重複しているため削除できません"
+            continue
+        entry.deletable = True
+        entry.default_selected = path.is_relative_to(own_default_data)
+    return entries
 
 
-def delete_instance(instances_root: Path, name: str, config_ini_path: Path | None = None) -> None:
+def _remove_path(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+        return
+    path.unlink(missing_ok=True)
+    for suffix in _SQLITE_SIDECAR_SUFFIXES:
+        path.with_name(path.name + suffix).unlink(missing_ok=True)
+
+
+def delete_instance(
+    instances_root: Path,
+    name: str,
+    config_ini_path: Path | None = None,
+    delete_data_keys: list[str] | tuple[str, ...] = (),
+) -> list[Path]:
     """インスタンスのディレクトリ（config_overrides.json/.env/backups等）を丸ごと削除する。
 
-    config_ini_path を渡すと、data/<name>/ のデータディレクトリも削除する
-    （_deletable_data_dir() 参照）。
+    delete_data_keys に DATA_PATH_FIELDS のキーを指定すると、その永続データも
+    削除する（config_ini_path 必須。削除可否は list_data_paths() で判定する）。
+    データの削除に失敗した場合は、やり直せるようインスタンスのディレクトリは残す。
 
     呼び出し元（admin/server.py）は、事前に supervisor で稼働中でないことを
     確認してから呼ぶこと（このモジュール自体はプロセス管理を知らない）。
 
+    Returns:
+        実際に削除したデータのパス一覧。
+
     Raises:
-        InstanceError: default インスタンスを削除しようとした、または存在しない。
+        InstanceError: default インスタンスを削除しようとした、存在しない、
+            削除できないデータを指定した、またはデータの削除に失敗した。
     """
     if name == DEFAULT_INSTANCE_NAME:
         raise InstanceError("既定インスタンス(default)は削除できません。")
     path = instance_dir(instances_root, name)
     if not path.is_dir():
         raise InstanceError(f"インスタンス {name!r} が見つかりません。")
-    data_dir = _deletable_data_dir(config_ini_path, instances_root, name) if config_ini_path else None
+
+    targets: list[Path] = []
+    if delete_data_keys:
+        if config_ini_path is None:
+            raise InstanceError("データを削除するには config.ini のパスが必要です。")
+        entries = {e.key: e for e in list_data_paths(instances_root, config_ini_path, name)}
+        for key in dict.fromkeys(delete_data_keys):
+            entry = entries.get(key)
+            if entry is None:
+                raise InstanceError(f"不明なデータ項目です: {key!r}")
+            if not entry.deletable:
+                raise InstanceError(f"{entry.label} は削除できません（{entry.reason}）: {entry.path}")
+            targets.append(entry.path)
+
+    deleted: list[Path] = []
+    # 上位ディレクトリから消し、配下の項目は存在しなくなっていれば飛ばす。
+    for target in sorted(targets, key=lambda p: len(p.parts)):
+        if not target.exists():
+            continue
+        try:
+            _remove_path(target)
+        except OSError as exc:
+            raise InstanceError(
+                f"データの削除に失敗しました（インスタンス自体は削除していません）: {target}: {exc}"
+            ) from exc
+        deleted.append(target)
     shutil.rmtree(path)
-    if data_dir is not None:
-        shutil.rmtree(data_dir)
+    return deleted

@@ -175,12 +175,25 @@ $C -X PUT $BASE/api/instances/test2 -H "$H" -H "$J" \
 
 稼働中は `409`。先に停止する。`default` は削除できない。
 
+ボディ省略時は `instances/<name>/` だけを削除し、永続データ（ログ・スレッド・
+default_workdir 等）は残す。一緒に消したいデータは、まず削除候補を取得し、
+`deletable: true` の項目の `key` を `delete_data` に指定する
+（`deletable: false` の項目を指定すると `400`、何も削除しない）。
+
 ```bash
+# 削除候補の一覧（key/label/path/exists/deletable/reason/default_selected）
+$C $BASE/api/instances/test2/data-paths
+# インスタンスのみ削除（データは残す）
 $C -X DELETE $BASE/api/instances/test2 -H "$H"
+# データディレクトリ全体も一緒に削除
+$C -X DELETE $BASE/api/instances/test2 -H "$H" -H "$J" -d '{"delete_data":["common_data_dir"]}'
+# => {"success":true,"deleted_data":["C:\\DT_Python\\Locohane\\data\\test2"]}
 ```
 
 ```bat
+%C% %BASE%/api/instances/test2/data-paths
 %C% -X DELETE %BASE%/api/instances/test2 -H %H%
+%C% -X DELETE %BASE%/api/instances/test2 -H %H% -H %J% -d "{\"delete_data\":[\"log_dir\",\"default_workdir\"]}"
 ```
 
 ### 起動・停止・再起動

@@ -273,23 +273,51 @@ def update_instance(
     return _instance_summary(name)
 
 
+@app.get("/api/instances/{name}/data-paths")
+def get_instance_data_paths(name: str, user: str = Depends(require_login)):
+    """インスタンス削除時に一緒に削除できる永続データの候補一覧。"""
+    _require_instance(name)
+    try:
+        entries = inst.list_data_paths(INSTANCES_ROOT, CONFIG_INI_PATH, name)
+    except inst.InstanceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"entries": [e.to_json() for e in entries]}
+
+
+class DeleteInstanceBody(BaseModel):
+    # 一緒に削除する永続データのキー（GET /api/instances/{name}/data-paths の key）。
+    # 省略・空ならデータは削除しない。
+    delete_data: list[str] = []
+
+
 @app.delete("/api/instances/{name}")
 def delete_instance(
-    name: str, request: Request, user: str = Depends(require_login), _csrf: None = Depends(require_csrf)
+    name: str,
+    request: Request,
+    body: DeleteInstanceBody | None = None,
+    user: str = Depends(require_login),
+    _csrf: None = Depends(require_csrf),
 ):
     _require_instance(name)
     status = _supervisor.status(name)
     if status.state in (supervisor.InstanceState.RUNNING, supervisor.InstanceState.EXTERNAL):
         raise HTTPException(status_code=409, detail="稼働中のインスタンスは削除できません。先に停止してください。")
+    delete_data = body.delete_data if body else []
     try:
-        inst.delete_instance(INSTANCES_ROOT, name, CONFIG_INI_PATH)
+        deleted = inst.delete_instance(INSTANCES_ROOT, name, CONFIG_INI_PATH, delete_data)
     except inst.InstanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     audit.append(
         AUDIT_LOG_PATH,
-        {"instance": name, "actor": user, "remote_addr": _client_ip(request), "action": "instance_delete"},
+        {
+            "instance": name,
+            "actor": user,
+            "remote_addr": _client_ip(request),
+            "action": "instance_delete",
+            "deleted_data": [str(p) for p in deleted],
+        },
     )
-    return {"success": True}
+    return {"success": True, "deleted_data": [str(p) for p in deleted]}
 
 
 @app.post("/api/instances/{name}/start")

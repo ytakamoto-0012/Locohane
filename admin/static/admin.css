@@ -124,6 +124,14 @@ label.checkbox input { width: auto; }
 .modal-wide { width: 640px; }
 .modal h3 { margin-top: 0; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.modal-actions .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+/* インスタンス削除モーダルのデータ削除候補 */
+.data-path-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.data-path-row { align-items: flex-start; }
+.data-path-row input { margin-top: 3px; }
+.data-path-row code { font-size: 12px; word-break: break-all; }
+.data-path-row.disabled { opacity: 0.55; }
 
 /* Config editor */
 .config-editor { display: flex; gap: 20px; align-items: flex-start; }

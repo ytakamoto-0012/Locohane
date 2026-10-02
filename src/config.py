@@ -850,6 +850,9 @@ class Config:
     bin_path: list[Path]
     system_prompt_path: Path
     project_instructions_paths: list[Path]
+    # [paths].common_data_dir の解決結果（${instance} 展開済み）。管理ツールの
+    # インスタンス削除時に、データ削除対象の候補として使う（admin/instances.py）。
+    common_data_dir: Path
     checkpoint_db: Path
     upload_dir: Path
     log_dir: Path
@@ -2339,6 +2342,7 @@ def load_config(
             PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", paths.get("system_prompt_path", "./system_prompt/system_prompt.md"))
         ),
         project_instructions_paths=[d / "LOCOHANE.md" for d in project_locohane_dirs],
+        common_data_dir=common_data_dir,
         checkpoint_db=_resolve(
             PROJECT_ROOT,
             _sub_common_data_dir(os.getenv("CHECKPOINT_DB", paths.get("checkpoint_db", "${common_data_dir}/checkpoints.sqlite")), common_data_dir, resolved_instance_name),

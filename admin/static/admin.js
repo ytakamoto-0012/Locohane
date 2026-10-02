@@ -205,16 +205,7 @@ async function refreshInstanceCards() {
         runInstanceAction(inst.name, "restart", card);
       }
     });
-    btnDelete.addEventListener("click", async () => {
-      const typed = prompt(`削除するには、インスタンス名 "${inst.name}" を入力してください（データも削除されます）。`);
-      if (typed !== inst.name) return;
-      try {
-        await api(`/api/instances/${encodeURIComponent(inst.name)}`, { method: "DELETE" });
-        await refreshInstanceCards();
-      } catch (e) {
-        alert("削除に失敗しました: " + e.message);
-      }
-    });
+    btnDelete.addEventListener("click", () => openDeleteInstanceModal(inst));
     btnEdit.addEventListener("click", () => openEditInstanceModal(inst));
     card.querySelector(".btn-config").addEventListener("click", () => renderInstanceDetail(inst.name));
 
@@ -321,6 +312,95 @@ function openEditInstanceModal(inst) {
       }
     } catch (e) {
       modal.querySelector("#edit-instance-error").textContent = e.message;
+    }
+  });
+}
+
+async function openDeleteInstanceModal(inst) {
+  let entries;
+  try {
+    entries = (await api(`/api/instances/${encodeURIComponent(inst.name)}/data-paths`)).entries;
+  } catch (e) {
+    alert("データの保存先を取得できませんでした: " + e.message);
+    return;
+  }
+  const modal = clone("tpl-delete-instance").firstElementChild;
+  document.body.appendChild(modal);
+  modal.querySelector(".delete-instance-name").textContent = inst.name;
+  const list = modal.querySelector(".data-path-list");
+  for (const entry of entries) {
+    const row = document.createElement("label");
+    row.className = "checkbox data-path-row" + (entry.deletable ? "" : " disabled");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.name = "delete_data";
+    cb.value = entry.key;
+    cb.disabled = !entry.deletable;
+    cb.checked = entry.deletable && entry.default_selected;
+    const text = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = entry.label;
+    const path = document.createElement("code");
+    path.textContent = entry.path;
+    text.append(title, document.createElement("br"), path);
+    if (entry.reason) {
+      const reason = document.createElement("span");
+      reason.className = "hint";
+      reason.textContent = `（${entry.reason}）`;
+      text.append(" ", reason);
+    }
+    row.append(cb, text);
+    list.appendChild(row);
+  }
+
+  // common_data_dir を選ぶと配下の項目もまとめて消えるため、配下の項目を連動させる。
+  const common = entries.find((e) => e.key === "common_data_dir");
+  const commonCb = list.querySelector('input[value="common_data_dir"]');
+  const isUnderCommon = (entry) => {
+    if (!common || entry.key === "common_data_dir") return false;
+    const base = common.path.replace(/[\\/]+$/, "").toLowerCase();
+    const p = entry.path.toLowerCase();
+    return p.startsWith(base + "\\") || p.startsWith(base + "/");
+  };
+  const syncCommon = () => {
+    for (const entry of entries) {
+      if (!isUnderCommon(entry)) continue;
+      const cb = list.querySelector(`input[value="${entry.key}"]`);
+      if (commonCb.checked) {
+        cb.checked = entry.exists;
+        cb.disabled = true;
+      } else {
+        cb.checked = entry.deletable && entry.default_selected;
+        cb.disabled = !entry.deletable;
+      }
+    }
+  };
+  if (commonCb && !commonCb.disabled) {
+    commonCb.addEventListener("change", syncCommon);
+    syncCommon();
+  }
+
+  modal.querySelector(".btn-cancel").addEventListener("click", () => modal.remove());
+  modal.querySelector("form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const errEl = modal.querySelector("#delete-instance-error");
+    if (ev.target.elements.confirm_name.value !== inst.name) {
+      errEl.textContent = "インスタンス名が一致しません。";
+      return;
+    }
+    // disabled のチェックボックス（common_data_dir 配下の連動分）は送らない。
+    const deleteData = $$('input[name="delete_data"]', list)
+      .filter((cb) => cb.checked && !cb.disabled)
+      .map((cb) => cb.value);
+    try {
+      await api(`/api/instances/${encodeURIComponent(inst.name)}`, {
+        method: "DELETE",
+        body: { delete_data: deleteData },
+      });
+      modal.remove();
+      await refreshInstanceCards();
+    } catch (e) {
+      errEl.textContent = "削除に失敗しました: " + e.message;
     }
   });
 }

@@ -134,23 +134,84 @@ def test_delete_instance(root):
     assert inst.list_instance_names(root) == ["default"]
 
 
-def test_delete_instance_removes_data_dir_under_project_data(root, tmp_path, monkeypatch):
+def test_delete_instance_keeps_data_when_not_selected(root, tmp_path, monkeypatch):
     monkeypatch.setattr(inst, "PROJECT_ROOT", tmp_path)
     inst.ensure_default_instance(root)
     inst.create_instance(root, CONFIG_INI_PATH, name="test2")
     data_dir = tmp_path / "data" / "test2"
     assert data_dir.is_dir()  # load_config() の副作用で作られている
-    inst.delete_instance(root, "test2", CONFIG_INI_PATH)
+    assert inst.delete_instance(root, "test2", CONFIG_INI_PATH) == []
+    assert data_dir.is_dir()
+    assert "test2" not in inst.list_instance_names(root)
+
+
+def test_delete_instance_removes_common_data_dir_when_selected(root, tmp_path, monkeypatch):
+    monkeypatch.setattr(inst, "PROJECT_ROOT", tmp_path)
+    inst.ensure_default_instance(root)
+    inst.create_instance(root, CONFIG_INI_PATH, name="test2")
+    data_dir = tmp_path / "data" / "test2"
+    deleted = inst.delete_instance(root, "test2", CONFIG_INI_PATH, ["common_data_dir", "log_dir"])
+    assert deleted == [data_dir]  # 配下の log_dir は common_data_dir と一緒に消えるので飛ばされる
     assert not data_dir.exists()
     assert (tmp_path / "data").is_dir()
 
 
-def test_delete_instance_keeps_data_dir_outside_project_data(root, tmp_path, monkeypatch):
+def test_delete_instance_removes_only_selected_items(root, tmp_path, monkeypatch):
+    monkeypatch.setattr(inst, "PROJECT_ROOT", tmp_path)
+    inst.ensure_default_instance(root)
+    inst.create_instance(root, CONFIG_INI_PATH, name="test2")
+    data_dir = tmp_path / "data" / "test2"
+    (data_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (data_dir / "memory").mkdir(parents=True, exist_ok=True)
+    db = data_dir / "chat_threads.sqlite"
+    db.write_bytes(b"x")
+    db.with_name(db.name + "-wal").write_bytes(b"x")
+    inst.delete_instance(root, "test2", CONFIG_INI_PATH, ["log_dir", "thread_store_db"])
+    assert not (data_dir / "logs").exists()
+    assert not db.exists()
+    assert not db.with_name(db.name + "-wal").exists()
+    assert (data_dir / "memory").is_dir()
+
+
+def test_list_data_paths_default_selection(root, tmp_path, monkeypatch):
+    monkeypatch.setattr(inst, "PROJECT_ROOT", tmp_path)
+    inst.ensure_default_instance(root)
+    inst.create_instance(root, CONFIG_INI_PATH, name="test2")
+    (tmp_path / "data" / "test2" / "logs").mkdir(parents=True, exist_ok=True)
+    entries = {e.key: e for e in inst.list_data_paths(root, CONFIG_INI_PATH, "test2")}
+    assert set(entries) == {k for k, _ in inst.DATA_PATH_FIELDS}
+    assert entries["common_data_dir"].deletable and entries["common_data_dir"].default_selected
+    assert entries["log_dir"].deletable and entries["log_dir"].default_selected
+    # chat_log_dir は load_config() が作らないため、書き込み前は存在しない。
+    assert not entries["chat_log_dir"].exists and not entries["chat_log_dir"].deletable
+
+
+def test_list_data_paths_outside_project_not_selected_by_default(root, tmp_path, monkeypatch):
+    """プロジェクト外のデータは削除可能だが、初期状態では選択しない。"""
     monkeypatch.setattr(inst, "PROJECT_ROOT", tmp_path / "elsewhere")
     inst.ensure_default_instance(root)
     inst.create_instance(root, CONFIG_INI_PATH, name="test2")
+    entries = {e.key: e for e in inst.list_data_paths(root, CONFIG_INI_PATH, "test2")}
+    assert entries["common_data_dir"].deletable
+    assert not entries["common_data_dir"].default_selected
     inst.delete_instance(root, "test2", CONFIG_INI_PATH)
     assert (tmp_path / "data" / "test2").is_dir()
+
+
+def test_list_data_paths_rejects_project_files_outside_data(root, tmp_path, monkeypatch):
+    """default_workdir をプロジェクト内の data/ 以外に向けていても、そこは消さない。"""
+    monkeypatch.setattr(inst, "PROJECT_ROOT", tmp_path)
+    inst.ensure_default_instance(root)
+    inst.create_instance(root, CONFIG_INI_PATH, name="test2")
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.setenv("DEFAULT_WORKDIR", str(work))
+    entries = {e.key: e for e in inst.list_data_paths(root, CONFIG_INI_PATH, "test2")}
+    assert not entries["default_workdir"].deletable
+    with pytest.raises(inst.InstanceError):
+        inst.delete_instance(root, "test2", CONFIG_INI_PATH, ["default_workdir"])
+    assert work.is_dir()
+    assert "test2" in inst.list_instance_names(root)  # 拒否時はインスタンスも残る
 
 
 def test_delete_instance_keeps_other_instances_data_dir(root, tmp_path, monkeypatch):
@@ -165,8 +226,20 @@ def test_delete_instance_keeps_other_instances_data_dir(root, tmp_path, monkeypa
     inst.overrides_path(root, "test2").write_text(
         json.dumps({"paths": {"common_data_dir": str(default_data)}}), encoding="utf-8"
     )
-    inst.delete_instance(root, "test2", CONFIG_INI_PATH)
+    entries = {e.key: e for e in inst.list_data_paths(root, CONFIG_INI_PATH, "test2")}
+    assert not entries["common_data_dir"].deletable
+    assert not entries["checkpoint_db"].deletable
+    with pytest.raises(inst.InstanceError):
+        inst.delete_instance(root, "test2", CONFIG_INI_PATH, ["common_data_dir"])
     assert (default_data / "checkpoints.sqlite").is_file()
+
+
+def test_delete_instance_rejects_unknown_data_key(root):
+    inst.ensure_default_instance(root)
+    inst.create_instance(root, CONFIG_INI_PATH, name="test2")
+    with pytest.raises(inst.InstanceError):
+        inst.delete_instance(root, "test2", CONFIG_INI_PATH, ["../../etc"])
+    assert "test2" in inst.list_instance_names(root)
 
 
 @pytest.mark.parametrize("copy_from", ["..", "../..", "nope"])

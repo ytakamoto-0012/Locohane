@@ -122,6 +122,25 @@
   </div>
 </template>
 
+<template id="tpl-delete-instance">
+  <div class="modal-backdrop">
+    <div class="modal modal-wide">
+      <h3>インスタンスを削除</h3>
+      <form id="delete-instance-form">
+        <p class="hint">インスタンス <strong class="delete-instance-name"></strong> の設定（instances/ 配下）を削除します。<br />
+          あわせて削除する永続データを選択してください（チェックしなかったデータは残ります）。</p>
+        <div class="data-path-list"></div>
+        <label>確認のため、インスタンス名を入力してください<input type="text" name="confirm_name" required autocomplete="off" /></label>
+        <div class="error" id="delete-instance-error"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-cancel">キャンセル</button>
+          <button type="submit" class="btn-danger">削除</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</template>
+
 <template id="tpl-instance-detail">
   <div class="view-instance-detail">
     <div class="view-header">

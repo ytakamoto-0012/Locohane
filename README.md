@@ -496,7 +496,7 @@ Locohane/
 | `data/elements/<thread_id>/` | 添付ファイル（`provide_download`/`analyze_image`の`show_in_chat=True`等）・回答本文への画像埋め込みの永続化先。スレッド再開・プロセス再起動後も表示できるようここへ実体をコピー保存する（`[elements]`参照、`src/thread_store.py`） | 添付ファイルが不要になったとき | フォルダ内を削除 |
 | `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（送信直後のライブ表示にのみ使う一時配信。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
 | `data/app.lock` | 同一データディレクトリへの多重起動を防ぐプロセス排他ロック（`src/instance_lock.py`）。空ファイルにOSのファイルロックをかけるだけで中身は使わない | アプリ停止中、削除しても実害はない | ファイルを削除（アプリ起動中は削除不可） |
-| `instances/<name>/` | 設定ダッシュボード（管理ツール）が管理するインスタンス別ディレクトリ（`config_overrides.json`・`.env`・`settings/`・`backups/`・`app_stdout.log`。データ本体は`data/<name>/`） | インスタンス自体が不要になったとき | 管理ツールの削除機能を使う（稼働中・`default`は不可。データディレクトリは、それが `data/<そのインスタンス名>/` である場合に限り一緒に削除される。詳細は「設定ダッシュボード」節） |
+| `instances/<name>/` | 設定ダッシュボード（管理ツール）が管理するインスタンス別ディレクトリ（`config_overrides.json`・`.env`・`settings/`・`backups/`・`app_stdout.log`。データ本体は`data/<name>/`） | インスタンス自体が不要になったとき | 管理ツールの削除機能を使う（稼働中・`default`は不可。ログ・スレッド・default_workdir 等の永続データは、削除ダイアログで選択したものだけ一緒に削除される。詳細は「設定ダッシュボード」節） |
 
 `data/uploads/` は `config.ini` の `[uploads] retention_days`（既定7日）を過ぎたファイルを
 `cleanup_interval_hours`（既定1時間）おきに自動削除する。`retention_days` を0以下にすると
@@ -1318,9 +1318,20 @@ config.ini 既定の `[paths] common_data_dir = ./data/${instance}` により
 データ保存先が他インスタンスと重複する場合は、作成・起動時と、設定画面での
 保存・バックアップ復元時にエラーとして拒否される。
 
-インスタンスの削除では `instances/<name>/` と `data/<name>/` を削除する
-（データ保存先が `data/<そのインスタンス名>/` 以外を指している場合、その
-データは他インスタンスの巻き込みを含む誤削除防止のため残す）。稼働中の
+インスタンスの削除では `instances/<name>/` を削除し、あわせて削除する
+永続データを削除ダイアログで選択できる。候補はそのインスタンスの実効設定
+（config.ini＋上書き）で解決した `common_data_dir`（データディレクトリ全体）・
+`checkpoint_db`・`[thread_store] db`・`memory_dir`・`plans_dir`・`[log] dir`・
+`[chat_log] dir`・`[uploads] dir`・`[elements] dir`・`[path_memory] dir`・
+`[default_workdir] dir` で、パスごとにチェックボックスで選ぶ（SQLite は
+`-wal`/`-shm` も一緒に消す）。`data/<そのインスタンス名>/` 配下は初期状態で
+選択済み、プロジェクト外のパスは未選択で表示される。次のパスは誤削除防止の
+ため選択できない: 存在しないパス、ドライブのルート・ホーム・プロジェクト・
+`instances/` やその上位、プロジェクト内で `data/<そのインスタンス名>/` 配下
+ではないパス、他インスタンスのデータパスや自他の `skills_dir`・`agents_dir`・
+`project_locohane_dir`・`bin_path`・`allow_sandbox_dir` と同一・包含関係に
+あるパス（他インスタンスの設定が読めない場合も確認できないため不可）。
+データの削除に失敗した場合はインスタンス自体を残す。稼働中の
 インスタンスと `default` は削除できない。設定（`config_overrides.json`）が
 壊れていて状態を解決できないインスタンスは「設定エラー」と表示される。
 
