@@ -1254,8 +1254,8 @@ def _token_usage_level(total: int) -> str | None:
 MAIN_CALL_USAGE_LABEL = "リクエスト1回あたり（main）"
 
 
-def _format_token_usage(call_usage: dict, cumulative_main: dict, cumulative: dict) -> str:
-    """出力元ごとの直近リクエスト1回分・メインエージェント累計・会話累計（メイン+サブ合算）を、
+def _format_token_usage(call_usage: dict, cumulative: dict) -> str:
+    """出力元ごとの直近リクエスト1回分と会話累計（メイン+サブ合算）を、
     サイドパネルの TokenUsageCard（表形式）表示用に JSON 化する。
 
     call_usage は出力元（None=メインエージェント、それ以外はサブエージェント/batchグループの
@@ -1264,9 +1264,8 @@ def _format_token_usage(call_usage: dict, cumulative_main: dict, cumulative: dic
     出力元ごとに1行ずつ並べ、警告色も行ごとに判定する。メインの行を常に先頭にする。
     group="call" の行はフロント側でスクロール領域に入る（行数が並列数で増えるため）。
 
-    cumulative_main はサブエージェント（dispatch_agent）内部の呼び出しを含まない、
-    メインエージェント自身のLLM呼び出しのみの累計。委譲がどれだけ会話コンテキストの
-    節約に寄与しているかを、cumulative（合算値）との差でユーザーが確認できる。
+    メインエージェント累計（token_usage_cumulative_main）は圧縮判定用に引き続き集計するが、
+    表示はしない。
     """
     ordered = sorted(call_usage.items(), key=lambda item: item[0] is not None)
     call_rows = [
@@ -1275,7 +1274,6 @@ def _format_token_usage(call_usage: dict, cumulative_main: dict, cumulative: dic
     payload = {
         "rows": [
             *call_rows,
-            {"label": "メインエージェント累計", **cumulative_main, "group": "total"},
             {"label": "会話累計（サブエージェント含む）", **cumulative, "group": "total"},
         ]
     }
@@ -1283,10 +1281,9 @@ def _format_token_usage(call_usage: dict, cumulative_main: dict, cumulative: dic
 
 
 async def _send_token_usage(call_usage: dict) -> None:
-    """call_usage とセッションの累計値からトークン使用量カードを送り直す。"""
+    """call_usage とセッションの会話累計からトークン使用量カードを送り直す。"""
     cumulative = cl.user_session.get("token_usage_cumulative") or _new_usage_totals()
-    cumulative_main = cl.user_session.get("token_usage_cumulative_main") or _new_usage_totals()
-    await cl.Message(content=_format_token_usage(call_usage, cumulative_main, cumulative)).send()
+    await cl.Message(content=_format_token_usage(call_usage, cumulative)).send()
 
 
 # トークン使用量表示（🔢 プレフィックス）と同じ仕組みで、作業ディレクトリの状態を

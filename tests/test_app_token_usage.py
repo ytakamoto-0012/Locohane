@@ -64,19 +64,18 @@ def test_is_subagent_call_true_after_dispatch_agent_tool_step_already_closed() -
     assert _is_subagent_call(event, dispatch_agent_run_ids) is True
 
 
-def test_format_token_usage_includes_all_three_tiers() -> None:
+def test_format_token_usage_includes_call_and_conversation_total() -> None:
     call = {"input": 1, "output": 2, "total": 3}
-    cumulative_main = {"input": 10, "output": 20, "total": 30}
     cumulative = {"input": 100, "output": 200, "total": 300}
 
-    text = _format_token_usage({None: {"label": MAIN_CALL_USAGE_LABEL, **call}}, cumulative_main, cumulative)
+    text = _format_token_usage({None: {"label": MAIN_CALL_USAGE_LABEL, **call}}, cumulative)
 
     assert text.startswith(TOKEN_USAGE_PREFIX)
     payload = json.loads(text[len(TOKEN_USAGE_PREFIX) :])
     rows = {row["label"]: row for row in payload["rows"]}
 
+    assert set(rows) == {MAIN_CALL_USAGE_LABEL, "会話累計（サブエージェント含む）"}
     assert rows[MAIN_CALL_USAGE_LABEL] == {"label": MAIN_CALL_USAGE_LABEL, **call, "level": None, "group": "call"}
-    assert rows["メインエージェント累計"] == {"label": "メインエージェント累計", **cumulative_main, "group": "total"}
     assert rows["会話累計（サブエージェント含む）"] == {
         "label": "会話累計（サブエージェント含む）",
         **cumulative,
@@ -94,7 +93,7 @@ def test_format_token_usage_one_row_per_owner_with_main_first(monkeypatch) -> No
         "g2": {"label": "SUB: worker（グループ2/16・15件）", "input": 1, "output": 2, "total": 3},
     }
 
-    payload = json.loads(_format_token_usage(call_usage, totals, totals)[len(TOKEN_USAGE_PREFIX) :])
+    payload = json.loads(_format_token_usage(call_usage, totals)[len(TOKEN_USAGE_PREFIX) :])
     call_rows = [row for row in payload["rows"] if row["group"] == "call"]
 
     assert [row["label"] for row in call_rows] == [
