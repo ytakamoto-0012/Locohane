@@ -64,6 +64,18 @@ def _file_detail(path: Path) -> dict:
 
 _BRACE_GROUP_RE = re.compile(r"\{([^{}]+)\}")
 
+# pathlib.Path.glob は絶対パスのパターン（"C:/images/*.jpg" 等）を ValueError ではなく
+# NotImplementedError で拒否する。ToolNode の既定エラーハンドラはこれを再送出して
+# ターン全体を落とすため、呼び出し側で捕捉してこのヒントを添えたエラー文字列に変える。
+GLOB_PATTERN_ERRORS = (ValueError, NotImplementedError)
+ABSOLUTE_PATTERN_HINT = "（pattern にはファイル名部分（例: *.jpg）だけを書き、フォルダは path に渡すこと）"
+
+
+def glob_pattern_error_message(error: Exception) -> str:
+    """GLOB_PATTERN_ERRORS を「パターンが不正です: ...」の文言へ変換する。"""
+    hint = ABSOLUTE_PATTERN_HINT if isinstance(error, NotImplementedError) else ""
+    return f"パターンが不正です: {error}{hint}"
+
 
 def _expand_braces(pattern: str) -> list[str]:
     """globパターン中の `{a,b,c}` をシェル同様の選択展開として複数パターンへ展開する。
@@ -120,8 +132,8 @@ def glob_search(base: Path, pattern: str, head_limit: int = 200, exclude_names: 
                 if p not in seen:
                     seen.add(p)
                     all_matches.append(p)
-    except ValueError as e:
-        raise ValueError(f"パターンが不正です: {e}") from e
+    except GLOB_PATTERN_ERRORS as e:
+        raise ValueError(glob_pattern_error_message(e)) from e
 
     if exclude_names:
         all_matches = [p for p in all_matches if not (set(p.parts) & exclude_names)]

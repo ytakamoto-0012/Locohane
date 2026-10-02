@@ -129,6 +129,15 @@ class _DispatchAgentJob:
     # その間に同一セッションで始まった別の新しいターンのツールガードカウンタを
     # 横から無効化してしまう。
     turn_still_waiting: bool = True
+    # セマフォ（[subagent].max_parallel）を確保して run_subagent を実際に開始した
+    # 時刻（time.monotonic()）。None の間は順番待ち。started_at は順番待ちの
+    # 時間も含むため、進捗表示の経過秒数はこちらを基準にする（順番待ちの
+    # ジョブが「経過1500秒・反復0回」と止まっているように見えるのを防ぐ）。
+    run_started_at: float | None = None
+    # False の場合、このジョブ自身の進捗push（_push_dispatch_agent_progress）を
+    # 行わない。dispatch_agent_batch はグループ数分のメッセージが並ぶのを
+    # 避けるため、全グループをまとめた進捗を自前で1件だけpushする。
+    push_progress: bool = True
 
 
 # dispatch_agent のジョブレジストリ。_script_job._BACKGROUND_JOBS と同じ理由で
@@ -149,7 +158,10 @@ def _format_dispatch_agent_progress(job: "_DispatchAgentJob", job_id: str) -> st
     check_dispatch_agent_job の running 分岐（フォールバック経路でのLLM向け
     応答）の両方から呼ぶ、表示フォーマット共通化のためのヘルパー。
     """
-    elapsed = int(time.monotonic() - job.started_at)
+    if job.run_started_at is None:
+        waited = int(time.monotonic() - job.started_at)
+        return f"順番待ちです（他のサブエージェントの完了待ち・待機 {waited} 秒・job_id={job_id}）。"
+    elapsed = int(time.monotonic() - job.run_started_at)
     parts = [f"実行中です（経過 {elapsed} 秒・反復 {job.current_iteration}/{job.max_iterations} 回・job_id={job_id}）。"]
     note_path = _scratch_notes_path_for_run(job.run_id)
     if note_path.is_file():
@@ -245,38 +257,33 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
     token = _IN_SUBAGENT.set(True)
     run_id_token = _SUBAGENT_RUN_ID.set(job.run_id)
     agent_type_token = _SUBAGENT_AGENT_TYPE.set(job.agent_type)
-    progress_task = asyncio.create_task(_push_dispatch_agent_progress(job, job_id))
+    progress_task = asyncio.create_task(_push_dispatch_agent_progress(job, job_id)) if job.push_progress else None
 
     def _on_iteration(iteration: int, max_iterations: int) -> None:
         job.current_iteration = iteration
 
     on_cancelled = _make_rescue_on_cancelled(job)
 
+    async def _run() -> str:
+        job.run_started_at = time.monotonic()
+        return await subagent.run_subagent(
+            task,
+            resolved.tools,
+            resolved.system_prompt,
+            _state._LLM_CONFIG,
+            job.max_iterations,
+            on_iteration=_on_iteration,
+            llm_timeout_max_retries=_state._DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES,
+            on_cancelled=on_cancelled,
+        )
+
     try:
         sem = _get_session_semaphore(_state._DISPATCH_AGENT_SEMAPHORES, _state._DISPATCH_AGENT_MAX_PARALLEL)
         if sem is not None:
             async with sem:
-                result = await subagent.run_subagent(
-                    task,
-                    resolved.tools,
-                    resolved.system_prompt,
-                    _state._LLM_CONFIG,
-                    job.max_iterations,
-                    on_iteration=_on_iteration,
-                    llm_timeout_max_retries=_state._DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES,
-                    on_cancelled=on_cancelled,
-                )
+                result = await _run()
         else:
-            result = await subagent.run_subagent(
-                task,
-                resolved.tools,
-                resolved.system_prompt,
-                _state._LLM_CONFIG,
-                job.max_iterations,
-                on_iteration=_on_iteration,
-                llm_timeout_max_retries=_state._DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES,
-                on_cancelled=on_cancelled,
-            )
+            result = await _run()
         result = _append_scratch_note_hint(result)
         if job.status != "killed":
             job.result = result
@@ -294,11 +301,12 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
             # 空の場合は例外の型名で補い、必ず何らかの手がかりを残す。
             job.error_message = f"{str(e) or type(e).__name__}\n{traceback.format_exc()}"
     finally:
-        progress_task.cancel()
-        try:
-            await progress_task
-        except asyncio.CancelledError:
-            pass
+        if progress_task is not None:
+            progress_task.cancel()
+            try:
+                await progress_task
+            except asyncio.CancelledError:
+                pass
         _IN_SUBAGENT.reset(token)
         _SUBAGENT_RUN_ID.reset(run_id_token)
         _SUBAGENT_AGENT_TYPE.reset(agent_type_token)

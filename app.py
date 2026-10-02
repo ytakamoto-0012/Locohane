@@ -2998,6 +2998,27 @@ def _find_orphaned_tool_calls(messages: list) -> list[dict]:
     return orphaned
 
 
+def _dispatch_agent_rescue_note_paths(tc: dict) -> list[Path]:
+    """孤立した dispatch_agent / dispatch_agent_batch の tool_call に対応する、実在する緊急退避ファイルの一覧。
+
+    パス解決に失敗した場合（_dispatch_agent_rescue_note_hint の docstring 参照）は空リスト。
+    """
+    try:
+        from src.tools.write_scratch_note import _scratch_notes_path_for_run, sanitize_run_id
+
+        run_id = sanitize_run_id(tc["id"])
+        if tc.get("name") != "dispatch_agent_batch":
+            candidate = _scratch_notes_path_for_run(run_id)
+            return [candidate] if candidate.is_file() else []
+        # sanitize_run_id 後の run_id は英数字・"_"・"-" だけなので glob の特殊文字を含まない。
+        notes_dir = _scratch_notes_path_for_run(run_id).parent
+        prefix = f"_scratch_notes_{run_id}_g"
+        found = [p for p in notes_dir.glob(f"{prefix}*.md") if p.is_file() and p.stem[len(prefix) :].isdigit()]
+        return sorted(found, key=lambda p: int(p.stem[len(prefix) :]))
+    except Exception:  # noqa: BLE001 - パス解決に失敗しても案内文の生成自体は諦めない
+        return []
+
+
 def _dispatch_agent_rescue_note_hint(tc: dict) -> str:
     """強制停止されたdispatch_agentの孤立tool_callに添える、緊急退避内容の案内文を組み立てる。
 
@@ -3014,23 +3035,28 @@ def _dispatch_agent_rescue_note_hint(tc: dict) -> str:
     タスク生成元のタブが既に閉じられている場合等）では例外を送出しうる。
     その場合、またはファイルが実際に存在しない場合は「退避を確認できな
     かった」ことを明示し、通常運用へのフォールバックを促す。
+
+    dispatch_agent_batch はグループごとに `<tool_call_id>_g<N>` を run_id とする
+    （src/tools/dispatch_agent_batch.py 参照）ため、実行中だったグループの数だけ
+    退避ファイルがありうる。_dispatch_agent_rescue_note_paths で全件を拾う。
     """
-    path = None
-    try:
-        from src.tools.write_scratch_note import _scratch_notes_path_for_run, sanitize_run_id
+    paths = _dispatch_agent_rescue_note_paths(tc)
 
-        candidate = _scratch_notes_path_for_run(sanitize_run_id(tc["id"]))
-        if candidate.is_file():
-            path = candidate
-    except Exception:  # noqa: BLE001 - パス解決に失敗しても案内文の生成自体は諦めない
-        path = None
-
-    if path is not None:
+    if len(paths) == 1:
         return (
             "このサブエージェントへの委譲は中断直前まで会話内容を次のファイルへ"
-            f"緊急退避済みです: {path}\n"
+            f"緊急退避済みです: {paths[0]}\n"
             "次にこのタスクを再開する際は、まずexploreサブエージェントへ委譲して"
             "このファイルを把握し、write_thread_noteで要点を記録してから、"
+            "続きの作業に着手してください。"
+        )
+    if paths:
+        listing = "\n".join(f"- {p}" for p in paths)
+        return (
+            "この一括委譲は、中断時点で実行中だった各グループのサブエージェントの会話内容を"
+            f"次のファイルへ緊急退避済みです:\n{listing}\n"
+            "次にこのタスクを再開する際は、まずexploreサブエージェントへ委譲して"
+            "これらのファイルを把握し、write_thread_noteで要点を記録してから、"
             "続きの作業に着手してください。"
         )
     return (
@@ -3041,7 +3067,7 @@ def _dispatch_agent_rescue_note_hint(tc: dict) -> str:
     )
 
 
-def _dispatch_agent_rescue_nudge_text(hint: str) -> str:
+def _dispatch_agent_rescue_nudge_text(hint: str, tool_name: str = "dispatch_agent") -> str:
     """孤立したdispatch_agent tool_callの直後に追加する、念押しのHumanMessage文言。
 
     ToolMessage単体（「エラー: ...」で始まる失敗通知の体裁）では、低
@@ -3060,7 +3086,7 @@ def _dispatch_agent_rescue_nudge_text(hint: str) -> str:
     ならないため）。
     """
     return (
-        f"[システム通知] 直前のdispatch_agentへの委譲は中断されました。{hint} "
+        f"[システム通知] 直前の{tool_name}への委譲は中断されました。{hint} "
         "ただし、この直後の指示が明確に別の作業内容への変更や中断を"
         "求めている場合は、そちらを優先してください。"
     )
@@ -3071,7 +3097,7 @@ def _build_orphaned_placeholder_messages(tc: dict, base_reason: str) -> list:
 
     _repair_orphaned_tool_calls（セッション復旧時）・on_message の
     except asyncio.CancelledError（停止ボタン等による中断時）の両方から
-    使う共通処理。tool_callがdispatch_agentの場合のみ、強制停止時に
+    使う共通処理。tool_callがdispatch_agent・dispatch_agent_batchの場合のみ、強制停止時に
     run_subagent が緊急退避した会話履歴（_dispatch_agent_job.py の
     _make_rescue_on_cancelled 参照）をどう扱うべきかの案内を、通常の
     ToolMessageに加えてHumanMessage（念押し、_dispatch_agent_rescue_nudge_text
@@ -3085,16 +3111,16 @@ def _build_orphaned_placeholder_messages(tc: dict, base_reason: str) -> list:
             前提で渡すこと。
 
     Returns:
-        補完用のメッセージ列（dispatch_agent以外はToolMessage1件のみ）。
+        補完用のメッセージ列（dispatch_agent・dispatch_agent_batch以外はToolMessage1件のみ）。
     """
     content = f"エラー: {base_reason}このツール呼び出しの実行が中断されました。"
-    if tc.get("name") != "dispatch_agent":
+    if tc.get("name") not in _SUBAGENT_DISPATCH_TOOLS:
         return [ToolMessage(content=content, tool_call_id=tc["id"], name=tc.get("name", ""))]
     hint = _dispatch_agent_rescue_note_hint(tc)
     content = f"{content}\n\n[{hint}]"
     return [
         ToolMessage(content=content, tool_call_id=tc["id"], name=tc.get("name", "")),
-        HumanMessage(content=_dispatch_agent_rescue_nudge_text(hint)),
+        HumanMessage(content=_dispatch_agent_rescue_nudge_text(hint, tc["name"])),
     ]
 
 

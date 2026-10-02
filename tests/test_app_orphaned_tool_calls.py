@@ -132,3 +132,22 @@ def test_build_orphaned_placeholder_messages_for_other_tool_returns_single_tool_
     assert messages[0].tool_call_id == "tc-2"
     assert "直前のセッション異常により、このツール呼び出しの実行が中断されました。" in messages[0].content
     assert "write_scratch_note" not in messages[0].content
+
+
+def test_build_orphaned_placeholder_messages_for_batch_lists_all_group_rescue_files(monkeypatch, tmp_path) -> None:
+    """dispatch_agent_batch はグループごとに `<tool_call_id>_g<N>` の退避ファイルを持つため、全件を案内する。"""
+    _setup_workdir(monkeypatch, tmp_path)
+    tc = {"name": "dispatch_agent_batch", "args": {}, "id": "tc-b", "type": "tool_call"}
+    paths = [_scratch_notes_path_for_run(sanitize_run_id(f"{tc['id']}_g{i}")) for i in (10, 2)]
+    for p in paths:
+        p.write_text("退避内容", encoding="utf-8")
+
+    messages = _build_orphaned_placeholder_messages(tc, "ユーザーの停止操作等により、")
+
+    assert len(messages) == 2
+    tool_msg, human_msg = messages
+    assert tool_msg.name == "dispatch_agent_batch"
+    # グループ番号順（g2→g10）に並ぶ。
+    assert tool_msg.content.index(str(paths[1])) < tool_msg.content.index(str(paths[0]))
+    assert "dispatch_agent_batchへの委譲は中断" in human_msg.content
+    assert str(paths[0]) in human_msg.content

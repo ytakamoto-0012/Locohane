@@ -196,3 +196,129 @@ async def test_batch_clamps_group_size_to_max_iterations(monkeypatch, tmp_path) 
     await _invoke(task="t", agent_type="worker", pattern="*.png", path=str(images), group_size=50)
 
     assert len(captured) == 3
+
+
+@pytest.mark.asyncio
+async def test_batch_absolute_pattern_returns_error_instead_of_raising(monkeypatch, tmp_path) -> None:
+    """Path.glob は絶対パスの pattern を NotImplementedError で拒否する。ToolNode の既定
+    エラーハンドラはこれを再送出してターン全体を落とすため、エラー文字列で返すこと。"""
+    images, _ = _setup(monkeypatch, tmp_path, ["a.png"])
+    captured = _capture_tasks(monkeypatch)
+
+    result = await _invoke(task="t", agent_type="worker", pattern=str(images / "*.png"), path=str(images))
+
+    assert result.startswith("エラー: パターンが不正です")
+    assert "path に渡す" in result
+    assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_batch_rejects_too_many_groups_without_starting_jobs(monkeypatch, tmp_path) -> None:
+    images, _ = _setup(monkeypatch, tmp_path, [f"f{i}.png" for i in range(4)])
+    monkeypatch.setattr(_BATCH_MODULE, "_MAX_GROUPS", 3)
+    captured = _capture_tasks(monkeypatch)
+
+    result = await _invoke(task="t", agent_type="worker", pattern="*.png", path=str(images), group_size=1)
+
+    assert result.startswith("エラー:") and "4 グループ" in result
+    assert captured == []
+    assert tools._dispatch_agent_job._DISPATCH_AGENT_JOBS == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_lists_files_only_for_failed_groups(monkeypatch, tmp_path) -> None:
+    images, notes = _setup(monkeypatch, tmp_path, ["a.png", "b.png"])
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        if "a.png" in task:
+            raise RuntimeError("boom")
+        return "処理件数: 1"
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+
+    result = await _invoke(task="t", agent_type="worker", pattern="*.png", path=str(images), group_size=1)
+
+    failed, ok = result.split("### ")[1:3]
+    ok = ok.split("\n\n")[0]  # 末尾の thread note 案内・再委任案内を除いた、グループ2のブロックだけ
+    assert failed.startswith("グループ1") and ": エラー" in failed
+    # 再委任でLLMがファイル名を推測しないよう、失敗グループには担当ファイルの絶対パスが載る。
+    assert f"- {(images / 'a.png').resolve()}" in failed
+    assert ok.startswith("グループ2") and ": 完了" in ok
+    assert "担当ファイル" not in ok
+    assert "dispatch_agent で再委任" in result
+    # thread note には全グループの担当ファイルが残る。
+    assert str((images / "b.png").resolve()) in notes[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_batch_timeout_returns_completed_results_and_pending_job_ids(monkeypatch, tmp_path) -> None:
+    """安全上限に達しても、それまでに完了したグループの結果を捨てないこと。"""
+    images, notes = _setup(monkeypatch, tmp_path, ["a.png", "b.png"])
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS", 0.2)
+    release = asyncio.Event()
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        if "b.png" in task:
+            await release.wait()
+            return "遅いグループ"
+        return "速いグループ"
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+
+    result = await _invoke(task="t", agent_type="worker", pattern="*.png", path=str(images), group_size=1)
+
+    jobs = tools._dispatch_agent_job._DISPATCH_AGENT_JOBS
+    assert len(jobs) == 1
+    (pending_id, pending_job), = jobs.items()
+    assert "速いグループ" in result
+    assert "完了 1" in result and "実行中 1" in result
+    assert f"job_id={pending_id}" in result
+    assert "check_dispatch_agent_job" in result
+    assert f"- {(images / 'b.png').resolve()}" in result
+    assert len(notes) == 1 and "速いグループ" in notes[0]["content"]
+    release.set()
+    await pending_job.runner_task
+    assert pending_job.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_batch_pushes_single_aggregated_progress_message(monkeypatch, tmp_path) -> None:
+    images, _ = _setup(monkeypatch, tmp_path, [f"f{i}.png" for i in range(3)])
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_MAX_PARALLEL", 1)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS", 0.01)
+    sent: list = []
+    contents: list[str] = []
+
+    class _RecordingMessage(_FakeMessage):
+        async def send(self) -> None:
+            sent.append(self)
+            contents.append(self.content)
+
+        async def update(self) -> None:
+            contents.append(self.content)
+
+    monkeypatch.setattr(tools.cl, "Message", _RecordingMessage)
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        await asyncio.sleep(0.05)
+        return "ok"
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+
+    await _invoke(task="t", agent_type="worker", pattern="*.png", path=str(images), group_size=1)
+
+    # グループごとの個別メッセージは出さず、1件のメッセージを書き換え続ける。
+    assert len(sent) == 1
+    assert any("順番待ち 2" in c for c in contents)
+
+
+def test_single_job_progress_shows_waiting_until_semaphore_acquired(monkeypatch) -> None:
+    monkeypatch.setattr(tools._dispatch_agent_job, "_scratch_notes_path_for_run", lambda run_id: __import__("pathlib").Path("__nonexistent__"))
+    job = tools._dispatch_agent_job._DispatchAgentJob(
+        thread_id="t", run_id="r", agent_type="worker", task_preview="", started_at=0.0,
+        status="running", result=None, error_message=None, max_iterations=10,
+    )
+
+    assert tools._dispatch_agent_job._format_dispatch_agent_progress(job, "j").startswith("順番待ちです")
+    job.run_started_at = __import__("time").monotonic()
+    assert tools._dispatch_agent_job._format_dispatch_agent_progress(job, "j").startswith("実行中です（経過 0 秒")
