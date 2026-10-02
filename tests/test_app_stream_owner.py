@@ -75,3 +75,20 @@ async def test_close_all_outputs_closes_every_owner_with_reason(monkeypatch) -> 
     assert thinkings == {} and answers == {}
     assert sorted(sent) == ["a2", "am"]
     assert t1.metadata == {"stopped_reason": "loop_detected"} and tm.updated == 1
+
+
+@pytest.mark.asyncio
+async def test_mark_background_group_steps_closes_only_unfinished_groups() -> None:
+    """安全上限で batch が先に返った時、まだ終わっていないグループStepを「停止」ではなく
+    「バックグラウンド継続」で閉じ、ターン終了時の _finalize_orphaned_steps の対象から外す。"""
+    running, other = _FakeStep("step-group2"), _FakeStep("step-tool")
+    steps = {"group2": running, "tool": other}
+
+    # group1 は on_chain_end 済みで steps に無い。
+    await app._mark_background_group_steps({"group1", "group2"}, steps)
+
+    assert steps == {"tool": other}
+    assert running.metadata == {"background": True}
+    assert running.end is not None and running.updated == 1
+    assert "バックグラウンド" in running.output
+    assert other.updated == 0

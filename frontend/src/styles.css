@@ -1522,6 +1522,12 @@
   color: #f59e0b;
 }
 
+.step-item-status-badge--background {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.14);
+  color: #3b82f6;
+}
+
 .step-item-caret {
   color: var(--text-muted);
 }

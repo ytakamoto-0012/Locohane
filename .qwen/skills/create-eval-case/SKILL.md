@@ -22,7 +22,7 @@ description: Locohane の evals/cases/<target>/*.yaml に新しい eval ケー�
    直接読んでも `instances/<instance>/config_overrides.json` の上書き分が
    反映されないため、必ずこのコマンドを使う）:
    ```
-   LOCOHANE_INSTANCE=<instance> CONFIG_OVERRIDES_PATH=instances/<instance>/config_overrides.json "C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe" -c "from src.config import load_config; c=load_config(); print([e.base_url for e in c.main_endpoints], c.log_dir, c.default_workdir)"
+   "C:\DT_Python\Python311\env_local_agent_system\Scripts\python.exe" -m evals.instance <instance>
    ```
 4. 表示されたLLM接続先で llama.cpp server が起動しているか確認する。
    手順7の動作確認で実際に1件実行するため、未起動ならユーザーに起動を促す。
@@ -257,10 +257,10 @@ expect:
 
 ### 7. 動作確認する
 
-必ず先頭に2つの環境変数を付けて実行する（付けないと `default`
+必ず `--instance <instance>` を付けて実行する（付けないと `default`
 インスタンスの設定で動いてしまう）:
 ```
-LOCOHANE_INSTANCE=<instance> CONFIG_OVERRIDES_PATH=instances/<instance>/config_overrides.json python -m evals.run_case evals/cases/<target>/<ファイル名>.yaml
+python -m evals.run_case evals/cases/<target>/<ファイル名>.yaml --instance <instance>
 ```
 
 - yaml の形式エラー（`case_schema.py` の `ValueError`）が出ないか確認する。

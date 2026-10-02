@@ -9,9 +9,9 @@ rem Requires ADMIN_USERS to be set in the project-root .env (login
 rem credentials for the admin tool); otherwise startup fails with an
 rem error (see .env.example).
 rem
-rem ADMIN_HOST/ADMIN_PORT below override config.ini's [admin] section
-rem (see src/config.py). Edit these two lines directly to change the
-rem host/port this dashboard listens on.
+rem The host/port this dashboard listens on come from config.ini's
+rem [admin] section. Setting ADMIN_HOST/ADMIN_PORT environment variables
+rem overrides them (see src/config.py).
 
 python -m admin.server
 pause

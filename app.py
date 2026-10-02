@@ -2969,6 +2969,32 @@ async def _finalize_orphaned_steps(steps: dict[str, cl.Step], reason: str) -> No
     steps.clear()
 
 
+# 安全上限で dispatch_agent_batch が先に返った後も裏で動き続けるグループStepの出力欄の文言。
+_BATCH_GROUP_BACKGROUND_OUTPUT = (
+    "安全上限に達したため、このグループはバックグラウンドで実行を続けています"
+    "（結果は check_dispatch_agent_job で取得します）。"
+)
+
+
+async def _mark_background_group_steps(group_run_ids, steps: dict[str, cl.Step]) -> None:
+    """dispatch_agent_batch の終了時点でまだ終わっていないグループStepを「バックグラウンド継続」で確定させる。
+
+    安全上限（[subagent].background_inline_wait_max_seconds）超過でツールが先に返ると、
+    裏で続くグループの on_chain_end はこのターンのイベントストリームへ届かない。
+    steps に残したままだとターン終了時の _finalize_orphaned_steps で「停止」と
+    表示され、実際には動いているのに止まったように見えるため、ここで
+    metadata.background を付けて閉じる（フロントは「バックグラウンド」バッジを出す）。
+    """
+    for run_id in group_run_ids:
+        step = steps.pop(run_id, None)
+        if step is None:
+            continue
+        step.metadata = {"background": True}
+        step.output = _BATCH_GROUP_BACKGROUND_OUTPUT
+        step.end = utc_now()
+        await step.update()
+
+
 async def _aclose_event_stream(event_stream) -> bool:
     """astream_events() の非同期ジェネレータを、5秒のタイムアウト付きで閉じる。
 
@@ -3858,6 +3884,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                                 removed_usage |= call_usage.pop(child_owner, None) is not None
                             if removed_usage:
                                 await _send_token_usage(call_usage)
+                            await _mark_background_group_steps(owner_children.get(event["run_id"], ()), steps)
                         output = event["data"].get("output")
                         content = getattr(output, "content", output)
                         step.output = content

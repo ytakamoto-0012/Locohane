@@ -117,6 +117,10 @@ def _list_target_files(base: Path, pattern: str) -> list[Path]:
     LLMが何度も呼ぶツールの応答時間を抑えるためで、1回呼ぶだけの本ツールには
     当てはまらない（大量に一致した場合は [subagent].batch_max_groups が起動前に止める）。
     `{a,b}` のブレース展開と他セッションの一時ディレクトリ除外は Glob と揃える。
+
+    pathlib の glob は pattern 中の ".." をそのまま辿る（"../other/*.jpg" で base の
+    外が一致する）ため、解決後に base 配下でないもの（シンボリックリンク経由で外へ
+    出るものを含む）は除く。
     """
     exclude_names = _foreign_tmp_dir_names()
     resolved_base = base.resolve()
@@ -132,6 +136,8 @@ def _list_target_files(base: Path, pattern: str) -> list[Path]:
             if exclude_names and set(p.parts) & exclude_names:
                 continue
             resolved = p.resolve()
+            if not resolved.is_relative_to(resolved_base):
+                continue
             if resolved not in seen:
                 seen.add(resolved)
                 files.append(resolved)
@@ -406,7 +412,9 @@ async def dispatch_agent_batch(
         hint = "（`@N` は例の記法です。実際の番号の `@12` 等か、作業ディレクトリからの相対パス `images` 等を渡すこと）" if "@N" in path else ""
         return f"エラー: 対象フォルダが見つかりません: {base}{hint}{_workdir_folders_hint()}"
     try:
-        files = _list_target_files(base, pattern)
+        # "**" の再帰探索は大きなフォルダで時間がかかるため、イベントループ（他セッション・
+        # 進捗表示を含むサーバー全体）を止めないよう別スレッドで行う。
+        files = await asyncio.to_thread(_list_target_files, base, pattern)
     except GLOB_PATTERN_ERRORS as e:
         return f"エラー: {glob_pattern_error_message(e)}"
     if not files:

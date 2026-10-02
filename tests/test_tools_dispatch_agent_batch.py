@@ -362,6 +362,24 @@ async def test_batch_subfolder_pattern_collects_nested_files(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_batch_pattern_cannot_escape_path_with_parent_dir(monkeypatch, tmp_path) -> None:
+    """pathlib の glob は ".." をそのまま辿るため、path の外のファイルが対象に入らないこと。"""
+    images, _ = _setup(monkeypatch, tmp_path, ["a.png"])
+    outside = images.parent / "outside"
+    outside.mkdir()
+    (outside / "secret.png").write_bytes(b"x")
+    captured = _capture_tasks(monkeypatch)
+
+    result = await _invoke(task="t", agent_type="worker", pattern="../outside/*.png", path=str(images))
+    assert result.startswith("エラー:")
+    assert captured == []
+
+    result = await _invoke(task="t", agent_type="worker", pattern="{*.png,../outside/*.png}", path=str(images))
+    assert len(captured) == 1
+    assert "a.png" in captured[0] and "secret.png" not in captured[0]
+
+
+@pytest.mark.asyncio
 async def test_batch_plain_pattern_stays_direct_children_only_with_hint(monkeypatch, tmp_path) -> None:
     images, _ = _setup(monkeypatch, tmp_path, [])
     (images / "sub").mkdir()

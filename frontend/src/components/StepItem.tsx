@@ -24,7 +24,8 @@ const STATUS_LABELS = {
   running: '実行中',
   done: '完了',
   error: 'エラー',
-  stopped: '停止'
+  stopped: '停止',
+  background: 'バックグラウンド'
 } as const;
 
 export function StepItem({ step }: { step: IStep }) {
@@ -41,13 +42,18 @@ export function StepItem({ step }: { step: IStep }) {
   // ループ検知等、アプリ側の判断で打ち切られたStepは正常完了と区別する
   // （app.py が thinking.metadata.stopped_reason を設定する）。
   const stopped = Boolean(step.metadata?.stopped_reason) && !step.isError;
+  // dispatch_agent_batch が安全上限で先に返った後も裏で動き続けるグループ
+  // （app.py の _mark_background_group_steps が metadata.background を設定する）。
+  const background = Boolean(step.metadata?.background) && !step.isError;
   const status: keyof typeof STATUS_LABELS = step.isError
     ? 'error'
     : stopped
       ? 'stopped'
-      : running
-        ? 'running'
-        : 'done';
+      : background
+        ? 'background'
+        : running
+          ? 'running'
+          : 'done';
   const typeLabel = TYPE_LABELS[step.type] ?? step.type;
   // dispatch_agent（サブエージェント実行）のStepは、app.py側で name を
   // "SUB: <agent_type>" 形式にして送ってくる。これは「ツール: サブエージェ...」
