@@ -10,7 +10,7 @@ import dataclasses
 import json
 
 import app
-from app import TOKEN_USAGE_PREFIX, _format_token_usage, _is_subagent_call, _token_usage_level
+from app import MAIN_CALL_USAGE_LABEL, TOKEN_USAGE_PREFIX, _format_token_usage, _is_subagent_call, _token_usage_level
 
 
 def _with_thresholds(monkeypatch, warn: int, alert: int) -> None:
@@ -69,31 +69,40 @@ def test_format_token_usage_includes_all_three_tiers() -> None:
     cumulative_main = {"input": 10, "output": 20, "total": 30}
     cumulative = {"input": 100, "output": 200, "total": 300}
 
-    text = _format_token_usage(call, cumulative_main, cumulative, is_subagent=False)
+    text = _format_token_usage({None: {"label": MAIN_CALL_USAGE_LABEL, **call}}, cumulative_main, cumulative)
 
     assert text.startswith(TOKEN_USAGE_PREFIX)
     payload = json.loads(text[len(TOKEN_USAGE_PREFIX) :])
     rows = {row["label"]: row for row in payload["rows"]}
 
-    assert rows["リクエスト1回あたり（main）"] == {"label": "リクエスト1回あたり（main）", **call, "level": None}
-    assert rows["メインエージェント累計"] == {"label": "メインエージェント累計", **cumulative_main}
+    assert rows[MAIN_CALL_USAGE_LABEL] == {"label": MAIN_CALL_USAGE_LABEL, **call, "level": None, "group": "call"}
+    assert rows["メインエージェント累計"] == {"label": "メインエージェント累計", **cumulative_main, "group": "total"}
     assert rows["会話累計（サブエージェント含む）"] == {
         "label": "会話累計（サブエージェント含む）",
         **cumulative,
+        "group": "total",
     }
 
 
-def test_format_token_usage_call_label_marks_subagent() -> None:
-    call = {"input": 1, "output": 2, "total": 3}
-    cumulative_main = {"input": 10, "output": 20, "total": 30}
-    cumulative = {"input": 100, "output": 200, "total": 300}
+def test_format_token_usage_one_row_per_owner_with_main_first(monkeypatch) -> None:
+    # 並列実行中のサブエージェントは出力元ごとに1行ずつ並び、警告色も行ごとに判定する。
+    _with_thresholds(monkeypatch, warn=48000, alert=64000)
+    totals = {"input": 0, "output": 0, "total": 0}
+    call_usage = {
+        "g1": {"label": "SUB: worker（グループ1/16・15件）", "input": 50000, "output": 0, "total": 50000},
+        None: {"label": MAIN_CALL_USAGE_LABEL, "input": 1, "output": 2, "total": 3},
+        "g2": {"label": "SUB: worker（グループ2/16・15件）", "input": 1, "output": 2, "total": 3},
+    }
 
-    text = _format_token_usage(call, cumulative_main, cumulative, is_subagent=True)
+    payload = json.loads(_format_token_usage(call_usage, totals, totals)[len(TOKEN_USAGE_PREFIX) :])
+    call_rows = [row for row in payload["rows"] if row["group"] == "call"]
 
-    payload = json.loads(text[len(TOKEN_USAGE_PREFIX) :])
-    rows = {row["label"]: row for row in payload["rows"]}
-
-    assert rows["リクエスト1回あたり（sub）"] == {"label": "リクエスト1回あたり（sub）", **call, "level": None}
+    assert [row["label"] for row in call_rows] == [
+        MAIN_CALL_USAGE_LABEL,
+        "SUB: worker（グループ1/16・15件）",
+        "SUB: worker（グループ2/16・15件）",
+    ]
+    assert [row["level"] for row in call_rows] == [None, "warn", None]
 
 
 def test_token_usage_level_none_below_thresholds(monkeypatch) -> None:

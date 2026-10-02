@@ -1251,27 +1251,42 @@ def _token_usage_level(total: int) -> str | None:
     return None
 
 
-def _format_token_usage(call: dict, cumulative_main: dict, cumulative: dict, is_subagent: bool) -> str:
-    """直近のリクエスト1回分・メインエージェント累計・会話累計（メイン+サブ合算）を、
+MAIN_CALL_USAGE_LABEL = "リクエスト1回あたり（main）"
+
+
+def _format_token_usage(call_usage: dict, cumulative_main: dict, cumulative: dict) -> str:
+    """出力元ごとの直近リクエスト1回分・メインエージェント累計・会話累計（メイン+サブ合算）を、
     サイドパネルの TokenUsageCard（表形式）表示用に JSON 化する。
+
+    call_usage は出力元（None=メインエージェント、それ以外はサブエージェント/batchグループの
+    run_id）→ {"label", "input", "output", "total"}。並列実行中のサブエージェントが
+    1行を交互に上書きすると、どの値か分からず、上限に近い値も直後に隠れてしまうため、
+    出力元ごとに1行ずつ並べ、警告色も行ごとに判定する。メインの行を常に先頭にする。
+    group="call" の行はフロント側でスクロール領域に入る（行数が並列数で増えるため）。
 
     cumulative_main はサブエージェント（dispatch_agent）内部の呼び出しを含まない、
     メインエージェント自身のLLM呼び出しのみの累計。委譲がどれだけ会話コンテキストの
     節約に寄与しているかを、cumulative（合算値）との差でユーザーが確認できる。
-
-    is_subagent は直近の call がメインエージェント自身のLLM呼び出しか、
-    dispatch_agent 内部（サブエージェント）由来かを示す（_is_subagent_call参照）。
-    「リクエスト1回あたり」の行がどちらの呼び出しの値かをラベルで区別できるようにする。
     """
-    call_label = f"リクエスト1回あたり（{'sub' if is_subagent else 'main'}）"
+    ordered = sorted(call_usage.items(), key=lambda item: item[0] is not None)
+    call_rows = [
+        {**row, "level": _token_usage_level(row["total"]), "group": "call"} for _, row in ordered
+    ]
     payload = {
         "rows": [
-            {"label": call_label, **call, "level": _token_usage_level(call["total"])},
-            {"label": "メインエージェント累計", **cumulative_main},
-            {"label": "会話累計（サブエージェント含む）", **cumulative},
+            *call_rows,
+            {"label": "メインエージェント累計", **cumulative_main, "group": "total"},
+            {"label": "会話累計（サブエージェント含む）", **cumulative, "group": "total"},
         ]
     }
     return TOKEN_USAGE_PREFIX + json.dumps(payload, ensure_ascii=False)
+
+
+async def _send_token_usage(call_usage: dict) -> None:
+    """call_usage とセッションの累計値からトークン使用量カードを送り直す。"""
+    cumulative = cl.user_session.get("token_usage_cumulative") or _new_usage_totals()
+    cumulative_main = cl.user_session.get("token_usage_cumulative_main") or _new_usage_totals()
+    await cl.Message(content=_format_token_usage(call_usage, cumulative_main, cumulative)).send()
 
 
 # トークン使用量表示（🔢 プレフィックス）と同じ仕組みで、作業ディレクトリの状態を
@@ -3603,6 +3618,10 @@ async def _on_message_impl(message: cl.Message) -> None:
         # 出力元 run_id → その配下のグループ run_id（dispatch_agent_batch 終了時に
         # グループ側の出力もまとめて確定させるため）。
         owner_children: dict[str, set[str]] = {}
+        # 出力元 run_id → 表示名（トークン使用量カードの行ラベル）と、
+        # 出力元 → 直近のリクエスト1回分（_format_token_usage 参照）。
+        owner_labels: dict[str, str] = {}
+        call_usage: dict[str | None, dict] = {}
         steps: dict[str, cl.Step] = {}  # run_id -> Step（ツール開始/終了を対応付け。_resolve_parent_idが「まだ完了していない祖先」の判定に使うため、on_tool_endで必ずpopする）
         # dispatch_agent（サブエージェント委譲）のtool run_id集合。_is_subagent_call
         # が使う。steps と異なり on_tool_end で pop しない（_is_subagent_call
@@ -3753,6 +3772,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                         # 終了までここから取り除かない。
                         dispatch_agent_run_ids.add(event["run_id"])
                         owner_run_ids.add(event["run_id"])
+                        owner_labels[event["run_id"]] = label
 
                 elif kind == "on_chain_start" and event["name"] == _BATCH_GROUP_RUN_NAME:
                     # dispatch_agent_batch のグループごとの中間Step。配下のサブエージェントの
@@ -3764,12 +3784,16 @@ async def _on_message_impl(message: cl.Message) -> None:
                     steps[event["run_id"]] = step
                     resync_steps[event["run_id"]] = step
                     owner_run_ids.add(event["run_id"])
+                    owner_labels[event["run_id"]] = label
                     batch_owner = _stream_owner(event, owner_run_ids - {event["run_id"]})
                     if batch_owner is not None:
                         owner_children.setdefault(batch_owner, set()).add(event["run_id"])
 
                 elif kind == "on_chain_end" and event["name"] == _BATCH_GROUP_RUN_NAME:
                     await _close_owner_output(event["run_id"], thinkings, answers)
+                    # 終わったグループの行はカードから消す（行数を並列数までに抑える）。
+                    if call_usage.pop(event["run_id"], None) is not None:
+                        await _send_token_usage(call_usage)
                     step = steps.pop(event["run_id"], None)
                     if step is not None:
                         output = event["data"].get("output")
@@ -3799,8 +3823,12 @@ async def _on_message_impl(message: cl.Message) -> None:
                         # サブエージェント起動ツールならその配下（自身・グループ）の分も確定させる。
                         await _close_owner_output(_stream_owner(event, owner_run_ids), thinkings, answers)
                         if event["name"] in _SUBAGENT_DISPATCH_TOOLS:
+                            removed_usage = False
                             for child_owner in [event["run_id"], *owner_children.get(event["run_id"], ())]:
                                 await _close_owner_output(child_owner, thinkings, answers)
+                                removed_usage |= call_usage.pop(child_owner, None) is not None
+                            if removed_usage:
+                                await _send_token_usage(call_usage)
                         output = event["data"].get("output")
                         content = getattr(output, "content", output)
                         step.output = content
@@ -3957,12 +3985,18 @@ async def _on_message_impl(message: cl.Message) -> None:
                         # ツール呼び出しを挟んで長く動くターンでも、LLM呼び出しの
                         # たびにサイドパネルの表示を更新する（ターン完了まで待たないと
                         # 見えない、という問題を避けるため）。表示は「このターン」の
-                        # 累積ではなく、直近のリクエスト（LLM呼び出し）1回分の値を使う。
+                        # 累積ではなく、直近のリクエスト（LLM呼び出し）1回分の値を出力元ごとに使う。
                         call_totals = {"input": 0, "output": 0, "total": 0}
                         _accumulate_usage(call_totals, usage)
-                        await cl.Message(
-                            content=_format_token_usage(call_totals, cumulative_main, cumulative, is_subagent_usage)
-                        ).send()
+                        usage_owner = _stream_owner(event, owner_run_ids)
+                        if usage_owner is None and is_subagent_usage:
+                            usage_owner, usage_label = "sub", "SUB"
+                        elif usage_owner is None:
+                            usage_label = MAIN_CALL_USAGE_LABEL
+                        else:
+                            usage_label = owner_labels.get(usage_owner, "SUB")
+                        call_usage[usage_owner] = {"label": usage_label, **call_totals}
+                        await _send_token_usage(call_usage)
 
                 elif kind == "on_custom_event" and event["name"] == "subagent_loop_retry":
                     # src/subagent.py の _invoke_with_loop_retry がサブエージェント

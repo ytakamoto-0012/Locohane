@@ -1299,6 +1299,27 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 11px;
+  table-layout: fixed;
+}
+
+.token-usage-col-label {
+  width: 31%;
+}
+
+/* 出力元ごとの直近1回分の行（並列数に応じて増える）。カードの高さを保ってスクロールさせる。 */
+.token-usage-scroll {
+  max-height: 64px;
+  overflow-y: auto;
+}
+
+.token-usage-scroll thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+.token-usage-totals {
+  border-top: 1px solid var(--border);
 }
 
 .token-usage-table th,
