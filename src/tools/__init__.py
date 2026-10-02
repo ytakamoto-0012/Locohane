@@ -24,6 +24,9 @@ LangChain の @tool として定義する。read_skill/read_skill_file/run_scrip
 - dispatch_agent  … タスクをサブエージェントへ委譲し、最終回答のみを受け取る。完了までの間、
   進捗（経過時間・反復回数）を人間向けにチャットへ直接通知する。設定した安全上限を超えても
   なお完了しない場合のみ job_id を返してターンを終える（フォールバック）
+- dispatch_agent_batch … フォルダ内の多数のファイルへ同じ処理を行う作業を、ハーネス側で
+  ファイル一覧取得・グループ分け・担当ファイル割り当てまで行い、複数のサブエージェントへ
+  並列に委譲する（LLMが1回呼ぶだけで並列化される。dispatch_agent と同じジョブ基盤を使う）
 - check_dispatch_agent_job / stop_dispatch_agent_job … 上記フォールバック時のみ使う、
   ジョブの状況確認・強制終了
 - ask_user_question(AskUserQuestion) … ユーザーへ自由記述で追加質問する。labels省略時は
@@ -91,6 +94,7 @@ from .registry import (  # noqa: F401
     create_plan,
     delete_memory,
     dispatch_agent,
+    dispatch_agent_batch,
     execute_python_code,
     execute_python_code_background,
     execute_python_code_readonly,

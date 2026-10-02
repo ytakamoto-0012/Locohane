@@ -24,6 +24,7 @@ from .execute_python_code import execute_python_code
 from .execute_python_code_readonly import execute_python_code_readonly
 from .execute_python_code_background import execute_python_code_background
 from .dispatch_agent import dispatch_agent
+from .dispatch_agent_batch import dispatch_agent_batch
 from .check_dispatch_agent_job import check_dispatch_agent_job
 from .stop_dispatch_agent_job import stop_dispatch_agent_job
 from .create_plan import create_plan
@@ -95,6 +96,7 @@ _BASE_TOOLS: list[BaseTool] = [
     list_thread_notes,
     read_thread_note,
     dispatch_agent,
+    dispatch_agent_batch,
     check_dispatch_agent_job,
     stop_dispatch_agent_job,
     ask_user_question,

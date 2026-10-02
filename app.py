@@ -177,6 +177,7 @@ _TOOL_LABELS = {
     "run_script": "スクリプト実行",
     "analyze_image": "画像解析",
     "dispatch_agent": "サブエージェント実行",
+    "dispatch_agent_batch": "サブエージェント一括実行",
     "AskUserQuestion": "ユーザーへの質問（自由記述）",
     "ask_user_choice": "ユーザーへの質問（選択式）",
     "create_plan": "実行計画作成",
@@ -193,6 +194,10 @@ _TOOL_LABELS = {
     "help": "ヘルプ表示",
 }
 
+# 内部でサブエージェント（run_subagent）を起動するツール名。これらの tool run_id
+# 配下のLLMイベントはサブエージェント由来として扱う（_is_subagent_call 参照）。
+_SUBAGENT_DISPATCH_TOOLS = frozenset({"dispatch_agent", "dispatch_agent_batch"})
+
 
 def _tool_step_label(event: dict) -> str:
     """on_tool_start イベントから Step の表示名を決める。
@@ -205,11 +210,11 @@ def _tool_step_label(event: dict) -> str:
     扱いにしている）。
     """
     name = event["name"]
-    if name == "dispatch_agent":
+    if name in _SUBAGENT_DISPATCH_TOOLS:
         tool_input = event["data"].get("input")
         agent_type = tool_input.get("agent_type") if isinstance(tool_input, dict) else None
         if agent_type:
-            return f"SUB: {agent_type}"
+            return f"SUB: {agent_type}（一括）" if name == "dispatch_agent_batch" else f"SUB: {agent_type}"
     return _TOOL_LABELS.get(name, name)
 
 # アプリ全体で共有する状態（起動時に一度だけ構築）。
@@ -2834,7 +2839,7 @@ def _is_dispatch_agent_error(tool_name: str, content: object) -> bool:
     終了として扱ってしまうため、ここで検知して呼び出し元が is_error を
     立てられるようにする。
     """
-    return tool_name == "dispatch_agent" and isinstance(content, str) and content.startswith("エラー:")
+    return tool_name in _SUBAGENT_DISPATCH_TOOLS and isinstance(content, str) and content.startswith("エラー:")
 
 
 def _is_dispatch_agent_truncated(tool_name: str, content: object) -> bool:
@@ -3648,7 +3653,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                     await step.send()
                     steps[event["run_id"]] = step
                     resync_steps[event["run_id"]] = step
-                    if event["name"] == "dispatch_agent":
+                    if event["name"] in _SUBAGENT_DISPATCH_TOOLS:
                         # _is_subagent_call docstring参照。steps と違いターン
                         # 終了までここから取り除かない。
                         dispatch_agent_run_ids.add(event["run_id"])
