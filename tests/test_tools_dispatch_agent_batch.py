@@ -360,3 +360,44 @@ async def test_batch_plain_pattern_stays_direct_children_only_with_hint(monkeypa
 
     assert result.startswith("エラー:") and "**/*.jpg" in result
     assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_batch_runs_each_group_as_named_child_runnable(monkeypatch, tmp_path) -> None:
+    """各グループは BATCH_GROUP_RUN_NAME の子runとして実行され、表示名が metadata に載る
+    （app.py がこれを見てグループごとの中間Stepを作る）。"""
+    from langchain_core.callbacks import AsyncCallbackHandler
+
+    images, _ = _setup(monkeypatch, tmp_path, [f"f{i}.png" for i in range(3)])
+    _capture_tasks(monkeypatch)
+    started: list[tuple[str, dict]] = []
+
+    class _Recorder(AsyncCallbackHandler):
+        async def on_chain_start(self, serialized, inputs, *, run_id, parent_run_id=None, tags=None, metadata=None, **kwargs):
+            if kwargs.get("name") == _BATCH_MODULE.BATCH_GROUP_RUN_NAME:
+                started.append((kwargs["name"], metadata or {}))
+
+    await tools.dispatch_agent_batch.ainvoke(
+        {
+            "name": "dispatch_agent_batch",
+            "args": {"task": "t", "agent_type": "worker", "pattern": "*.png", "path": str(images), "group_size": 2},
+            "id": "test-batch-runnable",
+            "type": "tool_call",
+        },
+        config={"callbacks": [_Recorder()]},
+    )
+
+    labels = sorted(meta["batch_group_label"] for _, meta in started)
+    assert labels == ["SUB: worker（グループ1/2・2件）", "SUB: worker（グループ2/2・1件）"]
+
+
+@pytest.mark.asyncio
+async def test_batch_missing_folder_lists_workdir_folders(monkeypatch, tmp_path) -> None:
+    _setup(monkeypatch, tmp_path, ["a.png"])
+    captured = _capture_tasks(monkeypatch)
+
+    result = await _invoke(task="t", agent_type="worker", pattern="*.png", path="no_such_folder")
+
+    assert result.startswith("エラー: 対象フォルダが見つかりません")
+    assert "直下のフォルダ: images" in result
+    assert captured == []

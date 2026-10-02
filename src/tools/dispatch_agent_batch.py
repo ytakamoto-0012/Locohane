@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import InjectedToolCallId, tool
 from pathlib import Path
 from typing import Annotated
@@ -18,7 +19,7 @@ from ._dispatch_agent_job import _SUBAGENT_MESSAGE_AUTHOR, _DispatchAgentJob, _f
 from ._dispatch_agent_job import _purge_stale_dispatch_agent_jobs, _run_dispatch_agent_job
 from ._path_memory_helpers import _resolve_path_memory_tokens_in_text
 from ._safe_path import _resolve_file_tools_path
-from ._workdir import _foreign_tmp_dir_names
+from ._workdir import _foreign_tmp_dir_names, _resolve_workdir
 from .dispatch_agent import _task_with_orchestrator_skill_hint, _task_with_plan_hint, _task_with_work_dir_hint
 from .glob_tool import GLOB_PATTERN_ERRORS, _expand_braces, glob_pattern_error_message
 from .thread_notes import write_thread_note
@@ -38,6 +39,13 @@ _GROUP_RESULT_PREVIEW_CHARS = 400
 # pattern="*" で大きなフォルダを指定した場合等に、確認なしで数百件のジョブが
 # 起動されるのを防ぐ（画像なら group_size=15 で750件まで）。
 _MAX_GROUPS = 50
+
+# 各グループのジョブを包む Runnable の run_name。app.py はこの名前の
+# on_chain_start/on_chain_end でグループごとの中間Stepを作り、配下のサブエージェントの
+# 思考・ツールStepをその下へ入れる（全グループが1つの「SUB: worker（一括）」の下に
+# 区別なく並び、どのグループの処理か分からなかったため）。表示名は metadata の
+# "batch_group_label"。
+BATCH_GROUP_RUN_NAME = "dispatch_agent_batch_group"
 
 # 安全上限超過で先にターンを終えた後も、全グループ完了まで動き続ける
 # 集約進捗pushタスクへの参照（asyncio はタスクを弱参照しか持たないため、
@@ -102,6 +110,25 @@ def _list_target_files(base: Path, pattern: str) -> list[Path]:
                 files.append(resolved)
     files.sort(key=lambda p: _relative_sort_key(p, resolved_base))
     return files
+
+
+def _workdir_folders_hint() -> str:
+    """対象フォルダが見つからない時に、作業ディレクトリ直下のフォルダ名を添える。
+
+    作業ディレクトリ自体の親フォルダ名（例: annual_schedule_large）を path に渡して
+    「見つかりません」になり、もう1往復して正しいパスを探し直した実測があるため
+    （evals/tuning_log.md batch_iter07）、相対パスでそのまま渡せる候補を示す。
+    """
+    try:
+        workdir = _resolve_workdir()
+        names = sorted((p.name for p in workdir.iterdir() if p.is_dir() and p.name not in _foreign_tmp_dir_names()), key=str.casefold)
+    except (OSError, RuntimeError):
+        return ""
+    shown = ", ".join(names[:20]) + ("…" if len(names) > 20 else "")
+    return (
+        f"\n作業ディレクトリ（{workdir}）直下のフォルダ: {shown or '（なし）'}。"
+        "path には作業ディレクトリからの相対パス（例: 上記のフォルダ名、作業ディレクトリ自体なら \".\"）を渡すこと。"
+    )
 
 
 def _file_listing(group: list[Path]) -> str:
@@ -184,6 +211,28 @@ async def _push_batch_progress(jobs: list[tuple[str, _DispatchAgentJob]], starte
         logger.debug("dispatch_agent_batch: 進捗pushに失敗しました", exc_info=True)
 
 
+async def _run_group_runnable(job: _DispatchAgentJob, job_id: str, text: str, resolved, label: str) -> None:
+    """1グループ分のジョブを、名前付きの Runnable として実行する。
+
+    asyncio.create_task はこのツール実行中のコンテキスト（LangChain のコールバック
+    設定を含む）をコピーするため、Runnable の実行はこのツールの子runとして
+    astream_events に現れ、配下のサブエージェントのイベントの parent_ids には
+    このグループの run_id が入る（app.py の _resolve_parent_id/_stream_owner 参照）。
+    戻り値（on_chain_end の output）はグループStepの出力表示用の短い文字列。
+    """
+
+    async def _run(_: object) -> str:
+        await _run_dispatch_agent_job(job, job_id, text, resolved)
+        if job.status == "error":
+            return f"エラー: {job.error_message or ''}"[:_GROUP_RESULT_PREVIEW_CHARS]
+        return (job.result or "")[:_GROUP_RESULT_PREVIEW_CHARS]
+
+    await RunnableLambda(_run).ainvoke(
+        None,
+        config={"run_name": BATCH_GROUP_RUN_NAME, "metadata": {"batch_group_label": label}},
+    )
+
+
 @tool
 async def dispatch_agent_batch(
     task: str,
@@ -206,6 +255,10 @@ async def dispatch_agent_batch(
     サブエージェントへ渡る task 文には、共通の指示の後ろに
     「担当ファイル（絶対パスの一覧）」が自動で付け足される。task には全グループ
     共通の指示（出力先・出力形式・ファイル名規則・スキップ条件等）だけを書くこと。
+
+    agent_type は dispatch_agent と同じ基準で選ぶ。例: 多数のファイルを読んで
+    内容を抽出・要約するだけなら explore、読んで書き出すなら worker、生成済みの
+    多数のファイルを検証するなら verifier。
 
     書き込みを伴う agent_type（worker 等）で使う場合は、dispatch_agent と同じく
     先に create_plan → approve_plan で承認を得ておくこと（計画のステップは
@@ -247,7 +300,7 @@ async def dispatch_agent_batch(
         return f"エラー: {error}"
     if not base.is_dir():
         hint = "（`@N` は例の記法です。実際の番号の `@12` 等か、作業ディレクトリからの相対パス `images` 等を渡すこと）" if "@N" in path else ""
-        return f"エラー: 対象フォルダが見つかりません: {base}{hint}"
+        return f"エラー: 対象フォルダが見つかりません: {base}{hint}{_workdir_folders_hint()}"
     try:
         files = _list_target_files(base, pattern)
     except GLOB_PATTERN_ERRORS as e:
@@ -312,7 +365,9 @@ async def dispatch_agent_batch(
         job_id = uuid.uuid4().hex[:12]
         # 同時実行数は _run_dispatch_agent_job 内のセッション単位セマフォ
         # （[subagent].max_parallel）がそのまま制御する。
-        job.runner_task = asyncio.create_task(_run_dispatch_agent_job(job, job_id, text, resolved))
+        group = groups[index - 1]
+        label = f"SUB: {agent_type}（グループ{index}/{len(groups)}・{len(group)}件）"
+        job.runner_task = asyncio.create_task(_run_group_runnable(job, job_id, text, resolved, label))
         _dispatch_agent_job._DISPATCH_AGENT_JOBS[job_id] = job
         jobs.append((job_id, job))
 
