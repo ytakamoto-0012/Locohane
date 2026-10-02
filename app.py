@@ -159,6 +159,7 @@ from src.tools import (
     reset_call_history_guards_after_compaction,
     toggle_plan_mode_from_ui,
 )
+from src.tools.dispatch_agent_batch import BATCH_GROUP_RUN_NAME
 from src.tools._path_memory_helpers import _register_path_memory
 from src.tools._plan_render import _render_plan_payload
 from src.tools._workdir import _build_workdir_status_info
@@ -2796,12 +2797,62 @@ def _resolve_parent_id(event: dict, steps: dict[str, cl.Step]) -> str | None:
     残っている（＝まだ完了していない）祖先Stepがあれば、その Step の下へ
     ネストさせる。該当が無ければ従来通り cl.context.current_step を使う。
     """
-    for parent_run_id in event.get("parent_ids", []):
+    # parent_ids は「ルート→直近の親」の順に並ぶため、逆順に見て一番近い祖先を選ぶ
+    # （dispatch_agent_batch のグループStepのように、開いているStepが入れ子になる
+    # 場合に外側のStepへ吸い寄せられないようにするため）。
+    for parent_run_id in reversed(event.get("parent_ids", [])):
         parent_step = steps.get(parent_run_id)
         if parent_step is not None:
             return parent_step.id
     parent = cl.context.current_step
     return parent.id if parent else None
+
+
+def _stream_owner(event: dict, owner_run_ids: set[str]) -> str | None:
+    """このイベントの出力元（思考Step・回答Messageを分けて持つ単位）を返す。
+
+    サブエージェント（dispatch_agent の run_id、または dispatch_agent_batch の
+    グループの run_id）由来なら一番近いその run_id、メインエージェント由来なら None。
+    [subagent].max_parallel が2以上だと複数のサブエージェントが同時にトークンを
+    流すため、思考Step・回答Messageを1つずつしか持たないと別々のサブエージェントの
+    思考が同じStepへ交互に書き込まれ、片方のツール開始でもう片方の思考Stepまで
+    閉じられてしまう。
+    """
+    for parent_run_id in reversed(event.get("parent_ids", [])):
+        if parent_run_id in owner_run_ids:
+            return parent_run_id
+    return None
+
+
+async def _close_owner_output(
+    owner: str | None,
+    thinkings: dict[str | None, cl.Step],
+    answers: dict[str | None, cl.Message],
+    *,
+    stopped_reason: str | None = None,
+) -> None:
+    """指定した出力元の思考Stepを確定させ、回答Messageを確定送信する（他の出力元には触れない）。"""
+    await _close_thinking(thinkings.pop(owner, None), stopped_reason=stopped_reason)
+    answer = answers.pop(owner, None)
+    if answer is not None:
+        await _send_answer(answer)
+
+
+async def _close_all_outputs(
+    thinkings: dict[str | None, cl.Step],
+    answers: dict[str | None, cl.Message],
+    *,
+    stopped_reason: str | None = None,
+) -> None:
+    """全出力元の思考Step・回答Messageを確定させる（ターンの中断・終了時用）。"""
+    for owner in list({*thinkings, *answers}):
+        await _close_owner_output(owner, thinkings, answers, stopped_reason=stopped_reason)
+
+
+# dispatch_agent_batch が各グループのジョブを包む Runnable の run_name。
+# この名前の on_chain_start/on_chain_end で、グループごとの中間Stepを作る。
+# 表示名は metadata の "batch_group_label" を使う。
+_BATCH_GROUP_RUN_NAME = BATCH_GROUP_RUN_NAME
 
 
 def _is_subagent_call(event: dict, dispatch_agent_run_ids: set[str]) -> bool:
@@ -3540,8 +3591,18 @@ async def _on_message_impl(message: cl.Message) -> None:
     # attempt += 1 する。
     attempt = 0
     while True:
-        answer: cl.Message | None = None  # ツール呼び出しごとに区切って新規発行する
-        thinking: cl.Step | None = None  # <think> ブロック（reasoning_content）を表示するStep
+        # 出力元（None=メインエージェント、それ以外=サブエージェントの run_id）ごとの
+        # 表示中の回答Message・<think>ブロック（reasoning_content）を表示するStep
+        # （_stream_owner 参照）。回答はツール呼び出しごとに区切って新規発行する。
+        answers: dict[str | None, cl.Message] = {}
+        thinkings: dict[str | None, cl.Step] = {}
+        # 出力元として扱う run_id（dispatch_agent 系ツールと、dispatch_agent_batch の
+        # グループ）。on_tool_end/on_chain_end でも取り除かない（ターン内で後から
+        # 届く内部イベントの出力元判定に使うため。dispatch_agent_run_ids と同じ理由）。
+        owner_run_ids: set[str] = set()
+        # 出力元 run_id → その配下のグループ run_id（dispatch_agent_batch 終了時に
+        # グループ側の出力もまとめて確定させるため）。
+        owner_children: dict[str, set[str]] = {}
         steps: dict[str, cl.Step] = {}  # run_id -> Step（ツール開始/終了を対応付け。_resolve_parent_idが「まだ完了していない祖先」の判定に使うため、on_tool_endで必ずpopする）
         # dispatch_agent（サブエージェント委譲）のtool run_id集合。_is_subagent_call
         # が使う。steps と異なり on_tool_end で pop しない（_is_subagent_call
@@ -3611,8 +3672,10 @@ async def _on_message_impl(message: cl.Message) -> None:
                     # llama-server が reasoning_content（<think>ブロック）を返す場合、
                     # ChatLlamaCpp（src/llm.py）が additional_kwargs へ拾い上げている。
                     # 本回答とは別の折りたたみStepとして「思考中」を可視化する。
+                    owner = _stream_owner(event, owner_run_ids)
                     reasoning = chunk.additional_kwargs.get("reasoning_content")
                     if reasoning:
+                        thinking = thinkings.get(owner)
                         if thinking is None:
                             thinking = cl.Step(
                                 name="思考中",
@@ -3621,7 +3684,13 @@ async def _on_message_impl(message: cl.Message) -> None:
                             )
                             thinking.start = utc_now()
                             await thinking.send()
-                            cl.user_session.set("live_thinking", thinking)
+                            thinkings[owner] = thinking
+                            if owner is None:
+                                cl.user_session.set("live_thinking", thinking)
+                            else:
+                                # live_thinking はメインの1件だけを追跡するため、サブエージェントの
+                                # 思考Stepは再接続時の再送対象（resync_steps）へ入れる。
+                                resync_steps[f"thinking:{thinking.id}"] = thinking
                             logging.getLogger(__name__).info(
                                 "thinking Step生成: step_id=%s parent_id=%s [%s]",
                                 thinking.id,
@@ -3646,8 +3715,9 @@ async def _on_message_impl(message: cl.Message) -> None:
                                     describe_current_task(),
                                 )
                             retry_first_chunk_start = None  # 2回目以降は計測しない
-                        # 思考が終わり本回答が始まったのでStepを確定させる。
-                        thinking = await _close_thinking(thinking)
+                        # 思考が終わり本回答が始まったのでStepを確定させる（同じ出力元の分だけ）。
+                        await _close_thinking(thinkings.pop(owner, None))
+                        answer = answers.get(owner)
                         if answer is None:
                             # dispatch_agent 内部（サブエージェント）由来のチャンクは、
                             # astream_events がcontextvar経由で内部呼び出しの
@@ -3655,19 +3725,18 @@ async def _on_message_impl(message: cl.Message) -> None:
                             # メインエージェントの回答と見分けが付かないまま届く
                             # （_resolve_parent_id/_is_subagent_call 参照）。
                             # authorを変えてUI側で区別できるようにする。
-                            is_subagent_answer = _is_subagent_call(event, dispatch_agent_run_ids)
+                            is_subagent_answer = owner is not None or _is_subagent_call(event, dispatch_agent_run_ids)
                             answer = cl.Message(
                                 content="",
                                 author=SUBAGENT_MESSAGE_AUTHOR if is_subagent_answer else None,
                             )
+                            answers[owner] = answer
                         await answer.stream_token(chunk.content)
 
                 elif kind == "on_tool_start":
-                    # ここまでの思考/回答があれば確定送信し、次のテキストは新しい Message に分ける。
-                    thinking = await _close_thinking(thinking)
-                    if answer is not None:
-                        await _send_answer(answer)
-                        answer = None
+                    # ここまでの思考/回答があれば確定送信し、次のテキストは新しい Message に分ける
+                    # （このツールを呼んだ出力元の分だけ。並列実行中の別サブエージェントの分には触れない）。
+                    await _close_owner_output(_stream_owner(event, owner_run_ids), thinkings, answers)
                     # ツール実行を Step として可視化（どのスキル/ツールかが見える）。
                     # cl.Step はコンストラクタで local_steps（@cl.on_message が積む
                     # 実行ラン）を自動継承しない（cl.Message は継承する）ため、
@@ -3683,6 +3752,32 @@ async def _on_message_impl(message: cl.Message) -> None:
                         # _is_subagent_call docstring参照。steps と違いターン
                         # 終了までここから取り除かない。
                         dispatch_agent_run_ids.add(event["run_id"])
+                        owner_run_ids.add(event["run_id"])
+
+                elif kind == "on_chain_start" and event["name"] == _BATCH_GROUP_RUN_NAME:
+                    # dispatch_agent_batch のグループごとの中間Step。配下のサブエージェントの
+                    # 思考・ツールStepはこの下へ入る（_resolve_parent_id が一番近い祖先を選ぶ）。
+                    label = (event.get("metadata") or {}).get("batch_group_label") or "SUB: グループ"
+                    step = cl.Step(name=label, type="tool", parent_id=_resolve_parent_id(event, steps))
+                    step.start = utc_now()
+                    await step.send()
+                    steps[event["run_id"]] = step
+                    resync_steps[event["run_id"]] = step
+                    owner_run_ids.add(event["run_id"])
+                    batch_owner = _stream_owner(event, owner_run_ids - {event["run_id"]})
+                    if batch_owner is not None:
+                        owner_children.setdefault(batch_owner, set()).add(event["run_id"])
+
+                elif kind == "on_chain_end" and event["name"] == _BATCH_GROUP_RUN_NAME:
+                    await _close_owner_output(event["run_id"], thinkings, answers)
+                    step = steps.pop(event["run_id"], None)
+                    if step is not None:
+                        output = event["data"].get("output")
+                        step.output = output if isinstance(output, str) else ""
+                        step.end = utc_now()
+                        if isinstance(output, str) and output.startswith("エラー:"):
+                            step.is_error = True
+                        await step.update()
 
                 elif kind == "on_tool_end":
                     step = steps.pop(event["run_id"], None)
@@ -3700,10 +3795,12 @@ async def _on_message_impl(message: cl.Message) -> None:
                         # 将来この確定処理をツール名で除外する改修をする場合、
                         # dispatch_agent は対象に含めないこと（上記のサブ
                         # エージェント名義混同バグが再発する）。
-                        thinking = await _close_thinking(thinking)
-                        if answer is not None:
-                            await _send_answer(answer)
-                            answer = None
+                        # 出力元ごとに分けた後は、このツールを呼んだ出力元に加え、
+                        # サブエージェント起動ツールならその配下（自身・グループ）の分も確定させる。
+                        await _close_owner_output(_stream_owner(event, owner_run_ids), thinkings, answers)
+                        if event["name"] in _SUBAGENT_DISPATCH_TOOLS:
+                            for child_owner in [event["run_id"], *owner_children.get(event["run_id"], ())]:
+                                await _close_owner_output(child_owner, thinkings, answers)
                         output = event["data"].get("output")
                         content = getattr(output, "content", output)
                         step.output = content
@@ -3754,10 +3851,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                     # 打ち切りを圧縮継続で握りつぶしてはならないため。
                     if event["name"] == "approve_plan" and cl.user_session.get("plan_denied_just_now"):
                         cl.user_session.set("plan_denied_just_now", False)
-                        thinking = await _close_thinking(thinking)
-                        if answer is not None:
-                            await _send_answer(answer)
-                            answer = None
+                        await _close_all_outputs(thinkings, answers)
                         await cl.Message(
                             content="実行計画が却下されたため、処理を終了しました。ご指示をお待ちしています。",
                             type="system_message",
@@ -3881,7 +3975,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                     # （2026-08-21ユーザー報告）。ターン自体は継続するため、
                     # answer/steps/_finalize_orphaned_stepsには触れず、thinkingの
                     # クローズ&リセットのみ行う。
-                    thinking = await _close_thinking(thinking, stopped_reason="loop_detected")
+                    await _close_thinking(thinkings.pop(_stream_owner(event, owner_run_ids), None), stopped_reason="loop_detected")
         except ThinkingLoopDetected as exc:
             # LLM応答（thinking/本文）が反復ループに陥り打ち切られた場合。
             # ここまでの思考/回答があれば確定送信してから、注意メッセージを
@@ -3903,10 +3997,7 @@ async def _on_message_impl(message: cl.Message) -> None:
             # 側はこの metadata を見て「完了」ではなく「停止」バッジを表示する
             # （デフォルトでは end のみ設定された Step は他の正常完了Stepと
             # 見分けが付かず「完了」と誤表示されていたため）。
-            thinking = await _close_thinking(thinking, stopped_reason="loop_detected")
-            if answer is not None:
-                await _send_answer(answer)
-                answer = None
+            await _close_all_outputs(thinkings, answers, stopped_reason="loop_detected")
             await _finalize_orphaned_steps(steps, "loop_detected")
         except LLM_CONNECTION_ERRORS as exc:
             # LLMサーバーとの通信エラー（接続失敗・5xx・httpx系）。
@@ -3927,10 +4018,7 @@ async def _on_message_impl(message: cl.Message) -> None:
             # 接続先を一時的にクールダウンし、次回 build_model() で次点の
             # 接続先へ切り替わるようにする（他戦略では実質無視される）。
             mark_last_endpoint_failed("main")
-            thinking = await _close_thinking(thinking)
-            if answer is not None:
-                await _send_answer(answer)
-                answer = None
+            await _close_all_outputs(thinkings, answers)
             await _finalize_orphaned_steps(steps, "connection_error")
             checkpointer_needs_rebuild = True
         except _CheckpointerTimeout as exc:
@@ -3947,18 +4035,12 @@ async def _on_message_impl(message: cl.Message) -> None:
                 exc,
                 describe_current_task(),
             )
-            thinking = await _close_thinking(thinking)
-            if answer is not None:
-                await _send_answer(answer)
-                answer = None
+            await _close_all_outputs(thinkings, answers)
             await _finalize_orphaned_steps(steps, "checkpointer_timeout")
         except GraphRecursionError:
             # メインの ReAct ループが recursion_limit（config.ini [graph]）に達した場合。
             # ここまでの思考/回答があれば確定送信してから、打ち切りを明示する。
-            thinking = await _close_thinking(thinking)
-            if answer is not None:
-                await _send_answer(answer)
-                answer = None
+            await _close_all_outputs(thinkings, answers)
             await _finalize_orphaned_steps(steps, "recursion_limit")
             await cl.Message(
                 content=(
@@ -3992,10 +4074,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                 "on_message: ループ内の安全な区切りでコンテキスト圧縮の条件を" "満たしたため、ターン内でグラフ実行を一時中断して圧縮します [%s]",
                 describe_current_task(),
             )
-            thinking = await _close_thinking(thinking)
-            if answer is not None:
-                await _send_answer(answer)
-                answer = None
+            await _close_all_outputs(thinkings, answers)
             await _finalize_orphaned_steps(steps, "context_compaction")
             # 重要: aupdate_state/_run_context_compaction（要約のLLM呼び出しを
             # 含み、数十秒〜数分かかりうる）を呼ぶ前に、必ずこの event_stream を
@@ -4095,10 +4174,7 @@ async def _on_message_impl(message: cl.Message) -> None:
                 describe_current_task(),
                 exc_info=True,
             )
-            thinking = await _close_thinking(thinking)
-            if answer is not None:
-                await _send_answer(answer)
-                answer = None
+            await _close_all_outputs(thinkings, answers)
             await _finalize_orphaned_steps(steps, "unclassified_error")
         finally:
             # astream_events() の非同期ジェネレータは、async for が
@@ -4120,7 +4196,8 @@ async def _on_message_impl(message: cl.Message) -> None:
             # 発生し、except asyncio.CancelledError節はraiseするのみで
             # thinkingを閉じないため、フロント側で「実行中」のまま固着した）。
             # steps と同じ安全網パターンで必ず閉じる。
-            thinking = await _close_thinking(thinking, stopped_reason="interrupted")
+            for owner in list(thinkings):
+                await _close_thinking(thinkings.pop(owner), stopped_reason="interrupted")
 
         # P2: ThinkingLoopDetected のグラフ再構築・nudge注入を finally 後へ延期。
         # これにより「aclose→rebuild→新リクエスト」の順序が保証される。
@@ -4226,9 +4303,7 @@ async def _on_message_impl(message: cl.Message) -> None:
             ).send()
             return
 
-        thinking = await _close_thinking(thinking)
-        if answer is not None:
-            await _send_answer(answer)
+        await _close_all_outputs(thinkings, answers)
 
         # 無言終了（tool_calls も回答テキストも無いまま終わる）を検知した場合、
         # 最終回答を促す短いメッセージを注入して自動的に1回だけリトライする
