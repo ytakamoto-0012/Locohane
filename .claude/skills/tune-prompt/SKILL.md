@@ -9,7 +9,8 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
 ツール docstring を、ローカル LLM で自動評価し、失敗があれば最小限の修正を
 加えて再評価する、というループを回す。
 
-対象ファイルの対応表（対象は`evals/cases/<target>/`ディレクトリ名）:
+ケース群（`evals/cases/<target>/`ディレクトリ名）と、既定のチューニング
+対象ファイルの対応表:
 - `system_prompt` → `system_prompt/system_prompt.md`
 - `system_prompt_scale` → 同上。実データ規模の重量級ケース専用。
   ユーザーが手順0で明示的に選んだ時だけ実行する。
@@ -17,20 +18,21 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
 - `config_timeouts` → このスキルの対象外（プロンプト資産ではなく
   timeout数値の実測用）。手順0の選択肢には出さない。ユーザーが明示指定
   してきた場合も対象外である旨を伝えて終了する。
-- （将来）`skill:<skill名>` → `skills/<skill名>/SKILL.md`
-- （将来）`tool_docstring` → `src/tools/`配下の各ツールファイル
+
+実際に修正してよいファイル（チューニング対象）は、手順0でユーザーに
+質問して決める。上の対応表は既定の候補にすぎない。
 
 新しいケースの追加は`create-eval-case`スキルを使う
 （このスキルは実行・修正のみを担当し、ケース作成はしない）。
 
-## 手順0: 対象・インスタンス・ケースを選ぶ（毎回必須・省略しない）
+## 手順0: ケース群・インスタンス・ケース・チューニング対象を選ぶ（毎回必須・省略しない）
 
 **スキル開始直後、他の作業（ファイル読み込み・疎通確認等）より先に行う。**
 ユーザーの依頼文で対象が指定されていても、必ず質問して確認する。
 
 1. `evals/cases/`直下のディレクトリ名を見る（`config_timeouts`は除く）。
 2. 必ず`AskUserQuestion`ツールを呼び、ディレクトリ名を選択肢
-   （`multiSelect: true`）にして、チューニング対象を選ばせる。
+   （`multiSelect: true`）にして、評価に使うケース群を選ばせる。
 3. 必ず`AskUserQuestion`ツールを呼び、`instances/`直下のディレクトリ名
    （`admin_changes.log`等のファイルは除く。`instances/`が無ければ
    `default`のみ）を選択肢（`multiSelect: false`）にして、評価に使う
@@ -40,10 +42,24 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
 4. 選ばれた対象ごとに、必ず`AskUserQuestion`ツールを呼び、
    `evals/cases/<target>/*.yaml`のファイル名（拡張子抜き）と
    「全ケース実行」を選択肢（`multiSelect: true`）にしてケースを選ばせる。
-5. 対象が複数選ばれたら、1つ目の対象で「手順1」〜「手順2」を最後まで
-   終えてから、2つ目の対象に進む（並行して進めない）。
+5. 選ばれたケース群ごとに、必ず`AskUserQuestion`ツールを呼び、修正して
+   よいチューニング対象ファイルを選ばせる（`multiSelect: true`）。
+   選択肢の例:
+   - 対応表の既定ファイル（先頭に置き、ラベル末尾に「(Recommended)」）
+   - `system_prompt/system_prompt.md`（既定と重複するなら出さない）
+   - `src/tools/`配下のツール docstring
+   - 修正せず評価のみ（失敗は報告して終了する）
 
-以降、`<instance>`は手順0-3で選んだインスタンス名を指す。
+   具体的なファイルパスは「Other」で入力してもらう。`src/tools/`等の
+   ディレクトリが選ばれたら、失敗原因を見てからその中のファイルを
+   1つに絞って直す。4と5は1回の`AskUserQuestion`呼び出しにまとめてよい。
+6. ケース群が複数選ばれたら、1つ目で「手順1」〜「手順2」を最後まで
+   終えてから、2つ目に進む（並行して進めない）。
+
+以降、`<instance>`は手順0-3で選んだインスタンス名、「対象ファイル」は
+手順0-5で選んだチューニング対象ファイルを指す。`<target>`はケース群名を
+指す。退避先の`evals/history/<target>/`には、対象ファイルが既定以外の
+ときファイル名を付けて退避する（例: `iter03_before_tools.py`）。
 
 ## 手順1: 前提を確認する
 
@@ -110,6 +126,9 @@ python evals/run_all.py <target> <case_id1> <case_id2> ... --instance <instance>
 
 ### 2-4. 不合格があれば直す
 
+手順0-5で「修正せず評価のみ」を選んだ場合は直さず、不合格ケースと
+推定原因をユーザーに報告して終了する。
+
 1. 不合格ケースの`transcript`と対象ファイルの記述を見比べ、根本原因を
    特定する（記述が曖昧、指示が矛盾している、例が無い、等）。
 2. 直す前に対象ファイルを`evals/history/<target>/iterNN_before.md`
@@ -131,8 +150,10 @@ python evals/run_all.py <target> <case_id1> <case_id2> ... --instance <instance>
 
 - gitへのコミット・ステージングはしない（退避ファイルと`tuning_log.md`
   だけで変更履歴を追う）。
-- 対象ファイル以外は編集しない（`system_prompt`実行中に`skills/*/SKILL.md`
-  や`src/tools/`を触らない）。原因が対象ファイルの記述ではなく
+- 手順0-5で選んだ対象ファイル以外は編集しない。原因が選ばれていない
+  ファイル（別のSKILL.md・ツール docstring等）にあると分かったら、
+  直さずにユーザーへ報告し、対象に加えてよいか`AskUserQuestion`で
+  確認する。原因が対象ファイルの記述ではなく
   `config.ini`側の数値（token上限・timeout等）だと分かった場合も、
   対象ファイルは直さずユーザーに報告して終了する（ユーザーから明示
   指示があれば`config.ini`を直してよいが、`tuning_log.md`に
