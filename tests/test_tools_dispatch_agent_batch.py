@@ -322,3 +322,41 @@ def test_single_job_progress_shows_waiting_until_semaphore_acquired(monkeypatch)
     assert tools._dispatch_agent_job._format_dispatch_agent_progress(job, "j").startswith("順番待ちです")
     job.run_started_at = __import__("time").monotonic()
     assert tools._dispatch_agent_job._format_dispatch_agent_progress(job, "j").startswith("実行中です（経過 0 秒")
+
+
+@pytest.mark.asyncio
+async def test_batch_subfolder_pattern_collects_nested_files(monkeypatch, tmp_path) -> None:
+    """年度フォルダ/ocr_md のような入れ子構成でも pattern に階層を含めれば対象にできる
+    （本番で "**/ocr_md/*.md" が直下のみの探索で0件エラーになった件の回帰テスト）。"""
+    images, _ = _setup(monkeypatch, tmp_path, [])
+    root = images.parent
+    for year in ("2024", "2023"):
+        ocr = root / year / "ocr_md"
+        ocr.mkdir(parents=True)
+        (ocr / f"{year}_a.md").write_text("x", encoding="utf-8")
+        (root / year / "photo.jpg").write_bytes(b"x")
+    captured = _capture_tasks(monkeypatch)
+
+    result = await _invoke(task="t", agent_type="worker", pattern="**/ocr_md/*.md", path=str(root), group_size=1)
+
+    assert len(captured) == 2
+    assert all("ocr_md" in task and "photo.jpg" not in task for task in captured)
+    # 相対パス順（2023 → 2024）でグループ分けされ、見出しにも相対パスが出る。
+    assert result.index("2023/ocr_md/2023_a.md") < result.index("2024/ocr_md/2024_a.md")
+
+    captured.clear()
+    result = await _invoke(task="t", agent_type="worker", pattern="*/ocr_md/*.md", path=str(root), group_size=10)
+    assert len(captured) == 1 and "2023_a.md" in captured[0] and "2024_a.md" in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_batch_plain_pattern_stays_direct_children_only_with_hint(monkeypatch, tmp_path) -> None:
+    images, _ = _setup(monkeypatch, tmp_path, [])
+    (images / "sub").mkdir()
+    (images / "sub" / "a.png").write_bytes(b"x")
+    captured = _capture_tasks(monkeypatch)
+
+    result = await _invoke(task="t", agent_type="worker", pattern="*.png", path=str(images))
+
+    assert result.startswith("エラー:") and "**/*.jpg" in result
+    assert captured == []

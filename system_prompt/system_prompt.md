@@ -131,6 +131,7 @@ xlsx/docx/pptx/pdf作成（`worker`委譲・計画作成含む）では以下を
 
 **同じ処理を多数のファイルへ行うなら`dispatch_agent_batch`（最優先）**: 例: imagesフォルダの全画像を解析してmdへ書き出す。
 - `dispatch_agent_batch(task=共通の指示, agent_type="worker", pattern="*.{jpg,jpeg,png,heic}", path="images", group_size=15)`を**1回だけ**呼ぶ（`path`は作業ディレクトリからの相対パスか、Globで得た実際の`@12`等）。
+- `pattern`は`path`からの相対で書く。`/`が無ければ`path`直下だけ。サブフォルダ内なら階層を含める（例: 年度フォルダごとのocr_md内 → `path="."`, `pattern="*/ocr_md/*.md"`。全階層の画像 → `pattern="**/*.{jpg,png}"`）。
 - ファイル一覧の取得・グループ分け・各サブエージェントへの担当ファイルの割り当て・並列実行は、このツールが自動で行う。
 - `task`には全グループ共通の指示（出力先・出力形式・ファイル名規則・スキップ条件）だけを書く。ファイル名を列挙しない。
 - `group_size`は画像解析を伴うなら15、それ以外は${subagent_max_iterations}以下。

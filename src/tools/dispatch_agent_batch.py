@@ -45,24 +45,54 @@ _MAX_GROUPS = 50
 _BATCH_PROGRESS_TASKS: set[asyncio.Task] = set()
 
 
+def _is_subfolder_pattern(pattern: str) -> bool:
+    """pattern がサブフォルダ階層を含むか（例: "*/ocr_md/*.md"、"**/*.jpg"）。"""
+    return "/" in pattern
+
+
+def _relative_sort_key(p: Path, resolved_base: Path) -> str:
+    try:
+        return p.relative_to(resolved_base).as_posix().casefold()
+    except ValueError:
+        return p.name.casefold()
+
+
+def _relative_display(p: Path, base: Path) -> str:
+    """結果の見出し用。サブフォルダ探索時は別フォルダの同名ファイルを区別できるよう相対パスで示す。"""
+    try:
+        return p.relative_to(base.resolve()).as_posix()
+    except ValueError:
+        return p.name
+
+
 def _list_target_files(base: Path, pattern: str) -> list[Path]:
-    """base 直下で pattern に一致するファイルを、ファイル名順で返す。
+    """base 配下で pattern に一致するファイルを、base からの相対パス順で返す。
 
     Glob ツール（glob_search）は更新日時降順で返すため、メインエージェントが
     「1〜15件目」のような範囲で各サブエージェントへ指示すると、受け取った側が
     自分でGlobし直した並びと一致する保証が無い。ここではグループ分けまで
     ハーネス側で行い、各グループへは絶対パスそのものを渡すため、並び順は
-    人間が追いやすく再現性のあるファイル名順（大文字小文字を区別しない）に固定する。
-    Glob と同じく直下のみを対象とし、`{a,b}` のブレース展開と他セッションの
-    一時ディレクトリ除外も揃える。
+    人間が追いやすく再現性のある相対パス順（大文字小文字を区別しない）に固定する
+    （同じフォルダのファイルが同じグループにまとまる）。
+
+    pattern が "/" を含まなければ Glob と同じく base 直下のみが対象。"/" を含む
+    場合（"*/ocr_md/*.md"、"**/*.jpg" 等）はその階層まで探索する。年度フォルダ/
+    ocr_md のような入れ子構成で "**/ocr_md/*.md" を渡され、直下のみの探索で
+    0件エラーになった本番実例（2026-10-02）への対応。Glob が直下限定なのは
+    LLMが何度も呼ぶツールの応答時間を抑えるためで、1回呼ぶだけの本ツールには
+    当てはまらない（大量に一致した場合は _MAX_GROUPS が起動前に止める）。
+    `{a,b}` のブレース展開と他セッションの一時ディレクトリ除外は Glob と揃える。
     """
     exclude_names = _foreign_tmp_dir_names()
     resolved_base = base.resolve()
     seen: set[Path] = set()
     files: list[Path] = []
-    for expanded in _expand_braces(pattern):
+    for expanded in _expand_braces(pattern.replace("\\", "/")):
+        subfolders = _is_subfolder_pattern(expanded)
         for p in base.glob(expanded):
-            if p.parent.resolve() != resolved_base or not p.is_file():
+            if not p.is_file():
+                continue
+            if not subfolders and p.parent.resolve() != resolved_base:
                 continue
             if exclude_names and set(p.parts) & exclude_names:
                 continue
@@ -70,7 +100,7 @@ def _list_target_files(base: Path, pattern: str) -> list[Path]:
             if resolved not in seen:
                 seen.add(resolved)
                 files.append(resolved)
-    files.sort(key=lambda p: p.name.casefold())
+    files.sort(key=lambda p: _relative_sort_key(p, resolved_base))
     return files
 
 
@@ -185,9 +215,10 @@ async def dispatch_agent_batch(
         task: 全グループ共通の指示。対象パスは `@N` を埋め込んでよい。
         agent_type: 使用するサブエージェントの種別名（dispatch_agent と同じ）。
         pattern: 対象ファイルのglobパターン（例: "*.{jpg,jpeg,png,heic}"）。
-            ファイル名部分だけを書く（フォルダは path に渡す）。
-            path の直下だけが対象（サブフォルダは探索しない）。拡張子の
-            大文字・小文字はどちらか一方を書けば両方一致する。
+            path からの相対パターンで書く（絶対パスは書かない。フォルダは path に渡す）。
+            "/" を含まなければ path の直下だけが対象。サブフォルダ内も対象にするなら
+            "*/ocr_md/*.md"（1階層下の ocr_md フォルダ内）や "**/*.jpg"（全階層）の
+            ように書く。拡張子の大文字・小文字はどちらか一方を書けば両方一致する。
         path: 対象フォルダの絶対パス（`@N` 可）。省略時は作業ディレクトリ。
         group_size: 1つのサブエージェントへ渡すファイル数（既定15。画像解析を
             伴うなら15以下）。1〜[subagent].max_iterations の範囲に丸める。
@@ -222,13 +253,14 @@ async def dispatch_agent_batch(
     except GLOB_PATTERN_ERRORS as e:
         return f"エラー: {glob_pattern_error_message(e)}"
     if not files:
-        return f"エラー: {base} の直下に pattern '{pattern}' に一致するファイルがありません。"
+        hint = "" if _is_subfolder_pattern(pattern) else "（サブフォルダ内のファイルなら \"*/フォルダ名/*.md\" や \"**/*.jpg\" のように階層を含めて書くこと）"
+        return f"エラー: {base} 配下に pattern '{pattern}' に一致するファイルがありません。{hint}"
 
     size = max(1, min(group_size, _state._SUBAGENT_MAX_ITERATIONS))
     groups = [files[i : i + size] for i in range(0, len(files), size)]
     if len(groups) > _MAX_GROUPS:
         return (
-            f"エラー: {base} の直下で pattern '{pattern}' に一致する {len(files)} 件は "
+            f"エラー: {base} 配下で pattern '{pattern}' に一致する {len(files)} 件は "
             f"{len(groups)} グループ（{size}件ずつ）になり、1回の上限（{_MAX_GROUPS}グループ）を超えます。"
             "pattern を絞り込むか、対象をサブフォルダ等に分けて複数回に分けて呼ぶこと（ジョブは起動していません）。"
         )
@@ -319,7 +351,8 @@ async def dispatch_agent_batch(
     counts: dict[str, int] = {}
     for index, ((job_id, job), group) in enumerate(zip(jobs, groups), start=1):
         start = (index - 1) * size + 1
-        label = f"グループ{index}（{start}〜{start + len(group) - 1}件目、{len(group)}件、{group[0].name}〜{group[-1].name}）"
+        first, last = (_relative_display(p, base) for p in (group[0], group[-1]))
+        label = f"グループ{index}（{start}〜{start + len(group) - 1}件目、{len(group)}件、{first}〜{last}）"
         if _is_active(job):
             # 安全上限超過でまだ終わっていないグループ。結果は check_dispatch_agent_job で取得する。
             pending.append(job_id)
