@@ -83,8 +83,12 @@ def _task_with_orchestrator_skill_hint(task: str, orchestrator_skill: str) -> tu
 
     Returns:
         (注入済みのtask, エラーメッセージ) のタプル。成功時は (task, None)、
-        失敗時は (None, "エラー: ...")。
+        失敗時は (None, "エラー: ...")。空文字・空白のみは未指定扱いで task をそのまま返す
+        （LLMが「省略」のつもりで "" を渡すことがあり、"/SKILL.md" 扱いでサンドボックス外エラーになっていた）。
     """
+    orchestrator_skill = orchestrator_skill.strip()
+    if not orchestrator_skill:
+        return task, None
     try:
         skill_md = _safe_path(f"{orchestrator_skill}/SKILL.md")
     except ValueError as e:
@@ -159,6 +163,7 @@ async def dispatch_agent(
     task = _resolve_path_memory_tokens_in_text(task)
     task = _task_with_work_dir_hint(task)
     task = _task_with_plan_hint(task)
+    orchestrator_skill = (orchestrator_skill or "").strip() or None
     if orchestrator_skill is not None:
         injected_task, error = _task_with_orchestrator_skill_hint(task, orchestrator_skill)
         if error:
