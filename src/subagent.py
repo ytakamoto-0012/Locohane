@@ -409,6 +409,19 @@ def is_truncated_result(content: object) -> bool:
     return isinstance(content, str) and content.startswith(_TRUNCATION_PREFIX)
 
 
+# LLM呼び出しのタイムアウト・通信エラーが再試行後も続いた場合の打ち切り理由。
+_LLM_UNREACHABLE_REASON = "LLM呼び出しがタイムアウトした"
+
+
+def is_llm_unreachable_result(content: object) -> bool:
+    """打ち切りの理由が、再試行後も続いたLLMのタイムアウト・通信エラーかを判定する。
+
+    dispatch_agent_batch が、LLMサーバーに届かない状態で残りのグループを
+    起動し続けないよう判定するために使う。
+    """
+    return isinstance(content, str) and content.startswith(f"{_TRUNCATION_PREFIX}{_LLM_UNREACHABLE_REASON}")
+
+
 def _build_truncation_message(reason: str, messages: list) -> str:
     """打ち切り時の共通メッセージを組み立てる（反復上限・トークン閾値超過で共用）。
 
@@ -610,7 +623,7 @@ async def run_subagent(
                     iteration,
                     exc,
                 )
-                return _build_truncation_message(f"LLM呼び出しがタイムアウトした({exc})", messages)
+                return _build_truncation_message(f"{_LLM_UNREACHABLE_REASON}({exc})", messages)
             except ThinkingLoopDetected as exc:
                 # thinking_loop_guard_max_retries回再試行してもなお反復ループが
                 # 解消しなかった場合（_invoke_with_loop_retry参照）。以前はここで

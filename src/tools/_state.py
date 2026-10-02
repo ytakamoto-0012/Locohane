@@ -255,6 +255,7 @@ _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS: int = 1800
 _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS: int = 20
 _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES: int = 3
 _DISPATCH_AGENT_BATCH_MAX_GROUPS: int = 50
+_DISPATCH_AGENT_BATCH_STOP_AFTER_UNREACHABLE_GROUPS: int = 1
 _MEMORY_ROOT: Path | None = None
 _PLANS_DIR: Path | None = None
 _HELP_PATH: Path | None = None
@@ -324,6 +325,7 @@ def init_tools(
     dispatch_agent_background_progress_push_interval_seconds: int = 20,
     dispatch_agent_background_llm_timeout_max_retries: int = 3,
     dispatch_agent_batch_max_groups: int = 50,
+    dispatch_agent_batch_stop_after_unreachable_groups: int = 1,
     plan_approval_exempt_scripts: Iterable[tuple[str, str]] = (),
     agent_type_run_script_allowlist: Iterable[tuple[str, str | tuple[str, str]]] | None = None,
     plans_dir: Path | None = None,
@@ -477,6 +479,10 @@ def init_tools(
         dispatch_agent_batch_max_groups: dispatch_agent_batch が1回の呼び出しで
             起動してよいグループ数の上限。0以下なら無制限（config.ini の
             [subagent].batch_max_groups 由来）。
+        dispatch_agent_batch_stop_after_unreachable_groups: dispatch_agent_batch で
+            LLMのタイムアウト・通信エラーにより打ち切られたグループがこの数に
+            達したら、未起動のグループを起動しない。0以下なら無効（config.ini の
+            [subagent].batch_stop_after_unreachable_groups 由来）。
         plan_approval_exempt_scripts: run_script/run_script_background の
             計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト。(skill_name, script_filename) の
@@ -529,6 +535,7 @@ def init_tools(
     global _DISPATCH_AGENT_BACKGROUND_MIN_POLL_MESSAGE
     global _DISPATCH_AGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS, _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS
     global _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES, _DISPATCH_AGENT_BATCH_MAX_GROUPS
+    global _DISPATCH_AGENT_BATCH_STOP_AFTER_UNREACHABLE_GROUPS
     global _DEFAULT_WORKDIR, _LLM_CONFIG, _AGENT_TYPES, _SUBAGENT_MAX_ITERATIONS
     global _ALLOW_SANDBOX_DIRS
     global _MEMORY_ROOT
@@ -563,6 +570,7 @@ def init_tools(
     _DISPATCH_AGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS = dispatch_agent_background_progress_push_interval_seconds
     _DISPATCH_AGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES = dispatch_agent_background_llm_timeout_max_retries
     _DISPATCH_AGENT_BATCH_MAX_GROUPS = dispatch_agent_batch_max_groups
+    _DISPATCH_AGENT_BATCH_STOP_AFTER_UNREACHABLE_GROUPS = dispatch_agent_batch_stop_after_unreachable_groups
     _PLAN_APPROVAL_EXEMPT_SCRIPTS = set(plan_approval_exempt_scripts)
     if agent_type_run_script_allowlist is not None:
         grouped: dict[str, set[str | tuple[str, str]]] = {}

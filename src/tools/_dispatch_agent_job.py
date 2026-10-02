@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import asyncio
 import chainlit as cl
@@ -227,8 +228,20 @@ async def _push_dispatch_agent_progress(job: "_DispatchAgentJob", job_id: str) -
             await message.update()
 
 
-async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: str, resolved: "ResolvedAgentType") -> None:
+async def _run_dispatch_agent_job(
+    job: "_DispatchAgentJob",
+    job_id: str,
+    task: str,
+    resolved: "ResolvedAgentType",
+    should_skip: "Callable[[], str | None] | None" = None,
+) -> None:
     """dispatch_agent のランナータスク本体。
+
+    should_skip はセマフォ確保直後に呼ばれ、文字列（理由）を返した場合は
+    run_subagent を起動せずに job.status="error"（error_message=理由）で終える。
+    run_started_at は None のまま残るため、呼び出し元は「未実行」と区別できる
+    （dispatch_agent_batch が、LLMサーバーに届かない状態で残りのグループを
+    起動し続けないために使う）。
 
     asyncio.create_task() はタスク生成時点のコンテキストをコピーし、以後
     タスク内部の contextvar.set()/reset() は呼び出し元（dispatch_agent）へは
@@ -264,7 +277,14 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
 
     on_cancelled = _make_rescue_on_cancelled(job)
 
-    async def _run() -> str:
+    skip_reason: str | None = None
+
+    async def _run() -> str | None:
+        nonlocal skip_reason
+        # セマフォの順番が回ってきた時点で判定する（順番待ちの間に起動を止める理由が生じうるため）。
+        skip_reason = should_skip() if should_skip is not None else None
+        if skip_reason:
+            return None
         job.run_started_at = time.monotonic()
         return await subagent.run_subagent(
             task,
@@ -284,10 +304,16 @@ async def _run_dispatch_agent_job(job: "_DispatchAgentJob", job_id: str, task: s
                 result = await _run()
         else:
             result = await _run()
-        result = _append_scratch_note_hint(result)
-        if job.status != "killed":
-            job.result = result
-            job.status = "completed"
+        if result is None:
+            # should_skip により起動しなかった（run_started_at は None のまま）。
+            if job.status != "killed":
+                job.status = "error"
+                job.error_message = skip_reason
+        else:
+            result = _append_scratch_note_hint(result)
+            if job.status != "killed":
+                job.result = result
+                job.status = "completed"
     except asyncio.CancelledError:
         raise
     except Exception as e:  # noqa: BLE001 - fire-and-forgetタスクの例外を消さず確定的に捕捉する

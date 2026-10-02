@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import InjectedToolCallId, tool
@@ -24,7 +25,7 @@ from .dispatch_agent import _task_with_orchestrator_skill_hint, _task_with_plan_
 from .glob_tool import GLOB_PATTERN_ERRORS, _expand_braces, glob_pattern_error_message
 from .thread_notes import write_thread_note
 from .write_scratch_note import sanitize_run_id
-from ..subagent import is_truncated_result
+from ..subagent import is_llm_unreachable_result, is_truncated_result
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,37 @@ BATCH_GROUP_RUN_NAME = "dispatch_agent_batch_group"
 # 集約進捗pushタスクへの参照（asyncio はタスクを弱参照しか持たないため、
 # ここで保持しないと実行途中でGCされうる）。
 _BATCH_PROGRESS_TASKS: set[asyncio.Task] = set()
+
+# LLMに届かないグループが続いたため、起動しなかったグループに付ける理由。
+_UNREACHABLE_SKIP_REASON = (
+    "LLMサーバーに接続できない（タイムアウト・通信エラーが再試行後も続いた）グループが出たため、起動しませんでした。"
+)
+
+
+def interrupted_note_topic(tool_call_id: str) -> str:
+    """停止ボタン等で中断した時点の結果を保存する thread note の topic 名。
+
+    app.py は孤立した tool_call の id からこの topic を求め、次のターンへの案内に載せる。
+    """
+    return f"dispatch_agent_batch中断時の結果（{sanitize_run_id(tool_call_id)}）"
+
+
+@dataclass
+class _UnreachableGuard:
+    """LLMに届かずに打ち切られたグループ数を数え、閾値に達したら残りのグループの起動を止める。
+
+    LLMサーバーが落ちたままだと、各グループが「タイムアウト×再試行回数」ずつ待ってから
+    打ち切られ、結果が分かりきった待ち時間がグループ数ぶん続くため
+    （[subagent].batch_stop_after_unreachable_groups。0以下なら止めない）。
+    """
+
+    threshold: int
+    count: int = 0
+
+    def skip_reason(self) -> str | None:
+        if self.threshold > 0 and self.count >= self.threshold:
+            return _UNREACHABLE_SKIP_REASON
+        return None
 
 
 def _is_subfolder_pattern(pattern: str) -> bool:
@@ -157,6 +189,9 @@ def _is_active(job: _DispatchAgentJob) -> bool:
 
 
 def _group_status(job: _DispatchAgentJob, result: str) -> str:
+    if job.run_started_at is None:
+        # 順番待ちのまま停止された、または _UnreachableGuard により起動しなかった。
+        return "未実行"
     if job.status == "error" or result.startswith("エラー:"):
         return "エラー"
     if job.status == "killed":
@@ -206,7 +241,9 @@ async def _push_batch_progress(jobs: list[tuple[str, _DispatchAgentJob]], starte
         logger.debug("dispatch_agent_batch: 進捗pushに失敗しました", exc_info=True)
 
 
-async def _run_group_runnable(job: _DispatchAgentJob, job_id: str, text: str, resolved, label: str) -> None:
+async def _run_group_runnable(
+    job: _DispatchAgentJob, job_id: str, text: str, resolved, label: str, guard: _UnreachableGuard
+) -> None:
     """1グループ分のジョブを、名前付きの Runnable として実行する。
 
     asyncio.create_task はこのツール実行中のコンテキスト（LangChain のコールバック
@@ -217,7 +254,9 @@ async def _run_group_runnable(job: _DispatchAgentJob, job_id: str, text: str, re
     """
 
     async def _run(_: object) -> str:
-        await _run_dispatch_agent_job(job, job_id, text, resolved)
+        await _run_dispatch_agent_job(job, job_id, text, resolved, should_skip=guard.skip_reason)
+        if is_llm_unreachable_result(job.result):
+            guard.count += 1
         if job.status == "error":
             return f"エラー: {job.error_message or ''}"[:_GROUP_RESULT_PREVIEW_CHARS]
         return (job.result or "")[:_GROUP_RESULT_PREVIEW_CHARS]
@@ -226,6 +265,76 @@ async def _run_group_runnable(job: _DispatchAgentJob, job_id: str, text: str, re
         None,
         config={"run_name": BATCH_GROUP_RUN_NAME, "metadata": {"batch_group_label": label}},
     )
+
+
+def _collect_group_results(
+    jobs: list[tuple[str, _DispatchAgentJob]], groups: list[list[Path]], size: int, base: Path
+) -> tuple[list[str], list[str], list[str], dict[str, int]]:
+    """各グループの状態を集計し、終わったグループのジョブをレジストリから取り除く。
+
+    Returns:
+        (summary_lines, full_lines, pending, counts)。summary_lines は戻り値用
+        （結果は先頭のみ）、full_lines は thread note 用（全文）、pending は
+        まだ実行中のグループの job_id、counts は状態ごとのグループ数。
+    """
+    summary_lines: list[str] = []
+    full_lines: list[str] = []
+    pending: list[str] = []
+    counts: dict[str, int] = {}
+    for index, ((job_id, job), group) in enumerate(zip(jobs, groups), start=1):
+        start = (index - 1) * size + 1
+        first, last = (_relative_display(p, base) for p in (group[0], group[-1]))
+        label = f"グループ{index}（{start}〜{start + len(group) - 1}件目、{len(group)}件、{first}〜{last}）"
+        if _is_active(job):
+            # 安全上限超過でまだ終わっていないグループ。結果は check_dispatch_agent_job で取得する。
+            pending.append(job_id)
+            counts["実行中"] = counts.get("実行中", 0) + 1
+            summary_lines.append(f"### {label}: 実行中（job_id={job_id}）\n担当ファイル:\n{_file_listing(group)}")
+            continue
+        if job.status == "running":
+            # status を書き換えられないままキャンセルで終わったジョブ。
+            job.status = "killed"
+        if job.run_started_at is None:
+            # 起動していないので「強制終了されました」等の文言は付けない。
+            _dispatch_agent_job._DISPATCH_AGENT_JOBS.pop(job_id, None)
+            result = job.error_message or "停止されたため、起動前に中断しました。"
+        else:
+            result = _finalize_dispatch_agent_job_result(job, job_id)
+        status = _group_status(job, result)
+        counts[status] = counts.get(status, 0) + 1
+        header = f"### {label}: {status}"
+        preview = result if len(result) <= _GROUP_RESULT_PREVIEW_CHARS else result[:_GROUP_RESULT_PREVIEW_CHARS] + "…（以下略）"
+        if status == "完了":
+            summary_lines.append(f"{header}\n{preview}")
+        else:
+            # 再委任時にLLMがファイル名を推測で補わないよう、担当ファイルをそのまま返す。
+            summary_lines.append(f"{header}\n{preview}\n担当ファイル:\n{_file_listing(group)}")
+        full_lines.append(f"{header}\n担当ファイル:\n{_file_listing(group)}\n\n{result}")
+    return summary_lines, full_lines, pending, counts
+
+
+def _save_interrupted_note(
+    tool_call_id: str, jobs: list[tuple[str, _DispatchAgentJob]], groups: list[list[Path]], size: int, base: Path
+) -> None:
+    """停止ボタン等で中断した時点の各グループの状態を thread note へ保存する。
+
+    中断時はツールの戻り値がLLMへ届かず、完了済みグループの結果がどこにも残らない。
+    次のターンで全件をやり直したり、どこまで終わったかを調べ直したりしないよう、
+    完了済みグループの結果と未完了グループの担当ファイルを残す
+    （topic は interrupted_note_topic。app.py が次のターンの案内に載せる）。
+    保存の失敗は CancelledError の再送出を妨げない。
+    """
+    try:
+        _, full_lines, _, counts = _collect_group_results(jobs, groups, size, base)
+        count_text = "、".join(f"{k} {v}" for k, v in counts.items())
+        head = (
+            f"{base} の一括委譲（{len(groups)} グループ）を中断した時点の状態です（{count_text}）。"
+            "「完了」のグループは処理済みなのでやり直さないこと。それ以外のグループは、"
+            "担当ファイルの一覧をそのまま task に入れて dispatch_agent で再委任すること。"
+        )
+        write_thread_note.invoke({"topic": interrupted_note_topic(tool_call_id), "content": "\n\n".join([head, *full_lines])})
+    except Exception:  # noqa: BLE001 - 中断処理そのものは止めない
+        logger.exception("dispatch_agent_batch: 中断時の結果を thread note へ保存できませんでした")
 
 
 @tool
@@ -275,7 +384,7 @@ async def dispatch_agent_batch(
 
     Returns:
         グループごとの処理結果（状態と最終回答の先頭部分）をまとめたテキスト。
-        「エラー」「打ち切り」「強制終了」のグループには担当ファイルの一覧も載る
+        「エラー」「打ち切り」「強制終了」「未実行」のグループには担当ファイルの一覧も載る
         （再委任時はその一覧を dispatch_agent の task へそのまま入れる）。
         各グループの最終回答の全文は thread note に保存し、その topic 名を
         末尾に示す。安全上限（[subagent].background_inline_wait_max_seconds）に
@@ -345,6 +454,7 @@ async def dispatch_agent_batch(
     thread_id = cl.user_session.get("thread_id") or ""
     batch_started_at = time.monotonic()
     jobs: list[tuple[str, _DispatchAgentJob]] = []
+    guard = _UnreachableGuard(threshold=_state._DISPATCH_AGENT_BATCH_STOP_AFTER_UNREACHABLE_GROUPS)
     for index, text in enumerate(task_texts, start=1):
         job = _DispatchAgentJob(
             thread_id=thread_id,
@@ -366,7 +476,7 @@ async def dispatch_agent_batch(
         # （[subagent].max_parallel）がそのまま制御する。
         group = groups[index - 1]
         label = f"SUB: {agent_type}（グループ{index}/{len(groups)}・{len(group)}件）"
-        job.runner_task = asyncio.create_task(_run_group_runnable(job, job_id, text, resolved, label))
+        job.runner_task = asyncio.create_task(_run_group_runnable(job, job_id, text, resolved, label, guard))
         _dispatch_agent_job._DISPATCH_AGENT_JOBS[job_id] = job
         jobs.append((job_id, job))
 
@@ -394,39 +504,13 @@ async def dispatch_agent_batch(
             if job.runner_task is not None:
                 job.runner_task.cancel()
         await asyncio.gather(*runner_tasks, progress_task, return_exceptions=True)
+        _save_interrupted_note(tool_call_id, jobs, groups, size, base)
         raise
     if not timed_out:
         progress_task.cancel()
         await asyncio.gather(progress_task, return_exceptions=True)
 
-    summary_lines: list[str] = []
-    full_lines: list[str] = []
-    pending: list[str] = []
-    counts: dict[str, int] = {}
-    for index, ((job_id, job), group) in enumerate(zip(jobs, groups), start=1):
-        start = (index - 1) * size + 1
-        first, last = (_relative_display(p, base) for p in (group[0], group[-1]))
-        label = f"グループ{index}（{start}〜{start + len(group) - 1}件目、{len(group)}件、{first}〜{last}）"
-        if _is_active(job):
-            # 安全上限超過でまだ終わっていないグループ。結果は check_dispatch_agent_job で取得する。
-            pending.append(job_id)
-            counts["実行中"] = counts.get("実行中", 0) + 1
-            summary_lines.append(f"### {label}: 実行中（job_id={job_id}）\n担当ファイル:\n{_file_listing(group)}")
-            continue
-        if job.status == "running":
-            # status を書き換えられないままキャンセルで終わったジョブ。
-            job.status = "killed"
-        result = _finalize_dispatch_agent_job_result(job, job_id)
-        status = _group_status(job, result)
-        counts[status] = counts.get(status, 0) + 1
-        header = f"### {label}: {status}"
-        preview = result if len(result) <= _GROUP_RESULT_PREVIEW_CHARS else result[:_GROUP_RESULT_PREVIEW_CHARS] + "…（以下略）"
-        if status == "完了":
-            summary_lines.append(f"{header}\n{preview}")
-        else:
-            # 再委任時にLLMがファイル名を推測で補わないよう、担当ファイルをそのまま返す。
-            summary_lines.append(f"{header}\n{preview}\n担当ファイル:\n{_file_listing(group)}")
-        full_lines.append(f"{header}\n担当ファイル:\n{_file_listing(group)}\n\n{result}")
+    summary_lines, full_lines, pending, counts = _collect_group_results(jobs, groups, size, base)
 
     note_line = ""
     if full_lines:
@@ -445,7 +529,15 @@ async def dispatch_agent_batch(
     )
     tail: list[str] = []
     if set(counts) - {"完了", "実行中"}:
-        tail.append("「エラー」「打ち切り」「強制終了」のグループは、表示した担当ファイルの一覧をそのまま task に入れて dispatch_agent で再委任すること。")
+        tail.append(
+            "「エラー」「打ち切り」「強制終了」「未実行」のグループは、表示した担当ファイルの一覧を"
+            "そのまま task に入れて dispatch_agent で再委任すること。"
+        )
+    if "未実行" in counts and guard.skip_reason():
+        tail.append(
+            "LLMサーバーに接続できないグループが出たため、残りのグループは起動していません。"
+            "再委任の前に、LLMサーバーの状態をユーザーに確認すること。"
+        )
     if pending:
         logger.warning("dispatch_agent_batch: 安全上限(%s秒)に達したため job_id を返します: %s", wait_timeout, pending)
         head += f"安全上限（{wait_timeout}秒）に達したため、まだ実行中の {len(pending)} グループを残していったんこのターンを終えて制御を返します（ジョブ自体は裏側で動き続けます）。"

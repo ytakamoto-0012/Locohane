@@ -159,7 +159,7 @@ from src.tools import (
     reset_call_history_guards_after_compaction,
     toggle_plan_mode_from_ui,
 )
-from src.tools.dispatch_agent_batch import BATCH_GROUP_RUN_NAME
+from src.tools.dispatch_agent_batch import BATCH_GROUP_RUN_NAME, interrupted_note_topic
 from src.tools._path_memory_helpers import _register_path_memory
 from src.tools._plan_render import _render_plan_payload
 from src.tools._workdir import _build_workdir_status_info
@@ -1830,6 +1830,7 @@ async def _setup() -> None:
         dispatch_agent_background_progress_push_interval_seconds=_config.subagent_background_progress_push_interval_seconds,
         dispatch_agent_background_llm_timeout_max_retries=_config.subagent_background_llm_timeout_max_retries,
         dispatch_agent_batch_max_groups=_config.subagent_batch_max_groups,
+        dispatch_agent_batch_stop_after_unreachable_groups=_config.subagent_batch_stop_after_unreachable_groups,
         plan_approval_exempt_scripts=_config.script_plan_approval_exempt_scripts,
         agent_type_run_script_allowlist=_config.script_agent_type_run_script_allowlist,
         plans_dir=_config.plans_dir,
@@ -3103,9 +3104,39 @@ def _dispatch_agent_rescue_note_hint(tc: dict) -> str:
     dispatch_agent_batch はグループごとに `<tool_call_id>_g<N>` を run_id とする
     （src/tools/dispatch_agent_batch.py 参照）ため、実行中だったグループの数だけ
     退避ファイルがありうる。_dispatch_agent_rescue_note_paths で全件を拾う。
+    退避ファイルは実行中だったグループの分しか無いため、完了済みグループの結果と
+    未完了グループの担当ファイルを保存した thread note があれば、その topic も先頭に載せる。
     """
-    paths = _dispatch_agent_rescue_note_paths(tc)
+    hint = _dispatch_agent_rescue_files_hint(_dispatch_agent_rescue_note_paths(tc))
+    note_line = _batch_interrupted_note_line(tc)
+    return f"{note_line}\n{hint}" if note_line else hint
 
+
+def _batch_interrupted_note_line(tc: dict) -> str:
+    """dispatch_agent_batch の中断時に保存した thread note があれば、その案内文を返す（無ければ空文字列）。"""
+    if tc.get("name") != "dispatch_agent_batch":
+        return ""
+    try:
+        from src.tools.thread_notes import _parse_thread_notes, _thread_notes_path
+
+        topic = interrupted_note_topic(tc["id"])
+        path = _thread_notes_path()
+        if not path.is_file():
+            return ""
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if not any(b.topic == topic for b in _parse_thread_notes(text)):
+            return ""
+    except Exception:  # noqa: BLE001 - 確認できなければ案内しないだけ
+        return ""
+    return (
+        f'中断した時点の各グループの状態（完了済みグループの結果と、未完了グループの担当ファイル）を thread note "{topic}" に'
+        "保存済みです。再開時はまず read_thread_note でこれを読み、完了済みのグループはやり直さず、"
+        "未完了のグループだけを再委任してください。"
+    )
+
+
+def _dispatch_agent_rescue_files_hint(paths: list[Path]) -> str:
+    """緊急退避ファイルの一覧から案内文を組み立てる（_dispatch_agent_rescue_note_hint 参照）。"""
     if len(paths) == 1:
         return (
             "このサブエージェントへの委譲は中断直前まで会話内容を次のファイルへ"

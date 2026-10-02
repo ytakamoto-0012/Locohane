@@ -396,6 +396,7 @@ async def _run(case: EvalCase) -> dict:
             dispatch_agent_background_progress_push_interval_seconds=config.subagent_background_progress_push_interval_seconds,
             dispatch_agent_background_llm_timeout_max_retries=config.subagent_background_llm_timeout_max_retries,
             dispatch_agent_batch_max_groups=config.subagent_batch_max_groups,
+            dispatch_agent_batch_stop_after_unreachable_groups=config.subagent_batch_stop_after_unreachable_groups,
             plans_dir=config.plans_dir,
             plan_approval_exempt_scripts=config.script_plan_approval_exempt_scripts,
             agent_type_run_script_allowlist=config.script_agent_type_run_script_allowlist,

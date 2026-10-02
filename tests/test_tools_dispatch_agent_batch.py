@@ -413,3 +413,90 @@ async def test_batch_missing_folder_lists_workdir_folders(monkeypatch, tmp_path)
     assert result.startswith("エラー: 対象フォルダが見つかりません")
     assert "直下のフォルダ: images" in result
     assert captured == []
+
+
+_UNREACHABLE_RESULT = "[サブエージェント: LLM呼び出しがタイムアウトした(ConnectError)ため打ち切りました]"
+
+
+@pytest.mark.asyncio
+async def test_batch_stops_starting_groups_after_llm_unreachable(monkeypatch, tmp_path) -> None:
+    """LLMに届かず打ち切られたグループが出たら、順番待ちのグループは起動せず「未実行」で返す。"""
+    images, _ = _setup(monkeypatch, tmp_path, [f"f{i}.png" for i in range(3)])
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_MAX_PARALLEL", 1)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BATCH_STOP_AFTER_UNREACHABLE_GROUPS", 1)
+    started: list[str] = []
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        started.append(task)
+        return _UNREACHABLE_RESULT
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+
+    result = await _invoke(task="t", agent_type="worker", pattern="*.png", path=str(images), group_size=1)
+
+    assert len(started) == 1
+    assert "打ち切り 1" in result and "未実行 2" in result
+    assert "LLMサーバーの状態をユーザーに確認" in result
+    # 未実行のグループも担当ファイルを返す（再委任用）。
+    assert f"- {(images / 'f2.png').resolve()}" in result
+    assert tools._dispatch_agent_job._DISPATCH_AGENT_JOBS == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_unreachable_guard_disabled_with_zero(monkeypatch, tmp_path) -> None:
+    images, _ = _setup(monkeypatch, tmp_path, [f"f{i}.png" for i in range(3)])
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_MAX_PARALLEL", 1)
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_BATCH_STOP_AFTER_UNREACHABLE_GROUPS", 0)
+    started: list[str] = []
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        started.append(task)
+        return _UNREACHABLE_RESULT
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+
+    result = await _invoke(task="t", agent_type="worker", pattern="*.png", path=str(images), group_size=1)
+
+    assert len(started) == 3
+    assert "打ち切り 3）" in result
+    assert "LLMサーバーの状態" not in result
+
+
+@pytest.mark.asyncio
+async def test_batch_saves_interrupted_note_on_cancel(monkeypatch, tmp_path) -> None:
+    """停止で中断しても、完了済みグループの結果と未完了グループの担当ファイルを thread note に残す。"""
+    images, notes = _setup(monkeypatch, tmp_path, ["a.png", "b.png", "c.png"])
+    monkeypatch.setattr(tools._state, "_DISPATCH_AGENT_MAX_PARALLEL", 1)
+    b_started = asyncio.Event()
+
+    async def fake_run_subagent(task, tools_list, system_prompt, llm_config, max_iterations, **kwargs):
+        if "a.png" in task:
+            return "グループ1の処理結果"
+        b_started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(tools._dispatch_agent_job.subagent, "run_subagent", fake_run_subagent)
+    tool_call_id = "test-batch-cancel"
+    call = asyncio.create_task(
+        tools.dispatch_agent_batch.ainvoke(
+            {
+                "name": "dispatch_agent_batch",
+                "args": {"task": "t", "agent_type": "worker", "pattern": "*.png", "path": str(images), "group_size": 1},
+                "id": tool_call_id,
+                "type": "tool_call",
+            }
+        )
+    )
+    await asyncio.wait_for(b_started.wait(), timeout=5)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert len(notes) == 1
+    note = notes[0]
+    assert note["topic"] == _BATCH_MODULE.interrupted_note_topic(tool_call_id)
+    content = note["content"]
+    assert "完了 1" in content and "強制終了 1" in content and "未実行 1" in content
+    assert "グループ1の処理結果" in content
+    assert str((images / "c.png").resolve()) in content
+    assert tools._dispatch_agent_job._DISPATCH_AGENT_JOBS == {}
