@@ -1274,7 +1274,7 @@ def _format_token_usage(call_usage: dict, cumulative: dict) -> str:
     payload = {
         "rows": [
             *call_rows,
-            {"label": "会話累計（サブエージェント含む）", **cumulative, "group": "total"},
+            {"label": "会話累計", **cumulative, "group": "total"},
         ]
     }
     return TOKEN_USAGE_PREFIX + json.dumps(payload, ensure_ascii=False)

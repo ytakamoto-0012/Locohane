@@ -74,10 +74,10 @@ def test_format_token_usage_includes_call_and_conversation_total() -> None:
     payload = json.loads(text[len(TOKEN_USAGE_PREFIX) :])
     rows = {row["label"]: row for row in payload["rows"]}
 
-    assert set(rows) == {MAIN_CALL_USAGE_LABEL, "会話累計（サブエージェント含む）"}
+    assert set(rows) == {MAIN_CALL_USAGE_LABEL, "会話累計"}
     assert rows[MAIN_CALL_USAGE_LABEL] == {"label": MAIN_CALL_USAGE_LABEL, **call, "level": None, "group": "call"}
-    assert rows["会話累計（サブエージェント含む）"] == {
-        "label": "会話累計（サブエージェント含む）",
+    assert rows["会話累計"] == {
+        "label": "会話累計",
         **cumulative,
         "group": "total",
     }
