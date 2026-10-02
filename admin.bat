@@ -13,8 +13,5 @@ rem ADMIN_HOST/ADMIN_PORT below override config.ini's [admin] section
 rem (see src/config.py). Edit these two lines directly to change the
 rem host/port this dashboard listens on.
 
-set ADMIN_HOST=127.0.0.1
-set ADMIN_PORT=7999
-
 python -m admin.server
 pause
