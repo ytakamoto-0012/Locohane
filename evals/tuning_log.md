@@ -5433,3 +5433,78 @@ system_prompt_scale全件（001xlsx/002pptx/003docx/004pdf/006recipe images
   約950文字（共通の出力規則・フォーマットを毎回全文記載）で、20件同時だと約19000文字の出力に
   なるのが阻害要因と推定。main 1call最大85122（calls_over_ceiling 17）。
 - 修正: 並列節に「共通指示は発行前にwrite_thread_noteへ1回書き、各task文はnote参照＋担当範囲の短文」を追加。
+
+### par_iter04（instance: default）
+- 006: 不合格（rules FAIL: main が analyze_image を直接呼出。並列発行0回）。explore で290件把握後、
+  自分で1枚 analyze_image → OCR方式へ切替 → create_plan[2steps]（mdフォルダ作成／全290件をOCRで1ステップ）。
+  件数既知でも1ステップに全件を詰めた。iter03で追加したthread note共通指示は未使用（効果判定不能）。
+- 参考（Web調査）: 並列指示の非Anthropicモデルでの逐次化対策として「送信前の自己チェック」が提案されている
+  （fullsend-ai/agents#1555）。
+- 修正: 「2. create_plan」に「呼ぶ前の自己チェック（1ステップの件数が上限以下か・グループ数ぶんのステップがあるか。処理方法を変えても上限は同じ）」を追加。
+
+### par_iter05（instance: default）
+- 006: 不合格寄り（並列は部分的。最大6件/応答、計25dispatchを3→5→3→4→6の波で発行）。
+  create_plan[22steps]（iter04の自己チェックが効いたと推定）、task文はインデックス範囲指定で約200文字に短縮・
+  ファイル名捏造なし。ただしutp(in_progress)とdispatchを別応答に分けて交互に繰り返す。
+  品質面: workerがanalyze_imageではなくeasyocrでOCRし181/297件出力（並列とは別問題、今回は対象外）。
+  main 1call最大63833（calls_over_ceiling 0）。
+- 修正: 並列節に「発行前の自己チェック（件数＝未着手の並列ステップ数か、in_progress化も同じ応答に入れる）」を追加。
+
+### par_iter06（instance: default）
+- 006: 合格（並列）。explore→create_plan[20steps]→write_thread_note（共通指示）→utp(in_progress)×20を1応答→
+  **worker×20を1応答で一括発行**。各task文は「thread note"画像処理作業指示"を読め＋範囲」。main 1call最大55859
+  （calls_over_ceiling 0）。turn_cutoffsなし。
+  残課題（並列以外）: in_progress化とdispatchは別応答のまま／最終確認をverifierでなくworkerで実施／
+  explore報告290件（実際297件、拡張子大文字小文字か）で出力187件。
+- 修正なし。再現性確認のため同一プロンプトで再実行。
+
+### par_iter07（instance: default、iter06と同一プロンプトでの再現性確認）
+- 006: 不合格（再現せず）。create_planを5グループずつ5回作り直し（6→5→5→5→2steps）、各計画ごとにworker×5を並列。
+  最終回答が空。detail_markdownに「今回処理するのは5グループ」と明記しており、プロンプトの例
+  「並列数5」「ステップ1〜5」が1波の上限としてアンカーになっていると判断。
+- 修正: 3か所の例を「画像240件→16グループ→16ステップを全て同じ応答で」に差し替え、
+  「5グループずつ等に分けて何度もcreate_planしない」を追記（ケースの297件と同数は過適合を避け不使用）。
+
+### par_iter08（instance: default）
+- 006: 不合格（rules FAIL: workerへのdispatch 0件）。冒頭でAskUserQuestion/ask_user_choiceを計5回（ばらつき）→
+  explore→create_plan[20steps]（例の差し替え後も20ステップで1計画、iter07のアンカー問題は解消）→
+  utp(in_progress)を1件ずつ別応答で2回→ループ検知が発火→状況報告テキストのみで終了（4分）。
+  プロンプト側「全部をin_progressにしてから同じ応答でdispatch」の「してから」が応答分割を誘発し、
+  iter05の「同じ応答に入れる」と食い違っていた。
+- 修正: 4. update_task_progress と必須ルールの該当2か所を「全件のutp(in_progress)と全件のdispatchを
+  1つの応答にまとめて出す／1件ずつ別応答で呼ばない（ループ検知される）」に統一。
+
+### par_iter09（instance: default）
+- 006: 不合格（並列0回）。explore→create_plan[11steps]（各27件程度、画像15件上限超過）→utp(in_progress)を11回
+  すべて別応答→worker×17も全て1件ずつ。全ツール呼び出しが単発。main 1call最大101111（calls_over_ceiling 24）。
+  出力178件。iter08で追加した否定文「1件ずつ別の応答で呼ばない」が逆に単発呼び出しをプライミングした可能性。
+- 修正: iter08で追加した否定文2か所を削除（肯定形「1つの応答にまとめて出す」のみ残す）。
+
+### par_iter10（中断）
+- 実行途中でユーザー指示により停止。プロンプトだけでの並列化はばらつきが大きく（iter01〜09で合格はiter06の1回のみ）、
+  ハーネス側に「Glob→グループ分割→worker並列実行」を行う一括委譲ツールを実装する方針へ転換（2026-10-02）。
+
+## dispatch_agent_batch 導入後の評価（system_prompt_scale / 006、インスタンス: default、2026-10-02〜）
+
+ハーネス側に dispatch_agent_batch（Glob→ファイル名順→group_size件ずつ分割→担当ファイルの絶対パスを
+task末尾へ機械的付与→既存ジョブ基盤で並列実行→結果は先頭400文字に切り詰め、全文はthread note）を追加。
+system_prompt.md は「同じ処理を多数のファイルへ行うなら dispatch_agent_batch を1回」を最優先に追加し、
+手動分割ルールはbatchが使えない場合のみに格下げ。006のexpectは dispatch_agent_batch(worker) に変更。
+
+### batch_iter01（instance: default）
+- 006: 合格（並列はハーネスで達成）。explore→create_plan[2steps]（batchで一括処理＋verifier）→
+  dispatch_agent_batch(worker, pattern="*.{jpg,jpeg,png,gif,webp,bmp}", group_size=15) を1回 →
+  290件を20グループへ分割、20グループすべて完了 → verifier。main 1call最大37785（calls_over_ceiling 0）。
+  出力270件。並列以外の課題: patternにheicが無く7件対象外（297中290）／グループ3・4で計8件を
+  「既に存在」としてスキップ（原因未調査）。
+- 修正なし。再現性確認のため再実行。
+  （追記）グループ3・4の「既に存在」スキップは、worker自身が書き出しコードを再実行し、1回目に自分が
+  書いたファイルを既存と判定したもの。担当外との衝突ではなく出力は揃っている（問題なし）。
+
+### batch_iter02（instance: default、batch_iter01と同一プロンプトでの再現性確認）
+- 006: 合格（並列はハーネスで達成、2回連続）。create_plan[2steps]→utp(in_progress)+batch を同一応答で発行。
+  1回目のbatchは path="@N"（プロンプト例の記法をそのまま）でエラー→2回目で正しいパスを渡し、290件を20グループへ
+  分割（完了19・エラー1）。エラーの1グループ（workerのトークン上限超過）は dispatch_agent で再委任して回復
+  （プロンプト通り）。main 1call最大41610。出力168件（品質面はworker側、今回の評価対象外）。
+- 修正: system_prompt の例を path=@N → path="images"（相対パス可・実際の@12等）へ。ツール側も path に
+  "@N" を含むときは記法の誤用である旨をエラーに添える。
