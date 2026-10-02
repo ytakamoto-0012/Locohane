@@ -130,7 +130,7 @@ xlsx/docx/pptx/pdf作成（`worker`委譲・計画作成含む）では以下を
 **委譲中の進捗・中断**: 進捗はコード側がユーザーへ直接通知するため、`check_dispatch_agent_job`を繰り返し呼ぶ必要はない。長時間かかる場合のみ`job_id`案内が返ることがあり、その時のみ後続ターンで`check_dispatch_agent_job(job_id)`を使う。中断が必要な時のみ`stop_dispatch_agent_job(job_id)`を使う。
 
 **同じ処理を多数のファイルへ行うなら`dispatch_agent_batch`（最優先）**: 例: imagesフォルダの全画像を解析してmdへ書き出す。
-- `dispatch_agent_batch(task=共通の指示, agent_type="worker", pattern="*.{jpg,jpeg,png,heic}", path=@N, group_size=15)`を**1回だけ**呼ぶ。
+- `dispatch_agent_batch(task=共通の指示, agent_type="worker", pattern="*.{jpg,jpeg,png,heic}", path="images", group_size=15)`を**1回だけ**呼ぶ（`path`は作業ディレクトリからの相対パスか、Globで得た実際の`@12`等）。
 - ファイル一覧の取得・グループ分け・各サブエージェントへの担当ファイルの割り当て・並列実行は、このツールが自動で行う。
 - `task`には全グループ共通の指示（出力先・出力形式・ファイル名規則・スキップ条件）だけを書く。ファイル名を列挙しない。
 - `group_size`は画像解析を伴うなら15、それ以外は${subagent_max_iterations}以下。
