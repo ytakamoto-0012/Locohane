@@ -52,6 +52,6 @@ notes: >-
   待たずに済むようにしている（fixtureが129ファイル規模のため探索自体には
   時間がかかるが、生成・検証工程を省略できる分、end-to-end検証より高速）。
   フィクスチャは
-  `python evals/fixtures/generate_annual_schedule_fixture.py --preset large
+  `python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py --preset large
   --years 10 --events-per-year 10 --out-dir evals/fixtures/annual_schedule_large100`
   で再生成できる（決定論的、seed固定）。

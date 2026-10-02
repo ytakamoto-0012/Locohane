@@ -36,7 +36,7 @@ judge: |
   2・3のいずれかに明確に反する場合は不合格とせよ。
 notes: >-
   work_dir の evals/fixtures/annual_schedule は
-  `python evals/fixtures/generate_annual_schedule_fixture.py`（引数なし、
+  `python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py`（引数なし、
   --preset small が既定）で再生成できる軽量フィクスチャ。005・007番ケースと
   同じフィクスチャを流用している。system_prompt.md 214行目のルール
   （最終回答より前にprovide_downloadを呼ぶ、書いた後に呼び直さない）は

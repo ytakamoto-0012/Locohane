@@ -41,7 +41,7 @@ judge: |
   2・3のいずれかに明確に反する場合は不合格とせよ。
 notes: >-
   work_dirは005/007/008番と同じ evals/fixtures/annual_schedule
-  （`python evals/fixtures/generate_annual_schedule_fixture.py` で再生成可能な
+  （`python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py` で再生成可能な
   軽量フィクスチャ）を流用。check_script_job/check_dispatch_agent_job/
   update_task_progress/ask_user_choice の4ツールはdocstring削減前まで
   呼び出し精度を検証するevalケースが1件も無かったため、削減の安全網として

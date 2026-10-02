@@ -65,7 +65,7 @@ notes: >-
   end-to-end本丸ケース（旧021の統合版。021は縮小フィクスチャで内容が
   重複するため削除し、こちらに一本化した）。/tune-prompt system_prompt の
   自動ループには含めない（毎イテレーション実行するには重すぎるため）。
-  `python evals/fixtures/generate_annual_schedule_fixture.py --preset large`
+  `python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py --preset large`
   でフィクスチャを再生成できる（決定論的、seed固定）。
   `python evals/run_all.py system_prompt_scale` で手動実行する。
   2026-08-01: officecli優先化に伴い expect.tool_call_args_contains を撤去し

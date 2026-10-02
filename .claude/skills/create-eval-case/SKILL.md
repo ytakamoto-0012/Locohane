@@ -183,15 +183,21 @@ expect:
 
 - 何を検証したいケースか（新機能の確認／本番で観測した失敗の回帰防止／
   性能特性の実測）をユーザーに確認する。
-- 対応する `target`（`evals/cases/<target>/`）を決める。
+- 対応する `target`（`evals/cases/<target>/`）は自分で決めず、必ず
+  `AskUserQuestion` ツールを呼び、`evals/cases/` 直下のディレクトリ名を
+  選択肢（`multiSelect: false`）にしてユーザーに選ばせる。選択肢が4件を
+  超える場合は、検証目的に近い4件に絞る（残りと新規targetは「Other」で
+  入力してもらう）。各選択肢の `description` には以下の用途を書く。
   - `system_prompt`: 通常規模のプロンプト品質検証。`/tune-prompt` の自動
     ループ対象。
   - `system_prompt_scale`: 実データ規模の重量級ケース（自動ループ対象外、
     手動実行）。
   - `config_timeouts`: 数値タイムアウトの実測用（パターンD、合否判定は
     簡略でよい）。
-  - 上記に当てはまらない新カテゴリなら `evals/cases/<新target>/` を新規
-    作成してよい（`run_case.py`/`run_all.py` は変更不要、README.md参照）。
+  - 上記以外の既存ディレクトリ（`excel-skills` 等）は、中の既存ケースを
+    読んで用途を1行で要約する。
+  - 「Other」で新カテゴリ名が入力されたら `evals/cases/<新target>/` を新規
+    作成する（`run_case.py`/`run_all.py` は変更不要、README.md参照）。
 
 ### 2. ファイル名・idを決める
 
@@ -203,10 +209,25 @@ expect:
 
 - `evals/fixtures/` に流用できる既存フィクスチャがあれば、`work_dir` で
   指定するだけで済ませる。
-- 新規フィクスチャが必要な場合、`evals/fixtures/generate_*.py` の既存例
-  （`generate_annual_schedule_fixture.py` 等）に倣い、**決定論的（seed固定）**
+- 新規フィクスチャが必要な場合、`evals/fixtures/answer/*/generate_*.py` の既存例
+  （`answer/system_prompt/generate_annual_schedule_fixture.py` 等）に倣い、**決定論的（seed固定）**
   な生成スクリプトを作る。手作業でファイルを置くのではなく、再生成コマンドを
   `notes` に書けるようにする。
+- 正解データ（judge照合用の answer key 等）や生成スクリプトを新規に作る
+  場合は、`evals/fixtures/answer/<target>/`（`<target>` は手順1で選んだ
+  ディレクトリ名。無ければ作成する）に置く。`evals/fixtures/` 直下には
+  置かない。
+  - `work_dir` に指定する、モデルが実際に操作するデータ一式は従来どおり
+    `evals/fixtures/<フィクスチャ名>/` に置く（正解データを `work_dir` 内に
+    置くとモデルが読めてしまうため、必ず分ける）。
+  - 例: 生成スクリプト `evals/fixtures/answer/system_prompt/generate_xxx_fixture.py`
+    → 出力先 `evals/fixtures/xxx/`、正解データ
+    `evals/fixtures/answer/system_prompt/xxx_answer_key.json`。
+  - `notes` の再生成コマンドもこのパスで書く。
+  - 生成スクリプトの出力先は `Path(__file__).resolve().parents[2] / "<フィクスチャ名>"`
+    （= `evals/fixtures/<フィクスチャ名>/`）で求める。
+  - 複数targetで共用するフィクスチャの生成スクリプトは、最初に作ったtarget側に
+    置いたまま共用する（複製しない）。
 - `work_dir` を指定しないケースは、実行時インスタンスの `default_workdir`
   （前提条件3で表示される値。既定 `data/<インスタンス名>/temp`）がそのまま
   使われる点に注意する。
@@ -262,4 +283,4 @@ python -m evals.run_case evals/cases/<target>/<ファイル名>.yaml --instance 
 - 既存ケースの yaml を無断で書き換えない（既存ケースの修正依頼と、新規
   ケース追加は別作業）。
 - fixture を新規生成する場合、既存フィクスチャを上書きしない
-  （別ディレクトリ名にする）。
+  （別ディレクトリ名にする。`answer` はフィクスチャ名に使わない）。

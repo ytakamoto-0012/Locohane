@@ -18,9 +18,9 @@ evals/tuning_log.md 参照）を埋めるため、年数・年あたり件数を
 実データ相当（数十件規模）のフィクスチャを決定論的に生成する。
 
 使い方:
-    python evals/fixtures/generate_annual_schedule_fixture.py
-    python evals/fixtures/generate_annual_schedule_fixture.py --preset large
-    python evals/fixtures/generate_annual_schedule_fixture.py --preset large --years 8 --events-per-year 15
+    python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py
+    python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py --preset large
+    python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py --preset large --years 8 --events-per-year 15
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-FIXTURE_ROOT = Path(__file__).resolve().parent / "annual_schedule"
-LARGE_FIXTURE_ROOT = Path(__file__).resolve().parent / "annual_schedule_large"
+FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "annual_schedule"
+LARGE_FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "annual_schedule_large"
 
 # PILのデフォルトフォントはCJK非対応で日本語が豆腐文字になるため、Windows同梱の
 # 日本語フォントを明示指定する（021/022ケースがVLMに読めない画像でjudgeされていた

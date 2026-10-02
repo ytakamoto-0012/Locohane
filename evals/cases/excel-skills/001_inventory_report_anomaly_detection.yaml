@@ -50,5 +50,5 @@ notes: >-
   --offset/--limit（既定200行）を組み合わせて、行数・列数どちらも多い
   表を正しく分割して読めるか、また読んだ内容から異常を発見できるかを
   評価する。fixtureは
-  `python evals/fixtures/generate_excel_columns_scale_fixture.py`
+  `python evals/fixtures/answer/excel-skills/generate_excel_columns_scale_fixture.py`
   で再生成できる（決定論的、seed固定）。

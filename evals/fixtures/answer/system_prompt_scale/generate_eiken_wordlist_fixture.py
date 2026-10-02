@@ -40,7 +40,7 @@ PDFにもSection1の別ページが混在。ファイル名 excited.pdf / でる
 ため。
 
 使い方:
-    python evals/fixtures/generate_eiken_wordlist_fixture.py
+    python evals/fixtures/answer/system_prompt_scale/generate_eiken_wordlist_fixture.py
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-FIXTURE_ROOT = Path(__file__).resolve().parent / "英検3級語彙"
+FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "英検3級語彙"
 ANSWER_KEY_PATH = Path(__file__).resolve().parent / "英検3級語彙_answer_key.json"
 
 # 実データ（E:\共有\勉強-課題\英検\３級）が6個のPDFに分散していたことに合わせた既定値。

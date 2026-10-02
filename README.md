@@ -351,8 +351,10 @@ Locohane/
 │   ├── cases/               # 評価ケース（YAML）
 │   │   ├── system_prompt/   # システムプロンプト用ケース
 │   │   ├── system_prompt_scale/ # スケーリング用ケース
-│   │   └── config_timeouts/ # timeout系設定チューニング用ケース
-│   ├── fixtures/            # 評価用フィクスチャデータ
+│   │   ├── config_timeouts/ # timeout系設定チューニング用ケース
+│   │   └── excel-skills/    # Excel系スキル用ケース
+│   ├── fixtures/            # 評価用フィクスチャデータ（work_dir に指定するデータ一式）
+│   │   └── answer/<target>/ # cases/<target> 用の正解データ・フィクスチャ生成スクリプト
 │   ├── history/             # チューニング前スナップショット
 │   └── results/             # 実行結果（再生成可能、.gitignore済み）
 ├── src/

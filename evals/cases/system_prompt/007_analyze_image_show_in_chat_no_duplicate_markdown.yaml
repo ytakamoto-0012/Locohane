@@ -41,7 +41,7 @@ judge: |
      しない）。
 notes: >-
   work_dir の evals/fixtures/annual_schedule は
-  `python evals/fixtures/generate_annual_schedule_fixture.py`（引数なし、
+  `python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py`（引数なし、
   --preset small が既定）で再生成できる軽量フィクスチャ（3年分・少数ファイル）。
   005番ケースと同じフィクスチャを流用している。実運用ログでは1ターン目に
   `dispatch_agent(agent_type="explore")` でパスを取得後、2ターン目「画像を

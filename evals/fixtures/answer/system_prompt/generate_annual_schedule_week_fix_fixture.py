@@ -17,7 +17,7 @@ B列の値は「4行区切りで月が変わる」という単純な（誤った
 が自然に生じる。
 
 使い方:
-    python evals/fixtures/generate_annual_schedule_week_fix_fixture.py
+    python evals/fixtures/answer/system_prompt/generate_annual_schedule_week_fix_fixture.py
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
-FIXTURE_ROOT = Path(__file__).resolve().parent / "annual_schedule_week_fix"
+FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "annual_schedule_week_fix"
 
 # fiscal year（4月始まり）の月順と、各月の固定行数（実データの本番ログに準拠）。
 _MONTHS_FISCAL = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3]

@@ -39,7 +39,7 @@ notes: >-
   system_prompt.md 875-877行目「Globの唯一の例外は1回だけ」ルールをコード側で
   裏付けるため src/tools.py に main_agent_glob_guard を追加した際の回帰ケース。
   work_dir の evals/fixtures/annual_schedule は
-  `python evals/fixtures/generate_annual_schedule_fixture.py`（引数なし、
+  `python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py`（引数なし、
   --preset small が既定）で再生成できる軽量フィクスチャ（3年分・9ファイル、
   年ごとのサブフォルダと一部年のみのocr_md/という浅いGlobでは把握しきれない
   構成）。001番ケースと違い、判定対象は調査の深さではなく Glob 呼び出し回数と

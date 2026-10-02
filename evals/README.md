@@ -123,7 +123,7 @@ notes: "人間向けの補足メモ（判定には使わない）"
 `system_prompt_scale`（`evals/cases/system_prompt_scale/`）は
 `system_prompt/system_prompt.md` を対象にする点は `system_prompt` と同じだが、
 `evals/fixtures/annual_schedule_large`（実データ規模を再現した大量ファイル
-フィクスチャ、`python evals/fixtures/generate_annual_schedule_fixture.py
+フィクスチャ、`python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py
 --preset large` で生成）を使う重量級ケース専用のカテゴリで、
 `/tune-prompt system_prompt` の自動ループ（毎イテレーション全件実行）には
 含めない。`python evals/run_all.py system_prompt_scale` で手動実行する。

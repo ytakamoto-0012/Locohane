@@ -26,7 +26,7 @@ excel-readスキルの`--columns`（2026-09-10追加、列絞り込み）と`--o
 含まれるよう分散させてある。
 
 使い方:
-    python evals/fixtures/generate_excel_columns_scale_fixture.py
+    python evals/fixtures/answer/excel-skills/generate_excel_columns_scale_fixture.py
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
-FIXTURE_ROOT = Path(__file__).resolve().parent / "excel_columns_scale"
+FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "excel_columns_scale"
 
 _CATEGORIES = ["食品", "日用品", "衣料品", "家電", "文具"]
 _TOTAL_ROWS = 300  # ヘッダー除くデータ行数

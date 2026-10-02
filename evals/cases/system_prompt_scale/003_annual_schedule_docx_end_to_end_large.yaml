@@ -68,7 +68,7 @@ notes: >-
   出力形式のみExcel（excel-edit）からWord（docx-create）に変更した。
   /tune-prompt system_prompt の自動ループには含めない（毎イテレーション
   実行するには重すぎるため、001と同じ理由）。
-  `python evals/fixtures/generate_annual_schedule_fixture.py --preset large`
+  `python evals/fixtures/answer/system_prompt/generate_annual_schedule_fixture.py --preset large`
   でフィクスチャを再生成できる（001と共有、決定論的、seed固定）。
   `python evals/run_all.py system_prompt_scale` で手動実行する。
   2026-08-13: 新規作成。

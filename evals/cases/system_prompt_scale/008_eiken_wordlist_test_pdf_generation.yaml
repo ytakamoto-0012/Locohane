@@ -201,14 +201,14 @@ expect:
   tool_called_any: [read_skill]
   response_not_contains: ["申し訳ありません", "できません", "機能がありません"]
 judge: |
-  英検3級の単語帳（合成フィクスチャ、evals/fixtures/generate_eiken_wordlist_fixture.py
+  英検3級の単語帳（合成フィクスチャ、evals/fixtures/answer/system_prompt_scale/generate_eiken_wordlist_fixture.py
   で生成、pypdf.extract_text()が空文字になる＝スキャン写真と同じテキスト層なしの
   画像PDF、全300語・6個のPDFファイルに分散収録、ファイル名は中身のヒントに
   ならない単語1語ベースの命名）から、指示された学習計画（40語/回・英→日/日→英/
   文脈確認の3方向・8回で300語を一巡）の「1回目のテスト（見出し語番号0001~0040）」
   をA4印刷可能なPDFとして作成できるかを見るend-to-endケース。
 
-  正解データは evals/fixtures/英検3級語彙_answer_key.json にある（このファイルは
+  正解データは evals/fixtures/answer/system_prompt_scale/英検3級語彙_answer_key.json にある（このファイルは
   work_dir の外に置かれており、エージェントの作業ディレクトリには存在しない＝
   エージェントはPDFを実際に読まない限り中身を知り得ない）。JSON の `files` 配列に
   ファイルごとの `{file, pages, head_nos}`（そのファイルに実際に収録されている
@@ -269,7 +269,7 @@ judge: |
 notes: >-
   ユーザー所有の実データ（E:\共有\勉強-課題\英検\３級、市販の英検3級単語帳
   「でる順パス単」相当をスマホで撮影したスキャンPDF6個、著作権のある実コンテンツ）
-  を一切使わず、evals/fixtures/generate_eiken_wordlist_fixture.py が単語・意味・
+  を一切使わず、evals/fixtures/answer/system_prompt_scale/generate_eiken_wordlist_fixture.py が単語・意味・
   例文をすべて自作して合成生成したダミー単語帳PDF群（evals/fixtures/英検3級語彙/
   配下に6個）を使う。
 
@@ -287,13 +287,13 @@ notes: >-
   へ委譲）が必要な点、および対象語を揃えるには複数ファイルを開いて回る必要が
   ある点の両方を、実データと同じ形でエージェントに課す。
 
-  正解データ（evals/fixtures/英検3級語彙_answer_key.json）は work_dir
+  正解データ（evals/fixtures/answer/system_prompt_scale/英検3級語彙_answer_key.json）は work_dir
   （run_case.py が一時ディレクトリへコピーするのは work_dir 配下のみ）の外に
   意図的に置いてあるため、エージェントからは見えない。judge はこのファイルを
   読み、生成された問題文の単語・訳が実際にPDFを読んだ結果か、読まずに一般的な
   英検3級単語で埋めた捏造かを突き合わせて判定する。
 
-  フィクスチャは `python evals/fixtures/generate_eiken_wordlist_fixture.py`
+  フィクスチャは `python evals/fixtures/answer/system_prompt_scale/generate_eiken_wordlist_fixture.py`
   で再生成できる（決定論的、seed固定。既定でNUM_FILES=6個のPDFへ、
   PAGES_PER_FILE_CHUNK=2ページ単位で順繰りに振り分ける）。対象40語
   （head_no 1~40）は既定パラメータでは3ファイルにまたがる想定
