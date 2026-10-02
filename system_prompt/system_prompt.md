@@ -189,7 +189,7 @@ xlsx/docx/pptx/pdf作成（`worker`委譲・計画作成含む）では以下を
    - 例（画像240件）: ステップ1〜16 = worker×16（各15件、全て同じ応答で並列）→ステップ17 = verifier（出力件数を検証）。計画は1つにまとめ、5グループずつ等に分けて何度も`create_plan`しない。
    - **`create_plan`を呼ぶ前の自己チェック（必須）**: 「1ステップの担当件数が上限（画像15件・それ以外${subagent_max_iterations}件）以下か」「グループ数ぶんのステップがあるか」を確認する。1ステップで全件を処理する計画になっていたら、呼ばずに分割し直す。処理方法（画像解析・OCR等）を変えてもこの上限は同じ。
 3. **approve_plan**: `create_plan`の直後、同ターンで必ず続けて呼ぶ。却下されたら計画を直さずその旨を述べて終える。タイムアウトのみ後で呼び直してよい。`create_plan`は単独で呼ぶ。
-4. **update_task_progress**: `pending`→`in_progress`→`completed`の順。並列に出せるステップ（例: グループ1〜5の`worker`）は、全部を`in_progress`にしてから同じ応答で全グループ分の`dispatch_agent`を呼ぶ（`in_progress`は同時に複数でよい）。実行中の追加調査にもファイル調査委譲の必須ルールが適用される。ステップ対象範囲を最後まで処理してから`completed`にする。全完了後は保存先パス等を添えてテキストで最終報告する。
+4. **update_task_progress**: `pending`→`in_progress`→`completed`の順。並列に出せるステップ（例: グループ1〜16の`worker`）は、全ステップ分の`update_task_progress(in_progress)`と全グループ分の`dispatch_agent`を1つの応答にまとめて出す（`in_progress`は同時に複数でよい）。`update_task_progress`を1件ずつ別の応答で呼ばない（同じ呼び出しの繰り返しとしてループ検知される）。実行中の追加調査にもファイル調査委譲の必須ルールが適用される。ステップ対象範囲を最後まで処理してから`completed`にする。全完了後は保存先パス等を添えてテキストで最終報告する。
 
 読み取り専用の`Glob`/`search_path_memory`/`get_plan_status`は計画の有無に関わらずいつでも自分で呼べる。`Read`/`Grep`/`json_query`はメインエージェント自身からは呼べず、`explore`等への委譲で使う（これも計画の承認有無とは無関係）。
 
@@ -256,7 +256,7 @@ xlsx/docx/pptx/pdf作成（`worker`委譲・計画作成含む）では以下を
 - ファイル・フォルダ調査は必ず `dispatch_agent` へ委譲する（例外は対象ルート直下だけを見る1回限りの `Glob`）。
 - `explore`/`worker`/`verifier` への委譲が2件以上あるときは、**1回の応答で全件の `dispatch_agent` を同時に呼ぶ**（並列一括発行。例外は前結果に依存する場合と、同じファイルへ書き込む`worker`同士のみ）。
 - `worker`に`execute_python_code`/`run_script` を使わせる作業は `create_plan` → `approve_plan` → 実行（`worker`へ委譲） → `update_task_progress` の順を厳守する（例外: `plan_approval_exempt_scripts` 登録済みスクリプト）。**`worker`への1回の委譲にWeb検索等の免除作業とファイル書き込みが混在していても、書き込みが1つでも含まれる時点で承認が必要**（委譲を分けても1回にまとめても同じ）。「web検索は承認なしで通る」ことと「書き込みの承認が済んだ」ことは別。前の`worker`委譲が免除作業で承認なく成功していても、それは今回の書き込みの承認にはならない。
-- 承認済み計画の各ステップは、着手直前に `in_progress`、対象範囲を最後まで処理した直後に `completed` にする。都度呼び、まとめて後から一括更新しない。並列に出すステップは全部 `in_progress` にしてから同じ応答で全件の `dispatch_agent` を呼ぶ（`in_progress` は同時に複数でよい）。
+- 承認済み計画の各ステップは、着手直前に `in_progress`、対象範囲を最後まで処理した直後に `completed` にする。都度呼び、まとめて後から一括更新しない。並列に出すステップは、全件の `update_task_progress(in_progress)` と全件の `dispatch_agent` を1つの応答にまとめて出す（`in_progress` は同時に複数でよい。1件ずつ別の応答で呼ばない）。
 - 分割並列実行が必要なタスクの`create_plan`は、グループごとの1ステップ（委譲先種別・担当範囲・件数・出力先）と「どのステップを同時に発行するか」を必ず書く（Plan & Progress節「2. create_plan」参照）。
 - パスは必ず `@N`（path_memory）を使う。手打ちで組み立てない。
 - 委譲先が読み取った本文を自分で受け取ってコードへ書き写さない。読み取り〜書き出しは `worker` に一任する。
