@@ -303,6 +303,7 @@ Locohane/
 │       ├── tune-prompt/           # system_prompt.md等のプロンプト資産自動チューニング
 │       ├── create-eval-case/      # evals/cases/ へのevalケース新規作成
 │       ├── consolidate-memory/    # 全インスタンスの永続メモリーの重複統合（日次）
+│       ├── apply-memory-to-skills/ # 指定インスタンスのメモリーをSKILL.mdへ反映しtune-prompt実行
 │       └── monitor-app-log/       # app_*.log を定期監視し issue/ へ自動起票
 ├── .qwen/                  # Qwen Code用の `.claude/` 相当ディレクトリ（settings.json・skills/等）
 ├── .locohane/                # project_locohane_dir（既定）。配下を起動時に自動検知

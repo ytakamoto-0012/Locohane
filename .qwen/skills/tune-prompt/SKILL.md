@@ -29,6 +29,8 @@ description: Locohane の system_prompt.md・SKILL.md・tool docstring 等のプ
 
 **スキル開始直後、他の作業（ファイル読み込み・疎通確認等）より先に行う。**
 ユーザーの依頼文で対象が指定されていても、必ず質問して確認する。
+例外: `apply-memory-to-skills`スキルから呼ばれた場合は、そのスキルが
+決めた値を使い、手順0を省略する。
 
 1. `evals/cases/`直下のディレクトリ名を見る（`config_timeouts`は除く）。
 2. 必ず`AskUserQuestion`ツールを呼び、ディレクトリ名を選択肢
