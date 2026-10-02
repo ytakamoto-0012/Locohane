@@ -5508,3 +5508,33 @@ system_prompt.md は「同じ処理を多数のファイルへ行うなら dispa
   （プロンプト通り）。main 1call最大41610。出力168件（品質面はworker側、今回の評価対象外）。
 - 修正: system_prompt の例を path=@N → path="images"（相対パス可・実際の@12等）へ。ツール側も path に
   "@N" を含むときは記法の誤用である旨をエラーに添える。
+
+### batch_iter03（中断）
+- 別エージェントでのバグ修正（dispatch_agent_batch の絶対パスpattern例外・安全上限超過時の部分結果・
+  進捗集約・失敗グループのファイル一覧・50グループ上限・停止時の退避案内、system_prompt.mdの食い違い修正）の
+  ため実行途中で停止。
+
+### batch_iter04（instance: default、001を追加）
+- 上記修正後のコードで 001（年間行事予定表xlsx）と 006 を実行。001 はユーザーが本番defaultで
+  一括委譲エラーに遭遇したケース（原因: 年度フォルダ/ocr_md の入れ子に pattern '**/ocr_md/*.{md,txt}' を
+  渡したが、batchは直下のみ探索のため0件エラー → dispatch_agentへフォールバック）。
+- 実行途中で停止（サブフォルダ探索対応のため）。
+
+### batch_iter05（instance: default）
+- dispatch_agent_batch にサブフォルダ探索を追加（pattern に "/" を含めば "*/ocr_md/*.md"・"**/*.jpg" 等で
+  階層を探索、"/" 無しは従来どおり直下のみ。並びと見出しは path からの相対パス）。system_prompt.md の
+  batch節に pattern の書き方（年度フォルダ内ocr_md の例）を追加。001 と 006 を再実行。
+- 結果:
+  - 006: 合格（batch 1回で20グループ並列、main 1call最大37205）。ただし create_plan は手動20グループ分の
+    21ステップで作っており、プロンプトの「batchなら1ステップでよい」と食い違い（実際の委譲はbatch1回のみ）。
+  - 001: 不合格（recursion_limit）。冒頭で AskUserQuestion「来年は2026年度か？」→evalでタイムアウト→
+    ほぼ同じ質問を165回繰り返してrecursion_limit。batchまで到達せず。タイムアウト時は再質問せず終える
+    プロンプト規則が守られず、ループ検知・重複ガードも止めない（ツール呼び出しの繰り返しのため）。
+    ハーネス側対策（同一ターンで質問タイムアウト済みなら再質問を即時拒否）をユーザーへ提案。
+
+### batch_iter06（instance: default、001のみ再実行・コード/プロンプト変更なし）
+- 001: 合格（rules PASS、turn_cutoffsなし、main 1call最大54340）。explore×2で構造把握 →
+  dispatch_agent_batch(worker, pattern="**/*.png", path=".", group_size=15) で年度フォルダ配下の写真40件を
+  3グループへ並列委譲（完了3）＝サブフォルダ探索が本番相当の入れ子構成で機能。その後 create_plan[2steps] →
+  worker で xlsx 作成 → verifier → provide_download。batch_iter05 の AskUserQuestion 無限ループは再現せず
+  （ばらつき。ただしハーネス側の再質問ガードは引き続き提案中）。
