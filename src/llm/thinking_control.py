@@ -1,0 +1,287 @@
+"""ReActループの各ステップで思考（thinking）レベルを機械的に切り替える。
+
+ローカルLLMでは思考トークンの生成が応答の遅さの大きな原因になる。一方で
+「Read/Grep が成功した直後に次のツールを呼ぶだけ」のようなルーチン的な
+ステップまで、計画を立てるときと同じだけ思考させる必要はない。そこで、
+送信直前のメッセージ列（直前の履歴の形）からルールでレベルを選び、
+リクエストの extra_body を差し替える（ChatLlamaCpp._get_request_payload から
+呼ばれる。[thinking_control] 参照）。
+
+レベルの実現方法はプロンプトの先頭部分を変えないものに限る（KVキャッシュを
+外さないため）:
+- off   : chat_template_kwargs.enable_thinking=false
+- それ以外: 思考予算（llama-server: reasoning_budget_tokens /
+  vLLM: thinking_token_budget）の大小
+reasoning_effort は使わない。Qwen3.6 の公式テンプレートは読まず、対応させる
+コミュニティ版テンプレートはシステムプロンプトへ指示文を足すため、ステップ
+ごとに切り替えるとキャッシュが外れる。
+
+判定は履歴だけから決まる純粋関数で、状態を保存しない。「直前のステップの
+レベル」は、最後のユーザー発言から順に判定をやり直して求める（_replay）。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+
+from ..config import THINKING_LEVELS, Config
+from .dialect import budget_params, extract_reasoning
+
+# レベルを比較するための順位（off が最小、xhigh が最大）。
+_RANK = {level: i for i, level in enumerate(THINKING_LEVELS)}
+
+# リクエストの extra_body に入りうる思考予算のキー（provider ごとに名前が違う）。
+_BUDGET_KEYS = ("reasoning_budget_tokens", "thinking_token_budget")
+
+
+@dataclass(frozen=True)
+class ThinkingControlSettings:
+    """select_level / apply_level が使う設定（Config から作る）。
+
+    Attributes:
+        rule_user_turn: ルール1（末尾がユーザー発言なら user_turn_level）の有効/無効。
+        rule_tool_error: ルール2（直前のツールがエラーなら1段上げる）の有効/無効。
+        rule_consecutive_cap: ルール3（default_level 未満が続いたら戻す）の有効/無効。
+        rule_after_tools: ルール4（直前のツール名で決める）の有効/無効。
+        user_turn_level: ルール1で使うレベル。
+        default_level: どのルールにも当たらなかったときのレベル。
+        budgets: レベルごとの思考予算。None なら予算を送らない（サーバー既定）。
+            off は予算を使わないため含めない。
+        level_by_tool: ルール4で使う「ツール名 → レベル」の対応。
+        error_prefixes: ツールの結果がこの文字列で始まればエラーとみなす。
+        max_consecutive_reduced: ルール3が働くまでの連続回数。0以下なら働かない。
+        budget_message: [llm].reasoning_budget_message。予算での打ち切り・本文への
+            漏れの検出（ログ用）に使う。None なら検出しない。
+    """
+
+    rule_user_turn: bool
+    rule_tool_error: bool
+    rule_consecutive_cap: bool
+    rule_after_tools: bool
+    user_turn_level: str
+    default_level: str
+    budgets: dict[str, int | None]
+    level_by_tool: dict[str, str]
+    error_prefixes: tuple[str, ...]
+    max_consecutive_reduced: int
+    budget_message: str | None
+
+
+def settings_from_config(config: Config) -> ThinkingControlSettings:
+    """Config の thinking_control_* から ThinkingControlSettings を作る。
+
+    予算が空欄のレベルは [llm].reasoning_budget を使う（それも空欄なら
+    予算を送らず、サーバー既定に委ねる）。
+
+    Args:
+        config: アプリ設定。
+
+    Returns:
+        ThinkingControlSettings。
+    """
+    budgets = {
+        "low": config.thinking_control_budget_low,
+        "medium": config.thinking_control_budget_medium,
+        "high": config.thinking_control_budget_high,
+        "xhigh": config.thinking_control_budget_xhigh,
+    }
+    level_by_tool: dict[str, str] = {}
+    for level, names in (
+        ("off", config.thinking_control_off_after_tools),
+        ("low", config.thinking_control_low_after_tools),
+        ("medium", config.thinking_control_medium_after_tools),
+    ):
+        for name in names:
+            level_by_tool[name] = level
+    return ThinkingControlSettings(
+        rule_user_turn=config.thinking_control_rule_user_turn,
+        rule_tool_error=config.thinking_control_rule_tool_error,
+        rule_consecutive_cap=config.thinking_control_rule_consecutive_cap,
+        rule_after_tools=config.thinking_control_rule_after_tools,
+        user_turn_level=config.thinking_control_user_turn_level,
+        default_level=config.thinking_control_default_level,
+        budgets={level: config.reasoning_budget if budget is None else budget for level, budget in budgets.items()},
+        level_by_tool=level_by_tool,
+        error_prefixes=tuple(config.thinking_control_error_prefixes),
+        max_consecutive_reduced=config.thinking_control_max_consecutive_reduced,
+        budget_message=config.reasoning_budget_message,
+    )
+
+
+def _is_tool_error(message: ToolMessage, error_prefixes: tuple[str, ...]) -> bool:
+    if getattr(message, "status", None) == "error":
+        return True
+    content = message.content if isinstance(message.content, str) else str(message.content)
+    return content.lstrip().startswith(error_prefixes) if error_prefixes else False
+
+
+def _first_step(settings: ThinkingControlSettings) -> tuple[str, str]:
+    if settings.rule_user_turn:
+        return settings.user_turn_level, "user_turn"
+    return settings.default_level, "default"
+
+
+def _next_step(
+    prev_ai: AIMessage,
+    tool_messages: list[ToolMessage],
+    history: list[str],
+    settings: ThinkingControlSettings,
+) -> tuple[str, str]:
+    """直前のAIMessageとそのツール結果から、次のリクエストのレベルを決める。"""
+    if settings.rule_tool_error and any(_is_tool_error(m, settings.error_prefixes) for m in tool_messages):
+        raised = min(_RANK[history[-1]] + 1, len(THINKING_LEVELS) - 1)
+        return THINKING_LEVELS[raised], "tool_error"
+
+    n = settings.max_consecutive_reduced
+    default_rank = _RANK[settings.default_level]
+    if (
+        settings.rule_consecutive_cap
+        and n > 0
+        and len(history) >= n
+        and all(_RANK[level] < default_rank for level in history[-n:])
+    ):
+        return settings.default_level, "consecutive_cap"
+
+    if settings.rule_after_tools:
+        names = [call.get("name") for call in prev_ai.tool_calls]
+        levels = [settings.level_by_tool.get(name) for name in names]
+        # 一覧にないツールが1つでも混ざっていれば default_level に任せる
+        # （並列呼び出しは最も高いレベルに合わせる方針で、一覧外は default 扱い）。
+        if levels and all(level is not None for level in levels):
+            return max(levels, key=lambda level: _RANK[level]), "after_tools"
+
+    return settings.default_level, "default"
+
+
+def _replay(messages: list[BaseMessage], settings: ThinkingControlSettings) -> list[tuple[str, str]]:
+    """最後のユーザー発言以降の各リクエストについて (レベル, 理由) を順に求める。
+
+    返り値の末尾が「これから送るリクエスト」のレベル。それより前は、同じ
+    ルールで判定し直した過去のステップのレベル（ルール2・3が参照する）。
+    """
+    start = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            start = i + 1
+            break
+
+    steps = [_first_step(settings)]
+    prev_ai: AIMessage | None = None
+    tool_messages: list[ToolMessage] = []
+    for message in messages[start:]:
+        if isinstance(message, AIMessage):
+            if prev_ai is not None:
+                steps.append(_next_step(prev_ai, tool_messages, [level for level, _ in steps], settings))
+            prev_ai = message
+            tool_messages = []
+        elif isinstance(message, ToolMessage):
+            tool_messages.append(message)
+    if prev_ai is not None:
+        steps.append(_next_step(prev_ai, tool_messages, [level for level, _ in steps], settings))
+    return steps
+
+
+def select_level(messages: list[BaseMessage], settings: ThinkingControlSettings) -> tuple[str, str, str | None]:
+    """これから送るリクエストの思考レベルを選ぶ。
+
+    最後の HumanMessage 以降を対象に、次の順で最初に当てはまったものを使う
+    （無効化されたルールは飛ばす）。
+
+    1. 末尾が HumanMessage（ユーザー発言・ナッジ等）→ user_turn_level
+    2. 直前のツール結果にエラーがある → 直前のレベルから1段上げる
+    3. 直前 max_consecutive_reduced 回が全て default_level 未満 → default_level
+    4. 直前に呼んだツールが全て一覧にある → その中で最も高いレベル
+    5. それ以外 → default_level
+
+    Args:
+        messages: 送信しようとしているメッセージ列（SystemMessage を含んでよい）。
+        settings: ThinkingControlSettings。
+
+    Returns:
+        (レベル, 判定理由のルール名, 直前のステップのレベル)。直前のステップが
+        無ければ3つ目は None。
+    """
+    steps = _replay(messages, settings)
+    level, reason = steps[-1]
+    prev_level = steps[-2][0] if len(steps) >= 2 else None
+    return level, reason, prev_level
+
+
+def apply_level(
+    extra_body: dict[str, Any] | None, level: str, settings: ThinkingControlSettings, provider: str
+) -> dict[str, Any]:
+    """extra_body のコピーへ、レベルに対応する思考パラメータを反映して返す。
+
+    Args:
+        extra_body: build_extra_body() が組み立てた元の extra_body（変更しない）。
+        level: select_level() が選んだレベル。
+        settings: ThinkingControlSettings。
+        provider: 送信先の LLMEndpoint.provider。
+
+    Returns:
+        新しい extra_body。off なら enable_thinking=false にして予算のキーを
+        外す。それ以外は enable_thinking を元の値のままにし、予算のキーだけを
+        レベルの値に置き換える。
+    """
+    result = dict(extra_body or {})
+    for key in _BUDGET_KEYS:
+        result.pop(key, None)
+    if level == "off":
+        chat_template_kwargs = dict(result.get("chat_template_kwargs") or {})
+        chat_template_kwargs["enable_thinking"] = False
+        result["chat_template_kwargs"] = chat_template_kwargs
+    else:
+        result.update(budget_params(provider, settings.budgets[level]))
+    return result
+
+
+def previous_step_stats(messages: list[BaseMessage], settings: ThinkingControlSettings) -> dict[str, Any] | None:
+    """直前のAIMessageの思考量と、予算での打ち切り・本文への漏れを調べる（ログ用）。
+
+    予算を使い切ると、サーバーが思考の末尾に budget_message を挿入する。
+    これが reasoning_content にあれば打ち切られた、content にあれば思考が
+    本文へ漏れたとみなす。
+
+    Args:
+        messages: 送信しようとしているメッセージ列。
+        settings: ThinkingControlSettings。
+
+    Returns:
+        {"reasoning_chars", "truncated", "leaked"} の dict。最後のユーザー
+        発言より後に AIMessage が無ければ None。budget_message が未設定なら
+        truncated/leaked は None。
+    """
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return None
+        if isinstance(message, AIMessage):
+            reasoning = extract_reasoning(message.additional_kwargs) or ""
+            content = message.content if isinstance(message.content, str) else str(message.content)
+            marker = settings.budget_message
+            return {
+                "reasoning_chars": len(reasoning),
+                "truncated": (marker in reasoning) if marker else None,
+                "leaked": (marker in content) if marker else None,
+            }
+    return None
+
+
+def unknown_tool_names(config: Config, known_names: set[str]) -> list[str]:
+    """[thinking_control] の *_after_tools のうち、実在しないツール名を返す（起動時の警告用）。
+
+    Args:
+        config: アプリ設定。
+        known_names: 実在するツール名（get_all_tools() の name）。
+
+    Returns:
+        known_names に無いツール名（書かれた順、重複なし）。
+    """
+    names = [
+        *config.thinking_control_off_after_tools,
+        *config.thinking_control_low_after_tools,
+        *config.thinking_control_medium_after_tools,
+    ]
+    return [name for name in dict.fromkeys(names) if name not in known_names]

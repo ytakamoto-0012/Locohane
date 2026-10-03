@@ -36,7 +36,7 @@ from langgraph.prebuilt import create_react_agent
 from .config import Config
 from .context_compaction import maybe_append_precompact_note_nudge
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
-from .llm import ThinkingLoopDetected, build_model, pick_loop_nudge_message
+from .llm import ThinkingLoopDetected, build_model, enable_thinking_control, pick_loop_nudge_message
 from .main_token_guard import maybe_append_token_guard
 from .tools import ImageAwareToolNode, filter_main_agent_tools, get_all_tools
 
@@ -74,7 +74,9 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
         astream_events / ainvoke などで実行できる。
     """
     main_tools = filter_main_agent_tools(get_all_tools(), config)
-    model = (await build_model(config, role="main", wait_when_busy=wait_when_busy)).bind_tools(main_tools)
+    model = enable_thinking_control(
+        await build_model(config, role="main", wait_when_busy=wait_when_busy), config, "main"
+    ).bind_tools(main_tools)
 
     async def call_model(state: MessagesState) -> dict:
         """agent ノード: システムプロンプトを先頭に付けてモデルを呼ぶ。
@@ -175,7 +177,7 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
         コンパイル済みの LangGraph（CompiledStateGraph）。
         astream_events / ainvoke などで実行できる。
     """
-    model = await build_model(config, role="main", wait_when_busy=wait_when_busy)
+    model = enable_thinking_control(await build_model(config, role="main", wait_when_busy=wait_when_busy), config, "main")
     main_tools = filter_main_agent_tools(get_all_tools(), config)
 
     def pre_model_hook(state: MessagesState) -> dict:

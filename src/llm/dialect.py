@@ -219,10 +219,30 @@ def build_extra_body(config: Config, provider: str) -> dict[str, Any]:
     if config.reasoning_effort is not None and config.reasoning_effort != "default":
         extra_body["reasoning_effort"] = config.reasoning_effort
 
-    if config.reasoning_budget is not None:
-        if not is_vllm:
-            extra_body["reasoning_budget_tokens"] = config.reasoning_budget
-        elif config.reasoning_budget >= 0:
-            extra_body["thinking_token_budget"] = config.reasoning_budget
+    extra_body.update(budget_params(provider, config.reasoning_budget))
 
     return extra_body
+
+
+def budget_params(provider: str, budget: int | None) -> dict[str, Any]:
+    """思考予算を provider ごとのパラメータ名へ変換する。
+
+    build_extra_body() と thinking_control.apply_level()（ステップごとの
+    予算の差し替え）の両方から使う。
+
+    Args:
+        provider: 送信先の LLMEndpoint.provider。
+        budget: 思考予算のトークン数。-1 は無制限。None なら送らない。
+
+    Returns:
+        llama_cpp / openai_compatible なら {"reasoning_budget_tokens": budget}、
+        vllm なら {"thinking_token_budget": budget}（-1 は送らない）。
+        送らない場合は空の dict。
+    """
+    if budget is None:
+        return {}
+    if provider != "vllm":
+        return {"reasoning_budget_tokens": budget}
+    if budget >= 0:
+        return {"thinking_token_budget": budget}
+    return {}

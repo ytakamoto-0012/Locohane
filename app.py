@@ -129,6 +129,7 @@ from src.llm import (
     recent_cancel_scope_breakage,
     set_current_session,
 )
+from src.llm.thinking_control import unknown_tool_names
 from src.log_rotation import LineCountRotatingFileHandler
 from src.mcp_client import init_mcp_tools, shutdown_mcp_tools
 from src.memory import render_memory_block
@@ -1743,6 +1744,15 @@ async def _setup() -> None:
     else:
         main_skills_block = render_skills_block(filter_skills_for_main_agent_guard(skills, _config))
         blocked_tools_hint = ""
+    # [thinking_control] の *_after_tools に書き間違いがあると、そのツールの後は
+    # 黙って default_level になるだけで気づきにくいため、起動時に警告しておく。
+    if _config.thinking_control_enabled:
+        unknown = unknown_tool_names(_config, {t.name for t in get_all_tools()})
+        if unknown:
+            logging.getLogger(__name__).warning(
+                "[thinking_control] のツール一覧に存在しないツール名があります（MCPツールは接続状況により誤検知の場合あり）: %s",
+                ", ".join(unknown),
+            )
     system_prompt = build_system_prompt_from_block(main_skills_block, _config.system_prompt_path).replace(
         "{{main_agent_blocked_tools_hint}}", blocked_tools_hint
     )

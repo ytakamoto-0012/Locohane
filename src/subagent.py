@@ -60,6 +60,7 @@ from .llm import (
     aclose_model_client,
     build_model,
     describe_current_task,
+    enable_thinking_control,
     mark_last_endpoint_failed,
     pick_loop_nudge_message,
 )
@@ -243,7 +244,7 @@ async def _invoke_with_loop_retry(model, messages: list, config: Config, tools: 
                 await adispatch_custom_event("subagent_loop_retry", {"snippet": exc.snippet})
             except Exception:  # noqa: BLE001 - UI通知の失敗でリトライ自体を止めない
                 logger.debug("subagent_loop_retry イベントの送出に失敗しました", exc_info=True)
-            current_model = (await build_model(config, role="sub")).bind_tools(tools)
+            current_model = enable_thinking_control(await build_model(config, role="sub"), config, "sub").bind_tools(tools)
             logger.warning(
                 "subagent: リトライ前にLLMモデルを再構築しました" "（client_broken=%s） [%s]",
                 exc.client_broken,
@@ -373,7 +374,7 @@ async def _invoke_with_timeout_retry(
             # except LLM_CONNECTION_ERRORS と同じフック。他戦略では実質
             # 無視される。src/llm.py の mark_last_endpoint_failed 参照）。
             mark_last_endpoint_failed("sub")
-            current_model = (await build_model(config, role="sub")).bind_tools(tools)
+            current_model = enable_thinking_control(await build_model(config, role="sub"), config, "sub").bind_tools(tools)
     raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -582,7 +583,7 @@ async def run_subagent(
     Returns:
         サブエージェントの最終回答テキスト。
     """
-    model = (await build_model(config, role="sub")).bind_tools(tools)
+    model = enable_thinking_control(await build_model(config, role="sub"), config, "sub").bind_tools(tools)
     tools_by_name = {t.name: t for t in tools}
     messages: list = [SystemMessage(content=system_prompt), HumanMessage(content=task)]
 

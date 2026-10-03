@@ -13,6 +13,7 @@ ReAct ループ）の両方から使う。tools.py が subagent.py を import �
     - routing.py      : セッション管理・httpxクライアントのライフサイクル・
                         接続先ルーティング（round_robin/random/
                         priority_failover）
+    - thinking_control.py : ステップごとの思考レベル切り替え（[thinking_control]）
     - chat_model.py   : ChatLlamaCpp・build_model()（上記3つを組み立てる入口）
 
 `_` 始まりの名前もいくつか再エクスポートしている。これは外部モジュールの
@@ -22,7 +23,7 @@ ReAct ループ）の両方から使う。tools.py が subagent.py を import �
 
 from __future__ import annotations
 
-from .chat_model import ChatLlamaCpp, build_model, init_llm_concurrency
+from .chat_model import ChatLlamaCpp, build_model, enable_thinking_control, init_llm_concurrency
 from .dialect import mark_user_turn
 from .diagnostics import (
     _CancelScopeBreakageWatcher,
@@ -50,6 +51,7 @@ __all__ = [
     "aclose_model_client",
     "build_model",
     "describe_current_task",
+    "enable_thinking_control",
     "forget_session",
     "get_current_session",
     "init_llm_concurrency",

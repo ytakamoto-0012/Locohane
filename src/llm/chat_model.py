@@ -18,7 +18,7 @@ import httpx
 from langchain_openai import ChatOpenAI
 
 from ..config import Config
-from .dialect import build_extra_body, extract_reasoning, history_reasoning_keys, last_user_turn_index
+from .dialect import _warn_once, build_extra_body, extract_reasoning, history_reasoning_keys, last_user_turn_index
 from .diagnostics import (
     _DebugResponseLogger,
     _log_first_chunk_latency,
@@ -27,6 +27,13 @@ from .diagnostics import (
 )
 from .loop_guard import ThinkingLoopDetected, _chunk_delta_text, _ThinkingLoopDetector
 from .routing import _active_async_clients, _CURRENT_SESSION_ID, _select_endpoint
+from .thinking_control import (
+    ThinkingControlSettings,
+    apply_level,
+    previous_step_stats,
+    select_level,
+    settings_from_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,13 +85,22 @@ class ChatLlamaCpp(ChatOpenAI):
     # 送信先の LLMEndpoint.provider。載せ直す際のキー名の決定に使う
     # （dialect.history_reasoning_keys 参照、build_model() が注入する）。
     reasoning_dialect: str = "llama_cpp"
+    # 設定されていれば、送信直前のメッセージ列から思考レベルを選んで extra_body を
+    # 差し替える（[thinking_control]、enable_thinking_control() が注入する）。
+    # None のモデル（要約・圧縮用など）は従来通り。
+    thinking_control: ThinkingControlSettings | None = None
+    # ログ用の役割名（"main" / "sub"、enable_thinking_control() が注入する）。
+    thinking_control_role: str = ""
 
     def _get_request_payload(self, input_: Any, *, stop: list[str] | None = None, **kwargs: Any) -> dict:
-        """reasoning_preserve 有効時、履歴の thinking をリクエストへ戻す。
+        """思考レベルの差し替えと、reasoning_preserve 有効時の履歴の thinking の載せ直しを行う。
 
-        langchain_openai の _convert_message_to_dict は additional_kwargs の
-        reasoning_content を読み捨てるため、サーバー側で preserve を有効に
-        しても過去の thinking が届かず効果が出ない。親が作った
+        thinking_control が設定されていれば、メッセージ列から思考レベルを選び
+        payload["extra_body"] を差し替える（src/llm/thinking_control.py 参照）。
+
+        reasoning_preserve について: langchain_openai の _convert_message_to_dict
+        は additional_kwargs の reasoning_content を読み捨てるため、サーバー側で
+        preserve を有効にしても過去の thinking が届かず効果が出ない。親が作った
         payload["messages"] は入力メッセージと1対1で並ぶので、同じ位置の
         AIMessage から補う。キー名は送信先の方言に合わせる（llama-server は
         reasoning_content、vLLM は reasoning しか読まない）。
@@ -96,10 +112,14 @@ class ChatLlamaCpp(ChatOpenAI):
         スレッド・サブエージェント）は全件載せ直す。
         """
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if self.thinking_control is None and not self.preserve_reasoning_content:
+            return payload
+        messages = self._convert_input(input_).to_messages()
+        if self.thinking_control is not None:
+            self._apply_thinking_control(payload, messages)
         if not self.preserve_reasoning_content:
             return payload
         payload_messages = payload.get("messages")
-        messages = self._convert_input(input_).to_messages()
         if not isinstance(payload_messages, list) or len(payload_messages) != len(messages):
             return payload
         start = last_user_turn_index(messages) or 0
@@ -111,6 +131,28 @@ class ChatLlamaCpp(ChatOpenAI):
                 for key in history_reasoning_keys(self.reasoning_dialect):
                     message_dict[key] = reasoning
         return payload
+
+    def _apply_thinking_control(self, payload: dict, messages: list) -> None:
+        """思考レベルを選んで payload["extra_body"] を差し替え、判定をログに残す。"""
+        settings = self.thinking_control
+        level, reason, prev_level = select_level(messages, settings)
+        payload["extra_body"] = apply_level(payload.get("extra_body"), level, settings, self.reasoning_dialect)
+        stats = previous_step_stats(messages, settings)
+        if stats is None:
+            prev = "none"
+        else:
+            prev = (
+                f"level={prev_level} reasoning_chars={stats['reasoning_chars']} "
+                f"truncated={stats['truncated']} leaked={stats['leaked']}"
+            )
+        logger.info(
+            "thinking_control: role=%s level=%s reason=%s prev(%s) [%s]",
+            self.thinking_control_role,
+            level,
+            reason,
+            prev,
+            describe_current_task(),
+        )
 
     def _convert_chunk_to_generation_chunk(
         self,
@@ -502,3 +544,42 @@ async def build_model(
         preserve_reasoning_content=bool(config.reasoning_preserve),
         reasoning_dialect=endpoint.provider,
     )
+
+
+def enable_thinking_control(model: Any, config: Config, role: Literal["main", "sub"]) -> Any:
+    """エージェントのループ用モデルに、ステップごとの思考レベル切り替えを有効化する。
+
+    build_model() 自体は要約・圧縮用の呼び出しとも共用のため、ここで対象を
+    ループ（src/graph.py・src/subagent.py）だけに限定する。build_model() の
+    戻り値をそのまま渡し、bind_tools() はこの後に行うこと。
+
+    次をすべて満たすときだけ設定を注入する（満たさなければ何もしない）:
+    - model が ChatLlamaCpp（テスト用の偽モデル等は対象外）
+    - [thinking_control].enabled が true
+    - role に対応する apply_to_main / apply_to_sub が true
+    - [llm] 側で思考が無効になっていない（enable_thinking=false /
+      reasoning_effort=none なら、レベルを上げても思考させられないため警告して無効）
+
+    Args:
+        model: build_model() が返したモデル。
+        config: アプリ設定。
+        role: "main" / "sub"。
+
+    Returns:
+        渡された model（設定を注入した場合も同じインスタンス）。
+    """
+    if not isinstance(model, ChatLlamaCpp) or not config.thinking_control_enabled:
+        return model
+    applies = config.thinking_control_apply_to_main if role == "main" else config.thinking_control_apply_to_sub
+    if not applies:
+        return model
+    if config.enable_thinking is False or config.reasoning_effort == "none":
+        _warn_once(
+            ("*", "thinking_control"),
+            "[thinking_control].enabled=true ですが [llm] 側で思考が無効"
+            "（enable_thinking=false / reasoning_effort=none）のため、思考レベルの切り替えは行いません",
+        )
+        return model
+    model.thinking_control = settings_from_config(config)
+    model.thinking_control_role = role
+    return model

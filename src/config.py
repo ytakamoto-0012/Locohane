@@ -57,6 +57,10 @@ LLM_REASONING_FORMATS = frozenset({"none", "deepseek", "deepseek-legacy"})
 # reasoning_effort が取りうる値（llama-server の --reasoning-effort と同じ）。
 LLM_REASONING_EFFORTS = frozenset({"none", "default", "minimal", "low", "medium", "high", "xhigh", "max"})
 
+# [thinking_control] の思考レベル（低い順）。順序はレベルの比較・1段上げる処理
+# （src/llm/thinking_control.py）で使う。
+THINKING_LEVELS = ("off", "low", "medium", "high", "xhigh")
+
 # [main_agent_tool_guard].visibility_mode が取りうる値。main_agent_tool_guard_mode
 # （呼び出し制限そのもののON/OFF/範囲）とは独立した「一覧の見せ方」の軸であり、
 # modeの値に関わらずこの値だけで表示が決まる。対象はスキル一覧（{{skills}}）と
@@ -666,6 +670,30 @@ class Config:
             本文も空のAIMessage）を検知した場合、最終回答を促して再試行する
             最大回数。thinking_loop_guard_max_retries と合算予算
             （total_retries）を共有する。
+        thinking_control_enabled: ReActループの各ステップで、直前の履歴の形から
+            思考レベル（THINKING_LEVELS）を選んでリクエストごとに切り替える機能
+            全体の有効/無効（src.llm.thinking_control 参照）。False なら従来と
+            全く同じリクエストになる。[llm] 側で思考が無効
+            （enable_thinking=false / reasoning_effort=none）なら有効でも働かない。
+        thinking_control_apply_to_main / thinking_control_apply_to_sub:
+            メインエージェント / サブエージェントのループに適用するか。
+            要約・圧縮のためのLLM呼び出しには常に適用しない。
+        thinking_control_rule_user_turn / _rule_tool_error /
+            _rule_consecutive_cap / _rule_after_tools: 判定ルール1〜4それぞれの
+            有効/無効。無効にしたルールは飛ばして次のルールで判定する。
+        thinking_control_user_turn_level: 末尾がユーザー発言（ナッジ含む）の
+            ときのレベル（ルール1）。
+        thinking_control_default_level: どのルールにも当たらなかったときの
+            レベル（ルール5）。ルール3もこのレベルへ戻す。
+        thinking_control_budget_low / _medium / _high / _xhigh: 各レベルの
+            思考予算（-1 = 無制限）。None なら [llm].reasoning_budget を使う。
+        thinking_control_off_after_tools / _low_after_tools /
+            _medium_after_tools: このツールの直後はそのレベルにする（ルール4）。
+            同じツール名を複数の一覧に書くことはできない。
+        thinking_control_error_prefixes: ツールの結果がこの文字列で始まれば
+            エラーとみなす（ルール2。ToolMessage.status="error" も対象）。
+        thinking_control_max_consecutive_reduced: default_level 未満がこの回数
+            続いたら default_level へ戻す（ルール3）。0以下なら戻さない。
         context_trim_enabled: 会話履歴中の古い ToolMessage を切り詰めて
             LLMへの入力を抑える機能の有効/無効（src.context_trim 参照）。
             メインエージェント（src.graph）向けの設定。サブエージェント
@@ -996,6 +1024,26 @@ class Config:
     thinking_loop_guard_max_retries: int
     thinking_loop_guard_nudge_messages: list[str]
     thinking_loop_guard_empty_response_max_retries: int
+
+    # --- ステップごとの思考レベル切り替え（src/llm/thinking_control.py） ---
+    thinking_control_enabled: bool
+    thinking_control_apply_to_main: bool
+    thinking_control_apply_to_sub: bool
+    thinking_control_rule_user_turn: bool
+    thinking_control_rule_tool_error: bool
+    thinking_control_rule_consecutive_cap: bool
+    thinking_control_rule_after_tools: bool
+    thinking_control_user_turn_level: str
+    thinking_control_default_level: str
+    thinking_control_budget_low: int | None
+    thinking_control_budget_medium: int | None
+    thinking_control_budget_high: int | None
+    thinking_control_budget_xhigh: int | None
+    thinking_control_off_after_tools: list[str]
+    thinking_control_low_after_tools: list[str]
+    thinking_control_medium_after_tools: list[str]
+    thinking_control_error_prefixes: list[str]
+    thinking_control_max_consecutive_reduced: int
 
     # --- 会話履歴トリミング（src/context_trim.py） ---
     context_trim_enabled: bool
@@ -1337,6 +1385,44 @@ def _as_optional_reasoning_effort(value: str | None) -> str | None:
         choices = "/".join(sorted(LLM_REASONING_EFFORTS))
         raise ValueError(f"[llm].reasoning_effort は {choices} のいずれかを指定してください（現在値: {text!r}）")
     return text
+
+
+def _as_thinking_level(value: str | None, key_name: str) -> str:
+    """[thinking_control] のレベル指定（THINKING_LEVELS のいずれか）を検証する。
+
+    Args:
+        value: config.ini から得た値、または環境変数から得た文字列。
+        key_name: エラーメッセージに使う設定キー名。
+
+    Returns:
+        前後の空白を除いた文字列。
+
+    Raises:
+        ValueError: THINKING_LEVELS に無い値が指定された場合。
+    """
+    text = str(value or "").strip()
+    if text not in THINKING_LEVELS:
+        choices = "/".join(THINKING_LEVELS)
+        raise ValueError(f"[thinking_control].{key_name} は {choices} のいずれかにしてください: {value!r}")
+    return text
+
+
+def _check_thinking_control_tool_lists(lists: dict[str, list[str]]) -> None:
+    """[thinking_control] の *_after_tools に同じツール名が重複していないか検証する。
+
+    Args:
+        lists: キー名 → ツール名のリスト。
+
+    Raises:
+        ValueError: 同じツール名が複数の一覧に書かれていた場合（どのレベルに
+            するかが曖昧になるため）。
+    """
+    seen: dict[str, str] = {}
+    for key_name, names in lists.items():
+        for name in names:
+            if name in seen and seen[name] != key_name:
+                raise ValueError(f"[thinking_control] のツール名 {name!r} が {seen[name]} と {key_name} の両方に書かれています")
+            seen[name] = key_name
 
 
 def _as_message_list(value: str | None) -> list[str]:
@@ -2137,6 +2223,7 @@ def load_config(
     timeouts = parser["user_response_timeouts"] if parser.has_section("user_response_timeouts") else {}
     plan_section = parser["plan"] if parser.has_section("plan") else {}
     thinking_loop_guard = parser["thinking_loop_guard"] if parser.has_section("thinking_loop_guard") else {}
+    thinking_control = parser["thinking_control"] if parser.has_section("thinking_control") else {}
     context_trim = parser["context_trim"] if parser.has_section("context_trim") else {}
     context_trim_subagent = parser["context_trim.subagent"] if parser.has_section("context_trim.subagent") else {}
     context_compaction = parser["context_compaction"] if parser.has_section("context_compaction") else {}
@@ -2257,6 +2344,13 @@ def load_config(
         os.getenv("ALLOW_SANDBOX_DIR", default_workdir_section.get("allow_sandbox_dir", "")),
         PROJECT_ROOT,
     )
+
+    # [thinking_control] のツール一覧は重複を検証してから Config へ渡す。
+    _thinking_control_tool_lists = {
+        key: _as_optional_str_list(os.getenv(f"THINKING_CONTROL_{key.upper()}", thinking_control.get(key, ""))) or []
+        for key in ("off_after_tools", "low_after_tools", "medium_after_tools")
+    }
+    _check_thinking_control_tool_lists(_thinking_control_tool_lists)
 
     main_url_raw = os.getenv("LLM_MAIN_URL", llm.get("main_url", _DEFAULT_LLM_URL))
     # sub_url が未指定（キー無し、または値が空）の場合、静的な接続先リストを
@@ -2685,6 +2779,55 @@ def load_config(
                 "THINKING_LOOP_GUARD_EMPTY_RESPONSE_MAX_RETRIES",
                 thinking_loop_guard.get("empty_response_max_retries", 2),
             )
+        ),
+        thinking_control_enabled=_as_bool(os.getenv("THINKING_CONTROL_ENABLED", thinking_control.get("enabled", False))),
+        thinking_control_apply_to_main=_as_bool(
+            os.getenv("THINKING_CONTROL_APPLY_TO_MAIN", thinking_control.get("apply_to_main", True))
+        ),
+        thinking_control_apply_to_sub=_as_bool(
+            os.getenv("THINKING_CONTROL_APPLY_TO_SUB", thinking_control.get("apply_to_sub", True))
+        ),
+        thinking_control_rule_user_turn=_as_bool(
+            os.getenv("THINKING_CONTROL_RULE_USER_TURN", thinking_control.get("rule_user_turn", True))
+        ),
+        thinking_control_rule_tool_error=_as_bool(
+            os.getenv("THINKING_CONTROL_RULE_TOOL_ERROR", thinking_control.get("rule_tool_error", True))
+        ),
+        thinking_control_rule_consecutive_cap=_as_bool(
+            os.getenv("THINKING_CONTROL_RULE_CONSECUTIVE_CAP", thinking_control.get("rule_consecutive_cap", True))
+        ),
+        thinking_control_rule_after_tools=_as_bool(
+            os.getenv("THINKING_CONTROL_RULE_AFTER_TOOLS", thinking_control.get("rule_after_tools", True))
+        ),
+        thinking_control_user_turn_level=_as_thinking_level(
+            os.getenv("THINKING_CONTROL_USER_TURN_LEVEL", thinking_control.get("user_turn_level", "high")),
+            "user_turn_level",
+        ),
+        thinking_control_default_level=_as_thinking_level(
+            os.getenv("THINKING_CONTROL_DEFAULT_LEVEL", thinking_control.get("default_level", "high")),
+            "default_level",
+        ),
+        thinking_control_budget_low=_as_optional_int(
+            os.getenv("THINKING_CONTROL_BUDGET_LOW", thinking_control.get("budget_low", "2048"))
+        ),
+        thinking_control_budget_medium=_as_optional_int(
+            os.getenv("THINKING_CONTROL_BUDGET_MEDIUM", thinking_control.get("budget_medium", "3072"))
+        ),
+        thinking_control_budget_high=_as_optional_int(
+            os.getenv("THINKING_CONTROL_BUDGET_HIGH", thinking_control.get("budget_high", ""))
+        ),
+        thinking_control_budget_xhigh=_as_optional_int(
+            os.getenv("THINKING_CONTROL_BUDGET_XHIGH", thinking_control.get("budget_xhigh", "-1"))
+        ),
+        thinking_control_off_after_tools=_thinking_control_tool_lists["off_after_tools"],
+        thinking_control_low_after_tools=_thinking_control_tool_lists["low_after_tools"],
+        thinking_control_medium_after_tools=_thinking_control_tool_lists["medium_after_tools"],
+        thinking_control_error_prefixes=_as_optional_str_list(
+            os.getenv("THINKING_CONTROL_ERROR_PREFIXES", thinking_control.get("error_prefixes", "エラー"))
+        )
+        or [],
+        thinking_control_max_consecutive_reduced=int(
+            os.getenv("THINKING_CONTROL_MAX_CONSECUTIVE_REDUCED", thinking_control.get("max_consecutive_reduced", 3))
         ),
         context_trim_enabled=_context_trim_enabled,
         context_trim_keep_recent_tool_iterations=_context_trim_keep_recent_tool_iterations,
