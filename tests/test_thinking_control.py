@@ -25,6 +25,7 @@ def _settings(**overrides) -> ThinkingControlSettings:
     base = ThinkingControlSettings(
         rule_user_turn=True,
         rule_tool_error=True,
+        tool_error_max_level="high",
         rule_consecutive_cap=True,
         rule_after_tools=True,
         user_turn_level="high",
@@ -103,9 +104,36 @@ def test_tool_error_by_status():
     assert select_level(messages, _settings())[:2] == ("medium", "tool_error")
 
 
-def test_tool_error_caps_at_xhigh():
+def test_tool_error_is_capped_by_tool_error_max_level():
+    # high の後のエラーは、上限 high のままなら上げない
     messages = _turn(_step("Read", error="エラー"))
+    assert select_level(messages, _settings())[:2] == ("high", "tool_error")
+    assert select_level(messages, _settings(tool_error_max_level="xhigh"))[0] == "xhigh"
+    # 直前が上限より高ければ下げない
     assert select_level(messages, _settings(user_turn_level="xhigh"))[0] == "xhigh"
+
+
+def _image_followup() -> HumanMessage:
+    return HumanMessage(content=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}])
+
+
+def test_image_followup_is_not_a_user_turn():
+    # analyze_image の結果の後に足される画像だけの HumanMessage は、ツール結果の続きとして扱う
+    ai = _ai("Read")
+    messages = _turn([ai, *_results(ai), _image_followup()])
+    assert select_level(messages, _settings())[:3] == ("low", "after_tools", "high")
+    # 連続回数も途切れない
+    steps = []
+    for _ in range(4):
+        ai = _ai("Read")
+        steps.append([ai, *_results(ai), _image_followup()])
+    assert select_level(_turn(*steps), _settings())[:2] == ("high", "consecutive_cap")
+
+
+def test_user_message_with_text_and_image_is_a_user_turn():
+    messages = _turn(_step("Read"))
+    messages.append(HumanMessage(content=[{"type": "text", "text": "これを見て"}, {"type": "image_url", "image_url": {"url": "x"}}]))
+    assert select_level(messages, _settings())[:2] == ("high", "user_turn")
 
 
 def test_consecutive_cap_returns_to_default():
@@ -274,6 +302,7 @@ class _Cfg:
     thinking_control_apply_to_sub: bool = True
     thinking_control_rule_user_turn: bool = True
     thinking_control_rule_tool_error: bool = True
+    thinking_control_tool_error_max_level: str = "high"
     thinking_control_rule_consecutive_cap: bool = True
     thinking_control_rule_after_tools: bool = True
     thinking_control_user_turn_level: str = "high"

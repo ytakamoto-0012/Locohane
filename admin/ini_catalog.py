@@ -66,6 +66,8 @@ class KeyInfo:
 # 持たないため、UIでの表示順はここで決める。先頭の "" は「空欄＝未指定」を
 # 許容するキー（src/config.py 側で None 扱いになるもの）にだけ置く。
 _ROUTING_STRATEGY_CHOICES = ("round_robin", "random", "priority_failover")
+# src/config.py の THINKING_LEVELS と同じ値・順序。
+_THINKING_LEVEL_CHOICES = ("off", "low", "medium", "high", "xhigh")
 _KEY_CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
     ("llm", "main_routing_strategy"): _ROUTING_STRATEGY_CHOICES,
     ("llm", "sub_routing_strategy"): _ROUTING_STRATEGY_CHOICES,
@@ -74,6 +76,9 @@ _KEY_CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
     ("main_agent_tool_guard", "mode"): ("false", "tools_skills_only", "all"),
     ("main_agent_tool_guard", "visibility_mode"): ("strict", "hint", "all"),
     ("log", "level"): ("info", "debug", "none"),
+    ("thinking_control", "user_turn_level"): _THINKING_LEVEL_CHOICES,
+    ("thinking_control", "default_level"): _THINKING_LEVEL_CHOICES,
+    ("thinking_control", "tool_error_max_level"): _THINKING_LEVEL_CHOICES,
 }
 
 

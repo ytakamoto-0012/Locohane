@@ -681,6 +681,9 @@ class Config:
         thinking_control_rule_user_turn / _rule_tool_error /
             _rule_consecutive_cap / _rule_after_tools: 判定ルール1〜4それぞれの
             有効/無効。無効にしたルールは飛ばして次のルールで判定する。
+        thinking_control_tool_error_max_level: ルール2で1段上げるときの上限
+            レベル。既定 high（xhigh の予算は無制限のため、エラーのたびに
+            思考が無制限になるのを避ける）。
         thinking_control_user_turn_level: 末尾がユーザー発言（ナッジ含む）の
             ときのレベル（ルール1）。
         thinking_control_default_level: どのルールにも当たらなかったときの
@@ -1031,6 +1034,7 @@ class Config:
     thinking_control_apply_to_sub: bool
     thinking_control_rule_user_turn: bool
     thinking_control_rule_tool_error: bool
+    thinking_control_tool_error_max_level: str
     thinking_control_rule_consecutive_cap: bool
     thinking_control_rule_after_tools: bool
     thinking_control_user_turn_level: str
@@ -2792,6 +2796,10 @@ def load_config(
         ),
         thinking_control_rule_tool_error=_as_bool(
             os.getenv("THINKING_CONTROL_RULE_TOOL_ERROR", thinking_control.get("rule_tool_error", True))
+        ),
+        thinking_control_tool_error_max_level=_as_thinking_level(
+            os.getenv("THINKING_CONTROL_TOOL_ERROR_MAX_LEVEL", thinking_control.get("tool_error_max_level", "high")),
+            "tool_error_max_level",
         ),
         thinking_control_rule_consecutive_cap=_as_bool(
             os.getenv("THINKING_CONTROL_RULE_CONSECUTIVE_CAP", thinking_control.get("rule_consecutive_cap", True))

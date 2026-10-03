@@ -44,6 +44,7 @@ class ThinkingControlSettings:
     Attributes:
         rule_user_turn: ルール1（末尾がユーザー発言なら user_turn_level）の有効/無効。
         rule_tool_error: ルール2（直前のツールがエラーなら1段上げる）の有効/無効。
+        tool_error_max_level: ルール2で上げるときの上限レベル。
         rule_consecutive_cap: ルール3（default_level 未満が続いたら戻す）の有効/無効。
         rule_after_tools: ルール4（直前のツール名で決める）の有効/無効。
         user_turn_level: ルール1で使うレベル。
@@ -59,6 +60,7 @@ class ThinkingControlSettings:
 
     rule_user_turn: bool
     rule_tool_error: bool
+    tool_error_max_level: str
     rule_consecutive_cap: bool
     rule_after_tools: bool
     user_turn_level: str
@@ -99,6 +101,7 @@ def settings_from_config(config: Config) -> ThinkingControlSettings:
     return ThinkingControlSettings(
         rule_user_turn=config.thinking_control_rule_user_turn,
         rule_tool_error=config.thinking_control_rule_tool_error,
+        tool_error_max_level=config.thinking_control_tool_error_max_level,
         rule_consecutive_cap=config.thinking_control_rule_consecutive_cap,
         rule_after_tools=config.thinking_control_rule_after_tools,
         user_turn_level=config.thinking_control_user_turn_level,
@@ -109,6 +112,19 @@ def settings_from_config(config: Config) -> ThinkingControlSettings:
         max_consecutive_reduced=config.thinking_control_max_consecutive_reduced,
         budget_message=config.reasoning_budget_message,
     )
+
+
+def _is_image_followup(message: BaseMessage) -> bool:
+    """ツール結果の画像を渡すために後から足された HumanMessage か。
+
+    analyze_image 等の結果は、画像だけを content に持つ HumanMessage として
+    ToolMessage の直後に積まれる（src/images.py の image_followup_message）。
+    これはユーザー発言ではなくツール結果の続きなので、ターンの区切り
+    （ルール1・判定のやり直しの起点）として扱わない。
+    """
+    if not isinstance(message, HumanMessage) or not isinstance(message.content, list) or not message.content:
+        return False
+    return all(isinstance(part, dict) and part.get("type") == "image_url" for part in message.content)
 
 
 def _is_tool_error(message: ToolMessage, error_prefixes: tuple[str, ...]) -> bool:
@@ -132,7 +148,10 @@ def _next_step(
 ) -> tuple[str, str]:
     """直前のAIMessageとそのツール結果から、次のリクエストのレベルを決める。"""
     if settings.rule_tool_error and any(_is_tool_error(m, settings.error_prefixes) for m in tool_messages):
-        raised = min(_RANK[history[-1]] + 1, len(THINKING_LEVELS) - 1)
+        # 1段上げるが tool_error_max_level は超えない。直前が既に上限以上なら
+        # そのまま（下げはしない）。
+        prev_rank = _RANK[history[-1]]
+        raised = max(prev_rank, min(prev_rank + 1, _RANK[settings.tool_error_max_level]))
         return THINKING_LEVELS[raised], "tool_error"
 
     n = settings.max_consecutive_reduced
@@ -164,7 +183,7 @@ def _replay(messages: list[BaseMessage], settings: ThinkingControlSettings) -> l
     """
     start = 0
     for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], HumanMessage):
+        if isinstance(messages[i], HumanMessage) and not _is_image_followup(messages[i]):
             start = i + 1
             break
 
@@ -187,11 +206,12 @@ def _replay(messages: list[BaseMessage], settings: ThinkingControlSettings) -> l
 def select_level(messages: list[BaseMessage], settings: ThinkingControlSettings) -> tuple[str, str, str | None]:
     """これから送るリクエストの思考レベルを選ぶ。
 
-    最後の HumanMessage 以降を対象に、次の順で最初に当てはまったものを使う
+    最後の HumanMessage（画像のフォローアップは除く）以降を対象に、次の順で最初に当てはまったものを使う
     （無効化されたルールは飛ばす）。
 
     1. 末尾が HumanMessage（ユーザー発言・ナッジ等）→ user_turn_level
     2. 直前のツール結果にエラーがある → 直前のレベルから1段上げる
+       （tool_error_max_level が上限）
     3. 直前 max_consecutive_reduced 回が全て default_level 未満 → default_level
     4. 直前に呼んだツールが全て一覧にある → その中で最も高いレベル
     5. それ以外 → default_level
@@ -255,7 +275,7 @@ def previous_step_stats(messages: list[BaseMessage], settings: ThinkingControlSe
         truncated/leaked は None。
     """
     for message in reversed(messages):
-        if isinstance(message, HumanMessage):
+        if isinstance(message, HumanMessage) and not _is_image_followup(message):
             return None
         if isinstance(message, AIMessage):
             reasoning = extract_reasoning(message.additional_kwargs) or ""
