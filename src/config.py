@@ -2816,7 +2816,7 @@ def load_config(
             "default_level",
         ),
         thinking_control_budget_low=_as_optional_int(
-            os.getenv("THINKING_CONTROL_BUDGET_LOW", thinking_control.get("budget_low", "2048"))
+            os.getenv("THINKING_CONTROL_BUDGET_LOW", thinking_control.get("budget_low", "1024"))
         ),
         thinking_control_budget_medium=_as_optional_int(
             os.getenv("THINKING_CONTROL_BUDGET_MEDIUM", thinking_control.get("budget_medium", "3072"))
