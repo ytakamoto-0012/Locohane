@@ -123,6 +123,11 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
                     keep_recent_iterations=config.context_trim_keep_recent_ai_iterations,
                     max_chars=config.context_trim_truncated_max_chars,
                 )
+        # 全く同じ応答（ツール呼び出し）を繰り返していれば、LLMを呼ばずに打ち切って
+        # 注意メッセージ付きの再試行へ回す（src/tool_loop_guard.py）。下のガード・
+        # ナッジが末尾に HumanMessage を足すと連続が途切れたとみなされ、閾値超過中は
+        # 検知できなくなるため、それらより前に判定する。
+        raise_if_tool_call_loop(history, config)
         # 切り詰めてもなお1リクエストあたりのトークン量が閾値に達している場合は、
         # 引継ぎプロンプトを出させて安全に終えるよう促す（src/main_token_guard.py）。
         before_guard = history
@@ -133,9 +138,6 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
             # 促す（src/context_compaction.py）。両方を同時に差し込むと
             # 「ツールを呼ぶな」と「write_thread_noteを呼べ」が矛盾するため。
             history = maybe_append_precompact_note_nudge(history, config)
-        # 全く同じ応答（ツール呼び出し）を繰り返していれば、LLMを呼ばずに打ち切って
-        # 注意メッセージ付きの再試行へ回す（src/tool_loop_guard.py）。
-        raise_if_tool_call_loop(history, config)
         messages = [SystemMessage(content=system_prompt), *history]
         response = await model.ainvoke(messages)
         return {"messages": [response]}
@@ -218,6 +220,11 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
                 keep_recent_iterations=config.context_trim_keep_recent_ai_iterations,
                 max_chars=config.context_trim_truncated_max_chars,
             )
+        # 全く同じ応答（ツール呼び出し）を繰り返していれば、LLMを呼ばずに打ち切って
+        # 注意メッセージ付きの再試行へ回す（src/tool_loop_guard.py）。下のガード・
+        # ナッジが末尾に HumanMessage を足すと連続が途切れたとみなされ、閾値超過中は
+        # 検知できなくなるため、それらより前に判定する。
+        raise_if_tool_call_loop(trimmed, config)
         # 切り詰めてもなお1リクエストあたりのトークン量が閾値に達している場合は、
         # 引継ぎプロンプトを出させて安全に終えるよう促す（src/main_token_guard.py）。
         before_guard = trimmed
@@ -228,9 +235,6 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
             # 促す（src/context_compaction.py）。両方を同時に差し込むと
             # 「ツールを呼ぶな」と「write_thread_noteを呼べ」が矛盾するため。
             trimmed = maybe_append_precompact_note_nudge(trimmed, config)
-        # 全く同じ応答（ツール呼び出し）を繰り返していれば、LLMを呼ばずに打ち切って
-        # 注意メッセージ付きの再試行へ回す（src/tool_loop_guard.py）。
-        raise_if_tool_call_loop(trimmed, config)
         return {"llm_input_messages": trimmed}
 
     return create_react_agent(
@@ -412,6 +416,12 @@ async def ainvoke_ensuring_final_text(
         try:
             result = await graph.ainvoke(current_inputs, config=run_config)
         except ThinkingLoopDetected as exc:
+            if isinstance(exc, ToolCallLoopDetected):
+                # 繰り返した応答を残すと、注意しても同じ tool_call を書き写し続ける
+                # （src/tool_loop_guard.py 冒頭参照）。上限で打ち切る場合も、
+                # 次のターンで書き写させないよう、また exc.detail の
+                # 「取り除きました」と食い違わないよう取り除く。
+                await _remove_message_ids_if_present(graph, run_config, list(exc.remove_ids))
             if loop_attempt >= loop_max_retries:
                 await _remove_message_ids_if_present(graph, run_config, remove_ids)
                 raise
@@ -423,9 +433,6 @@ async def ainvoke_ensuring_final_text(
             nudge_id = str(uuid.uuid4())
             remove_ids.append(nudge_id)
             if isinstance(exc, ToolCallLoopDetected):
-                # 繰り返した応答を残すと、注意しても同じ tool_call を書き写し続ける
-                # （src/tool_loop_guard.py 冒頭参照）。
-                await _remove_message_ids_if_present(graph, run_config, list(exc.remove_ids))
                 text = tool_loop_nudge_text(tool_loop_nudge_messages or [], tool_loop_attempt, exc)
                 tool_loop_attempt += 1
             else:

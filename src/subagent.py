@@ -109,6 +109,9 @@ async def _run_one_tool_call(call: dict, tools_by_name: dict[str, BaseTool]) -> 
         tool_message = ToolMessage(
             content=leaked_tool_markup_error(call["name"], leaked_key),
             tool_call_id=call["id"],
+            # name が無いと、繰り返した場合のループ通知（ToolLoop.tool_names）が空になる
+            name=call["name"],
+            status="error",
         )
     else:
         try:

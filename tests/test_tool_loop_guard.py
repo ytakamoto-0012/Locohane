@@ -204,6 +204,10 @@ _LEAKED = "</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=write
         ({"content": "普通の本文"}, None),
         # 書式を説明する文章（閉じタグ単体）は誤検知しない
         ({"content": "Qwenは </parameter> で引数を閉じる"}, None),
+        # 開きと閉じが対応した書式の例（文書・テストコードの書き込み）は弾かない
+        ({"content": "例:\n<function=Read>\n<parameter=path>\na.txt\n</parameter>\n</function>"}, None),
+        # 正しい例の後ろに漏れがあれば検知する
+        ({"content": "<parameter=a>\nx\n</parameter>\n<parameter=b>\ny\n</parameter>\n</function>\n</parameter>\n</function>"}, "content"),
         ({}, None),
         (None, None),
     ],
@@ -279,3 +283,52 @@ async def test_subagent_nudges_then_truncates(monkeypatch):
     assert not any(isinstance(m, AIMessage) for m in model.inputs[3])
     assert len(model.inputs) == 6
     assert "全く同じツール呼び出し（dispatch_agent）が繰り返され" in result
+
+
+@pytest.mark.asyncio
+async def test_subagent_leaked_markup_result_has_tool_name():
+    from src.subagent import _run_one_tool_call
+
+    call = {"name": "dispatch_agent", "args": {"task": _LEAKED}, "id": "c1", "type": "tool_call"}
+    message, _ = await _run_one_tool_call(call, {"dispatch_agent": _ErrorTool()})
+    assert message.name == "dispatch_agent" and message.status == "error"
+    assert message.content == leaked_tool_markup_error("dispatch_agent", "task")
+
+
+@pytest.mark.asyncio
+async def test_prebuilt_hook_detects_loop_even_when_token_guard_appends(monkeypatch):
+    """トークンガードが末尾に HumanMessage を足す状況でも、ループ検知は効く。"""
+    from langchain_core.messages import HumanMessage as _Human
+
+    from src import graph as graph_mod
+
+    captured = {}
+
+    def fake_create_react_agent(model, tools, prompt, pre_model_hook, checkpointer):
+        captured["hook"] = pre_model_hook
+        return object()
+
+    async def fake_build_model(config, role, wait_when_busy=True):
+        return object()
+
+    monkeypatch.setattr(graph_mod, "create_react_agent", fake_create_react_agent)
+    monkeypatch.setattr(graph_mod, "build_model", fake_build_model)
+    monkeypatch.setattr(graph_mod, "enable_thinking_control", lambda m, c, r: m)
+    monkeypatch.setattr(graph_mod, "filter_main_agent_tools", lambda tools, c: [])
+    monkeypatch.setattr(graph_mod, "ImageAwareToolNode", lambda tools: None)
+    monkeypatch.setattr(graph_mod, "maybe_append_token_guard", lambda m, c: [*m, _Human(content="引継ぎ")])
+
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace(
+        context_trim_enabled=False,
+        graph_token_guard_enabled=True,
+        context_compaction_enabled=False,
+        context_compaction_pre_note_threshold=0,
+        tool_loop_guard_enabled=True,
+        tool_loop_guard_max_repeats=3,
+        tool_loop_guard_exclude_tools=[],
+    )
+    await graph_mod._build_prebuilt_graph(cfg, "sp", None)
+    with pytest.raises(ToolCallLoopDetected):
+        captured["hook"]({"messages": _history(_err(), _err(), _err())})

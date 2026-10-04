@@ -4398,6 +4398,10 @@ async def _on_message_impl(message: cl.Message) -> None:
                 attempt += 1  # for range(total_retries + 1) の暗黙インクリメント相当
                 loop_exc = None  # このターンの検知を消費したので次周回へ持ち越さない（状態リーク防止）
                 continue
+            if isinstance(loop_exc, ToolCallLoopDetected) and loop_exc.remove_ids:
+                # 上限で停止する場合も取り除く。残すと次のターンでまた同じ tool_call を
+                # 書き写し、通知に添える loop_exc.detail の「取り除きました」とも食い違う。
+                await _remove_message_ids_if_present(graph, config, list(loop_exc.remove_ids))
             await cl.Message(
                 content=(
                     f"全く同じツール呼び出しが繰り返され、{loop_max_retries}回リトライしましたが"

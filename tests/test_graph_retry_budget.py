@@ -142,3 +142,17 @@ async def test_stale_nudge_ids_are_not_removed_via_removemessage() -> None:
         )
 
     assert graph.updated_states == [], "生存しないidに対してaupdate_stateを呼ばないこと"
+
+
+@pytest.mark.asyncio
+async def test_tool_loop_tail_is_removed_even_when_retries_are_exhausted() -> None:
+    """上限で打ち切る ToolCallLoopDetected でも、繰り返した区間は履歴から取り除く。"""
+    from src.llm import ToolCallLoopDetected
+
+    graph = _FakeGraph([ToolCallLoopDetected("詳細", remove_ids=("a1", "t1"))])
+    graph._live_ids.update({"a1", "t1"})
+
+    with pytest.raises(ToolCallLoopDetected):
+        await ainvoke_ensuring_final_text(graph, {"messages": []}, {}, max_retries=0, loop_max_retries=0)
+
+    assert not {"a1", "t1"} & graph._live_ids

@@ -163,6 +163,20 @@ def raise_if_tool_call_loop(messages: list[BaseMessage], config: Config) -> None
 _LEAKED_TOOL_MARKUP_RE = re.compile(r"</parameter>\s*(?:</function>|<parameter=)")
 
 
+def _has_unmatched_close(value: str) -> bool:
+    """値の中に、対応する <parameter= の無い </parameter>（漏れの形）があるか。
+
+    漏れた値は引数の途中から始まるため、最初の閉じタグの前に開きタグが無い。
+    書式の正しい例（<parameter=..>..</parameter></function>）を含む文書・
+    テストコードの書き込みは開きと閉じが対応するので、ここでは弾かない。
+    """
+    for match in _LEAKED_TOOL_MARKUP_RE.finditer(value):
+        closes = value.count("</parameter>", 0, match.start()) + 1
+        if value.count("<parameter=", 0, match.start()) < closes:
+            return True
+    return False
+
+
 def find_leaked_tool_markup(args) -> str | None:
     """tool_call の引数に tool_call の XML が漏れていれば、その引数名を返す。
 
@@ -182,7 +196,7 @@ def find_leaked_tool_markup(args) -> str | None:
 
     def _has_markup(value) -> bool:
         if isinstance(value, str):
-            return bool(_LEAKED_TOOL_MARKUP_RE.search(value))
+            return _has_unmatched_close(value)
         if isinstance(value, dict):
             return any(_has_markup(v) for v in value.values())
         if isinstance(value, list):
