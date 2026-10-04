@@ -1744,6 +1744,17 @@ async def _setup() -> None:
     else:
         main_skills_block = render_skills_block(filter_skills_for_main_agent_guard(skills, _config))
         blocked_tools_hint = ""
+    # ループ検知が本文だけを監視する設定で思考予算も無制限だと、思考のループを
+    # 止めるものが無くなる。
+    if (
+        _config.thinking_loop_guard_enabled
+        and _config.thinking_loop_guard_target == "content_only"
+        and _config.enable_thinking is not False
+        and (_config.reasoning_budget is None or _config.reasoning_budget < 0)
+    ):
+        logging.getLogger(__name__).warning(
+            "[thinking_loop_guard].target = content_only ですが [llm].reasoning_budget が無制限のため、思考のループを止める仕組みがありません"
+        )
     # [thinking_control] の *_after_tools に書き間違いがあると、そのツールの後は
     # 黙って default_level になるだけで気づきにくいため、起動時に警告しておく。
     if _config.thinking_control_enabled:

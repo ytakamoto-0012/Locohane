@@ -76,6 +76,7 @@ _KEY_CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
     ("main_agent_tool_guard", "mode"): ("false", "tools_skills_only", "all"),
     ("main_agent_tool_guard", "visibility_mode"): ("strict", "hint", "all"),
     ("log", "level"): ("info", "debug", "none"),
+    ("thinking_loop_guard", "target"): ("all", "content_only"),
     ("thinking_control", "user_turn_level"): _THINKING_LEVEL_CHOICES,
     ("thinking_control", "default_level"): _THINKING_LEVEL_CHOICES,
     ("thinking_control", "tool_error_max_level"): _THINKING_LEVEL_CHOICES,

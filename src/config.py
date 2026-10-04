@@ -57,6 +57,9 @@ LLM_REASONING_FORMATS = frozenset({"none", "deepseek", "deepseek-legacy"})
 # reasoning_effort が取りうる値（llama-server の --reasoning-effort と同じ）。
 LLM_REASONING_EFFORTS = frozenset({"none", "default", "minimal", "low", "medium", "high", "xhigh", "max"})
 
+# [thinking_loop_guard].target が取りうる値。
+THINKING_LOOP_GUARD_TARGETS = ("all", "content_only")
+
 # [thinking_control] の思考レベル（低い順）。順序はレベルの比較・1段上げる処理
 # （src/llm/thinking_control.py）で使う。
 THINKING_LEVELS = ("off", "low", "medium", "high", "xhigh")
@@ -651,6 +654,9 @@ class Config:
             （config.ini の [plan].force_approve_plan_after_errors 由来）。
         thinking_loop_guard_enabled: LLM応答（thinking/本文）のストリーミング中に
             反復ループを検知したら生成を打ち切って再試行する機能の有効/無効。
+        thinking_loop_guard_target: ループ検知の監視対象（THINKING_LOOP_GUARD_TARGETS）。
+            "all" は思考と本文の両方、"content_only" は本文だけを監視し、思考の
+            ループは思考予算（[llm].reasoning_budget）での打ち切りに任せる。
         thinking_loop_guard_window_chars: ループ検知の判定対象に使う
             直近テキストのウィンドウ文字数。
         thinking_loop_guard_check_interval_chars: このバイト数増えるごとに
@@ -1025,6 +1031,7 @@ class Config:
 
     # --- LLM応答の反復ループ検知（src/llm.py の ChatLlamaCpp） ---
     thinking_loop_guard_enabled: bool
+    thinking_loop_guard_target: str
     thinking_loop_guard_window_chars: int
     thinking_loop_guard_check_interval_chars: int
     thinking_loop_guard_confirm_count: int
@@ -1394,6 +1401,25 @@ def _as_optional_reasoning_effort(value: str | None) -> str | None:
     if text not in LLM_REASONING_EFFORTS:
         choices = "/".join(sorted(LLM_REASONING_EFFORTS))
         raise ValueError(f"[llm].reasoning_effort は {choices} のいずれかを指定してください（現在値: {text!r}）")
+    return text
+
+
+def _as_thinking_loop_guard_target(value: str | None) -> str:
+    """[thinking_loop_guard].target（THINKING_LOOP_GUARD_TARGETS のいずれか）を検証する。
+
+    Args:
+        value: config.ini から得た値、または環境変数から得た文字列。
+
+    Returns:
+        前後の空白を除いた文字列。
+
+    Raises:
+        ValueError: THINKING_LOOP_GUARD_TARGETS に無い値が指定された場合。
+    """
+    text = str(value or "").strip()
+    if text not in THINKING_LOOP_GUARD_TARGETS:
+        choices = "/".join(THINKING_LOOP_GUARD_TARGETS)
+        raise ValueError(f"[thinking_loop_guard].target は {choices} のいずれかにしてください: {value!r}")
     return text
 
 
@@ -2763,6 +2789,9 @@ def load_config(
             os.getenv("PLAN_FORCE_APPROVE_PLAN_AFTER_ERRORS", plan_section.get("force_approve_plan_after_errors", 2))
         ),
         thinking_loop_guard_enabled=_as_bool(os.getenv("THINKING_LOOP_GUARD_ENABLED", thinking_loop_guard.get("enabled", True))),
+        thinking_loop_guard_target=_as_thinking_loop_guard_target(
+            os.getenv("THINKING_LOOP_GUARD_TARGET", thinking_loop_guard.get("target", "all"))
+        ),
         thinking_loop_guard_window_chars=int(os.getenv("THINKING_LOOP_GUARD_WINDOW_CHARS", thinking_loop_guard.get("window_chars", 600))),
         thinking_loop_guard_check_interval_chars=int(
             os.getenv(

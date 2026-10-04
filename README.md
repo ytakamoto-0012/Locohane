@@ -1041,6 +1041,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[log]` | `retention_days` | ローテーション済み app_*.log の保持日数 | `LOG_RETENTION_DAYS` |
 | `[log]` | `cleanup_interval_hours` | app_*.log 自動削除チェック間隔（時間） | `LOG_CLEANUP_INTERVAL_HOURS` |
 | `[thinking_loop_guard]` | `enabled` | ループ検知＆ループガード＆リトライ機能の有効/無効 | `THINKING_LOOP_GUARD_ENABLED` |
+| `[thinking_loop_guard]` | `target` | ループ検知の監視対象（`all`: 思考と本文の両方 / `content_only`: 本文だけを監視し、思考のループは`[llm].reasoning_budget`での打ち切りに任せる。`content_only`で思考予算が無制限なら起動時に警告） | `THINKING_LOOP_GUARD_TARGET` |
 | `[thinking_loop_guard]` | `window_chars` | ループ判定対象とする直近テキストのウィンドウ文字数 | `THINKING_LOOP_GUARD_WINDOW_CHARS` |
 | `[thinking_loop_guard]` | `check_interval_chars` | 何文字増えるごとに再チェックするか | `THINKING_LOOP_GUARD_CHECK_INTERVAL_CHARS` |
 | `[thinking_loop_guard]` | `confirm_count` | ループ確定と判定するまでの連続成立回数（誤検知防止） | `THINKING_LOOP_GUARD_CONFIRM_COUNT` |
