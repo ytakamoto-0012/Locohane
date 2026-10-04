@@ -23,15 +23,13 @@ BUDGET_MESSAGE = "STOP-THINKING"
 
 def _settings(**overrides) -> ThinkingControlSettings:
     base = ThinkingControlSettings(
-        rule_user_turn=True,
-        rule_tool_error=True,
-        tool_error_max_level="high",
-        rule_consecutive_cap=True,
-        rule_after_tools=True,
-        user_turn_level="high",
+        rule_user_turn="high",
+        rule_tool_error="high",
+        rule_consecutive_cap="high",
+        rule_after_tools="low",
         default_level="high",
         budgets={"low": 2048, "medium": 3072, "high": 4096, "xhigh": -1},
-        level_by_tool={"Read": "low", "Grep": "low", "dispatch_agent": "medium", "noop": "off"},
+        after_tools=frozenset({"Read", "Grep"}),
         error_prefixes=("エラー",),
         max_consecutive_reduced=3,
         budget_message=BUDGET_MESSAGE,
@@ -76,41 +74,29 @@ def _step(*names: str, **kwargs) -> list:
 # --- select_level ---
 
 
-def test_user_turn_uses_user_turn_level():
-    assert select_level(_turn(), _settings(user_turn_level="medium"))[:2] == ("medium", "user_turn")
+def test_user_turn_uses_rule_user_turn_level():
+    assert select_level(_turn(), _settings(rule_user_turn="medium"))[:2] == ("medium", "user_turn")
 
 
-def test_after_listed_tool_uses_its_level():
+def test_after_listed_tool_uses_rule_after_tools_level():
     level, reason, prev = select_level(_turn(_step("Read")), _settings())
     assert (level, reason, prev) == ("low", "after_tools", "high")
-
-
-def test_parallel_tools_take_highest_level():
-    assert select_level(_turn(_step("Read", "dispatch_agent")), _settings())[:2] == ("medium", "after_tools")
+    assert select_level(_turn(_step("Read", "Grep")), _settings(rule_after_tools="off"))[:2] == ("off", "after_tools")
 
 
 def test_unlisted_tool_falls_back_to_default():
     assert select_level(_turn(_step("Read", "run_script")), _settings())[:2] == ("high", "default")
 
 
-def test_tool_error_by_prefix_raises_one_level_from_previous():
-    # high(ユーザー発言) → low(Read) → エラーで low から1段上げて medium
+def test_tool_error_by_prefix_uses_rule_tool_error_level():
     messages = _turn(_step("Read"), _step("Read", error="エラー: not found"))
-    assert select_level(messages, _settings())[:2] == ("medium", "tool_error")
+    assert select_level(messages, _settings())[:2] == ("high", "tool_error")
+    assert select_level(messages, _settings(rule_tool_error="xhigh"))[:2] == ("xhigh", "tool_error")
 
 
 def test_tool_error_by_status():
     messages = _turn(_step("Read"), _step("Grep", status="error"))
-    assert select_level(messages, _settings())[:2] == ("medium", "tool_error")
-
-
-def test_tool_error_is_capped_by_tool_error_max_level():
-    # high の後のエラーは、上限 high のままなら上げない
-    messages = _turn(_step("Read", error="エラー"))
-    assert select_level(messages, _settings())[:2] == ("high", "tool_error")
-    assert select_level(messages, _settings(tool_error_max_level="xhigh"))[0] == "xhigh"
-    # 直前が上限より高ければ下げない
-    assert select_level(messages, _settings(user_turn_level="xhigh"))[0] == "xhigh"
+    assert select_level(messages, _settings(rule_tool_error="medium"))[:2] == ("medium", "tool_error")
 
 
 def _image_followup() -> HumanMessage:
@@ -136,7 +122,7 @@ def test_user_message_with_text_and_image_is_a_user_turn():
     assert select_level(messages, _settings())[:2] == ("high", "user_turn")
 
 
-def test_consecutive_cap_returns_to_default():
+def test_consecutive_cap_returns_to_cap_level():
     # high → low → low → low（ここまでで low が3回）→ 次は high に戻す
     messages = _turn(_step("Read"), _step("Read"), _step("Read"))
     assert select_level(messages, _settings())[:2] == ("low", "after_tools")
@@ -147,13 +133,16 @@ def test_consecutive_cap_returns_to_default():
     assert select_level(messages, _settings())[:2] == ("low", "after_tools")
 
 
+def test_consecutive_cap_uses_its_own_level():
+    messages = _turn(_step("Read"), _step("Read"), _step("Read"), _step("Read"))
+    assert select_level(messages, _settings(rule_consecutive_cap="medium"))[:2] == ("medium", "consecutive_cap")
+    # low が cap 未満でなければ働かない
+    assert select_level(messages, _settings(rule_consecutive_cap="low"))[:2] == ("low", "after_tools")
+
+
 def test_consecutive_cap_disabled_by_zero():
     messages = _turn(_step("Read"), _step("Read"), _step("Read"), _step("Read"))
     assert select_level(messages, _settings(max_consecutive_reduced=0))[0] == "low"
-
-
-def test_off_level_after_listed_tool():
-    assert select_level(_turn(_step("noop")), _settings())[0] == "off"
 
 
 def test_trailing_human_nudge_resets_to_user_turn_level():
@@ -171,33 +160,33 @@ def test_only_steps_after_last_human_are_considered():
     assert select_level(messages, _settings())[:3] == ("low", "after_tools", "high")
 
 
-# --- ルールごとのON/OFF ---
+# --- ルールごとのON/OFF（None = 無効） ---
 
 
-def test_rule_user_turn_off_uses_default():
-    assert select_level(_turn(), _settings(rule_user_turn=False, default_level="medium"))[:2] == ("medium", "default")
+def test_rule_user_turn_disabled_uses_default():
+    assert select_level(_turn(), _settings(rule_user_turn=None, default_level="medium"))[:2] == ("medium", "default")
 
 
-def test_rule_tool_error_off_falls_through_to_tool_names():
+def test_rule_tool_error_disabled_falls_through_to_tool_names():
     messages = _turn(_step("Read", error="エラー: x"))
-    assert select_level(messages, _settings(rule_tool_error=False))[:2] == ("low", "after_tools")
+    assert select_level(messages, _settings(rule_tool_error=None))[:2] == ("low", "after_tools")
 
 
-def test_rule_consecutive_cap_off():
+def test_rule_consecutive_cap_disabled():
     messages = _turn(_step("Read"), _step("Read"), _step("Read"), _step("Read"))
-    assert select_level(messages, _settings(rule_consecutive_cap=False))[:2] == ("low", "after_tools")
+    assert select_level(messages, _settings(rule_consecutive_cap=None))[:2] == ("low", "after_tools")
 
 
-def test_rule_after_tools_off_uses_default():
-    assert select_level(_turn(_step("Read")), _settings(rule_after_tools=False))[:2] == ("high", "default")
+def test_rule_after_tools_disabled_uses_default():
+    assert select_level(_turn(_step("Read")), _settings(rule_after_tools=None))[:2] == ("high", "default")
 
 
 def test_all_rules_off_always_default():
     settings = _settings(
-        rule_user_turn=False,
-        rule_tool_error=False,
-        rule_consecutive_cap=False,
-        rule_after_tools=False,
+        rule_user_turn=None,
+        rule_tool_error=None,
+        rule_consecutive_cap=None,
+        rule_after_tools=None,
         default_level="medium",
     )
     for messages in (_turn(), _turn(_step("Read")), _turn(_step("Read", error="エラー"))):
@@ -300,20 +289,16 @@ class _Cfg:
     thinking_control_enabled: bool = True
     thinking_control_apply_to_main: bool = True
     thinking_control_apply_to_sub: bool = True
-    thinking_control_rule_user_turn: bool = True
-    thinking_control_rule_tool_error: bool = True
-    thinking_control_tool_error_max_level: str = "high"
-    thinking_control_rule_consecutive_cap: bool = True
-    thinking_control_rule_after_tools: bool = True
-    thinking_control_user_turn_level: str = "high"
+    thinking_control_rule_user_turn: str | None = "high"
+    thinking_control_rule_tool_error: str | None = "high"
+    thinking_control_rule_consecutive_cap: str | None = "high"
+    thinking_control_rule_after_tools: str | None = "low"
     thinking_control_default_level: str = "high"
     thinking_control_budget_low: int | None = 2048
     thinking_control_budget_medium: int | None = None
     thinking_control_budget_high: int | None = None
     thinking_control_budget_xhigh: int | None = -1
-    thinking_control_off_after_tools: list[str] = field(default_factory=list)
-    thinking_control_low_after_tools: list[str] = field(default_factory=lambda: ["Read"])
-    thinking_control_medium_after_tools: list[str] = field(default_factory=lambda: ["dispatch_agent"])
+    thinking_control_after_tools: list[str] = field(default_factory=lambda: ["Read", "Grep"])
     thinking_control_error_prefixes: list[str] = field(default_factory=lambda: ["エラー"])
     thinking_control_max_consecutive_reduced: int = 3
     enable_thinking: bool | None = True
@@ -332,7 +317,7 @@ def _reset_warned():
 def test_settings_from_config_falls_back_to_llm_budget():
     settings = settings_from_config(_Cfg())
     assert settings.budgets == {"low": 2048, "medium": 4096, "high": 4096, "xhigh": -1}
-    assert settings.level_by_tool == {"Read": "low", "dispatch_agent": "medium"}
+    assert settings.after_tools == frozenset({"Read", "Grep"})
 
 
 def test_enable_thinking_control_injects_settings():
@@ -360,5 +345,5 @@ def test_enable_thinking_control_ignores_non_chatllamacpp():
 
 
 def test_unknown_tool_names():
-    cfg = _Cfg(thinking_control_low_after_tools=["Read", "Raed"], thinking_control_off_after_tools=["Raed"])
+    cfg = _Cfg(thinking_control_after_tools=["Read", "Raed", "Raed"])
     assert unknown_tool_names(cfg, {"Read", "dispatch_agent"}) == ["Raed"]

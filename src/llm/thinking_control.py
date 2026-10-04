@@ -43,31 +43,29 @@ class ThinkingControlSettings:
     """select_level / apply_level が使う設定（Config から作る）。
 
     Attributes:
-        rule_user_turn: ルール1（末尾がユーザー発言なら user_turn_level）の有効/無効。
-        rule_tool_error: ルール2（直前のツールがエラーなら1段上げる）の有効/無効。
-        tool_error_max_level: ルール2で上げるときの上限レベル。
-        rule_consecutive_cap: ルール3（default_level 未満が続いたら戻す）の有効/無効。
-        rule_after_tools: ルール4（直前のツール名で決める）の有効/無効。
-        user_turn_level: ルール1で使うレベル。
+        rule_user_turn: ルール1（末尾がユーザー発言）で使うレベル。None なら無効。
+        rule_tool_error: ルール2（直前のツールがエラー）で使うレベル。None なら無効。
+        rule_consecutive_cap: ルール3（このレベル未満が続いた）で使うレベル。
+            None なら無効。
+        rule_after_tools: ルール4（直前のツールが全て after_tools にある）で
+            使うレベル。None なら無効。
         default_level: どのルールにも当たらなかったときのレベル。
         budgets: レベルごとの思考予算。None なら予算を送らない（サーバー既定）。
             off は予算を使わないため含めない。
-        level_by_tool: ルール4で使う「ツール名 → レベル」の対応。
+        after_tools: ルール4の対象ツール名。
         error_prefixes: ツールの結果がこの文字列で始まればエラーとみなす。
         max_consecutive_reduced: ルール3が働くまでの連続回数。0以下なら働かない。
         budget_message: [llm].reasoning_budget_message。予算での打ち切り・本文への
             漏れの検出（ログ用）に使う。None なら検出しない。
     """
 
-    rule_user_turn: bool
-    rule_tool_error: bool
-    tool_error_max_level: str
-    rule_consecutive_cap: bool
-    rule_after_tools: bool
-    user_turn_level: str
+    rule_user_turn: str | None
+    rule_tool_error: str | None
+    rule_consecutive_cap: str | None
+    rule_after_tools: str | None
     default_level: str
     budgets: dict[str, int | None]
-    level_by_tool: dict[str, str]
+    after_tools: frozenset[str]
     error_prefixes: tuple[str, ...]
     max_consecutive_reduced: int
     budget_message: str | None
@@ -91,24 +89,14 @@ def settings_from_config(config: Config) -> ThinkingControlSettings:
         "high": config.thinking_control_budget_high,
         "xhigh": config.thinking_control_budget_xhigh,
     }
-    level_by_tool: dict[str, str] = {}
-    for level, names in (
-        ("off", config.thinking_control_off_after_tools),
-        ("low", config.thinking_control_low_after_tools),
-        ("medium", config.thinking_control_medium_after_tools),
-    ):
-        for name in names:
-            level_by_tool[name] = level
     return ThinkingControlSettings(
         rule_user_turn=config.thinking_control_rule_user_turn,
         rule_tool_error=config.thinking_control_rule_tool_error,
-        tool_error_max_level=config.thinking_control_tool_error_max_level,
         rule_consecutive_cap=config.thinking_control_rule_consecutive_cap,
         rule_after_tools=config.thinking_control_rule_after_tools,
-        user_turn_level=config.thinking_control_user_turn_level,
         default_level=config.thinking_control_default_level,
         budgets={level: config.reasoning_budget if budget is None else budget for level, budget in budgets.items()},
-        level_by_tool=level_by_tool,
+        after_tools=frozenset(config.thinking_control_after_tools),
         error_prefixes=tuple(config.thinking_control_error_prefixes),
         max_consecutive_reduced=config.thinking_control_max_consecutive_reduced,
         budget_message=config.reasoning_budget_message,
@@ -123,8 +111,8 @@ def _is_tool_error(message: ToolMessage, error_prefixes: tuple[str, ...]) -> boo
 
 
 def _first_step(settings: ThinkingControlSettings) -> tuple[str, str]:
-    if settings.rule_user_turn:
-        return settings.user_turn_level, "user_turn"
+    if settings.rule_user_turn is not None:
+        return settings.rule_user_turn, "user_turn"
     return settings.default_level, "default"
 
 
@@ -135,30 +123,19 @@ def _next_step(
     settings: ThinkingControlSettings,
 ) -> tuple[str, str]:
     """直前のAIMessageとそのツール結果から、次のリクエストのレベルを決める。"""
-    if settings.rule_tool_error and any(_is_tool_error(m, settings.error_prefixes) for m in tool_messages):
-        # 1段上げるが tool_error_max_level は超えない。直前が既に上限以上なら
-        # そのまま（下げはしない）。
-        prev_rank = _RANK[history[-1]]
-        raised = max(prev_rank, min(prev_rank + 1, _RANK[settings.tool_error_max_level]))
-        return THINKING_LEVELS[raised], "tool_error"
+    if settings.rule_tool_error is not None and any(_is_tool_error(m, settings.error_prefixes) for m in tool_messages):
+        return settings.rule_tool_error, "tool_error"
 
     n = settings.max_consecutive_reduced
-    default_rank = _RANK[settings.default_level]
-    if (
-        settings.rule_consecutive_cap
-        and n > 0
-        and len(history) >= n
-        and all(_RANK[level] < default_rank for level in history[-n:])
-    ):
-        return settings.default_level, "consecutive_cap"
+    cap = settings.rule_consecutive_cap
+    if cap is not None and n > 0 and len(history) >= n and all(_RANK[level] < _RANK[cap] for level in history[-n:]):
+        return cap, "consecutive_cap"
 
-    if settings.rule_after_tools:
+    if settings.rule_after_tools is not None:
         names = [call.get("name") for call in prev_ai.tool_calls]
-        levels = [settings.level_by_tool.get(name) for name in names]
-        # 一覧にないツールが1つでも混ざっていれば default_level に任せる
-        # （並列呼び出しは最も高いレベルに合わせる方針で、一覧外は default 扱い）。
-        if levels and all(level is not None for level in levels):
-            return max(levels, key=lambda level: _RANK[level]), "after_tools"
+        # 一覧にないツールが1つでも混ざっていれば default_level に任せる。
+        if names and all(name in settings.after_tools for name in names):
+            return settings.rule_after_tools, "after_tools"
 
     return settings.default_level, "default"
 
@@ -167,7 +144,7 @@ def _replay(messages: list[BaseMessage], settings: ThinkingControlSettings) -> l
     """最後のユーザー発言以降の各リクエストについて (レベル, 理由) を順に求める。
 
     返り値の末尾が「これから送るリクエスト」のレベル。それより前は、同じ
-    ルールで判定し直した過去のステップのレベル（ルール2・3が参照する）。
+    ルールで判定し直した過去のステップのレベル（ルール3が参照する）。
     """
     start = 0
     for i in range(len(messages) - 1, -1, -1):
@@ -197,11 +174,11 @@ def select_level(messages: list[BaseMessage], settings: ThinkingControlSettings)
     最後の HumanMessage（画像のフォローアップは除く）以降を対象に、次の順で最初に当てはまったものを使う
     （無効化されたルールは飛ばす）。
 
-    1. 末尾が HumanMessage（ユーザー発言・ナッジ等）→ user_turn_level
-    2. 直前のツール結果にエラーがある → 直前のレベルから1段上げる
-       （tool_error_max_level が上限）
-    3. 直前 max_consecutive_reduced 回が全て default_level 未満 → default_level
-    4. 直前に呼んだツールが全て一覧にある → その中で最も高いレベル
+    1. 末尾が HumanMessage（ユーザー発言・ナッジ等）→ rule_user_turn
+    2. 直前のツール結果にエラーがある → rule_tool_error
+    3. 直前 max_consecutive_reduced 回が全て rule_consecutive_cap 未満
+       → rule_consecutive_cap
+    4. 直前に呼んだツールが全て after_tools にある → rule_after_tools
     5. それ以外 → default_level
 
     Args:
@@ -278,7 +255,7 @@ def previous_step_stats(messages: list[BaseMessage], settings: ThinkingControlSe
 
 
 def unknown_tool_names(config: Config, known_names: set[str]) -> list[str]:
-    """[thinking_control] の *_after_tools のうち、実在しないツール名を返す（起動時の警告用）。
+    """[thinking_control].after_tools のうち、実在しないツール名を返す（起動時の警告用）。
 
     Args:
         config: アプリ設定。
@@ -287,9 +264,4 @@ def unknown_tool_names(config: Config, known_names: set[str]) -> list[str]:
     Returns:
         known_names に無いツール名（書かれた順、重複なし）。
     """
-    names = [
-        *config.thinking_control_off_after_tools,
-        *config.thinking_control_low_after_tools,
-        *config.thinking_control_medium_after_tools,
-    ]
-    return [name for name in dict.fromkeys(names) if name not in known_names]
+    return [name for name in dict.fromkeys(config.thinking_control_after_tools) if name not in known_names]

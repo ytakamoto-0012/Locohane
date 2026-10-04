@@ -947,7 +947,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `dry_base` | DRYサンプラーの反復長に対するペナルティ指数増加率（空欄で未指定） | `LLM_DRY_BASE` |
 | `[llm]` | `dry_allowed_length` | DRYサンプラーがこの文字数以下の反復を許容する閾値（空欄で未指定） | `LLM_DRY_ALLOWED_LENGTH` |
 | `[llm]` | `dry_penalty_last_n` | DRYサンプラーが反復検出に遡って見るトークン数（空欄で未指定） | `LLM_DRY_PENALTY_LAST_N` |
-| `[llm]` | `dry_sequence_breakers` | DRYサンプラーの反復検出リセット区切り文字（カンマ区切り、空欄で既定値） | `LLM_DRY_SEQUENCE_BREAKERS` |
+| `[llm]` | `dry_sequence_breakers` | DRYサンプラーの反復検出リセット区切り文字（リスト形式、空リスト`[]`で既定値） | `LLM_DRY_SEQUENCE_BREAKERS` |
 | `[llm]` | `enable_thinking` | Qwen3系モデルのthinking（reasoning、`<think>`ブロック）モードのON/OFF（llama.cpp/vLLM共通、`chat_template_kwargs`で送信、空欄なら未指定でモデル・llama-server既定に委ねる） | `LLM_ENABLE_THINKING` |
 | `[llm]` | `reasoning_format` | thinkingブロックの出力形式（`none`/`deepseek`/`deepseek-legacy`。llama.cpp拡張、`provider=vllm`へは送らない。空欄なら未指定でllama-server既定の`auto`に委ねる） | `LLM_REASONING_FORMAT` |
 | `[llm]` | `reasoning_budget` | thinkingに使えるトークン数上限（`-1`=無制限・`N>0`=上限。llama-serverへは`reasoning_budget_tokens`、vLLMへは`thinking_token_budget`として送信。llama-serverはリクエストでの`0`を無視するため、thinkingを止めるなら`reasoning_effort=none`か`enable_thinking=false`を使う。空欄なら未指定でllama-server既定の`-1`に委ねる） | `LLM_REASONING_BUDGET` |
@@ -1053,15 +1053,14 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[tool_loop_guard]` | `enabled` | 全く同じ応答（本文とツール呼び出しの名前・引数）を連続で繰り返すループを検知する機能の有効/無効（`src/tool_loop_guard.py`）。ツールの結果やエラーかどうかは比べない。検知したら`[thinking_loop_guard]`と同じ仕組みで、注意メッセージに「何を繰り返したか」を添えて再試行し、`max_retries`（思考のループと合算）で停止してユーザーに通知する。サブエージェントは上限でそこまでの経過を返して打ち切る。モデルにツール呼び出しを強制する`tool_choice`はQwen3.6では効かないため使わない | `TOOL_LOOP_GUARD_ENABLED` |
 | `[tool_loop_guard]` | `max_repeats` | 全く同じ応答が何回連続したらループとみなすか（1以下で無効） | `TOOL_LOOP_GUARD_MAX_REPEATS` |
 | `[tool_loop_guard]` | `nudge_messages` | ループ検知後に注入する注意メッセージ（複数指定可。思考のループとは別に数えた回数の順に使い、末尾に何を繰り返したかが自動で添えられる） | `TOOL_LOOP_GUARD_NUDGE_MESSAGES` |
-| `[tool_loop_guard]` | `exclude_tools` | このツールだけを呼ぶ応答は数えない（状態確認のポーリング等。既定`check_script_job, check_dispatch_agent_job`） | `TOOL_LOOP_GUARD_EXCLUDE_TOOLS` |
+| `[tool_loop_guard]` | `exclude_tools` | このツールだけを呼ぶ応答は数えない（状態確認のポーリング等。リスト形式、既定`["check_script_job", "check_dispatch_agent_job"]`） | `TOOL_LOOP_GUARD_EXCLUDE_TOOLS` |
 | `[thinking_control]` | `enabled` | ReActループの各ステップで、直前の履歴の形から思考レベル（`off`/`low`/`medium`/`high`/`xhigh`）をルールで選び、リクエストごとに切り替える機能全体の有効/無効（`src/llm/thinking_control.py`）。`off`は`enable_thinking=false`、それ以外は思考予算の大小で表すため、プロンプトの先頭部分は変わらずKVキャッシュは外れない（`reasoning_effort`はテンプレート次第でシステムプロンプトが変わるため切り替えに使わない）。`false`なら従来と全く同じリクエスト。`[llm]`側で思考が無効なら働かない。判定はアプリログの`thinking_control:`行（レベル・判定理由・直前ステップの思考文字数・予算での打ち切り・本文への漏れ）で確認できる | `THINKING_CONTROL_ENABLED` |
 | `[thinking_control]` | `apply_to_main` / `apply_to_sub` | メインエージェント / サブエージェントのループに適用するか（要約・圧縮のLLM呼び出しには常に適用しない） | `THINKING_CONTROL_APPLY_TO_MAIN` / `THINKING_CONTROL_APPLY_TO_SUB` |
-| `[thinking_control]` | `rule_user_turn` / `rule_tool_error` / `rule_consecutive_cap` / `rule_after_tools` | 判定ルール1〜4それぞれの有効/無効（1: 末尾がユーザー発言・ナッジ（画像のフォローアップは除く）なら`user_turn_level`、2: 直前のツールがエラーなら直前のレベルから1段上げる、3: `default_level`未満が`max_consecutive_reduced`回続いたら戻す、4: 直前に呼んだツールが全て`*_after_tools`にあればその最高レベル）。無効にしたルールは飛ばし、どれにも当たらなければ`default_level` | `THINKING_CONTROL_RULE_USER_TURN` 等 |
-| `[thinking_control]` | `tool_error_max_level` | ルール2で1段上げるときの上限レベル（既定`high`。`xhigh`の予算は既定で無制限のため） | `THINKING_CONTROL_TOOL_ERROR_MAX_LEVEL` |
-| `[thinking_control]` | `user_turn_level` / `default_level` | ルール1で使うレベル / どのルールにも当たらないときのレベル | `THINKING_CONTROL_USER_TURN_LEVEL` / `THINKING_CONTROL_DEFAULT_LEVEL` |
+| `[thinking_control]` | `rule_user_turn` / `rule_tool_error` / `rule_consecutive_cap` / `rule_after_tools` | 判定ルール1〜4それぞれに当てはまったときのレベル（`off`〜`xhigh`、空欄でそのルールを無効化。1: 末尾がユーザー発言・ナッジ（画像のフォローアップは除く）、2: 直前のツールがエラー、3: 直前`max_consecutive_reduced`回が全てこのレベル未満、4: 直前に呼んだツールが全て`after_tools`にある）。ルール1→4の順で最初に当てはまったものを使い、どれにも当たらなければ`default_level`。既定は`high`/`high`/`high`/`low` | `THINKING_CONTROL_RULE_USER_TURN` 等 |
+| `[thinking_control]` | `default_level` | どのルールにも当たらないときのレベル | `THINKING_CONTROL_DEFAULT_LEVEL` |
 | `[thinking_control]` | `budget_low` / `budget_medium` / `budget_high` / `budget_xhigh` | 各レベルの思考予算（-1=無制限、空欄なら`[llm].reasoning_budget`）。小さくするほど予算での打ち切りが増え、思考が本文へ漏れやすくなる | `THINKING_CONTROL_BUDGET_LOW` 等 |
-| `[thinking_control]` | `off_after_tools` / `low_after_tools` / `medium_after_tools` | ルール4のツール一覧（カンマ区切り、同じツールを複数の一覧に書くとエラー）。起動時に存在しないツール名を警告する | `THINKING_CONTROL_OFF_AFTER_TOOLS` 等 |
-| `[thinking_control]` | `error_prefixes` | ルール2でエラーとみなすツール結果の先頭文字列（`ToolMessage.status="error"`も対象） | `THINKING_CONTROL_ERROR_PREFIXES` |
+| `[thinking_control]` | `after_tools` | ルール4の対象ツール一覧（リスト形式`["Read", "Grep"]`）。起動時に存在しないツール名を警告する | `THINKING_CONTROL_AFTER_TOOLS` |
+| `[thinking_control]` | `error_prefixes` | ルール2でエラーとみなすツール結果の先頭文字列（リスト形式。`ToolMessage.status="error"`も対象） | `THINKING_CONTROL_ERROR_PREFIXES` |
 | `[thinking_control]` | `max_consecutive_reduced` | ルール3が働くまでの連続回数（0以下で無効） | `THINKING_CONTROL_MAX_CONSECUTIVE_REDUCED` |
 | `[context_trim]` | `enabled` | 古い `ToolMessage` を切り詰めてプリフィル遅延を抑える機能の有効/無効 | `CONTEXT_TRIM_ENABLED` |
 | `[context_trim]` | `trigger_total_tokens` | トリムを発動させる閾値（Claude APIのcontext editing、`clear_tool_uses_20250919`のtrigger.value相当）。LLM呼び出しのtotal_tokensがこの値未満のうちは発動しない。一度でも達したら、以後その会話ではトリムを継続する（解除・再トリムの繰り返しでプレフィックスキャッシュが毎回外れるのを防ぐため）。コンテキスト圧縮が走ると解除される。0以下なら常に発動 | `CONTEXT_TRIM_TRIGGER_TOTAL_TOKENS` |

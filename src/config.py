@@ -60,8 +60,8 @@ LLM_REASONING_EFFORTS = frozenset({"none", "default", "minimal", "low", "medium"
 # [thinking_loop_guard].target が取りうる値。
 THINKING_LOOP_GUARD_TARGETS = ("all", "content_only", "thinking_only")
 
-# [thinking_control] の思考レベル（低い順）。順序はレベルの比較・1段上げる処理
-# （src/llm/thinking_control.py）で使う。
+# [thinking_control] の思考レベル（低い順）。順序はレベルの比較
+# （src/llm/thinking_control.py のルール3）で使う。
 THINKING_LEVELS = ("off", "low", "medium", "high", "xhigh")
 
 # [main_agent_tool_guard].visibility_mode が取りうる値。main_agent_tool_guard_mode
@@ -698,25 +698,23 @@ class Config:
         thinking_control_apply_to_main / thinking_control_apply_to_sub:
             メインエージェント / サブエージェントのループに適用するか。
             要約・圧縮のためのLLM呼び出しには常に適用しない。
-        thinking_control_rule_user_turn / _rule_tool_error /
-            _rule_consecutive_cap / _rule_after_tools: 判定ルール1〜4それぞれの
-            有効/無効。無効にしたルールは飛ばして次のルールで判定する。
-        thinking_control_tool_error_max_level: ルール2で1段上げるときの上限
-            レベル。既定 high（xhigh の予算は無制限のため、エラーのたびに
-            思考が無制限になるのを避ける）。
-        thinking_control_user_turn_level: 末尾がユーザー発言（ナッジ含む）の
-            ときのレベル（ルール1）。
+        thinking_control_rule_user_turn: 末尾がユーザー発言（ナッジ含む）の
+            ときのレベル（ルール1）。None ならルール無効。
+        thinking_control_rule_tool_error: 直前のツール結果がエラーのときの
+            レベル（ルール2）。None ならルール無効。
+        thinking_control_rule_consecutive_cap: 直前 max_consecutive_reduced 回が
+            全てこのレベル未満なら、このレベルにする（ルール3）。None なら無効。
+        thinking_control_rule_after_tools: 直前に呼んだツールが全て after_tools
+            にあるときのレベル（ルール4）。None ならルール無効。
         thinking_control_default_level: どのルールにも当たらなかったときの
-            レベル（ルール5）。ルール3もこのレベルへ戻す。
+            レベル（ルール5）。
         thinking_control_budget_low / _medium / _high / _xhigh: 各レベルの
             思考予算（-1 = 無制限）。None なら [llm].reasoning_budget を使う。
-        thinking_control_off_after_tools / _low_after_tools /
-            _medium_after_tools: このツールの直後はそのレベルにする（ルール4）。
-            同じツール名を複数の一覧に書くことはできない。
+        thinking_control_after_tools: ルール4の対象ツール名。
         thinking_control_error_prefixes: ツールの結果がこの文字列で始まれば
             エラーとみなす（ルール2。ToolMessage.status="error" も対象）。
-        thinking_control_max_consecutive_reduced: default_level 未満がこの回数
-            続いたら default_level へ戻す（ルール3）。0以下なら戻さない。
+        thinking_control_max_consecutive_reduced: ルール3が働くまでの連続回数。
+            0以下なら働かない。
         context_trim_enabled: 会話履歴中の古い ToolMessage を切り詰めて
             LLMへの入力を抑える機能の有効/無効（src.context_trim 参照）。
             メインエージェント（src.graph）向けの設定。サブエージェント
@@ -1059,20 +1057,16 @@ class Config:
     thinking_control_enabled: bool
     thinking_control_apply_to_main: bool
     thinking_control_apply_to_sub: bool
-    thinking_control_rule_user_turn: bool
-    thinking_control_rule_tool_error: bool
-    thinking_control_tool_error_max_level: str
-    thinking_control_rule_consecutive_cap: bool
-    thinking_control_rule_after_tools: bool
-    thinking_control_user_turn_level: str
+    thinking_control_rule_user_turn: str | None
+    thinking_control_rule_tool_error: str | None
+    thinking_control_rule_consecutive_cap: str | None
+    thinking_control_rule_after_tools: str | None
     thinking_control_default_level: str
     thinking_control_budget_low: int | None
     thinking_control_budget_medium: int | None
     thinking_control_budget_high: int | None
     thinking_control_budget_xhigh: int | None
-    thinking_control_off_after_tools: list[str]
-    thinking_control_low_after_tools: list[str]
-    thinking_control_medium_after_tools: list[str]
+    thinking_control_after_tools: list[str]
     thinking_control_error_prefixes: list[str]
     thinking_control_max_consecutive_reduced: int
 
@@ -1342,21 +1336,22 @@ def _as_optional_bool(value: bool | str | None) -> bool | None:
 
 
 def _as_optional_str_list(value: str | None) -> list[str] | None:
-    """config.ini のカンマ区切り文字列を list[str] に変換する。空欄は None。
+    """config.ini のリスト形式（["a", "b"]）の値を list[str] に変換する。空は None。
+
+    管理ツールのリストエディタで編集できるよう、カンマ区切りではなく
+    _as_message_list と同じ JSON/Python風のリスト形式で書く。
 
     Args:
-        value: config.ini から得たカンマ区切り文字列、または環境変数由来の文字列。
+        value: config.ini から得たリスト形式の文字列、または環境変数由来の文字列。
 
     Returns:
-        空欄・None なら None、それ以外はカンマ区切りで分割し前後の空白を
-        取り除いた文字列のリスト。
+        空欄・空リスト・None なら None、それ以外は文字列のリスト。
+
+    Raises:
+        ValueError: 値がリスト（配列）として解釈できない場合。
     """
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    return [item.strip() for item in text.split(",")]
+    items = _as_message_list(value)
+    return items or None
 
 
 def _as_optional_str(value: str | None) -> str | None:
@@ -1457,22 +1452,29 @@ def _as_thinking_level(value: str | None, key_name: str) -> str:
     return text
 
 
-def _check_thinking_control_tool_lists(lists: dict[str, list[str]]) -> None:
-    """[thinking_control] の *_after_tools に同じツール名が重複していないか検証する。
+def _as_optional_thinking_level(value: str | None, key_name: str) -> str | None:
+    """[thinking_control].rule_* のレベル指定を検証する。空欄はルール無効（None）。
 
     Args:
-        lists: キー名 → ツール名のリスト。
+        value: config.ini から得た値、または環境変数から得た文字列。
+        key_name: エラーメッセージに使う設定キー名。
+
+    Returns:
+        THINKING_LEVELS のいずれか。空欄・None なら None。
 
     Raises:
-        ValueError: 同じツール名が複数の一覧に書かれていた場合（どのレベルに
-            するかが曖昧になるため）。
+        ValueError: THINKING_LEVELS に無い値が指定された場合。
     """
-    seen: dict[str, str] = {}
-    for key_name, names in lists.items():
-        for name in names:
-            if name in seen and seen[name] != key_name:
-                raise ValueError(f"[thinking_control] のツール名 {name!r} が {seen[name]} と {key_name} の両方に書かれています")
-            seen[name] = key_name
+    if _as_optional_str(value) is None:
+        return None
+    return _as_thinking_level(value, key_name)
+
+
+# [thinking_control].after_tools が config.ini に無い場合の既定値。
+_DEFAULT_THINKING_CONTROL_AFTER_TOOLS = (
+    '["Read", "Glob", "Grep", "json_query", "search_path_memory", "check_work_dir_status",'
+    ' "update_task_progress", "get_plan_status"]'
+)
 
 
 def _as_message_list(value: str | None) -> list[str]:
@@ -2396,13 +2398,6 @@ def load_config(
         PROJECT_ROOT,
     )
 
-    # [thinking_control] のツール一覧は重複を検証してから Config へ渡す。
-    _thinking_control_tool_lists = {
-        key: _as_optional_str_list(os.getenv(f"THINKING_CONTROL_{key.upper()}", thinking_control.get(key, ""))) or []
-        for key in ("off_after_tools", "low_after_tools", "medium_after_tools")
-    }
-    _check_thinking_control_tool_lists(_thinking_control_tool_lists)
-
     main_url_raw = os.getenv("LLM_MAIN_URL", llm.get("main_url", _DEFAULT_LLM_URL))
     # sub_url が未指定（キー無し、または値が空）の場合、静的な接続先リストを
     # main_url からコピーするだけでなく、実行時に「委譲元メインエージェントの
@@ -2839,7 +2834,7 @@ def load_config(
         tool_loop_guard_exclude_tools=_as_optional_str_list(
             os.getenv(
                 "TOOL_LOOP_GUARD_EXCLUDE_TOOLS",
-                tool_loop_guard.get("exclude_tools", "check_script_job, check_dispatch_agent_job"),
+                tool_loop_guard.get("exclude_tools", '["check_script_job", "check_dispatch_agent_job"]'),
             )
         )
         or [],
@@ -2853,25 +2848,21 @@ def load_config(
         thinking_control_apply_to_sub=_as_bool(
             os.getenv("THINKING_CONTROL_APPLY_TO_SUB", thinking_control.get("apply_to_sub", True))
         ),
-        thinking_control_rule_user_turn=_as_bool(
-            os.getenv("THINKING_CONTROL_RULE_USER_TURN", thinking_control.get("rule_user_turn", True))
+        thinking_control_rule_user_turn=_as_optional_thinking_level(
+            os.getenv("THINKING_CONTROL_RULE_USER_TURN", thinking_control.get("rule_user_turn", "high")),
+            "rule_user_turn",
         ),
-        thinking_control_rule_tool_error=_as_bool(
-            os.getenv("THINKING_CONTROL_RULE_TOOL_ERROR", thinking_control.get("rule_tool_error", True))
+        thinking_control_rule_tool_error=_as_optional_thinking_level(
+            os.getenv("THINKING_CONTROL_RULE_TOOL_ERROR", thinking_control.get("rule_tool_error", "high")),
+            "rule_tool_error",
         ),
-        thinking_control_tool_error_max_level=_as_thinking_level(
-            os.getenv("THINKING_CONTROL_TOOL_ERROR_MAX_LEVEL", thinking_control.get("tool_error_max_level", "high")),
-            "tool_error_max_level",
+        thinking_control_rule_consecutive_cap=_as_optional_thinking_level(
+            os.getenv("THINKING_CONTROL_RULE_CONSECUTIVE_CAP", thinking_control.get("rule_consecutive_cap", "high")),
+            "rule_consecutive_cap",
         ),
-        thinking_control_rule_consecutive_cap=_as_bool(
-            os.getenv("THINKING_CONTROL_RULE_CONSECUTIVE_CAP", thinking_control.get("rule_consecutive_cap", True))
-        ),
-        thinking_control_rule_after_tools=_as_bool(
-            os.getenv("THINKING_CONTROL_RULE_AFTER_TOOLS", thinking_control.get("rule_after_tools", True))
-        ),
-        thinking_control_user_turn_level=_as_thinking_level(
-            os.getenv("THINKING_CONTROL_USER_TURN_LEVEL", thinking_control.get("user_turn_level", "high")),
-            "user_turn_level",
+        thinking_control_rule_after_tools=_as_optional_thinking_level(
+            os.getenv("THINKING_CONTROL_RULE_AFTER_TOOLS", thinking_control.get("rule_after_tools", "low")),
+            "rule_after_tools",
         ),
         thinking_control_default_level=_as_thinking_level(
             os.getenv("THINKING_CONTROL_DEFAULT_LEVEL", thinking_control.get("default_level", "high")),
@@ -2889,11 +2880,12 @@ def load_config(
         thinking_control_budget_xhigh=_as_optional_int(
             os.getenv("THINKING_CONTROL_BUDGET_XHIGH", thinking_control.get("budget_xhigh", "-1"))
         ),
-        thinking_control_off_after_tools=_thinking_control_tool_lists["off_after_tools"],
-        thinking_control_low_after_tools=_thinking_control_tool_lists["low_after_tools"],
-        thinking_control_medium_after_tools=_thinking_control_tool_lists["medium_after_tools"],
+        thinking_control_after_tools=_as_optional_str_list(
+            os.getenv("THINKING_CONTROL_AFTER_TOOLS", thinking_control.get("after_tools", _DEFAULT_THINKING_CONTROL_AFTER_TOOLS))
+        )
+        or [],
         thinking_control_error_prefixes=_as_optional_str_list(
-            os.getenv("THINKING_CONTROL_ERROR_PREFIXES", thinking_control.get("error_prefixes", "エラー"))
+            os.getenv("THINKING_CONTROL_ERROR_PREFIXES", thinking_control.get("error_prefixes", '["エラー"]'))
         )
         or [],
         thinking_control_max_consecutive_reduced=int(

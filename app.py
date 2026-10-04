@@ -1757,13 +1757,13 @@ async def _setup() -> None:
         logging.getLogger(__name__).warning(
             "[thinking_loop_guard].target = content_only ですが [llm].reasoning_budget が無制限のため、思考のループを止める仕組みがありません"
         )
-    # [thinking_control] の *_after_tools に書き間違いがあると、そのツールの後は
+    # [thinking_control].after_tools に書き間違いがあると、そのツールの後は
     # 黙って default_level になるだけで気づきにくいため、起動時に警告しておく。
     if _config.thinking_control_enabled:
         unknown = unknown_tool_names(_config, {t.name for t in get_all_tools()})
         if unknown:
             logging.getLogger(__name__).warning(
-                "[thinking_control] のツール一覧に存在しないツール名があります（MCPツールは接続状況により誤検知の場合あり）: %s",
+                "[thinking_control].after_tools に存在しないツール名があります（MCPツールは接続状況により誤検知の場合あり）: %s",
                 ", ".join(unknown),
             )
     system_prompt = build_system_prompt_from_block(main_skills_block, _config.system_prompt_path).replace(

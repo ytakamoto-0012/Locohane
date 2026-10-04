@@ -77,9 +77,12 @@ _KEY_CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
     ("main_agent_tool_guard", "visibility_mode"): ("strict", "hint", "all"),
     ("log", "level"): ("info", "debug", "none"),
     ("thinking_loop_guard", "target"): ("all", "content_only", "thinking_only"),
-    ("thinking_control", "user_turn_level"): _THINKING_LEVEL_CHOICES,
     ("thinking_control", "default_level"): _THINKING_LEVEL_CHOICES,
-    ("thinking_control", "tool_error_max_level"): _THINKING_LEVEL_CHOICES,
+    # rule_* は空欄＝ルール無効。
+    ("thinking_control", "rule_user_turn"): ("", *_THINKING_LEVEL_CHOICES),
+    ("thinking_control", "rule_tool_error"): ("", *_THINKING_LEVEL_CHOICES),
+    ("thinking_control", "rule_consecutive_cap"): ("", *_THINKING_LEVEL_CHOICES),
+    ("thinking_control", "rule_after_tools"): ("", *_THINKING_LEVEL_CHOICES),
 }
 
 
