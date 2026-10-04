@@ -2861,6 +2861,46 @@ def _stream_owner(event: dict, owner_run_ids: set[str]) -> str | None:
     return None
 
 
+async def _get_or_open_thinking(
+    event: dict,
+    owner: str | None,
+    thinkings: dict[str | None, cl.Step],
+    steps: dict[str, cl.Step],
+    resync_steps: dict[str, cl.Step],
+) -> cl.Step:
+    """指定した出力元の「思考中」Stepを返す（無ければ生成して送信する）。
+
+    サブエージェント（owner が None 以外）の思考Stepは、思考を input、回答本文を
+    output に流す（回答をチャット欄の Message ではなくこのStepの出力欄に出すため）。
+    フロントが2欄を「思考」「出力」と表示できるよう metadata.subagent_output を立てる。
+    """
+    thinking = thinkings.get(owner)
+    if thinking is not None:
+        return thinking
+    thinking = cl.Step(
+        name="思考中",
+        type="llm",
+        parent_id=_resolve_parent_id(event, steps),
+        metadata={"subagent_output": True} if owner is not None else None,
+    )
+    thinking.start = utc_now()
+    await thinking.send()
+    thinkings[owner] = thinking
+    if owner is None:
+        cl.user_session.set("live_thinking", thinking)
+    else:
+        # live_thinking はメインの1件だけを追跡するため、サブエージェントの
+        # 思考Stepは再接続時の再送対象（resync_steps）へ入れる。
+        resync_steps[f"thinking:{thinking.id}"] = thinking
+    logging.getLogger(__name__).info(
+        "thinking Step生成: step_id=%s parent_id=%s [%s]",
+        thinking.id,
+        thinking.parent_id,
+        describe_current_task(),
+    )
+    return thinking
+
+
 async def _close_owner_output(
     owner: str | None,
     thinkings: dict[str | None, cl.Step],
@@ -2963,7 +3003,7 @@ async def _close_thinking(thinking: cl.Step | None, *, stopped_reason: str | Non
     if thinking is None:
         return None
     if stopped_reason is not None:
-        thinking.metadata = {"stopped_reason": stopped_reason}
+        thinking.metadata = {**(thinking.metadata or {}), "stopped_reason": stopped_reason}
     thinking.end = utc_now()
     await thinking.update()
     logging.getLogger(__name__).info(
@@ -3773,31 +3813,14 @@ async def _on_message_impl(message: cl.Message) -> None:
                     # ChatLlamaCpp（src/llm.py）が additional_kwargs へ拾い上げている。
                     # 本回答とは別の折りたたみStepとして「思考中」を可視化する。
                     owner = _stream_owner(event, owner_run_ids)
+                    # サブエージェントの回答本文はチャット欄へ流さず、思考Stepの出力欄
+                    # （output）へ流す。その場合、思考は入力欄（input）側へ流して分ける
+                    # （フロントは metadata.subagent_output を見て「思考」「出力」と表示）。
+                    to_thinking_step = owner is not None
                     reasoning = chunk.additional_kwargs.get("reasoning_content")
                     if reasoning:
-                        thinking = thinkings.get(owner)
-                        if thinking is None:
-                            thinking = cl.Step(
-                                name="思考中",
-                                type="llm",
-                                parent_id=_resolve_parent_id(event, steps),
-                            )
-                            thinking.start = utc_now()
-                            await thinking.send()
-                            thinkings[owner] = thinking
-                            if owner is None:
-                                cl.user_session.set("live_thinking", thinking)
-                            else:
-                                # live_thinking はメインの1件だけを追跡するため、サブエージェントの
-                                # 思考Stepは再接続時の再送対象（resync_steps）へ入れる。
-                                resync_steps[f"thinking:{thinking.id}"] = thinking
-                            logging.getLogger(__name__).info(
-                                "thinking Step生成: step_id=%s parent_id=%s [%s]",
-                                thinking.id,
-                                thinking.parent_id,
-                                describe_current_task(),
-                            )
-                        await thinking.stream_token(reasoning)
+                        thinking = await _get_or_open_thinking(event, owner, thinkings, steps, resync_steps)
+                        await thinking.stream_token(reasoning, is_input=to_thinking_step)
 
                     if chunk.content:
                         # リトライ後の初回チャンク受信までの待ち時間を記録。
@@ -3815,23 +3838,29 @@ async def _on_message_impl(message: cl.Message) -> None:
                                     describe_current_task(),
                                 )
                             retry_first_chunk_start = None  # 2回目以降は計測しない
-                        # 思考が終わり本回答が始まったのでStepを確定させる（同じ出力元の分だけ）。
-                        await _close_thinking(thinkings.pop(owner, None))
-                        answer = answers.get(owner)
-                        if answer is None:
-                            # dispatch_agent 内部（サブエージェント）由来のチャンクは、
-                            # astream_events がcontextvar経由で内部呼び出しの
-                            # イベントも同じストリームへ伝播させるため、対策しないと
-                            # メインエージェントの回答と見分けが付かないまま届く
-                            # （_resolve_parent_id/_is_subagent_call 参照）。
-                            # authorを変えてUI側で区別できるようにする。
-                            is_subagent_answer = owner is not None or _is_subagent_call(event, dispatch_agent_run_ids)
-                            answer = cl.Message(
-                                content="",
-                                author=SUBAGENT_MESSAGE_AUTHOR if is_subagent_answer else None,
-                            )
-                            answers[owner] = answer
-                        await answer.stream_token(chunk.content)
+                        if to_thinking_step:
+                            # 思考Stepはツール開始・出力元の終了時に閉じる（_close_owner_output）。
+                            thinking = await _get_or_open_thinking(event, owner, thinkings, steps, resync_steps)
+                            await thinking.stream_token(chunk.content)
+                        else:
+                            # 思考が終わり本回答が始まったのでStepを確定させる（同じ出力元の分だけ）。
+                            await _close_thinking(thinkings.pop(owner, None))
+                            answer = answers.get(owner)
+                            if answer is None:
+                                # dispatch_agent 内部（サブエージェント）由来のチャンクは、
+                                # astream_events がcontextvar経由で内部呼び出しの
+                                # イベントも同じストリームへ伝播させるため、対策しないと
+                                # メインエージェントの回答と見分けが付かないまま届く
+                                # （_resolve_parent_id/_is_subagent_call 参照）。
+                                # 出力元判定（_stream_owner）をすり抜けた場合の保険として
+                                # authorを変えてUI側で区別できるようにする。
+                                is_subagent_answer = _is_subagent_call(event, dispatch_agent_run_ids)
+                                answer = cl.Message(
+                                    content="",
+                                    author=SUBAGENT_MESSAGE_AUTHOR if is_subagent_answer else None,
+                                )
+                                answers[owner] = answer
+                            await answer.stream_token(chunk.content)
 
                 elif kind == "on_tool_start":
                     # ここまでの思考/回答があれば確定送信し、次のテキストは新しい Message に分ける
@@ -3887,10 +3916,10 @@ async def _on_message_impl(message: cl.Message) -> None:
                 elif kind == "on_tool_end":
                     step = steps.pop(event["run_id"], None)
                     if step is not None:
-                        # dispatch_agent 実行中、内部のサブエージェント回答を
+                        # サブエージェントの回答は現在は思考Stepの出力欄へ流すが
+                        # （上のon_chat_model_stream参照）、出力元判定をすり抜けた分は
                         # author=SUBAGENT_MESSAGE_AUTHOR の answer として
-                        # ストリーム表示している場合がある（上のon_chat_model_stream
-                        # 参照）。このツール終了時点で確定させておかないと、続く
+                        # ストリーム表示される。このツール終了時点で確定させておかないと、続く
                         # メインエージェントの最終回答が（間に別のon_tool_startを
                         # 挟まない限り）answer is None判定を通らず、このSUB名義の
                         # Messageへそのまま追記されてしまう

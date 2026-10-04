@@ -78,6 +78,42 @@ async def test_close_all_outputs_closes_every_owner_with_reason(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_get_or_open_thinking_marks_subagent_step_and_reuses_it(monkeypatch) -> None:
+    """サブエージェントの回答はチャット欄でなく思考Stepの出力欄へ流すため、
+    サブエージェントの思考Stepだけに metadata.subagent_output を立て、同じ出力元では使い回す。"""
+    created: list = []
+
+    class _SendableStep(_FakeStep):
+        def __init__(self, name, type, parent_id, metadata) -> None:
+            super().__init__(f"t{len(created)}")
+            self.parent_id = parent_id
+            self.metadata = metadata
+            created.append(self)
+
+        async def send(self) -> None:
+            pass
+
+    monkeypatch.setattr(app.cl, "Step", _SendableStep)
+    monkeypatch.setattr(app.cl.user_session, "set", lambda *a: None)
+    monkeypatch.setattr(app, "_resolve_parent_id", lambda event, steps: None)
+    thinkings: dict = {}
+    resync: dict = {}
+    event = {"parent_ids": ["graph", "g1", "model"]}
+
+    sub = await app._get_or_open_thinking(event, "g1", thinkings, {}, resync)
+    again = await app._get_or_open_thinking(event, "g1", thinkings, {}, resync)
+    main = await app._get_or_open_thinking({"parent_ids": []}, None, thinkings, {}, resync)
+
+    assert sub is again and len(created) == 2
+    assert sub.metadata == {"subagent_output": True} and not main.metadata
+    assert list(resync.values()) == [sub]
+
+    # 打ち切りで閉じても subagent_output は消さない（フロントの欄見出しに使うため）。
+    await app._close_thinking(sub, stopped_reason="loop_detected")
+    assert sub.metadata == {"subagent_output": True, "stopped_reason": "loop_detected"}
+
+
+@pytest.mark.asyncio
 async def test_mark_background_group_steps_closes_only_unfinished_groups() -> None:
     """安全上限で batch が先に返った時、まだ終わっていないグループStepを「停止」ではなく
     「バックグラウンド継続」で閉じ、ターン終了時の _finalize_orphaned_steps の対象から外す。"""

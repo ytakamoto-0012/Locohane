@@ -1405,9 +1405,11 @@ function buildScalarEditor(value, set) {
 function setEdit(k, newValue) {
   const id = keyId(k);
   resetKeys.delete(id);
+  delete dirtyEdits[id];
   if (newValue === k.default) {
-    delete dirtyEdits[id];
-  } else {
+    // 上書き値が保存済みなら、既定値の手入力は「既定値へ戻す」と同じ変更として扱う
+    if (k.override !== null) resetKeys.add(id);
+  } else if (k.override === null || newValue !== k.override) {
     dirtyEdits[id] = newValue;
   }
   updateFooter();
