@@ -957,7 +957,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `track_token_usage` | トークン使用量の取得を有効にする（Chainlit UI表示・eval結果に反映） | `LLM_TRACK_TOKEN_USAGE` |
 | `[llm]` | `request_timeout_seconds` | LLMサーバーへの応答待ちタイムアウト秒数（read/write/pool） | `LLM_REQUEST_TIMEOUT_SECONDS` |
 | `[llm]` | `stream_chunk_timeout_seconds` | ストリーミング中にチャンクが届かない場合のタイムアウト秒数 | `LLM_STREAM_CHUNK_TIMEOUT_SECONDS` |
-| `[llm]` | `max_concurrent_requests` | 推論サーバーへの同時リクエスト数上限。1以上でSemaphore(N)ガード（既定1＝完全直列化）、0以下で無制限 | `LLM_MAX_CONCURRENT_REQUESTS` |
+| `[llm]` | `max_concurrent_requests` | 推論サーバーへの同時リクエスト数上限。1以上でSemaphore(N)ガード（既定1＝完全直列化）、0以下で無制限。全セッション合算で数え、生成1回の間だけ枠を占有する。`[graph]`/`[subagent]` の `max_parallel` がこの値より大きくても、超えた分はLLM呼び出しの直前で待つだけで、エラーにはならない（待ち時間はタイムアウトに数えない） | `LLM_MAX_CONCURRENT_REQUESTS` |
 | `[llm]` | `round_robin_slots_probe_timeout_seconds` | `round_robin`戦略がprovider="llama_cpp"の接続先を選ぶ前に送るGET /slots問い合わせ自体のタイムアウト秒数（既定3、確認できなければ空きありとみなすfail-safe） | `LLM_ROUND_ROBIN_SLOTS_PROBE_TIMEOUT_SECONDS` |
 | `[llm]` | `round_robin_busy_poll_interval_seconds` | `round_robin`戦略で候補の全接続先に空きスロットが無かった場合、再確認までに待機する秒数（既定2） | `LLM_ROUND_ROBIN_BUSY_POLL_INTERVAL_SECONDS` |
 | `[paths]` | `common_data_dir` | 各種データ保存先パスの共通ベースディレクトリ（既定 `./data/${instance}`）。本セクションの`checkpoint_db`/`memory_dir`/`plans_dir`、および`[uploads]`/`[log]`/`[default_workdir]`/`[path_memory]`/`[chat_log]`の`dir`系キーの値に`${common_data_dir}`と書くとここで指定した値に置換される（configparser標準の補間ではなくconfig.py側の独自置換）。`common_data_dir`自身とこれらのキーでは`${instance}`がインスタンス名（環境変数`LOCOHANE_INSTANCE`、未設定なら`default`）に置換される | `COMMON_DATA_DIR` |
