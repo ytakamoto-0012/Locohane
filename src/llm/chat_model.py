@@ -81,6 +81,9 @@ class ChatLlamaCpp(ChatOpenAI):
     # False なら思考（reasoning_content）をループ検知の対象から外し、本文だけを
     # 監視する（[thinking_loop_guard].target = content_only、build_model() が注入する）。
     loop_guard_include_reasoning: bool = True
+    # False なら本文（content）をループ検知の対象から外し、思考だけを監視する
+    # （[thinking_loop_guard].target = thinking_only、build_model() が注入する）。
+    loop_guard_include_content: bool = True
     # True なら履歴の AIMessage.additional_kwargs["reasoning_content"] を
     # リクエストの assistant メッセージへ載せ直す（[llm].reasoning_preserve
     # 由来、build_model() が注入する）。
@@ -208,7 +211,11 @@ class ChatLlamaCpp(ChatOpenAI):
         first_chunk_seen = False
         try:
             for chunk in inner:
-                if detector.feed(_chunk_delta_text(chunk, include_reasoning=self.loop_guard_include_reasoning)):
+                if detector.feed(_chunk_delta_text(
+                    chunk,
+                    include_reasoning=self.loop_guard_include_reasoning,
+                    include_content=self.loop_guard_include_content,
+                )):
                     snippet = detector.snippet()
                     logger.warning(
                         "LLM応答のループを検知したため生成を打ち切ります（直近テキスト: %r）",
@@ -265,7 +272,11 @@ class ChatLlamaCpp(ChatOpenAI):
         first_chunk_seen = False
         try:
             async for chunk in agen:
-                if detector.feed(_chunk_delta_text(chunk, include_reasoning=self.loop_guard_include_reasoning)):
+                if detector.feed(_chunk_delta_text(
+                    chunk,
+                    include_reasoning=self.loop_guard_include_reasoning,
+                    include_content=self.loop_guard_include_content,
+                )):
                     snippet = detector.snippet()
                     diag = describe_current_task(diag_start)
                     logger.warning(
@@ -544,7 +555,8 @@ async def build_model(
         loop_guard_confirm_count=config.thinking_loop_guard_confirm_count,
         loop_guard_max_history_chars=config.thinking_loop_guard_max_history_chars,
         loop_guard_match_ratio_threshold=config.thinking_loop_guard_match_ratio_threshold,
-        loop_guard_include_reasoning=config.thinking_loop_guard_target == "all",
+        loop_guard_include_reasoning=config.thinking_loop_guard_target != "content_only",
+        loop_guard_include_content=config.thinking_loop_guard_target != "thinking_only",
         preserve_reasoning_content=bool(config.reasoning_preserve),
         reasoning_dialect=endpoint.provider,
     )

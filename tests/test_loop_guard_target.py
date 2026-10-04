@@ -30,6 +30,11 @@ def test_chunk_delta_text_content_only():
     assert _chunk_delta_text(_chunk("", "R"), include_reasoning=False) == ""
 
 
+def test_chunk_delta_text_thinking_only():
+    assert _chunk_delta_text(_chunk("A", "R"), include_content=False) == "R"
+    assert _chunk_delta_text(_chunk("A"), include_content=False) == ""
+
+
 def _stream_response(field: str) -> httpx.MockTransport:
     """field（"reasoning_content" か "content"）に同じ文を繰り返し流す応答。"""
 
@@ -47,7 +52,7 @@ def _stream_response(field: str) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
-def _model(field: str, include_reasoning: bool) -> ChatLlamaCpp:
+def _model(field: str, include_reasoning: bool, include_content: bool = True) -> ChatLlamaCpp:
     return ChatLlamaCpp(
         base_url="http://fake/v1",
         api_key="x",
@@ -61,6 +66,7 @@ def _model(field: str, include_reasoning: bool) -> ChatLlamaCpp:
         loop_guard_max_history_chars=2000,
         loop_guard_match_ratio_threshold=0.6,
         loop_guard_include_reasoning=include_reasoning,
+        loop_guard_include_content=include_content,
     )
 
 
@@ -82,3 +88,24 @@ def test_content_only_ignores_reasoning_loop():
 def test_content_only_still_detects_content_loop():
     with pytest.raises(ThinkingLoopDetected):
         _run(_model("content", include_reasoning=False))
+
+
+def test_thinking_only_ignores_content_loop():
+    result = _run(_model("content", include_reasoning=True, include_content=False))
+    assert result.content.endswith("done")
+
+
+def test_thinking_only_still_detects_reasoning_loop():
+    with pytest.raises(ThinkingLoopDetected):
+        _run(_model("reasoning_content", include_reasoning=True, include_content=False))
+
+
+@pytest.mark.parametrize(
+    ("target", "reasoning", "content"),
+    [("all", True, True), ("content_only", False, True), ("thinking_only", True, False)],
+)
+def test_config_target_maps_to_model_flags(target, reasoning, content):
+    from src.config import _as_thinking_loop_guard_target
+
+    assert _as_thinking_loop_guard_target(f" {target} ") == target
+    assert (target != "content_only", target != "thinking_only") == (reasoning, content)

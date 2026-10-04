@@ -58,7 +58,7 @@ LLM_REASONING_FORMATS = frozenset({"none", "deepseek", "deepseek-legacy"})
 LLM_REASONING_EFFORTS = frozenset({"none", "default", "minimal", "low", "medium", "high", "xhigh", "max"})
 
 # [thinking_loop_guard].target が取りうる値。
-THINKING_LOOP_GUARD_TARGETS = ("all", "content_only")
+THINKING_LOOP_GUARD_TARGETS = ("all", "content_only", "thinking_only")
 
 # [thinking_control] の思考レベル（低い順）。順序はレベルの比較・1段上げる処理
 # （src/llm/thinking_control.py）で使う。
@@ -652,6 +652,7 @@ class Config:
         thinking_loop_guard_target: ループ検知の監視対象（THINKING_LOOP_GUARD_TARGETS）。
             "all" は思考と本文の両方、"content_only" は本文だけを監視し、思考の
             ループは思考予算（[llm].reasoning_budget）での打ち切りに任せる。
+            "thinking_only" は思考だけを監視する。
         thinking_loop_guard_window_chars: ループ検知の判定対象に使う
             直近テキストのウィンドウ文字数。
         thinking_loop_guard_check_interval_chars: このバイト数増えるごとに

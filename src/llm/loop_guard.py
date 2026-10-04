@@ -235,7 +235,7 @@ class _ThinkingLoopDetector:
         return self._consecutive_hits >= self._confirm_count
 
 
-def _chunk_delta_text(chunk: Any, *, include_reasoning: bool = True) -> str:
+def _chunk_delta_text(chunk: Any, *, include_reasoning: bool = True, include_content: bool = True) -> str:
     """ストリームチャンク（ChatGenerationChunk）から、監視対象のテキストを取り出す。
 
     content と reasoning_content（ChatLlamaCpp._convert_chunk_to_generation_chunk
@@ -245,14 +245,15 @@ def _chunk_delta_text(chunk: Any, *, include_reasoning: bool = True) -> str:
 
     include_reasoning=False（[thinking_loop_guard].target = content_only）なら
     content だけを対象にする。思考のループは思考予算（reasoning_budget）で
-    打ち切る運用向け。
+    打ち切る運用向け。include_content=False（target = thinking_only）なら
+    reasoning_content だけを対象にする。
     """
     message = getattr(chunk, "message", None)
     if message is None:
         return ""
     parts = []
     content = getattr(message, "content", None)
-    if isinstance(content, str) and content:
+    if include_content and isinstance(content, str) and content:
         parts.append(content)
     reasoning = (getattr(message, "additional_kwargs", None) or {}).get("reasoning_content") if include_reasoning else None
     if reasoning:
