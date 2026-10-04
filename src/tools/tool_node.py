@@ -114,9 +114,6 @@ def _mcp_tool_always_allowed(name: str, guard_mode: str) -> bool:
 
 
 _ALLOWED_WHILE_AWAITING_APPROVAL = {"approve_plan", "get_plan_status", "lock_plan_mode"}
-# create_plan 直後に approve_plan 以外を呼んだときの合成エラー。src/graph.py の
-# should_force_approve_plan() がこの文言で連続回数を数えるため、変更時は両方に効く。
-AWAITING_APPROVE_PLAN_ERROR = "エラー: create_planの直後はapprove_planを呼んでください（他のツールは実行されませんでした）。"
 # このうち呼ばれたらガードのフラグ自体を解除するもの（それ以外
 # （get_plan_status）は読み取り専用の確認だけなので、フラグは維持したまま
 # 通過させる）。
@@ -160,7 +157,7 @@ def _guard_awaiting_approve_plan(input):  # noqa: A002
     return {
         "messages": [
             ToolMessage(
-                content=AWAITING_APPROVE_PLAN_ERROR,
+                content=("エラー: create_planの直後はapprove_planを呼んでください" "（他のツールは実行されませんでした）。"),
                 name=name,
                 tool_call_id=call.get("id"),
                 status="error",
