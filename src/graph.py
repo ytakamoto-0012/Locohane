@@ -26,9 +26,11 @@ import uuid
 
 from langchain_core.messages import (
     AIMessage,
+    BaseMessage,
     HumanMessage,
     RemoveMessage,
     SystemMessage,
+    ToolMessage,
 )
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import create_react_agent
@@ -38,7 +40,7 @@ from .context_compaction import maybe_append_precompact_note_nudge
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
 from .llm import ThinkingLoopDetected, build_model, enable_thinking_control, pick_loop_nudge_message
 from .main_token_guard import maybe_append_token_guard
-from .tools import ImageAwareToolNode, filter_main_agent_tools, get_all_tools
+from .tools import AWAITING_APPROVE_PLAN_ERROR, ImageAwareToolNode, filter_main_agent_tools, get_all_tools
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,69 @@ EMPTY_RESPONSE_NUDGE = (
     "テキストで書いてください。まだ作業が終わっていなければ、続きのツール"
     "呼び出しを行ってください。）"
 )
+
+
+def should_force_approve_plan(messages: list[BaseMessage], threshold: int) -> bool:
+    """create_plan 直後に approve_plan を呼ばない誤りが threshold 回続いたか。
+
+    create_plan の直後は approve_plan 等以外の呼び出しがエラー
+    （AWAITING_APPROVE_PLAN_ERROR）で弾かれるが、モデルがそれを読んでも同じ
+    呼び出しを繰り返すことがある（eval 008 で30回連続を確認、2026-10-04）。
+    末尾から数えて、直近 threshold 回のステップ（AIMessage とその
+    ToolMessage 群）の結果が全てこのエラーなら True を返す。呼び出し側は
+    次のリクエストだけツールを approve_plan に絞って呼び出しを強制する。
+
+    Args:
+        messages: モデルへ渡す直前の会話履歴。
+        threshold: 何回続いたら強制するか。0以下なら常に False。
+
+    Returns:
+        強制すべきなら True。
+    """
+    if threshold <= 0:
+        return False
+    count = 0
+    results: list[ToolMessage] = []
+    for message in reversed(messages):
+        if isinstance(message, ToolMessage):
+            results.append(message)
+            continue
+        if not isinstance(message, AIMessage) or not results:
+            break
+        if not all(m.content == AWAITING_APPROVE_PLAN_ERROR for m in results):
+            break
+        count += 1
+        if count >= threshold:
+            return True
+        results = []
+    return False
+
+
+def _approve_plan_forced_model(model, main_tools: list):
+    """approve_plan だけを渡し tool_choice="required" で呼び出しを強制するモデルを返す。
+
+    llama-server は tool_choice の特定関数名指定を無視するため、ツールを1件に
+    絞った上で "required" にする（実機検証済み）。ツール定義が変わるため、
+    この1回はプロンプト先頭のKVキャッシュが外れる。approve_plan がメイン
+    エージェントのツールに無ければ None。
+    """
+    approve = next((t for t in main_tools if t.name == "approve_plan"), None)
+    if approve is None:
+        return None
+    return model.bind_tools([approve], tool_choice="required")
+
+
+def _select_main_model(model, forced_approve_model, history: list[BaseMessage], config: Config):
+    """通常は model、approve_plan を呼ばない誤りが続いていれば forced_approve_model を返す。"""
+    if forced_approve_model is not None and should_force_approve_plan(
+        history, config.plan_force_approve_plan_after_errors
+    ):
+        logger.warning(
+            "create_plan 直後に approve_plan を呼ばない誤りが %d 回続いたため、approve_plan の呼び出しを強制します",
+            config.plan_force_approve_plan_after_errors,
+        )
+        return forced_approve_model
+    return model
 
 
 async def _build_handwritten_graph(config: Config, system_prompt: str, checkpointer, *, wait_when_busy: bool = True):
@@ -74,9 +139,11 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
         astream_events / ainvoke などで実行できる。
     """
     main_tools = filter_main_agent_tools(get_all_tools(), config)
-    model = enable_thinking_control(
+    base_model = enable_thinking_control(
         await build_model(config, role="main", wait_when_busy=wait_when_busy), config, "main"
-    ).bind_tools(main_tools)
+    )
+    model = base_model.bind_tools(main_tools)
+    forced_approve_model = _approve_plan_forced_model(base_model, main_tools)
 
     async def call_model(state: MessagesState) -> dict:
         """agent ノード: システムプロンプトを先頭に付けてモデルを呼ぶ。
@@ -126,7 +193,7 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
             # 「ツールを呼ぶな」と「write_thread_noteを呼べ」が矛盾するため。
             history = maybe_append_precompact_note_nudge(history, config)
         messages = [SystemMessage(content=system_prompt), *history]
-        response = await model.ainvoke(messages)
+        response = await _select_main_model(model, forced_approve_model, history, config).ainvoke(messages)
         return {"messages": [response]}
 
     def should_continue(state: MessagesState) -> str:
@@ -161,8 +228,9 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
     """LangGraph 標準の create_react_agent にそのまま委譲してグラフを作る。
 
     ノード配線・tool_calls の分岐はすべて create_react_agent 内部に隠蔽される。
-    モデルは bind_tools せずに渡す（create_react_agent が内部で
-    ImageAwareToolNode に渡した tools を bind する）。tools は get_all_tools() を
+    モデルは動的モデル（select_model）として渡し、呼び出しごとに通常の
+    bind_tools 済みモデルか、approve_plan を強制するモデル
+    （should_force_approve_plan 参照）かを選ぶ。tools は get_all_tools() を
     filter_main_agent_tools() で絞り込んだもの（[main_agent_tool_guard] 有効時、
     呼び出し不可なツールは docstring ごとモデルへ見せない）。
 
@@ -177,8 +245,22 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
         コンパイル済みの LangGraph（CompiledStateGraph）。
         astream_events / ainvoke などで実行できる。
     """
-    model = enable_thinking_control(await build_model(config, role="main", wait_when_busy=wait_when_busy), config, "main")
+    base_model = enable_thinking_control(
+        await build_model(config, role="main", wait_when_busy=wait_when_busy), config, "main"
+    )
     main_tools = filter_main_agent_tools(get_all_tools(), config)
+    model = base_model.bind_tools(main_tools)
+    forced_approve_model = _approve_plan_forced_model(base_model, main_tools)
+
+    def select_model(state: MessagesState, runtime) -> object:
+        """create_react_agent の動的モデル。呼び出しごとに使うモデルを選ぶ。
+
+        state["messages"] は pre_model_hook の llm_input_messages を反映済み。
+        動的モデルでは create_react_agent が bind_tools しないため、ここで
+        bind 済みのものを返す。
+        """
+        del runtime
+        return _select_main_model(model, forced_approve_model, state["messages"], config)
 
     def pre_model_hook(state: MessagesState) -> dict:
         """モデル呼び出し直前に、入力を絞り、必要なら引継ぎ促しを差し込む。
@@ -220,7 +302,7 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
         return {"llm_input_messages": trimmed}
 
     return create_react_agent(
-        model,
+        select_model,
         ImageAwareToolNode(main_tools),
         prompt=system_prompt,
         # トリミング・トークンガード・圧縮予告ナッジのいずれかが有効なら

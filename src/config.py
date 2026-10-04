@@ -644,6 +644,11 @@ class Config:
             execute_python_code等）が人の確認を経ずに実行されるようになるため、
             信頼できる自動化用途以外では False（既定）を推奨する。
             （config.ini の [plan].auto_approve 由来）。
+        plan_force_approve_plan_after_errors: create_plan 直後に approve_plan を
+            呼ばずエラーで弾かれる誤りがこの回数続いたら、次のリクエストだけ
+            ツールを approve_plan に絞って呼び出しを強制する（src.graph の
+            should_force_approve_plan 参照）。0以下なら強制しない。
+            （config.ini の [plan].force_approve_plan_after_errors 由来）。
         thinking_loop_guard_enabled: LLM応答（thinking/本文）のストリーミング中に
             反復ループを検知したら生成を打ち切って再試行する機能の有効/無効。
         thinking_loop_guard_window_chars: ループ検知の判定対象に使う
@@ -1016,6 +1021,7 @@ class Config:
     plan_reset_approval_on_recreate: bool
     plan_reset_approval_on_new_message: bool
     plan_auto_approve: bool
+    plan_force_approve_plan_after_errors: int
 
     # --- LLM応答の反復ループ検知（src/llm.py の ChatLlamaCpp） ---
     thinking_loop_guard_enabled: bool
@@ -2753,6 +2759,9 @@ def load_config(
             os.getenv("PLAN_RESET_APPROVAL_ON_NEW_MESSAGE", plan_section.get("reset_approval_on_new_message", True))
         ),
         plan_auto_approve=_as_bool(os.getenv("PLAN_AUTO_APPROVE", plan_section.get("auto_approve", False))),
+        plan_force_approve_plan_after_errors=int(
+            os.getenv("PLAN_FORCE_APPROVE_PLAN_AFTER_ERRORS", plan_section.get("force_approve_plan_after_errors", 2))
+        ),
         thinking_loop_guard_enabled=_as_bool(os.getenv("THINKING_LOOP_GUARD_ENABLED", thinking_loop_guard.get("enabled", True))),
         thinking_loop_guard_window_chars=int(os.getenv("THINKING_LOOP_GUARD_WINDOW_CHARS", thinking_loop_guard.get("window_chars", 600))),
         thinking_loop_guard_check_interval_chars=int(
