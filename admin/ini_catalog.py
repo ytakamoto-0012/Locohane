@@ -78,11 +78,11 @@ _KEY_CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
     ("log", "level"): ("info", "debug", "none"),
     ("thinking_loop_guard", "target"): ("all", "content_only", "thinking_only"),
     ("thinking_control", "default_level"): _THINKING_LEVEL_CHOICES,
-    # rule_* は空欄＝ルール無効。
-    ("thinking_control", "rule_user_turn"): ("", *_THINKING_LEVEL_CHOICES),
-    ("thinking_control", "rule_tool_error"): ("", *_THINKING_LEVEL_CHOICES),
-    ("thinking_control", "rule_consecutive_cap"): ("", *_THINKING_LEVEL_CHOICES),
-    ("thinking_control", "rule_after_tools"): ("", *_THINKING_LEVEL_CHOICES),
+    # rule_* は false＝ルール無効。
+    ("thinking_control", "rule_user_turn"): ("false", *_THINKING_LEVEL_CHOICES),
+    ("thinking_control", "rule_tool_error"): ("false", *_THINKING_LEVEL_CHOICES),
+    ("thinking_control", "rule_consecutive_cap"): ("false", *_THINKING_LEVEL_CHOICES),
+    ("thinking_control", "rule_after_tools"): ("false", *_THINKING_LEVEL_CHOICES),
 }
 
 

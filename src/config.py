@@ -699,7 +699,7 @@ class Config:
             メインエージェント / サブエージェントのループに適用するか。
             要約・圧縮のためのLLM呼び出しには常に適用しない。
         thinking_control_rule_user_turn: 末尾がユーザー発言（ナッジ含む）の
-            ときのレベル（ルール1）。None ならルール無効。
+            ときのレベル（ルール1）。None（config.ini では false）ならルール無効。
         thinking_control_rule_tool_error: 直前のツール結果がエラーのときの
             レベル（ルール2）。None ならルール無効。
         thinking_control_rule_consecutive_cap: 直前 max_consecutive_reduced 回が
@@ -1453,21 +1453,26 @@ def _as_thinking_level(value: str | None, key_name: str) -> str:
 
 
 def _as_optional_thinking_level(value: str | None, key_name: str) -> str | None:
-    """[thinking_control].rule_* のレベル指定を検証する。空欄はルール無効（None）。
+    """[thinking_control].rule_* のレベル指定を検証する。false はルール無効（None）。
 
     Args:
         value: config.ini から得た値、または環境変数から得た文字列。
         key_name: エラーメッセージに使う設定キー名。
 
     Returns:
-        THINKING_LEVELS のいずれか。空欄・None なら None。
+        THINKING_LEVELS のいずれか。false なら None。
 
     Raises:
-        ValueError: THINKING_LEVELS に無い値が指定された場合。
+        ValueError: false でも THINKING_LEVELS でもない値（空欄を含む）が
+            指定された場合。
     """
-    if _as_optional_str(value) is None:
+    if str(value or "").strip().lower() == "false":
         return None
-    return _as_thinking_level(value, key_name)
+    text = str(value or "").strip()
+    if text not in THINKING_LEVELS:
+        choices = "/".join(("false", *THINKING_LEVELS))
+        raise ValueError(f"[thinking_control].{key_name} は {choices} のいずれかにしてください: {value!r}")
+    return text
 
 
 # [thinking_control].after_tools が config.ini に無い場合の既定値。
@@ -2872,7 +2877,7 @@ def load_config(
             os.getenv("THINKING_CONTROL_BUDGET_LOW", thinking_control.get("budget_low", "1024"))
         ),
         thinking_control_budget_medium=_as_optional_int(
-            os.getenv("THINKING_CONTROL_BUDGET_MEDIUM", thinking_control.get("budget_medium", "3072"))
+            os.getenv("THINKING_CONTROL_BUDGET_MEDIUM", thinking_control.get("budget_medium", "2048"))
         ),
         thinking_control_budget_high=_as_optional_int(
             os.getenv("THINKING_CONTROL_BUDGET_HIGH", thinking_control.get("budget_high", ""))
