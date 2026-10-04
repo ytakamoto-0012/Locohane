@@ -8,6 +8,7 @@ from langgraph.prebuilt import ToolNode
 import chainlit as cl
 import logging
 
+from ..tool_loop_guard import find_leaked_tool_markup, leaked_tool_markup_error
 from . import _state
 from ._duplicate_guard import _record_and_check_duplicate
 from ._state import _IN_SUBAGENT, _tool_call_semaphore_wrap
@@ -111,6 +112,31 @@ def _mcp_tool_always_allowed(name: str, guard_mode: str) -> bool:
     list_blocked_tool_names_for_hint の3箇所が同じ判定を使う共通ゲート。
     """
     return guard_mode == "tools_skills_only" and _is_mcp_tool_name(name)
+
+
+def _guard_leaked_tool_markup(input):  # noqa: A002
+    """引数に tool_call の XML が漏れた呼び出しを実行させず、エラーの ToolMessage に差し替える。
+
+    Returns:
+        ブロックする場合は {"messages": [ToolMessage]}、問題なければ None。
+    """
+    call = _extract_tool_call_from_node_input(input)
+    if not call:
+        return None
+    key = find_leaked_tool_markup(call.get("args"))
+    if key is None:
+        return None
+    name = call.get("name") or ""
+    return {
+        "messages": [
+            ToolMessage(
+                content=leaked_tool_markup_error(name, key),
+                name=name,
+                tool_call_id=call.get("id"),
+                status="error",
+            )
+        ]
+    }
 
 
 _ALLOWED_WHILE_AWAITING_APPROVAL = {"approve_plan", "get_plan_status", "lock_plan_mode"}
@@ -412,7 +438,11 @@ class ImageAwareToolNode(ToolNode):
         call_args = _extract_tool_call_from_node_input(input)
         if call_args:
             call_args = call_args.get("args", {})
-        blocked = _guard_awaiting_approve_plan(input) or _guard_main_agent_tool_limit(input)
+        blocked = (
+            _guard_leaked_tool_markup(input)
+            or _guard_awaiting_approve_plan(input)
+            or _guard_main_agent_tool_limit(input)
+        )
         if blocked is not None:
             _log_tool_results_debug(blocked, call_args)
             return _with_image_followups(blocked)
@@ -425,7 +455,11 @@ class ImageAwareToolNode(ToolNode):
         call_args = _extract_tool_call_from_node_input(input)
         if call_args:
             call_args = call_args.get("args", {})
-        blocked = _guard_awaiting_approve_plan(input) or _guard_main_agent_tool_limit(input)
+        blocked = (
+            _guard_leaked_tool_markup(input)
+            or _guard_awaiting_approve_plan(input)
+            or _guard_main_agent_tool_limit(input)
+        )
         if blocked is not None:
             _log_tool_results_debug(blocked, call_args)
             return _with_image_followups(blocked)

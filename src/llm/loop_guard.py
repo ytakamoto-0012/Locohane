@@ -62,11 +62,14 @@ class ToolCallLoopDetected(ThinkingLoopDetected):
     Attributes:
         detail: 何を繰り返したかの説明（注意メッセージ・停止の通知に添える。
             どうすべきかの指示は含めず、[tool_loop_guard].nudge_messages に任せる）。
+        remove_ids: 繰り返した区間のメッセージ id。再試行の前にチェックポイント
+            から取り除く（残すとモデルが同じ tool_call を書き写し続けるため）。
     """
 
-    def __init__(self, detail: str) -> None:
+    def __init__(self, detail: str, remove_ids: tuple[str, ...] = ()) -> None:
         super().__init__("全く同じツール呼び出しが繰り返されたため打ち切りました", snippet=detail)
         self.detail = detail
+        self.remove_ids = remove_ids
 
 
 def tool_loop_nudge_text(messages: list[str], attempt_index: int, exc: ToolCallLoopDetected) -> str:

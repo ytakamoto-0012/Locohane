@@ -4370,6 +4370,15 @@ async def _on_message_impl(message: cl.Message) -> None:
                     "ThinkingLoopDetected: リトライ前にLLMグラフを再構築しました [%s]",
                     describe_current_task(),
                 )
+                if isinstance(loop_exc, ToolCallLoopDetected) and loop_exc.remove_ids:
+                    # 繰り返した応答を残すと、注意しても同じ tool_call を書き写し続ける
+                    # （src/tool_loop_guard.py 冒頭参照）。
+                    await _remove_message_ids_if_present(graph, config, list(loop_exc.remove_ids))
+                    logging.getLogger(__name__).warning(
+                        "ツール呼び出しのループ区間(%d件)を履歴から取り除きました [%s]",
+                        len(loop_exc.remove_ids),
+                        describe_current_task(),
+                    )
                 repaired = await _repair_orphaned_tool_calls(graph, config)
                 if repaired:
                     logging.getLogger(__name__).warning(

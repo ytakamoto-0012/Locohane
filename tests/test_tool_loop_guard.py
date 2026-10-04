@@ -8,7 +8,12 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from src.llm import ThinkingLoopDetected, ToolCallLoopDetected, tool_loop_nudge_text
-from src.tool_loop_guard import detect_tool_call_loop, raise_if_tool_call_loop
+from src.tool_loop_guard import (
+    detect_tool_call_loop,
+    find_leaked_tool_markup,
+    leaked_tool_markup_error,
+    raise_if_tool_call_loop,
+)
 
 ERROR = "エラー: create_planの直後はapprove_planを呼んでください（他のツールは実行されませんでした）。"
 
@@ -143,6 +148,82 @@ def test_detail_has_no_instruction_only_facts():
     assert "切り替えて" not in loop.detail()
 
 
+def _with_ids(messages: list) -> list:
+    for i, m in enumerate(messages):
+        m.id = f"m{i}"
+    return messages
+
+
+def test_loop_reports_the_repeated_tail_for_removal():
+    messages = _with_ids(_history(_err("a"), _err(), _err(), _err()))
+    loop = detect_tool_call_loop(messages, _Cfg())
+    # SystemMessage・HumanMessage・_err("a")（2件）の後ろ、繰り返した3回分（AIMessage+ToolMessage ×3）
+    assert loop.start_index == 4
+    assert loop.message_ids == tuple(m.id for m in messages[4:])
+    assert "取り除きました" in loop.detail(removed=True)
+    assert "取り除きました" not in loop.detail()
+
+
+def test_loop_tail_includes_image_followups():
+    followup = HumanMessage(content=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}])
+    steps = [_step(("analyze_image", {"p": "a.png"}, "説明")) + [followup.model_copy()] for _ in range(3)]
+    messages = _with_ids(_history(*steps))
+    loop = detect_tool_call_loop(messages, _Cfg())
+    assert loop.start_index == 2 and len(loop.message_ids) == 9
+
+
+def test_no_ids_to_remove_if_any_message_lacks_an_id():
+    messages = _with_ids(_history(_err(), _err(), _err()))
+    messages[-1].id = None
+    loop = detect_tool_call_loop(messages, _Cfg())
+    assert loop is not None and loop.message_ids == ()
+
+
+def test_raise_if_tool_call_loop_carries_remove_ids():
+    messages = _with_ids(_history(_err(), _err(), _err()))
+    with pytest.raises(ToolCallLoopDetected) as info:
+        raise_if_tool_call_loop(messages, _Cfg())
+    assert info.value.remove_ids == tuple(m.id for m in messages[2:])
+    assert "取り除きました" in info.value.detail
+    # id が無ければ取り除かず、その旨も書かない
+    with pytest.raises(ToolCallLoopDetected) as info:
+        raise_if_tool_call_loop(_history(_err(), _err(), _err()), _Cfg())
+    assert info.value.remove_ids == () and "取り除きました" not in info.value.detail
+
+
+# 2026-10-04 本番ログで write_thread_note の content に漏れていた値
+_LEAKED = "</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=write_thread_note>\n<parameter=topic>\n画像ファイルの一覧"
+
+
+@pytest.mark.parametrize(
+    "args, expected",
+    [
+        ({"topic": "mdファイルの一覧", "content": _LEAKED}, "content"),
+        ({"a": "値\n</parameter>\n<parameter=b>\n値2"}, "a"),
+        ({"items": [{"x": _LEAKED}]}, "items"),
+        ({"content": "普通の本文"}, None),
+        # 書式を説明する文章（閉じタグ単体）は誤検知しない
+        ({"content": "Qwenは </parameter> で引数を閉じる"}, None),
+        ({}, None),
+        (None, None),
+    ],
+)
+def test_find_leaked_tool_markup(args, expected):
+    assert find_leaked_tool_markup(args) == expected
+
+
+def test_tool_node_blocks_leaked_markup_without_running_the_tool():
+    from src.tools.tool_node import _guard_leaked_tool_markup
+
+    call = {"name": "write_thread_note", "args": {"topic": "t", "content": _LEAKED}, "id": "c1"}
+    blocked = _guard_leaked_tool_markup({"__type": "tool_call_with_context", "tool_call": call, "state": {}})
+    message = blocked["messages"][0]
+    assert message.status == "error" and message.tool_call_id == "c1"
+    assert message.content == leaked_tool_markup_error("write_thread_note", "content")
+    ok = {"name": "write_thread_note", "args": {"topic": "t", "content": "x"}, "id": "c2"}
+    assert _guard_leaked_tool_markup({"__type": "tool_call_with_context", "tool_call": ok, "state": {}}) is None
+
+
 # --- サブエージェント（src/subagent.py の run_subagent） ---
 
 
@@ -194,5 +275,7 @@ async def test_subagent_nudges_then_truncates(monkeypatch):
     nudged = [i for i, msgs in enumerate(model.inputs) if isinstance(msgs[-1], HumanMessage) and "自動検知" in msgs[-1].content]
     assert nudged == [3]
     assert model.inputs[3][-1].content.startswith("ツールループ用1")
+    # 繰り返した応答は取り除かれ、注意メッセージの直前にはもう無い
+    assert not any(isinstance(m, AIMessage) for m in model.inputs[3])
     assert len(model.inputs) == 6
     assert "全く同じツール呼び出し（dispatch_agent）が繰り返され" in result

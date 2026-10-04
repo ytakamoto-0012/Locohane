@@ -54,7 +54,7 @@ from .context_compaction import (
 )
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
 from .images import image_followup_message
-from .tool_loop_guard import detect_tool_call_loop
+from .tool_loop_guard import detect_tool_call_loop, find_leaked_tool_markup, leaked_tool_markup_error
 from .llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -99,9 +99,15 @@ _POST_COMPACTION_SUSPICIOUS_RESPONSE_NUDGE_TEXT = (
 async def _run_one_tool_call(call: dict, tools_by_name: dict[str, BaseTool]) -> tuple[ToolMessage, HumanMessage | None]:
     """1件の tool_call を実行し、(ToolMessage, followup) を返す。例外は送出しない。"""
     tool_obj = tools_by_name.get(call["name"])
+    leaked_key = find_leaked_tool_markup(call.get("args"))
     if tool_obj is None:
         tool_message = ToolMessage(
             content=f"エラー: 未知のツールです: {call['name']}",
+            tool_call_id=call["id"],
+        )
+    elif leaked_key is not None:
+        tool_message = ToolMessage(
+            content=leaked_tool_markup_error(call["name"], leaked_key),
             tool_call_id=call["id"],
         )
     else:
@@ -637,12 +643,15 @@ async def run_subagent(
                     tool_loop_retries + 1,
                     tool_loop.detail(),
                 )
+                # 繰り返した応答を残すと、注意しても同じ tool_call を書き写し続ける
+                # （src/tool_loop_guard.py 冒頭参照）。
+                del messages[tool_loop.start_index :]
                 messages.append(
                     HumanMessage(
                         content=tool_loop_nudge_text(
                             config.tool_loop_guard_nudge_messages,
                             tool_loop_retries,
-                            ToolCallLoopDetected(tool_loop.detail()),
+                            ToolCallLoopDetected(tool_loop.detail(removed=True)),
                         )
                     )
                 )

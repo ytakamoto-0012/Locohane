@@ -11,11 +11,18 @@
 （ThinkingLoopDetected）と同じ仕組み（注意メッセージを入れて再試行し、上限で
 停止を通知する）に任せる。Qwen3.6 では tool_choice によるツール呼び出しの
 強制が効かないため、モデルの強制機能には頼らない。
+
+再試行の前に、繰り返した応答（AIMessage とその結果）を会話履歴から取り除く。
+残したままだと、モデルは注意メッセージを読んで「別のツールを呼ぶ」と思考しても、
+履歴の同じ tool_call をトークン単位で書き写してしまい、何度注意しても止まらない
+（2026-10-04 本番ログ: 引数に tool_call の XML が漏れた write_thread_note を
+7周繰り返した）。何を繰り返したかは注意メッセージ（ToolLoop.detail）で伝える。
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -36,18 +43,29 @@ class ToolLoop:
         repeats: 同じ応答が連続した回数。
         tool_names: 繰り返された応答で呼ばれたツール名（重複なし、呼び出し順）。
         result_excerpt: 直近の応答に対するツール結果の抜粋（最初のツール結果）。
+        start_index: 繰り返しの最初の AIMessage の、渡された messages 内の位置
+            （messages[start_index:] が繰り返した区間）。
+        message_ids: 繰り返した区間の全メッセージの id。id の無いメッセージが
+            1件でもあれば空（一部だけ消すと tool_call と結果の対応が崩れるため）。
     """
 
     repeats: int
     tool_names: tuple[str, ...]
     result_excerpt: str
+    start_index: int = 0
+    message_ids: tuple[str, ...] = ()
 
-    def detail(self) -> str:
-        """注意メッセージに添える説明を返す。"""
+    def detail(self, removed: bool = False) -> str:
+        """注意メッセージに添える説明を返す。
+
+        Args:
+            removed: 繰り返した応答を会話履歴から取り除いた場合は True。
+        """
         names = "、".join(self.tool_names)
+        note = "繰り返した呼び出しは会話履歴から取り除きました。" if removed else ""
         return (
             f"（自動検知: 直近{self.repeats}回、全く同じツール呼び出し（{names}）を繰り返しています。"
-            f"その結果: {self.result_excerpt}）"
+            f"{note}その結果: {self.result_excerpt}）"
         )
 
 
@@ -88,7 +106,8 @@ def detect_tool_call_loop(messages: list[BaseMessage], config: Config) -> ToolLo
     first_results: list[ToolMessage] = []
     repeats = 0
     results: list[ToolMessage] = []
-    for message in reversed(messages):
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
         if is_image_followup_message(message):
             continue
         if isinstance(message, ToolMessage):
@@ -108,13 +127,24 @@ def detect_tool_call_loop(messages: list[BaseMessage], config: Config) -> ToolLo
         if repeats >= config.tool_loop_guard_max_repeats:
             names = tuple(dict.fromkeys(m.name or "" for m in first_results))
             excerpt = _content_text(first_results[0]).strip().replace("\n", " ")[:_EXCERPT_CHARS]
-            return ToolLoop(repeats=repeats, tool_names=names, result_excerpt=excerpt)
+            tail = messages[index:]
+            ids = tuple(m.id for m in tail) if all(m.id for m in tail) else ()
+            return ToolLoop(
+                repeats=repeats,
+                tool_names=names,
+                result_excerpt=excerpt,
+                start_index=index,
+                message_ids=ids,
+            )
         results = []
     return None
 
 
 def raise_if_tool_call_loop(messages: list[BaseMessage], config: Config) -> None:
     """ループを検知したら ToolCallLoopDetected を送出する（メインエージェント用）。
+
+    繰り返した区間のメッセージ id を例外に載せ、再試行する側
+    （app.py・ainvoke_ensuring_final_text）がチェックポイントから取り除く。
 
     Args:
         messages: モデルへ渡す直前の会話履歴。
@@ -125,4 +155,49 @@ def raise_if_tool_call_loop(messages: list[BaseMessage], config: Config) -> None
     """
     loop = detect_tool_call_loop(messages, config)
     if loop is not None:
-        raise ToolCallLoopDetected(loop.detail())
+        raise ToolCallLoopDetected(loop.detail(removed=bool(loop.message_ids)), remove_ids=loop.message_ids)
+
+
+# 引数へ漏れた tool_call の XML（Qwen系の <function=..><parameter=..>..</parameter></function> 書式）。
+# 閉じタグの直後に次の閉じタグ・開きタグが続く形に限り、書式を説明する文章などの誤検知を避ける。
+_LEAKED_TOOL_MARKUP_RE = re.compile(r"</parameter>\s*(?:</function>|<parameter=)")
+
+
+def find_leaked_tool_markup(args) -> str | None:
+    """tool_call の引数に tool_call の XML が漏れていれば、その引数名を返す。
+
+    llama-server がモデル出力の tool_call を取り違えると、次の引数や次の
+    tool_call の XML が引数の値に混ざる。そのまま実行すると壊れた値で
+    副作用（書き込み等）が起き、履歴に残った壊れた tool_call をモデルが
+    書き写して同じ呼び出しを繰り返す（2026-10-04 本番ログ）。
+
+    Args:
+        args: tool_call の args（dict。入れ子の list/dict も調べる）。
+
+    Returns:
+        漏れが見つかった引数名。無ければ None。
+    """
+    if not isinstance(args, dict):
+        return None
+
+    def _has_markup(value) -> bool:
+        if isinstance(value, str):
+            return bool(_LEAKED_TOOL_MARKUP_RE.search(value))
+        if isinstance(value, dict):
+            return any(_has_markup(v) for v in value.values())
+        if isinstance(value, list):
+            return any(_has_markup(v) for v in value)
+        return False
+
+    for key, value in args.items():
+        if _has_markup(value):
+            return str(key)
+    return None
+
+
+def leaked_tool_markup_error(name: str, key: str) -> str:
+    """find_leaked_tool_markup が見つけた場合に返すエラー文。"""
+    return (
+        f"エラー: {name} の引数 {key} に、ツール呼び出しの書式（</parameter> など）が混ざっています。"
+        "ツールは実行されませんでした。引数を1つずつ正しく分けて、呼び出しをやり直してください。"
+    )

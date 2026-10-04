@@ -423,6 +423,9 @@ async def ainvoke_ensuring_final_text(
             nudge_id = str(uuid.uuid4())
             remove_ids.append(nudge_id)
             if isinstance(exc, ToolCallLoopDetected):
+                # 繰り返した応答を残すと、注意しても同じ tool_call を書き写し続ける
+                # （src/tool_loop_guard.py 冒頭参照）。
+                await _remove_message_ids_if_present(graph, run_config, list(exc.remove_ids))
                 text = tool_loop_nudge_text(tool_loop_nudge_messages or [], tool_loop_attempt, exc)
                 tool_loop_attempt += 1
             else:
