@@ -57,7 +57,10 @@ export function StepItem({ step }: { step: IStep }) {
   // サブエージェントの思考Stepは思考を input、回答本文を output に持つ
   // （app.py の _get_or_open_thinking が metadata.subagent_output を設定する）。
   const subagentOutput = Boolean(step.metadata?.subagent_output);
+  // メインエージェントの思考Stepは思考を output に持つため、見出しを「思考」にする
+  // （「出力」と表示すると回答本文がバッジへ入ったように見える）。
   const inputTitle = subagentOutput ? '思考' : '入力';
+  const outputTitle = step.type === 'llm' && !subagentOutput ? '思考' : '出力';
   const typeLabel = TYPE_LABELS[step.type] ?? step.type;
   // dispatch_agent（サブエージェント実行）のStepは、app.py側で name を
   // "SUB: <agent_type>" 形式にして送ってくる。これは「ツール: サブエージェ...」
@@ -97,7 +100,7 @@ export function StepItem({ step }: { step: IStep }) {
           ) : null}
           {step.output ? (
             <div>
-              <div className="step-item-body-title">出力</div>
+              <div className="step-item-body-title">{outputTitle}</div>
               <pre>{formatContent(step.output)}</pre>
             </div>
           ) : null}
