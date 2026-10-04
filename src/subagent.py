@@ -54,6 +54,7 @@ from .context_compaction import (
 )
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
 from .images import image_followup_message
+from .tool_loop_guard import detect_tool_call_loop
 from .llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -608,11 +609,35 @@ async def run_subagent(
     # 次回に持ち越さないよう毎回リセットする。
     just_compacted_or_nudged = False
     hallucination_retry_used = False
+    # 全く同じ応答（ツール呼び出し）を繰り返すループ（src/tool_loop_guard.py）を検知して
+    # 注意メッセージを入れた回数。thinking_loop_guard_max_retries を超えたら打ち切る。
+    tool_loop_retries = 0
 
     try:
         for iteration in range(1, max_iterations + 1):
             check_final_answer_strictly = just_compacted_or_nudged
             just_compacted_or_nudged = False
+            tool_loop = detect_tool_call_loop(messages, config)
+            if tool_loop is not None:
+                if tool_loop_retries >= config.thinking_loop_guard_max_retries:
+                    logger.warning(
+                        "dispatch_agent: 同じツール呼び出しのループが解消しないため打ち切り(iter=%d): %s",
+                        iteration,
+                        tool_loop.detail(),
+                    )
+                    return _build_truncation_message(
+                        f"全く同じツール呼び出し（{'、'.join(tool_loop.tool_names)}）が繰り返され、"
+                        f"{tool_loop_retries}回注意しても解消しなかった",
+                        messages,
+                    )
+                logger.warning(
+                    "dispatch_agent: 同じツール呼び出しのループを検知（%d回目）: %s",
+                    tool_loop_retries + 1,
+                    tool_loop.detail(),
+                )
+                nudge = pick_loop_nudge_message(config.thinking_loop_guard_nudge_messages, tool_loop_retries)
+                messages.append(HumanMessage(content=f"{nudge}\n\n{tool_loop.detail()}"))
+                tool_loop_retries += 1
             llm_input = _build_llm_input(messages, config)
             try:
                 response, model, empty_retries_exhausted = await _invoke_with_timeout_retry(

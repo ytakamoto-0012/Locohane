@@ -676,6 +676,15 @@ class Config:
             本文も空のAIMessage）を検知した場合、最終回答を促して再試行する
             最大回数。thinking_loop_guard_max_retries と合算予算
             （total_retries）を共有する。
+        tool_loop_guard_enabled: 全く同じ応答（本文とツール呼び出しの名前・引数）を
+            連続で繰り返すループを検知し、
+            [thinking_loop_guard] と同じ仕組み（注意メッセージを入れて再試行、
+            max_retries で停止を通知）で回復させる機能の有効/無効
+            （src.tool_loop_guard 参照）。
+        tool_loop_guard_max_repeats: 全く同じ応答が何回連続したらループとみなすか。
+            ツールの結果は比べない。1以下なら無効。
+        tool_loop_guard_exclude_tools: このツールだけを呼ぶ応答は数えない
+            （状態確認のポーリング等、同じ呼び出しを正当に繰り返すツール）。
         thinking_control_enabled: ReActループの各ステップで、直前の履歴の形から
             思考レベル（THINKING_LEVELS）を選んでリクエストごとに切り替える機能
             全体の有効/無効（src.llm.thinking_control 参照）。False なら従来と
@@ -1034,6 +1043,11 @@ class Config:
     thinking_loop_guard_max_retries: int
     thinking_loop_guard_nudge_messages: list[str]
     thinking_loop_guard_empty_response_max_retries: int
+
+    # --- 全く同じ応答（ツール呼び出し）を連続で繰り返すループの検知（src/tool_loop_guard.py） ---
+    tool_loop_guard_enabled: bool
+    tool_loop_guard_max_repeats: int
+    tool_loop_guard_exclude_tools: list[str]
 
     # --- ステップごとの思考レベル切り替え（src/llm/thinking_control.py） ---
     thinking_control_enabled: bool
@@ -2254,6 +2268,7 @@ def load_config(
     plan_section = parser["plan"] if parser.has_section("plan") else {}
     thinking_loop_guard = parser["thinking_loop_guard"] if parser.has_section("thinking_loop_guard") else {}
     thinking_control = parser["thinking_control"] if parser.has_section("thinking_control") else {}
+    tool_loop_guard = parser["tool_loop_guard"] if parser.has_section("tool_loop_guard") else {}
     context_trim = parser["context_trim"] if parser.has_section("context_trim") else {}
     context_trim_subagent = parser["context_trim.subagent"] if parser.has_section("context_trim.subagent") else {}
     context_compaction = parser["context_compaction"] if parser.has_section("context_compaction") else {}
@@ -2813,6 +2828,15 @@ def load_config(
                 thinking_loop_guard.get("empty_response_max_retries", 2),
             )
         ),
+        tool_loop_guard_enabled=_as_bool(os.getenv("TOOL_LOOP_GUARD_ENABLED", tool_loop_guard.get("enabled", True))),
+        tool_loop_guard_max_repeats=int(os.getenv("TOOL_LOOP_GUARD_MAX_REPEATS", tool_loop_guard.get("max_repeats", 3))),
+        tool_loop_guard_exclude_tools=_as_optional_str_list(
+            os.getenv(
+                "TOOL_LOOP_GUARD_EXCLUDE_TOOLS",
+                tool_loop_guard.get("exclude_tools", "check_script_job, check_dispatch_agent_job"),
+            )
+        )
+        or [],
         thinking_control_enabled=_as_bool(os.getenv("THINKING_CONTROL_ENABLED", thinking_control.get("enabled", False))),
         thinking_control_apply_to_main=_as_bool(
             os.getenv("THINKING_CONTROL_APPLY_TO_MAIN", thinking_control.get("apply_to_main", True))

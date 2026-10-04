@@ -217,3 +217,22 @@ def image_followup_message(artifact: dict | None) -> HumanMessage | None:
             additional_kwargs={IMAGE_REFS_KEY: [ref]} if ref else {},
         )
     return None
+
+
+def is_image_followup_message(message: object) -> bool:
+    """image_followup_message() が作った（画像だけを content に持つ）HumanMessage か。
+
+    ツール結果の画像をモデルへ見せるために ToolMessage の直後へ積まれるもので、
+    ユーザー発言ではなくツール結果の続きにあたる。ユーザーが画像を添付した
+    発言は、本文が空でも先頭にテキスト要素を持つ（app.py の _build_human_message）
+    ため、これには当たらない。
+
+    Args:
+        message: 判定するメッセージ。
+
+    Returns:
+        画像のフォローアップなら True。
+    """
+    if not isinstance(message, HumanMessage) or not isinstance(message.content, list) or not message.content:
+        return False
+    return all(isinstance(part, dict) and part.get("type") == "image_url" for part in message.content)

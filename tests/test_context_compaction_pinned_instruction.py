@@ -96,6 +96,10 @@ async def test_no_pinned_instruction_appends_nothing(monkeypatch, tmp_path) -> N
 @dataclass
 class _SubagentConfig:
     thinking_loop_guard_max_retries: int = 0
+    # 同じツール呼び出しのループ検知（src/tool_loop_guard.py）。このテストの対象外のため無効。
+    tool_loop_guard_enabled: bool = False
+    tool_loop_guard_max_repeats: int = 3
+    tool_loop_guard_exclude_tools: tuple = ()
     subagent_empty_response_max_retries: int = 0
     subagent_token_guard_enabled: bool = False
     track_token_usage: bool = True

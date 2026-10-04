@@ -50,6 +50,45 @@ class ThinkingLoopDetected(Exception):
         self.client_broken = client_broken
 
 
+class ToolCallLoopDetected(ThinkingLoopDetected):
+    """全く同じ応答（ツール呼び出し）を連続で繰り返すループを、LLMを呼ぶ直前に検知したことを示す。
+
+    src/graph.py がモデル呼び出しの直前に送出する（[tool_loop_guard]、
+    src/tool_loop_guard.py の detect_tool_call_loop 参照）。ThinkingLoopDetected
+    のサブクラスにして、注意メッセージを注入して再試行する・上限で停止を
+    通知する・成功後に注意メッセージを履歴から消す、という既存の仕組みを
+    そのまま使う。ストリームは開いていないため client_broken は常に False。
+
+    Attributes:
+        detail: 何が繰り返されたかの説明（注意メッセージに添える1行）。
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__("全く同じツール呼び出しが繰り返されたため打ち切りました", snippet=detail)
+        self.detail = detail
+
+
+def loop_nudge_text(messages: list[str], attempt_index: int, exc: BaseException | None = None) -> str:
+    """ループ検知時に注入する注意メッセージを作る（pick_loop_nudge_message に詳細を添える）。
+
+    exc が ToolCallLoopDetected なら、何が繰り返されたかを末尾に添える
+    （どのツールのどの結果が続いたのかが分からないと、モデルが同じ呼び出しを
+    また選びやすいため）。
+
+    Args:
+        messages: [thinking_loop_guard].nudge_messages 由来の候補。
+        attempt_index: 0始まりのループ検知リトライ回数。
+        exc: 検知した例外。None なら詳細を添えない。
+
+    Returns:
+        注入するメッセージ文字列。
+    """
+    text = pick_loop_nudge_message(messages, attempt_index)
+    if isinstance(exc, ToolCallLoopDetected):
+        text = f"{text}\n\n{exc.detail}"
+    return text
+
+
 _DEFAULT_LOOP_NUDGE = "直前の応答は同じ内容を繰り返すループに陥ったため打ち切りました。" "落ち着いて、今のタスクの続きを行ってください。"
 
 

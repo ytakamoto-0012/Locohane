@@ -116,6 +116,7 @@ from src import instance_lock
 from src.llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
+    ToolCallLoopDetected,
     _register_cancel_scope_watcher,
     aclose_active_llm_clients,
     build_model,
@@ -125,7 +126,7 @@ from src.llm import (
     init_llm_concurrency,
     mark_last_endpoint_failed,
     mark_user_turn,
-    pick_loop_nudge_message,
+    loop_nudge_text,
     recent_cancel_scope_breakage,
     set_current_session,
 )
@@ -4345,14 +4346,19 @@ async def _on_message_impl(message: cl.Message) -> None:
                     )
                 nudge_id = str(uuid.uuid4())
                 loop_nudge_ids.append(nudge_id)
-                text = pick_loop_nudge_message(_config.thinking_loop_guard_nudge_messages, loop_attempt)
+                text = loop_nudge_text(_config.thinking_loop_guard_nudge_messages, loop_attempt, loop_exc)
                 loop_attempt += 1
                 inputs = {"messages": [HumanMessage(content=text, id=nudge_id)]}
                 attempt += 1  # for range(total_retries + 1) の暗黙インクリメント相当
                 loop_exc = None  # このターンの検知を消費したので次周回へ持ち越さない（状態リーク防止）
                 continue
             await cl.Message(
-                content=(f"生成がループし、{loop_max_retries}回リトライしましたが" "改善しなかったため停止しました。"),
+                content=(
+                    f"全く同じツール呼び出しが繰り返され、{loop_max_retries}回リトライしましたが"
+                    f"改善しなかったため停止しました。\n\n{loop_exc.detail}"
+                    if isinstance(loop_exc, ToolCallLoopDetected)
+                    else f"生成がループし、{loop_max_retries}回リトライしましたが改善しなかったため停止しました。"
+                ),
                 type="system_message",
             ).send()
             await _remove_message_ids_if_present(graph, config, loop_nudge_ids)

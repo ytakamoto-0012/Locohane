@@ -28,6 +28,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from ..config import THINKING_LEVELS, Config
+from ..images import is_image_followup_message
 from .dialect import budget_params, extract_reasoning
 
 # レベルを比較するための順位（off が最小、xhigh が最大）。
@@ -114,19 +115,6 @@ def settings_from_config(config: Config) -> ThinkingControlSettings:
     )
 
 
-def _is_image_followup(message: BaseMessage) -> bool:
-    """ツール結果の画像を渡すために後から足された HumanMessage か。
-
-    analyze_image 等の結果は、画像だけを content に持つ HumanMessage として
-    ToolMessage の直後に積まれる（src/images.py の image_followup_message）。
-    これはユーザー発言ではなくツール結果の続きなので、ターンの区切り
-    （ルール1・判定のやり直しの起点）として扱わない。
-    """
-    if not isinstance(message, HumanMessage) or not isinstance(message.content, list) or not message.content:
-        return False
-    return all(isinstance(part, dict) and part.get("type") == "image_url" for part in message.content)
-
-
 def _is_tool_error(message: ToolMessage, error_prefixes: tuple[str, ...]) -> bool:
     if getattr(message, "status", None) == "error":
         return True
@@ -183,7 +171,7 @@ def _replay(messages: list[BaseMessage], settings: ThinkingControlSettings) -> l
     """
     start = 0
     for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], HumanMessage) and not _is_image_followup(messages[i]):
+        if isinstance(messages[i], HumanMessage) and not is_image_followup_message(messages[i]):
             start = i + 1
             break
 
@@ -275,7 +263,7 @@ def previous_step_stats(messages: list[BaseMessage], settings: ThinkingControlSe
         truncated/leaked は None。
     """
     for message in reversed(messages):
-        if isinstance(message, HumanMessage) and not _is_image_followup(message):
+        if isinstance(message, HumanMessage) and not is_image_followup_message(message):
             return None
         if isinstance(message, AIMessage):
             reasoning = extract_reasoning(message.additional_kwargs) or ""

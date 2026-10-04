@@ -31,7 +31,13 @@ from .diagnostics import (
     describe_current_task,
     recent_cancel_scope_breakage,
 )
-from .loop_guard import LLM_CONNECTION_ERRORS, ThinkingLoopDetected, pick_loop_nudge_message
+from .loop_guard import (
+    LLM_CONNECTION_ERRORS,
+    ThinkingLoopDetected,
+    ToolCallLoopDetected,
+    loop_nudge_text,
+    pick_loop_nudge_message,
+)
 from .routing import (
     _active_async_clients,
     _select_endpoint,
@@ -47,6 +53,7 @@ __all__ = [
     "LLM_CONNECTION_ERRORS",
     "ChatLlamaCpp",
     "ThinkingLoopDetected",
+    "ToolCallLoopDetected",
     "aclose_active_llm_clients",
     "aclose_model_client",
     "build_model",
@@ -55,6 +62,7 @@ __all__ = [
     "forget_session",
     "get_current_session",
     "init_llm_concurrency",
+    "loop_nudge_text",
     "mark_last_endpoint_failed",
     "mark_user_turn",
     "pick_loop_nudge_message",
