@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from src.llm import ThinkingLoopDetected, ToolCallLoopDetected, loop_nudge_text
+from src.llm import ThinkingLoopDetected, ToolCallLoopDetected, tool_loop_nudge_text
 from src.tool_loop_guard import detect_tool_call_loop, raise_if_tool_call_loop
 
 ERROR = "エラー: create_planの直後はapprove_planを呼んでください（他のツールは実行されませんでした）。"
@@ -129,11 +129,18 @@ def test_raise_if_tool_call_loop_raises_thinking_loop_subclass():
     raise_if_tool_call_loop(_history(_err()), _Cfg())  # 検知しなければ何もしない
 
 
-def test_loop_nudge_text_appends_detail_only_for_tool_loops():
+def test_tool_loop_nudge_text_uses_own_messages_and_appends_detail():
     exc = ToolCallLoopDetected("（自動検知: 詳細）")
-    assert loop_nudge_text(["注意"], 0, exc) == "注意\n\n（自動検知: 詳細）"
-    assert loop_nudge_text(["注意"], 0, ThinkingLoopDetected("x")) == "注意"
-    assert loop_nudge_text(["注意"], 0) == "注意"
+    assert tool_loop_nudge_text(["注意A", "注意B"], 1, exc) == "注意B\n\n（自動検知: 詳細）"
+    # 空なら組み込みの既定文言＋詳細
+    text = tool_loop_nudge_text([], 0, exc)
+    assert text.startswith("全く同じツール呼び出しを繰り返しています") and text.endswith("（自動検知: 詳細）")
+
+
+def test_detail_has_no_instruction_only_facts():
+    loop = detect_tool_call_loop(_history(_err(), _err(), _err()), _Cfg())
+    assert loop.detail().startswith("（自動検知: 直近3回、全く同じツール呼び出し（dispatch_agent）を繰り返しています。")
+    assert "切り替えて" not in loop.detail()
 
 
 # --- サブエージェント（src/subagent.py の run_subagent） ---
@@ -177,7 +184,8 @@ async def test_subagent_nudges_then_truncates(monkeypatch):
     config = replace(
         _FakeConfig(),
         thinking_loop_guard_max_retries=1,
-        thinking_loop_guard_nudge_messages=["注意1"],
+        thinking_loop_guard_nudge_messages=["思考ループ用"],
+        tool_loop_guard_nudge_messages=("ツールループ用1",),
         tool_loop_guard_enabled=True,
     )
     result = await subagent.run_subagent(task="t", tools=[_ErrorTool()], system_prompt="sp", config=config, max_iterations=20)
@@ -185,6 +193,6 @@ async def test_subagent_nudges_then_truncates(monkeypatch):
     # 3回目の後に注意メッセージ（詳細付き）が入り、また3回繰り返したところで打ち切られる
     nudged = [i for i, msgs in enumerate(model.inputs) if isinstance(msgs[-1], HumanMessage) and "自動検知" in msgs[-1].content]
     assert nudged == [3]
-    assert model.inputs[3][-1].content.startswith("注意1")
+    assert model.inputs[3][-1].content.startswith("ツールループ用1")
     assert len(model.inputs) == 6
     assert "全く同じツール呼び出し（dispatch_agent）が繰り返され" in result

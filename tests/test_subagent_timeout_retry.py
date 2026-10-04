@@ -43,6 +43,7 @@ class _FakeConfig:
     tool_loop_guard_enabled: bool = False
     tool_loop_guard_max_repeats: int = 3
     tool_loop_guard_exclude_tools: tuple = ()
+    tool_loop_guard_nudge_messages: tuple = ()
     thinking_loop_guard_nudge_messages: list = field(default_factory=lambda: ["繰り返しを避けてください"])
     subagent_empty_response_max_retries: int = 0
     subagent_token_guard_enabled: bool = False

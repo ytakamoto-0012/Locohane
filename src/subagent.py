@@ -58,12 +58,14 @@ from .tool_loop_guard import detect_tool_call_loop
 from .llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
+    ToolCallLoopDetected,
     aclose_model_client,
     build_model,
     describe_current_task,
     enable_thinking_control,
     mark_last_endpoint_failed,
     pick_loop_nudge_message,
+    tool_loop_nudge_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -635,8 +637,15 @@ async def run_subagent(
                     tool_loop_retries + 1,
                     tool_loop.detail(),
                 )
-                nudge = pick_loop_nudge_message(config.thinking_loop_guard_nudge_messages, tool_loop_retries)
-                messages.append(HumanMessage(content=f"{nudge}\n\n{tool_loop.detail()}"))
+                messages.append(
+                    HumanMessage(
+                        content=tool_loop_nudge_text(
+                            config.tool_loop_guard_nudge_messages,
+                            tool_loop_retries,
+                            ToolCallLoopDetected(tool_loop.detail()),
+                        )
+                    )
+                )
                 tool_loop_retries += 1
             llm_input = _build_llm_input(messages, config)
             try:

@@ -27,6 +27,7 @@ class _FakeConfig:
     tool_loop_guard_enabled: bool = False
     tool_loop_guard_max_repeats: int = 3
     tool_loop_guard_exclude_tools: tuple = ()
+    tool_loop_guard_nudge_messages: tuple = ()
     subagent_empty_response_max_retries: int = 0
     subagent_token_guard_enabled: bool = False
     track_token_usage: bool = False

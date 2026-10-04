@@ -685,6 +685,10 @@ class Config:
             ツールの結果は比べない。1以下なら無効。
         tool_loop_guard_exclude_tools: このツールだけを呼ぶ応答は数えない
             （状態確認のポーリング等、同じ呼び出しを正当に繰り返すツール）。
+        tool_loop_guard_nudge_messages: ループ検知後に注入する注意メッセージの
+            候補リスト。思考のループとは別に数えた回数に応じて順番に使い、
+            使い切ったらランダムに選ぶ。末尾には何を繰り返したかの説明が
+            添えられる。空リストなら組み込みの既定文言を使う。
         thinking_control_enabled: ReActループの各ステップで、直前の履歴の形から
             思考レベル（THINKING_LEVELS）を選んでリクエストごとに切り替える機能
             全体の有効/無効（src.llm.thinking_control 参照）。False なら従来と
@@ -1048,6 +1052,7 @@ class Config:
     tool_loop_guard_enabled: bool
     tool_loop_guard_max_repeats: int
     tool_loop_guard_exclude_tools: list[str]
+    tool_loop_guard_nudge_messages: list[str]
 
     # --- ステップごとの思考レベル切り替え（src/llm/thinking_control.py） ---
     thinking_control_enabled: bool
@@ -2837,6 +2842,9 @@ def load_config(
             )
         )
         or [],
+        tool_loop_guard_nudge_messages=_as_message_list(
+            os.getenv("TOOL_LOOP_GUARD_NUDGE_MESSAGES", tool_loop_guard.get("nudge_messages", ""))
+        ),
         thinking_control_enabled=_as_bool(os.getenv("THINKING_CONTROL_ENABLED", thinking_control.get("enabled", False))),
         thinking_control_apply_to_main=_as_bool(
             os.getenv("THINKING_CONTROL_APPLY_TO_MAIN", thinking_control.get("apply_to_main", True))

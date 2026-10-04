@@ -60,7 +60,8 @@ class ToolCallLoopDetected(ThinkingLoopDetected):
     そのまま使う。ストリームは開いていないため client_broken は常に False。
 
     Attributes:
-        detail: 何が繰り返されたかの説明（注意メッセージに添える1行）。
+        detail: 何を繰り返したかの説明（注意メッセージ・停止の通知に添える。
+            どうすべきかの指示は含めず、[tool_loop_guard].nudge_messages に任せる）。
     """
 
     def __init__(self, detail: str) -> None:
@@ -68,28 +69,31 @@ class ToolCallLoopDetected(ThinkingLoopDetected):
         self.detail = detail
 
 
-def loop_nudge_text(messages: list[str], attempt_index: int, exc: BaseException | None = None) -> str:
-    """ループ検知時に注入する注意メッセージを作る（pick_loop_nudge_message に詳細を添える）。
+def tool_loop_nudge_text(messages: list[str], attempt_index: int, exc: ToolCallLoopDetected) -> str:
+    """ツール呼び出しのループを検知したときに注入する注意メッセージを作る。
 
-    exc が ToolCallLoopDetected なら、何が繰り返されたかを末尾に添える
-    （どのツールのどの結果が続いたのかが分からないと、モデルが同じ呼び出しを
-    また選びやすいため）。
+    [tool_loop_guard].nudge_messages から pick_loop_nudge_message と同じ規則で
+    選び、何を繰り返したかの説明（exc.detail）を末尾に添える（どの呼び出しを
+    繰り返したのかが分からないと、モデルが同じ呼び出しをまた選びやすいため）。
 
     Args:
-        messages: [thinking_loop_guard].nudge_messages 由来の候補。
-        attempt_index: 0始まりのループ検知リトライ回数。
-        exc: 検知した例外。None なら詳細を添えない。
+        messages: [tool_loop_guard].nudge_messages 由来の候補（0件でもよい）。
+        attempt_index: 0始まりの、ツール呼び出しのループで注意した回数
+            （思考のループとは別に数える）。
+        exc: 検知した例外。
 
     Returns:
         注入するメッセージ文字列。
     """
-    text = pick_loop_nudge_message(messages, attempt_index)
-    if isinstance(exc, ToolCallLoopDetected):
-        text = f"{text}\n\n{exc.detail}"
-    return text
+    text = pick_loop_nudge_message(messages, attempt_index, default=_DEFAULT_TOOL_LOOP_NUDGE)
+    return f"{text}\n\n{exc.detail}"
 
 
 _DEFAULT_LOOP_NUDGE = "直前の応答は同じ内容を繰り返すループに陥ったため打ち切りました。" "落ち着いて、今のタスクの続きを行ってください。"
+_DEFAULT_TOOL_LOOP_NUDGE = (
+    "全く同じツール呼び出しを繰り返しています。同じ呼び出しを繰り返さず、"
+    "直前の結果に書かれた指示に従うか、別の手段に切り替えてください。"
+)
 
 
 # openai SDK が httpx 例外をラップしないケースがあるため、両系統を1箇所に集約。
@@ -115,7 +119,7 @@ LLM_CONNECTION_ERRORS: tuple[type[Exception], ...] = (
 )
 
 
-def pick_loop_nudge_message(messages: list[str], attempt_index: int) -> str:
+def pick_loop_nudge_message(messages: list[str], attempt_index: int, default: str = _DEFAULT_LOOP_NUDGE) -> str:
     """ループ検知時に注入する注意メッセージを選ぶ。
 
     attempt_index（0始まり、何回目のループ検知リトライか）が messages の
@@ -123,15 +127,16 @@ def pick_loop_nudge_message(messages: list[str], attempt_index: int) -> str:
     ランダムに選ぶ（同じ文言の繰り返しで同じ堂々巡りを誘発しないため）。
 
     Args:
-        messages: config.ini の [thinking_loop_guard].nudge_messages 由来の
-            メッセージ候補（0件でもよい）。
+        messages: config.ini の [thinking_loop_guard].nudge_messages（または
+            [tool_loop_guard].nudge_messages）由来のメッセージ候補（0件でもよい）。
         attempt_index: 0始まりのループ検知リトライ回数。
+        default: messages が空のときに返す組み込みの既定文言。
 
     Returns:
-        注入するメッセージ文字列。messages が空なら組み込みの既定文言を返す。
+        注入するメッセージ文字列。messages が空なら default を返す。
     """
     if not messages:
-        return _DEFAULT_LOOP_NUDGE
+        return default
     if attempt_index < len(messages):
         return messages[attempt_index]
     return random.choice(messages)

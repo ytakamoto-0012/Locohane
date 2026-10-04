@@ -126,9 +126,10 @@ from src.llm import (
     init_llm_concurrency,
     mark_last_endpoint_failed,
     mark_user_turn,
-    loop_nudge_text,
+    pick_loop_nudge_message,
     recent_cancel_scope_breakage,
     set_current_session,
+    tool_loop_nudge_text,
 )
 from src.llm.thinking_control import unknown_tool_names
 from src.log_rotation import LineCountRotatingFileHandler
@@ -3655,6 +3656,9 @@ async def _on_message_impl(message: cl.Message) -> None:
     # 注入した注意メッセージ（機械的なもの）のid（成功後に履歴から取り除くため）。
     loop_max_retries = _config.thinking_loop_guard_max_retries
     loop_attempt = 0
+    # ツール呼び出しのループ（ToolCallLoopDetected）で注意した回数。再試行の予算は
+    # loop_attempt と合算だが、[tool_loop_guard].nudge_messages の段階はこちらで数える。
+    tool_loop_attempt = 0
     loop_nudge_ids: list[str] = []
     # 無言終了リマインダーのid（成功後に履歴から取り除くため。thinking_loopの
     # nudgeと同様、機械的な注入を会話履歴に残さないようにする）。
@@ -4346,7 +4350,11 @@ async def _on_message_impl(message: cl.Message) -> None:
                     )
                 nudge_id = str(uuid.uuid4())
                 loop_nudge_ids.append(nudge_id)
-                text = loop_nudge_text(_config.thinking_loop_guard_nudge_messages, loop_attempt, loop_exc)
+                if isinstance(loop_exc, ToolCallLoopDetected):
+                    text = tool_loop_nudge_text(_config.tool_loop_guard_nudge_messages, tool_loop_attempt, loop_exc)
+                    tool_loop_attempt += 1
+                else:
+                    text = pick_loop_nudge_message(_config.thinking_loop_guard_nudge_messages, loop_attempt)
                 loop_attempt += 1
                 inputs = {"messages": [HumanMessage(content=text, id=nudge_id)]}
                 attempt += 1  # for range(total_retries + 1) の暗黙インクリメント相当

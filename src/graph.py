@@ -36,7 +36,14 @@ from langgraph.prebuilt import create_react_agent
 from .config import Config
 from .context_compaction import maybe_append_precompact_note_nudge
 from .context_trim import is_trigger_reached, trim_old_ai_messages, trim_old_tool_messages
-from .llm import ThinkingLoopDetected, build_model, enable_thinking_control, loop_nudge_text
+from .llm import (
+    ThinkingLoopDetected,
+    ToolCallLoopDetected,
+    build_model,
+    enable_thinking_control,
+    pick_loop_nudge_message,
+    tool_loop_nudge_text,
+)
 from .main_token_guard import maybe_append_token_guard
 from .tool_loop_guard import raise_if_tool_call_loop
 from .tools import ImageAwareToolNode, filter_main_agent_tools, get_all_tools
@@ -336,6 +343,7 @@ async def ainvoke_ensuring_final_text(
     max_retries: int = 2,
     nudge_messages: list[str] | None = None,
     loop_max_retries: int = 2,
+    tool_loop_nudge_messages: list[str] | None = None,
 ) -> dict:
     """graph.ainvoke() を呼び、無言終了（空応答）や反復ループだった場合は再試行する。
 
@@ -379,6 +387,9 @@ async def ainvoke_ensuring_final_text(
             省略時は空リスト（pick_loop_nudge_message の既定文言を使う）。
         loop_max_retries: ループ検知時に再試行する最大回数
             （config.ini の [thinking_loop_guard].max_retries 由来）。
+        tool_loop_nudge_messages: ツール呼び出しのループ（ToolCallLoopDetected）を
+            検知したときに注入する注意メッセージの候補（config.ini の
+            [tool_loop_guard].nudge_messages 由来）。省略時は組み込みの既定文言。
 
     Returns:
         graph.ainvoke() と同じ形式の結果 dict（{"messages": [...]})。
@@ -391,6 +402,7 @@ async def ainvoke_ensuring_final_text(
     nudge_messages = nudge_messages or []
     remove_ids: list[str] = []
     loop_attempt = 0
+    tool_loop_attempt = 0
     empty_attempt = 0
     total_budget = max_retries + loop_max_retries
     current_inputs = inputs
@@ -410,7 +422,11 @@ async def ainvoke_ensuring_final_text(
             )
             nudge_id = str(uuid.uuid4())
             remove_ids.append(nudge_id)
-            text = loop_nudge_text(nudge_messages, loop_attempt, exc)
+            if isinstance(exc, ToolCallLoopDetected):
+                text = tool_loop_nudge_text(tool_loop_nudge_messages or [], tool_loop_attempt, exc)
+                tool_loop_attempt += 1
+            else:
+                text = pick_loop_nudge_message(nudge_messages, loop_attempt)
             current_inputs = {"messages": [HumanMessage(content=text, id=nudge_id)]}
             loop_attempt += 1
             continue

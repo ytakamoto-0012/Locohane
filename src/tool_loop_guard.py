@@ -47,8 +47,7 @@ class ToolLoop:
         names = "、".join(self.tool_names)
         return (
             f"（自動検知: 直近{self.repeats}回、全く同じツール呼び出し（{names}）を繰り返しています。"
-            f"その結果: {self.result_excerpt}）\n"
-            "同じ呼び出しを繰り返さず、結果に書かれた指示に従うか、別の手段に切り替えてください。"
+            f"その結果: {self.result_excerpt}）"
         )
 
 

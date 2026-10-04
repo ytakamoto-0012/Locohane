@@ -1052,6 +1052,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[thinking_loop_guard]` | `nudge_messages` | ループ検知後に注入する注意メッセージ（複数指定可） | `THINKING_LOOP_GUARD_NUDGE_MESSAGES` |
 | `[tool_loop_guard]` | `enabled` | 全く同じ応答（本文とツール呼び出しの名前・引数）を連続で繰り返すループを検知する機能の有効/無効（`src/tool_loop_guard.py`）。ツールの結果やエラーかどうかは比べない。検知したら`[thinking_loop_guard]`と同じ仕組みで、注意メッセージに「何を繰り返したか」を添えて再試行し、`max_retries`（思考のループと合算）で停止してユーザーに通知する。サブエージェントは上限でそこまでの経過を返して打ち切る。モデルにツール呼び出しを強制する`tool_choice`はQwen3.6では効かないため使わない | `TOOL_LOOP_GUARD_ENABLED` |
 | `[tool_loop_guard]` | `max_repeats` | 全く同じ応答が何回連続したらループとみなすか（1以下で無効） | `TOOL_LOOP_GUARD_MAX_REPEATS` |
+| `[tool_loop_guard]` | `nudge_messages` | ループ検知後に注入する注意メッセージ（複数指定可。思考のループとは別に数えた回数の順に使い、末尾に何を繰り返したかが自動で添えられる） | `TOOL_LOOP_GUARD_NUDGE_MESSAGES` |
 | `[tool_loop_guard]` | `exclude_tools` | このツールだけを呼ぶ応答は数えない（状態確認のポーリング等。既定`check_script_job, check_dispatch_agent_job`） | `TOOL_LOOP_GUARD_EXCLUDE_TOOLS` |
 | `[thinking_control]` | `enabled` | ReActループの各ステップで、直前の履歴の形から思考レベル（`off`/`low`/`medium`/`high`/`xhigh`）をルールで選び、リクエストごとに切り替える機能全体の有効/無効（`src/llm/thinking_control.py`）。`off`は`enable_thinking=false`、それ以外は思考予算の大小で表すため、プロンプトの先頭部分は変わらずKVキャッシュは外れない（`reasoning_effort`はテンプレート次第でシステムプロンプトが変わるため切り替えに使わない）。`false`なら従来と全く同じリクエスト。`[llm]`側で思考が無効なら働かない。判定はアプリログの`thinking_control:`行（レベル・判定理由・直前ステップの思考文字数・予算での打ち切り・本文への漏れ）で確認できる | `THINKING_CONTROL_ENABLED` |
 | `[thinking_control]` | `apply_to_main` / `apply_to_sub` | メインエージェント / サブエージェントのループに適用するか（要約・圧縮のLLM呼び出しには常に適用しない） | `THINKING_CONTROL_APPLY_TO_MAIN` / `THINKING_CONTROL_APPLY_TO_SUB` |

@@ -35,7 +35,7 @@ from .loop_guard import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
     ToolCallLoopDetected,
-    loop_nudge_text,
+    tool_loop_nudge_text,
     pick_loop_nudge_message,
 )
 from .routing import (
@@ -62,7 +62,7 @@ __all__ = [
     "forget_session",
     "get_current_session",
     "init_llm_concurrency",
-    "loop_nudge_text",
+    "tool_loop_nudge_text",
     "mark_last_endpoint_failed",
     "mark_user_turn",
     "pick_loop_nudge_message",

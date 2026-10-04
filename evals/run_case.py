@@ -457,6 +457,7 @@ async def _run(case: EvalCase) -> dict:
                             max_retries=config.thinking_loop_guard_empty_response_max_retries,
                             nudge_messages=config.thinking_loop_guard_nudge_messages,
                             loop_max_retries=config.thinking_loop_guard_max_retries,
+                            tool_loop_nudge_messages=config.tool_loop_guard_nudge_messages,
                         )
                     except (GraphRecursionError, ThinkingLoopDetected) as e:
                         # 本番 app.py はこの2例外をターンごとに捕捉し、打ち切り
