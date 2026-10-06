@@ -99,3 +99,22 @@ def test_agent_type_frontmatter_model(tmp_path) -> None:
     by_name = {a.name: a for a in scan_agent_types(tmp_path)}
     assert by_name["with-model"].model == "QWEN3.6_35B-A3B"
     assert by_name["no-model"].model is None
+
+
+@pytest.mark.asyncio
+async def test_preferred_model_match_ignores_case_and_spaces() -> None:
+    session_id = _unique_session_id("case")
+    try:
+        llm.set_current_session(session_id)
+        picked = await llm._select_endpoint("sub", _endpoints(), "priority_failover", preferred_model=" c ")
+        assert picked.base_url == "http://c3/v1"
+    finally:
+        llm.forget_session(session_id)
+
+
+def test_agent_type_frontmatter_model_inherit_is_unspecified(tmp_path) -> None:
+    (tmp_path / "inherit-model.md").write_text("---\nname: inherit-model\ndescription: d\nmodel: inherit\n---\nbody\n", encoding="utf-8")
+    (tmp_path / "empty-model.md").write_text("---\nname: empty-model\ndescription: d\nmodel: \"\"\n---\nbody\n", encoding="utf-8")
+    by_name = {a.name: a for a in scan_agent_types(tmp_path)}
+    assert by_name["inherit-model"].model is None
+    assert by_name["empty-model"].model is None

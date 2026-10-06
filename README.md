@@ -153,8 +153,9 @@
 の frontmatter、ClaudeCode の `.claude/agents/*.md` 相当）を起動時に走査して読み込む。
 
 `model`（任意）には `[llm].sub_url` の接続先の `model` 名を書く。指定するとその種別のサブエージェントは、
-`sub_url` のうち `model` が完全一致する接続先だけを候補にして `sub_routing_strategy` に従って接続先を選ぶ
+`sub_url` のうち `model` が一致する（大文字小文字は区別しない）接続先だけを候補にして `sub_routing_strategy` に従って接続先を選ぶ
 （`sub_url` 未指定でメインの接続先を継承する場合も、継承先が指定モデルでなければ指定モデルの接続先から選ぶ）。
+`model: inherit`（ClaudeCode の定義ファイル由来）と空文字は指定なしとして扱う。
 一致する接続先が無い（または全て `start`/`end` の時間帯外の）場合は指定を無視し、通常のルーティング規則に従う。
 `dispatch_agent`/`dispatch_agent_batch` の `model` 引数でも1回の委譲ごとに指定でき、frontmatter より優先される。
 ジョブ内の再構築・圧縮用のモデル構築にも同じ指定が適用される（`src/llm/routing.py` の `_PREFERRED_SUB_MODEL`）。

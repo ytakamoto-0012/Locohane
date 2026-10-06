@@ -333,16 +333,21 @@ def _model_matching_indices(endpoints: tuple[LLMEndpoint, ...], model: str | Non
     model 未指定、または一致する接続先が1件も無い場合は None（＝指定を
     無視して通常のルーティングに従う合図）を返す。
 
+    比較は大文字小文字を区別しない。dispatch_agent の model 引数はLLMが
+    ユーザー発話から書き写すため、"qwen3.6_35b-a3b" のように大小が崩れた
+    だけで黙って無視されるのを避ける。
+
     Args:
         endpoints: 選択対象の接続先タプル。
-        model: 優先するモデル名（LLMEndpoint.model と完全一致で比較）。
+        model: 優先するモデル名（LLMEndpoint.model と前後空白・大文字小文字を無視して比較）。
 
     Returns:
         一致した index 一覧（1件以上）、または None。
     """
     if not model:
         return None
-    matched = [i for i, e in enumerate(endpoints) if e.model == model]
+    wanted = model.strip().casefold()
+    matched = [i for i, e in enumerate(endpoints) if (e.model or "").strip().casefold() == wanted]
     return matched or None
 
 

@@ -29,6 +29,7 @@ name: worker              # 必須。1〜64文字、小文字英数字・ハイ�
                             # 先頭末尾は区切り文字不可、区切り文字の連続不可、ファイル名(stem)と一致
 description: ...            # 必須。1〜1024文字。「何をする専用エージェントか」を書く
 tools: read_skill, Read, Glob, run_script   # 任意。カンマ区切り文字列 or YAMLリストのどちらも可
+model: QWEN3.6_35B-A3B      # 任意。[llm].sub_url の接続先の model 名（後述）
 ---
 
 # 本文（システムプロンプトとして丸ごとサブエージェントに渡る Markdown 自由記述）
@@ -38,6 +39,12 @@ tools: read_skill, Read, Glob, run_script   # 任意。カンマ区切り文字�
 - 検証に落ちたファイルは黙ってスキップされる（例外で全体を落とさない設計）。ログ（`app.log`）で `仕様違反のためスキップ` を確認できる。成功時は `エージェント種別発見: <name>`（155行）。
 - `description` は **メインエージェントが `dispatch_agent` 呼び出し時に `agent_type` を選ぶ唯一の手がかり**（利用可能なエージェント種別一覧としてシステムプロンプトに列挙される）。「何を委譲できる専用エージェントか」を具体的に書くこと（既存4種別を参照）。
 - `tools` は省略可能。**省略した場合は `_SUBAGENT_TOOLS`（後述）を丸ごと継承する**（`_resolve_agent_types()`、`src/tools/_state.py` 623-624行。Anthropic仕様の「tools省略時は全ツール継承」を踏襲したと同関数の同ファイル608-609行のdocstringに明記）。書式はカンマ区切り文字列（Anthropic公式仕様の主形式、`_parse_tools_field()` 81行コメント）・YAMLリストのどちらでも受け付ける。
+- `model` は省略可能（Anthropic公式仕様の `model` 相当）。`config.ini` の `[llm].sub_url` に並べた接続先の `model` 名を書くと、その種別のサブエージェントは**その `model` の接続先だけを候補に `sub_routing_strategy` で接続先を選ぶ**（比較は前後空白・大文字小文字を無視）。
+  - 一致する接続先が無い、または一致する接続先が全て `start`/`end` の時間帯外の場合は、指定を無視して通常のルーティングに従う（起動は止めず、`app.log` に WARNING を出す）。
+  - `sub_url` 未指定（メインの接続先を継承する設定）の場合も、継承先が指定モデルでなければ `main_url` の中の指定モデルの接続先から選ぶ。
+  - `model: inherit`（ClaudeCode の定義ファイル由来）と空文字は指定なしとして扱う。`sonnet`/`opus` 等のエイリアスは解釈しない（一致する接続先が無いものとして無視される）。
+  - 実装: `_parse_model_field()`（`src/agent_types.py`）→ `ResolvedAgentType.model`（`src/tools/_state.py`）→ `_run_dispatch_agent_job` が `set_preferred_sub_model()` でジョブのタスク内だけに設定（`src/tools/_dispatch_agent_job.py`）→ `build_model(role="sub")` が `_select_endpoint(preferred_model=...)` へ渡す（`src/llm/routing.py`）。contextvar なのでジョブ内の再構築・圧縮用の `build_model()` にも同じ指定が効き、メインエージェントや他のジョブへは漏れない。
+  - `dispatch_agent`/`dispatch_agent_batch` の `model` 引数（5節）で1回の委譲ごとに上書きできる（引数が優先）。
 
 ## 3. `tools:` フィールドとツール名の解決
 
@@ -65,14 +72,16 @@ read_memory, search_memory, list_memories
 ## 4. `{{skills}}`/`{{agent_types}}` プレースホルダーと共通注意事項の自動連結
 
 - `app.py` 525-527行。`scan_agent_types()` の後、`render_skills_block(skills)`（`src/skills.py`、`name: description` 形式のスキル一覧）を各エージェントの `system_prompt` 内の `{{skills}}` へ `str.replace` で差し込む（`dataclasses.replace` でイミュータブルに更新）。**スキルの本文そのものは含まれず、一覧のみ**（skills側の progressive disclosure 第1段階と同じ扱い）。
+- `{{skills}}` に載るスキルは `filter_skills_for_agent_type()`（`src/skills.py`）で種別ごとに絞り込む。`config.ini` の `[scripts].agent_type_run_script_allowlist` にその種別の登録が1件でもあれば、登録したスキル（`["スキル名","スクリプト名"]` 指定はそのスキル）だけを載せる（`scripts/` を持たない知識系スキルも、未登録なら載せない）。登録が無い種別（`worker` 等）は全スキルを載せる。`{{run_script_allowlist}}` には同じ登録内容が種別ごとに差し込まれる。
 - 同じ箇所で `render_agent_types_block(agent_type_defs)`（`src/agent_types.py`、`name: description` に続けて frontmatter の `tools`（省略時は既定ツール一式を継承する旨）を「使用可能ツール:」行として添えたエージェント種別一覧。メインの `system_prompt.md` に差し込む `{{agent_types}}` と同じブロックを使い回す）を各エージェントの `system_prompt` 内の `{{agent_types}}` へも差し込む。ただし現状、本文で `{{agent_types}}` を使うエージェント種別は無い（旧 `planner` 種別のみが使っていたが2026-09-29に廃止）。サブエージェントは `dispatch_agent` を持たず孫委譲できないため `{{agent_types}}` を本文に書く必要はない。
 - `app.py` 550行。`system_prompt/subagent_common.md`（作業量・トークン上限に達した際の振る舞いに加え、`write_scratch_note` での途中経過の書き残し方・最終回答を生データの羅列にせず簡潔にまとめる指示を含む共通文）を**全エージェントの system_prompt 末尾に自動連結**する。個々の `agents/*.md` 側で同様の注意書きを重複して書く必要はない。
 
 ## 5. メインエージェントからの呼び出し方法
 
-メインエージェントは `dispatch_agent(task: str, agent_type: str, tool_call_id: ..., orchestrator_skill: str | None = None)`（`src/tools/dispatch_agent.py` 101-240行）でサブエージェントに委譲する。
+メインエージェントは `dispatch_agent(task: str, agent_type: str, tool_call_id: ..., orchestrator_skill: str | None = None, model: str | None = None)`（`src/tools/dispatch_agent.py`）でサブエージェントに委譲する。
 
 - `agent_type` は `agents/*.md` の `name` と一致させる必須引数（既定値なし）。
+- `model` は任意。ユーザーがモデルを指定した場合だけ使う想定で、frontmatter の `model`（2節）より優先される。`dispatch_agent_batch` も同じ `model` 引数を持ち、全グループに同じ指定が適用される。
 - 内部で `_AGENT_TYPES.get(agent_type)` を引き、`asyncio.create_task` で起動したバックグラウンドジョブ（`_run_dispatch_agent_job`、`src/tools/_dispatch_agent_job.py` 211-313行）の中で `run_subagent(task, resolved.tools, resolved.system_prompt, _LLM_CONFIG, job.max_iterations, on_iteration=..., llm_timeout_max_retries=..., on_cancelled=...)`（`src/subagent.py` 493行〜）を呼ぶ。`dispatch_agent` 自身はこのジョブの完了を（安全上限まで）待ち続け、完了までの間チャットへ進捗を直接pushする。サブエージェントは委譲元と**独立した ReAct ループ**（別の会話履歴）で動き、思考過程・途中のツール呼び出しは委譲元と共有されない。
 - 委譲元に返るのは、サブエージェントが最後に返す「tool_calls を伴わないメッセージ」の content のみ。各 `agents/*.md` 本文が「最終回答を必ず書け、無言で終わるな」と強調しているのはこのため（空文字で終えると委譲元には何も伝わらない）。
 - ジョブ実行中は `_IN_SUBAGENT` コンテキスト変数が `True` になる（`_run_dispatch_agent_job` 内、`src/tools/_dispatch_agent_job.py` 238行。変数自体の定義は `src/tools/_state.py` 38行）。
@@ -160,11 +169,12 @@ read_memory, search_memory, list_memories
 
 ## 9. Anthropic（ClaudeCode）仕様との関係
 
-`agent_types.py` 冒頭コメント（3行）に「ClaudeCode の `.claude/agents/*.md` 相当」と明記されている通り、frontmatter形式（`name`/`description`/`tools`）・`tools` 省略時の全ツール継承・カンマ区切りを主形式とする書式は、Anthropic公式のサブエージェント仕様の挙動を踏襲している。
+`agent_types.py` 冒頭コメント（3行）に「ClaudeCode の `.claude/agents/*.md` 相当」と明記されている通り、frontmatter形式（`name`/`description`/`tools`/`model`）・`tools` 省略時の全ツール継承・カンマ区切りを主形式とする書式は、Anthropic公式のサブエージェント仕様の挙動を踏襲している。
 
 ただし以下は本プロジェクト独自の実装であり、ClaudeCode本体のSubagentランタイムをそのまま使っているわけではない点に注意（`SKILLS_README.md` 6節と同様の位置づけ）:
 
 - LLM本体は **llama.cpp server（OpenAI互換API）** に接続しており、Claude/Anthropic APIは使用していない（`src/graph.py` の `build_model()` 参照）。
+- `model` も同じ名前のフィールドだが、値は `sonnet`/`opus`/`haiku` 等のエイリアスではなく `[llm].sub_url` の接続先の `model` 名を書く（`inherit` のみ「指定なし」として受け付ける。2節参照）。
 - `dispatch_agent` はこのプロジェクトが `src/tools/dispatch_agent.py` に独自実装した委譲ツールであり、ClaudeCode本体のTaskツール実装そのものではない。
 - サブエージェントは委譲元と別の独立した ReAct ループ（`src/subagent.py`）で動く自前実装であり、さらに別のサブエージェントへ再委譲する経路は `_SUBAGENT_TOOLS` に `dispatch_agent` を含めないことで意図的に塞いでいる（ClaudeCode本体でのネスト委譲可否とは無関係に、本プロジェクトの設計判断）。
 - `SKILLS_README.md` が言及する「公式仕様URLへの準拠宣言」に相当する記述は `agents/` 側には無く、「`.claude/agents/*.md` 相当」というコード内コメントのみが根拠。

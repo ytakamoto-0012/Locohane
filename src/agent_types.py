@@ -132,6 +132,21 @@ def _validate(name: object, description: object, file_stem: str) -> str | None:
     return None
 
 
+def _parse_model_field(value: object) -> str | None:
+    """frontmatter の model を正規化する（未指定・空文字・"inherit" は None）。
+
+    "inherit" は Anthropic公式仕様の「メインと同じモデル」の指定。ClaudeCode の
+    定義ファイルをそのまま持ち込んだ場合に、存在しないモデル名として毎回
+    警告ログを出さないよう、指定なし（通常のルーティング）として扱う。
+    """
+    if value is None:
+        return None
+    model = str(value).strip()
+    if not model or model.casefold() == "inherit":
+        return None
+    return model
+
+
 def _scan_one(root: Path) -> list[AgentType]:
     """1つのディレクトリ直下の `*.md` を走査し、有効な AgentType の一覧を返す（内部ヘルパー）。"""
     agent_types: list[AgentType] = []
@@ -156,7 +171,7 @@ def _scan_one(root: Path) -> list[AgentType]:
                 description=description.strip(),
                 tool_names=_parse_tools_field(fm.get("tools")),
                 system_prompt=body.strip() + "\n",
-                model=(str(fm["model"]).strip() or None) if fm.get("model") is not None else None,
+                model=_parse_model_field(fm.get("model")),
             )
         )
         logger.info("エージェント種別発見: %s", name)
