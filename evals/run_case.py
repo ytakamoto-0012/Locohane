@@ -250,7 +250,7 @@ async def _run(case: EvalCase) -> dict:
     from src.graph import ainvoke_ensuring_final_text, build_graph
     from src.llm import ThinkingLoopDetected, mark_user_turn
     from src.memory import render_memory_block
-    from src.skills import build_system_prompt, render_skills_block, scan_skills
+    from src.skills import build_system_prompt, filter_skills_for_agent_type, render_skills_block, scan_skills
     from src.tools import get_all_tools, init_tools
 
     # メモリー系ツール（create_memory 等）を評価すると本番の永続メモリーストア
@@ -332,12 +332,16 @@ async def _run(case: EvalCase) -> dict:
         # {{agent_types}}/{{memory}} プレースホルダーを置換する
         # （本番と同じシステムプロンプトで評価するため）。
         agent_type_defs = scan_agent_types([config.agents_dir, *config.locohane_agents_dirs])
-        skills_block = render_skills_block(skills)
         agent_types_block = render_agent_types_block(agent_type_defs)
         agent_type_defs = [
             replace(
                 a,
-                system_prompt=a.system_prompt.replace("{{skills}}", skills_block)
+                system_prompt=a.system_prompt.replace(
+                    "{{skills}}",
+                    render_skills_block(
+                        filter_skills_for_agent_type(skills, a.name, config.script_agent_type_run_script_allowlist)
+                    ),
+                )
                 .replace("{{agent_types}}", agent_types_block)
                 .replace(
                     "{{run_script_allowlist}}",

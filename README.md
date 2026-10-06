@@ -1010,7 +1010,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[scripts]` | `background_progress_push_interval_seconds` | 待機中、人間向けに経過秒数・標準出力/標準エラー末尾をチャットへ直接送る間隔（秒） | `SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS` |
 | `[scripts]` | `background_job_output_tail_chars` | 進捗表示・`check_script_job`/`stop_script_job`/`read_thread_note`が末尾のみ表示する際の標準出力/標準エラー/進捗メモの最大文字数（`[subagent]`配下の同種表示も共有） | `SCRIPT_BACKGROUND_JOB_OUTPUT_TAIL_CHARS` |
 | `[scripts]` | `plan_approval_exempt_scripts` | `run_script`/`run_script_background`の計画承認（Plan Mode）を免除する読み取り専用スクリプトのホワイトリスト（`[["スキル名","スクリプトファイル名"], ...]`形式、空欄なら既定7件）。免除は承認のみで、`[main_agent_tool_guard]`によるメインエージェントからの直接呼び出し制限は別枠 | `SCRIPT_PLAN_APPROVAL_EXEMPT_SCRIPTS` |
-| `[scripts]` | `agent_type_run_script_allowlist` | `dispatch_agent`の`agent_type`ごとに`run_script`で呼べるスキル/スクリプトを絞り込むホワイトリスト（`[[agent_type, 対象], ...]`形式、対象は`"スキル名"`または`["スキル名","スクリプトファイル名"]`、空欄なら既定19件） | `SCRIPT_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` |
+| `[scripts]` | `agent_type_run_script_allowlist` | `dispatch_agent`の`agent_type`ごとに`run_script`で呼べるスキル/スクリプトを絞り込むホワイトリスト（`[[agent_type, 対象], ...]`形式、対象は`"スキル名"`または`["スキル名","スクリプトファイル名"]`、空欄なら既定19件。登録がある`agent_type`は`{{skills}}`の一覧も登録スキルのみに絞られる） | `SCRIPT_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` |
 | `[file_tools_duplicate_guard]` | `enabled` | Read/Glob/Grep/json_query ツールの同一引数繰り返し呼び出しを防止するガードの有効/無効 | `FILE_TOOLS_DUPLICATE_GUARD_ENABLED` |
 | `[file_tools_duplicate_guard]` | `max_calls` | 同一シグネチャの呼び出しを許可する回数（既定1回） | `FILE_TOOLS_DUPLICATE_GUARD_MAX_CALLS` |
 | `[file_tools_duplicate_guard]` | `carry_over_to_main` | サブエージェント内の呼び出し履歴をメイン判定へ持ち越すかどうか | `FILE_TOOLS_DUPLICATE_GUARD_CARRY_OVER` |

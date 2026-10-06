@@ -2130,8 +2130,8 @@ def render_plan_approval_exempt_scripts_block(entries: frozenset[tuple[str, str]
 def render_agent_type_run_script_allowlist_block(agent_type: str, entries: frozenset[tuple[str, str | tuple[str, str]]]) -> str:
     """agents/*.md の `{{run_script_allowlist}}` へ差し込むテキストを組み立てる。
 
-    `{{skills}}`（render_skills_block）が全スキル共通で同じ内容を差し込むのに
-    対し、こちらは agent_type ごとに異なる内容を差し込む（呼び出し元
+    agent_type ごとに異なる内容を差し込む（`{{skills}}` も同じエントリで
+    src/skills.py の filter_skills_for_agent_type が絞り込む）。呼び出し元
     （app.py/evals/run_case.py）が AgentType 1件ずつに対して agent_type を
     渡して呼ぶ）。config.ini の [scripts].agent_type_run_script_allowlist
     （script_agent_type_run_script_allowlist）は全 agent_type 分の

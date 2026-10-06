@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -340,8 +340,9 @@ def filter_skills_for_main_agent_guard(skills: list[Skill], config: "Config") ->
     scriptsを持たないスキルも、allow_entries に [skill_name, ""] のダミー
     エントリを登録していなければ同様に除外する（is_skill_directly_runnable参照）。
 
-    dispatch_agent配下のサブエージェントには本ガードと無関係にフルの
-    `{{skills}}` が渡る（app.py の agent_type_defs 差し込み参照）ため、ここで
+    dispatch_agent配下のサブエージェントには本ガードと無関係な `{{skills}}`
+    が渡る（app.py の agent_type_defs 差し込み参照。agent_type_run_script_allowlist
+    登録があればそのスキルのみ、filter_skills_for_agent_type参照）ため、ここで
     絞ってもスキル自体へアクセスする手段が失われるわけではない。
 
     Args:
@@ -358,6 +359,34 @@ def filter_skills_for_main_agent_guard(skills: list[Skill], config: "Config") ->
     if config.main_agent_tool_guard_mode == "false":
         return skills
     return [s for s in skills if is_skill_directly_runnable(s, config)]
+
+
+def filter_skills_for_agent_type(
+    skills: list[Skill],
+    agent_type: str,
+    entries: Iterable[tuple[str, str | tuple[str, str]]],
+) -> list[Skill]:
+    """サブエージェント（agents/*.md）の `{{skills}}` へ載せるスキルを、
+    [scripts].agent_type_run_script_allowlist に登録されたものだけに絞り込む。
+
+    その agent_type のエントリが1件でもあれば、run_script で呼べない
+    スキルを一覧に載せても拒否されるだけなので、対象スキル（文字列指定は
+    そのスキル、[スキル名, スクリプト名] 指定はそのスキル名）だけを残す。
+    エントリが1件も無い agent_type は制限なしのため skills をそのまま返す
+    （render_agent_type_run_script_allowlist_block と同じ扱い）。
+
+    Args:
+        skills: scan_skills() が返した有効な Skill のリスト。
+        agent_type: 差し込み先の agents/*.md の frontmatter name。
+        entries: config.script_agent_type_run_script_allowlist（全 agent_type 分）。
+
+    Returns:
+        絞り込み後のスキルリスト（元の並び順を保つ）。
+    """
+    allowed = {target[0] if isinstance(target, tuple) else target for a, target in entries if a == agent_type}
+    if not allowed:
+        return skills
+    return [s for s in skills if s.name in allowed]
 
 
 def render_skills_block_with_guard_annotation(skills: list[Skill], config: "Config") -> str:

@@ -75,6 +75,7 @@ from src.memory import render_memory_block  # noqa: E402
 from src.project_instructions import render_project_instructions_block  # noqa: E402
 from src.skills import (  # noqa: E402
     build_system_prompt_from_block,
+    filter_skills_for_agent_type,
     filter_skills_for_main_agent_guard,
     render_skills_block,
     render_skills_block_with_guard_annotation,
@@ -201,8 +202,9 @@ def build_subagent_agent_types(config) -> list[dict]:
     """app.py の @cl.on_chat_start と同じ手順で、agents/*.md（dispatch_agent の
     agent_type）ごとに本番相当の system_prompt・bind対象ツールを組み立てる。
 
-    {{skills}}は主エージェント用ガード絞り込みを掛けない未フィルタ版
-    （app.py の render_skills_block(skills)、main_skills_block とは別物）を使う。
+    {{skills}}は主エージェント用ガード絞り込みを掛けず、
+    agent_type_run_script_allowlist 登録がある種別だけ登録スキルへ絞った版
+    （app.py と同じ filter_skills_for_agent_type、main_skills_block とは別物）を使う。
     tool_names（frontmatterの tools:）が省略されている種別は、
     _SUBAGENT_TOOLS 全量を継承する（src/tools/_state.py の
     _resolve_agent_types() と同じ解決ロジック）。
@@ -212,7 +214,6 @@ def build_subagent_agent_types(config) -> list[dict]:
         （name の昇順、scan_agent_types() の並びと同じ）。
     """
     skills = scan_skills([config.skills_dir, *config.locohane_skills_dirs])
-    subagent_skills_block = render_skills_block(skills)
     agent_type_defs = scan_agent_types([config.agents_dir, *config.locohane_agents_dirs])
     agent_types_block = render_agent_types_block(agent_type_defs)
     subagent_common = build_subagent_common_expanded(config)
@@ -222,7 +223,12 @@ def build_subagent_agent_types(config) -> list[dict]:
     results = []
     for a in agent_type_defs:
         expanded = (
-            a.system_prompt.replace("{{skills}}", subagent_skills_block)
+            a.system_prompt.replace(
+                "{{skills}}",
+                render_skills_block(
+                    filter_skills_for_agent_type(skills, a.name, config.script_agent_type_run_script_allowlist)
+                ),
+            )
             .replace("{{agent_types}}", agent_types_block)
             .replace(
                 "{{run_script_allowlist}}",

@@ -140,6 +140,7 @@ from src.plan_persist import plan_message_id, register_plan_persist
 from src.project_instructions import render_project_instructions_block
 from src.skills import (
     build_system_prompt_from_block,
+    filter_skills_for_agent_type,
     filter_skills_for_main_agent_guard,
     render_skills_block,
     render_skills_block_with_guard_annotation,
@@ -1715,7 +1716,7 @@ async def _setup() -> None:
     skills = scan_skills([_config.skills_dir, *_config.locohane_skills_dirs])
     # メインエージェントの system_prompt に差し込む {{skills}}/{{main_agent_blocked_tools_hint}}
     # は [main_agent_tool_guard].visibility_mode の値だけで組み立て方が変わる
-    # （dispatch_agent配下のサブエージェント用 skills_block は下記の通り未フィルタの
+    # （dispatch_agent配下のサブエージェント用 {{skills}} は下記の通り本ガードと無関係に
     # skills から別途組み立てるため、いずれのモードでもスキル自体は失われない）。
     # main_agent_tool_guard_mode（呼び出し制限そのもののON/OFF/範囲）とは独立した軸で、
     # mode=false の場合は filter_skills_for_main_agent_guard 等が内部で
@@ -1773,13 +1774,19 @@ async def _setup() -> None:
     # 各種別のシステムプロンプトにも {{skills}}/{{agent_types}} を差し込む
     # （本文で {{agent_types}} を使う種別が dispatch_agent の委譲先一覧を参照できるようにするため）。
     # agents_dir と locohane_agents_dirs をマージ（同名は locohane 側優先）。
+    # {{skills}} は [scripts].agent_type_run_script_allowlist に登録がある種別だけ
+    # 登録スキルへ絞る（run_script で呼べないスキルを載せても拒否されるだけのため）。
     agent_type_defs = scan_agent_types([_config.agents_dir, *_config.locohane_agents_dirs])
-    skills_block = render_skills_block(skills)
     agent_types_block = render_agent_types_block(agent_type_defs)
     agent_type_defs = [
         replace(
             a,
-            system_prompt=a.system_prompt.replace("{{skills}}", skills_block)
+            system_prompt=a.system_prompt.replace(
+                "{{skills}}",
+                render_skills_block(
+                    filter_skills_for_agent_type(skills, a.name, _config.script_agent_type_run_script_allowlist)
+                ),
+            )
             .replace("{{agent_types}}", agent_types_block)
             .replace(
                 "{{run_script_allowlist}}",
