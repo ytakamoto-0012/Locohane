@@ -26,7 +26,7 @@ from .diagnostics import (
     describe_current_task,
 )
 from .loop_guard import ThinkingLoopDetected, _chunk_delta_text, _ThinkingLoopDetector
-from .routing import _active_async_clients, _CURRENT_SESSION_ID, _select_endpoint
+from .routing import _active_async_clients, _CURRENT_SESSION_ID, _select_endpoint, get_preferred_sub_model
 from .thinking_control import (
     ThinkingControlSettings,
     apply_level,
@@ -428,7 +428,9 @@ async def build_model(
             config.sub_endpoints_inherit_main が True（[llm].sub_url 未指定）
             の場合、role="sub" は sub_routing_strategy を使わず、同一
             セッションでメインエージェントが直近実際に使った接続先を
-            そのまま継承する。
+            そのまま継承する。role="sub" で set_preferred_sub_model() により
+            モデル名が指定されている場合は、その model の接続先だけから選ぶ
+            （一致する接続先が無ければ指定を無視。_select_endpoint() 参照）。
         wait_when_busy: main_routing_strategy/sub_routing_strategy=round_robin
             かつ provider="llama_cpp" の接続先が全てビジーだった場合、空きが
             出るまで待つか（True、既定）。False の場合は待たずにフェイル
@@ -467,6 +469,7 @@ async def build_model(
         probe_timeout_seconds=config.round_robin_slots_probe_timeout_seconds,
         busy_poll_interval_seconds=config.round_robin_busy_poll_interval_seconds,
         wait_when_busy=wait_when_busy,
+        preferred_model=get_preferred_sub_model() if role == "sub" else None,
     )
     logger.info(
         "build_model()呼び出し: role=%s routing_strategy=%s session_id=%r -> "

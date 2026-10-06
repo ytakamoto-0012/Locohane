@@ -2,7 +2,7 @@
 
 ClaudeCode の `.claude/agents/*.md` 相当。agents_dir 配下の各 `*.md` を
 1ファイル=1種別として走査し、YAML frontmatter（name, description, 任意で
-tools）をパース・検証する。仕様に準拠しないファイルは例外を投げず
+tools・model）をパース・検証する。仕様に準拠しないファイルは例外を投げず
 ログ警告してスキップし、全体は落とさない（scan_skills() と同方針）。
 
 tools.py はここから意図的に import しない（BaseTool への解決は tools.py
@@ -38,12 +38,18 @@ class AgentType:
             正規化した list[str]）。省略時は None（呼び出し側が既定の
             ツール一式を継承させる）。
         system_prompt: frontmatter を除いた本文（`{{skills}}` は未置換のまま）。
+        model: frontmatter の model（Anthropic公式のサブエージェント仕様の
+            model 相当）。[llm].sub_url の接続先の model 名を書くと、その
+            モデルの接続先だけから sub_routing_strategy に従って選ぶ。
+            一致する接続先が無い場合は無視される（src/llm/routing.py の
+            _select_endpoint 参照）。省略時は None。
     """
 
     name: str
     description: str
     tool_names: list[str] | None
     system_prompt: str
+    model: str | None = None
 
 
 def _parse_frontmatter(text: str) -> dict | None:
@@ -150,6 +156,7 @@ def _scan_one(root: Path) -> list[AgentType]:
                 description=description.strip(),
                 tool_names=_parse_tools_field(fm.get("tools")),
                 system_prompt=body.strip() + "\n",
+                model=(str(fm["model"]).strip() or None) if fm.get("model") is not None else None,
             )
         )
         logger.info("エージェント種別発見: %s", name)

@@ -352,6 +352,7 @@ async def dispatch_agent_batch(
     path: str = "",
     group_size: int = 15,
     orchestrator_skill: str | None = None,
+    model: str | None = None,
 ) -> str:
     """フォルダ内の多数のファイルへ同じ処理を行う作業を、自動でグループに分けて複数のサブエージェントへ並列に委譲する。
 
@@ -387,6 +388,7 @@ async def dispatch_agent_batch(
             伴うなら15以下）。1〜[subagent].max_iterations の範囲に丸める。
             グループ数が設定の上限を超える場合は起動前にエラーになる（上限はエラー文に示す）。
         orchestrator_skill: dispatch_agent と同じ（通常は省略）。
+        model: dispatch_agent と同じ（通常は省略）。
 
     Returns:
         グループごとの処理結果（状態と最終回答の先頭部分）をまとめたテキスト。
@@ -447,14 +449,16 @@ async def dispatch_agent_batch(
                 return error
         task_texts.append(text)
 
+    model = (model or "").strip() or None
     logger.info(
-        "dispatch_agent_batch: agent_type=%r base=%s pattern=%r files=%d groups=%d group_size=%d",
+        "dispatch_agent_batch: agent_type=%r base=%s pattern=%r files=%d groups=%d group_size=%d model=%r",
         agent_type,
         base,
         pattern,
         len(files),
         len(groups),
         size,
+        model,
     )
 
     _purge_stale_dispatch_agent_jobs()
@@ -478,6 +482,7 @@ async def dispatch_agent_batch(
             max_iterations=_state._SUBAGENT_MAX_ITERATIONS,
             # 進捗はこのツールが全グループ分を1件にまとめてpushする。
             push_progress=False,
+            model=model,
         )
         job_id = uuid.uuid4().hex[:12]
         # 同時実行数は _run_dispatch_agent_job 内のセッション単位セマフォ

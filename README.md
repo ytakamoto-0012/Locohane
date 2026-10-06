@@ -149,8 +149,24 @@
 `dispatch_agent` のみ、`src/subagent.py` 内で独立した ReAct ループを回す特殊なツールで、
 その内部のツール呼び出し（`read_skill`/`read_skill_file`/`run_script`/`execute_python_code` 等、
 `agent_type` で選んだ種別が持つツールに限る）は親の会話履歴・グラフトレースには乗らない
-（コンテキスト節約のため意図的な設計）。種別定義は `agents/*.md`（`name`/`description`/`tools`
+（コンテキスト節約のため意図的な設計）。種別定義は `agents/*.md`（`name`/`description`/`tools`/`model`
 の frontmatter、ClaudeCode の `.claude/agents/*.md` 相当）を起動時に走査して読み込む。
+
+`model`（任意）には `[llm].sub_url` の接続先の `model` 名を書く。指定するとその種別のサブエージェントは、
+`sub_url` のうち `model` が完全一致する接続先だけを候補にして `sub_routing_strategy` に従って接続先を選ぶ
+（`sub_url` 未指定でメインの接続先を継承する場合も、継承先が指定モデルでなければ指定モデルの接続先から選ぶ）。
+一致する接続先が無い（または全て `start`/`end` の時間帯外の）場合は指定を無視し、通常のルーティング規則に従う。
+`dispatch_agent`/`dispatch_agent_batch` の `model` 引数でも1回の委譲ごとに指定でき、frontmatter より優先される。
+ジョブ内の再構築・圧縮用のモデル構築にも同じ指定が適用される（`src/llm/routing.py` の `_PREFERRED_SUB_MODEL`）。
+
+```markdown
+---
+name: explore
+description: ...
+tools: read_skill, Read, Grep
+model: Qwen3.6-35B-A3B
+---
+```
 
 起動時に `[paths].project_locohane_dir`（既定 `.locohane`）配下の `LOCOHANE.md`
 （存在すれば）も読み込まれ、システムプロンプトの `{{project_instructions}}` へ
@@ -232,7 +248,7 @@ LLM は `read_skill`/`read_skill_file`/`run_script` という**ビルトイン�
 | `search_path_memory` | 現在の会話のパスメモリー（`@N`）から、ファイル名等に似たパスを類似検索する（文字bigram＋コサイン類似度、読み取り専用） |
 | `provide_download` | 既存のファイルをチャット画面にダウンロードボタンとして提示する |
 | `analyze_image` | 画像ファイルをLLMへ視覚情報として見せ、LLM自身が内容を解析・説明・判断する（Vision対応モデル向け）。`show_in_chat=True` を指定すると、解析と同時にチャット画面へもプレビュー表示する（「表示して」「見せて」にはこちらを使う。表示だけして中身を見ない、という呼び方はできない）。回答本文（Markdownテーブルのセル等）の中に画像を組み込みたい場合は、ツールを使わず回答テキストへ直接 `![説明](絶対パス)` と書けばよい（送信直前に自動でブラウザから取得可能なURLへ変換される。`app.py` の `_embed_local_images_as_session_urls`） |
-| `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される。任意の `orchestrator_skill` 引数（複数SKILLを横断的に使うオーケストレーター役SKILL.mdのスキル名）を指定すると、そのSKILL.md本文全体がtaskの先頭へ機械的に注入され、必須ルール・禁止事項の要約時の脱落を防ぐ（詳細は `skills/SKILLS_README.md` 7節）。完了までの間、進捗（経過時間・反復回数）をチャットへ直接通知しながら待つため、LLM自身がポーリングする必要は無い。設定した安全上限（`[subagent].background_inline_wait_max_seconds`）を超えてもなお完了しない場合のみ `job_id` を返してターンを終える |
+| `dispatch_agent` | タスクをサブエージェント（`src/subagent.py`）へ委譲し最終回答のみ受け取る。`agent_type` 引数でサブエージェントの種別を必ず指定する（暗黙の既定値は無い）。種別定義は `agents/*.md`（ClaudeCode の `.claude/agents/*.md` 相当）。`.locohane/agents/*.md` ともマージ走査され、同名は `.locohane/agents` 側が優先される。任意の `orchestrator_skill` 引数（複数SKILLを横断的に使うオーケストレーター役SKILL.mdのスキル名）を指定すると、そのSKILL.md本文全体がtaskの先頭へ機械的に注入され、必須ルール・禁止事項の要約時の脱落を防ぐ（詳細は `skills/SKILLS_README.md` 7節）。任意の `model` 引数で `[llm].sub_url` のモデル名を指定でき、`agents/*.md` の frontmatter `model` より優先される（存在しないモデル名は無視）。完了までの間、進捗（経過時間・反復回数）をチャットへ直接通知しながら待つため、LLM自身がポーリングする必要は無い。設定した安全上限（`[subagent].background_inline_wait_max_seconds`）を超えてもなお完了しない場合のみ `job_id` を返してターンを終える |
 | `dispatch_agent_batch` | フォルダ内の多数のファイルへ同じ処理を行う作業を、複数のサブエージェントへ並列に委譲する。`pattern`（`path`からの相対。`/`を含まなければ直下のみ、`*/ocr_md/*.md`・`**/*.jpg`のように階層を含めればサブフォルダも探索。`{a,b}`展開可。`..`等で`path`の外に出るファイルは対象外）に一致するファイルを`path`からの相対パス順に取得し、`group_size`件ずつに分けて各グループの task 末尾へ担当ファイルの絶対パスを機械的に付け足し、`dispatch_agent` と同じジョブ基盤（`[subagent].max_parallel` のセマフォ・進捗通知・停止ボタン対応）で並列実行する。LLMは1回呼ぶだけでよく、1応答で複数の `dispatch_agent` を並べる必要が無い（低パラメータモデルでは並列発行が安定しないため）。戻り値はグループごとの状態と最終回答の先頭400文字のみで、全文は thread note に保存する。「エラー」「打ち切り」「強制終了」「未実行」のグループには再委任用に担当ファイルの一覧も載せる。進捗通知はグループごとではなく全グループを集約した1件のみ。1回あたりのグループ数は `[subagent].batch_max_groups` まで（既定50、0以下で無制限。超える場合は起動前にエラー）。安全上限（`background_inline_wait_max_seconds`）超過時は完了済みグループの結果と実行中グループの `job_id` を返す（実行中グループのStepは「バックグラウンド」バッジで閉じる）。LLMのタイムアウト・通信エラーで打ち切られたグループが `[subagent].batch_stop_after_unreachable_groups` 件に達すると、残りのグループは起動せず「未実行」として返す。停止ボタンで中断した場合は、完了済みグループの結果と未完了グループの担当ファイルを thread note に保存し、次のターンの案内にその topic を載せる |
 | `check_dispatch_agent_job` / `stop_dispatch_agent_job` | 上記の安全上限超過フォールバック時のみ使う、ジョブの状況確認・強制終了 |
 | `create_plan` / `approve_plan` / `update_task_progress` | 複数ステップの実行計画を作成・承認・進捗更新（承認後は`run_script`の個別確認をスキップ）。各ステップは `content`（内容）と `activeForm`（実行中表示用の現在進行形）を持つ |
@@ -935,7 +951,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `main_url` | メインエージェント用のLLM接続先リスト（`[{"base_url":...,"api_key":...,"model":...}]` のJSON/Python風リスト形式、複数指定可。各要素に任意で `start`/`end`（使用可能時間帯、単位は時間、分は小数、必ずセットで指定）、`provider`（`openai_compatible`既定/`llama_cpp`/`vllm`。推論サーバーの種類で、拡張パラメータ名とthinkingのフィールド名をサーバーに合わせる（`src/llm/dialect.py`）。`llama_cpp`は`round_robin`戦略が選ぶ前にGET /slotsで空き確認する対象にもなる）を追加でき、リスト全体で最低1件は`start`/`end`両方省略した常時使用可能な接続先が必要） | `LLM_MAIN_URL` |
 | `[llm]` | `main_routing_strategy` | `main_url` が複数件のときの選び方（`round_robin`/`random`/`priority_failover`。`round_robin`はprovider="llama_cpp"の接続先を選ぶ前にGET /slotsで空きを確認し、無ければスキップ、全滅なら待機する） | `LLM_MAIN_ROUTING_STRATEGY` |
 | `[llm]` | `sub_url` | サブエージェント（`dispatch_agent`）用のLLM接続先リスト。形式は `main_url` と同じ | `LLM_SUB_URL` |
-| `[llm]` | `sub_routing_strategy` | `sub_url` が複数件のときの選び方。形式は `main_routing_strategy` と同じ | `LLM_SUB_ROUTING_STRATEGY` |
+| `[llm]` | `sub_routing_strategy` | `sub_url` が複数件のときの選び方。形式は `main_routing_strategy` と同じ。サブエージェントにモデル指定（`agents/*.md` の `model` / `dispatch_agent` の `model` 引数）がある場合は、そのモデルの接続先だけを候補にこの規則で選ぶ（一致する接続先が無ければ指定は無視） | `LLM_SUB_ROUTING_STRATEGY` |
 | `[llm]` | `temperature` | 生成のばらつき | `LLM_TEMPERATURE` |
 | `[llm]` | `top_p` | 累積確率上位のみサンプリング（空欄で未指定） | `LLM_TOP_P` |
 | `[llm]` | `top_k` | 上位k候補のみサンプリング（llama.cpp/vLLM拡張、空欄で未指定） | `LLM_TOP_K` |

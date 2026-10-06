@@ -221,6 +221,8 @@ class ResolvedAgentType:
     description: str
     system_prompt: str
     tools: list[BaseTool]
+    # frontmatter の model（AgentType.model 参照）。None なら通常のルーティング。
+    model: str | None = None
 
 
 # init_tools() で注入されるモジュール設定（起動時に一度だけ設定）。
@@ -665,5 +667,6 @@ def _resolve_agent_types(agent_type_defs: list[AgentType]) -> dict[str, Resolved
             description=agent_def.description,
             system_prompt=agent_def.system_prompt,
             tools=tools,
+            model=agent_def.model,
         )
     return resolved

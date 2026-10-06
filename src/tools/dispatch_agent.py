@@ -107,6 +107,7 @@ async def dispatch_agent(
     agent_type: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
     orchestrator_skill: str | None = None,
+    model: str | None = None,
 ) -> str:
     """タスクを独立したサブエージェントへ委譲し、最終回答のみを受け取る。
 
@@ -146,6 +147,9 @@ async def dispatch_agent(
             必須ルール・禁止事項を要約せずサブエージェントへ渡せる。通常の委譲では
             省略してよい。存在しないスキル名を指定した場合は起動前に「エラー: ...」
             を返す（この場合 job は作られない）。
+        model: サブエージェントに使わせるモデル名。ユーザーがモデルを指定した
+            場合のみ指定し、通常は省略する（省略時は agent_type の既定）。
+            存在しないモデル名は無視される。
 
     Returns:
         通常はサブエージェントの最終回答テキスト。安全上限に達した場合のみ
@@ -169,11 +173,13 @@ async def dispatch_agent(
         if error:
             return error
         task = injected_task
+    model = (model or "").strip() or None
     logger.info(
-        "dispatch_agent: task=%r agent_type=%r orchestrator_skill=%r",
+        "dispatch_agent: task=%r agent_type=%r orchestrator_skill=%r model=%r",
         task,
         agent_type,
         orchestrator_skill,
+        model,
     )
 
     _purge_stale_dispatch_agent_jobs()
@@ -193,6 +199,7 @@ async def dispatch_agent(
         result=None,
         error_message=None,
         max_iterations=_state._SUBAGENT_MAX_ITERATIONS,
+        model=model,
     )
     job_id = uuid.uuid4().hex[:12]
     job.runner_task = asyncio.create_task(_run_dispatch_agent_job(job, job_id, task, resolved))

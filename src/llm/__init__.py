@@ -45,8 +45,11 @@ from .routing import (
     aclose_model_client,
     forget_session,
     get_current_session,
+    get_preferred_sub_model,
     mark_last_endpoint_failed,
+    reset_preferred_sub_model,
     set_current_session,
+    set_preferred_sub_model,
 )
 
 __all__ = [
@@ -61,11 +64,14 @@ __all__ = [
     "enable_thinking_control",
     "forget_session",
     "get_current_session",
+    "get_preferred_sub_model",
     "init_llm_concurrency",
     "tool_loop_nudge_text",
     "mark_last_endpoint_failed",
     "mark_user_turn",
     "pick_loop_nudge_message",
     "recent_cancel_scope_breakage",
+    "reset_preferred_sub_model",
     "set_current_session",
+    "set_preferred_sub_model",
 ]

@@ -11,6 +11,7 @@ import time
 import traceback
 
 from .. import subagent
+from ..llm import reset_preferred_sub_model, set_preferred_sub_model
 from ..subagent import dump_messages_for_cancelled_rescue, is_truncated_result
 
 from . import _state
@@ -139,6 +140,9 @@ class _DispatchAgentJob:
     # 行わない。dispatch_agent_batch はグループ数分のメッセージが並ぶのを
     # 避けるため、全グループをまとめた進捗を自前で1件だけpushする。
     push_progress: bool = True
+    # dispatch_agent/dispatch_agent_batch の model 引数。指定時は agents/*.md の
+    # frontmatter model より優先する（_run_dispatch_agent_job 参照）。
+    model: str | None = None
 
 
 # dispatch_agent のジョブレジストリ。_script_job._BACKGROUND_JOBS と同じ理由で
@@ -270,6 +274,9 @@ async def _run_dispatch_agent_job(
     token = _IN_SUBAGENT.set(True)
     run_id_token = _SUBAGENT_RUN_ID.set(job.run_id)
     agent_type_token = _SUBAGENT_AGENT_TYPE.set(job.agent_type)
+    # このタスク内の build_model(role="sub")（再構築・圧縮用を含む）が使うモデル。
+    # 一致する [llm].sub_url の接続先が無ければルーティング側で無視される。
+    model_token = set_preferred_sub_model(job.model or resolved.model)
     progress_task = asyncio.create_task(_push_dispatch_agent_progress(job, job_id)) if job.push_progress else None
 
     def _on_iteration(iteration: int, max_iterations: int) -> None:
@@ -336,6 +343,7 @@ async def _run_dispatch_agent_job(
         _IN_SUBAGENT.reset(token)
         _SUBAGENT_RUN_ID.reset(run_id_token)
         _SUBAGENT_AGENT_TYPE.reset(agent_type_token)
+        reset_preferred_sub_model(model_token)
         # 委譲が完了するたびに main_agent_tool_guard のカウンタをリセットする。
         # 1ターン内で複数回「調査→delegate」を繰り返す正当なケースを妨げないため。
         # ただし、安全上限フォールバックや停止ボタン等で呼び出し元のターンが
