@@ -63,7 +63,10 @@ def test_admin_section_override_ignored(tmp_path):
     ov_path = tmp_path / "overrides.json"
     _write_overrides(ov_path, {"admin": {"port": "9999"}})
     cfg = load_config(overrides_path=ov_path)
-    assert cfg.admin_port == 8001  # config.ini の既定値のまま
+    # config.ini の値のまま（値自体は運用で変わるため、上書きなしの読込結果と比べる）
+    cfg_default = load_config(overrides_path=tmp_path / "missing.json")
+    assert cfg.admin_port == cfg_default.admin_port
+    assert cfg.admin_port != 9999
 
 
 def test_malformed_json_raises(tmp_path):

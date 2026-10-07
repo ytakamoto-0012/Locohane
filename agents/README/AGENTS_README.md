@@ -42,7 +42,7 @@ model: QWEN3.6_35B-A3B      # 任意。[llm].sub_url の接続先の model 名�
 - `model` は省略可能（Anthropic公式仕様の `model` 相当）。`config.ini` の `[llm].sub_url` に並べた接続先の `model` 名を書くと、その種別のサブエージェントは**その `model` の接続先だけを候補に `sub_routing_strategy` で接続先を選ぶ**（比較は前後空白・大文字小文字を無視）。
   - 一致する接続先が無い、または一致する接続先が全て `start`/`end` の時間帯外の場合は、指定を無視して通常のルーティングに従う（起動は止めず、`app.log` に WARNING を出す）。
   - `sub_url` 未指定（メインの接続先を継承する設定）の場合も、継承先が指定モデルでなければ `main_url` の中の指定モデルの接続先から選ぶ。
-  - `model: inherit`（ClaudeCode の定義ファイル由来）と空文字は指定なしとして扱う。`sonnet`/`opus` 等のエイリアスは解釈しない（一致する接続先が無いものとして無視される）。
+  - 省略・`model: inherit`（ClaudeCode の定義ファイル由来）・空文字は指定なしとして扱い、`config.ini` の `[llm].sub_default_model` があればそのモデルを同じ扱いで使う（空欄なら従来どおりモデル名を見ずに選ぶ）。`sub_url` 未指定（メインの接続先を引き継ぐ設定）でも `sub_default_model` は有効で、メインが別モデルの接続先を使っていると引き継がず、`main_url` のうち `sub_default_model` のモデルの接続先から選ぶ（メインと同じ接続先を使わせたいなら空欄にする）。`sonnet`/`opus` 等のエイリアスは解釈しない（一致する接続先が無いものとして無視される）。
   - 実装: `_parse_model_field()`（`src/agent_types.py`）→ `ResolvedAgentType.model`（`src/tools/_state.py`）→ `_run_dispatch_agent_job` が `set_preferred_sub_model()` でジョブのタスク内だけに設定（`src/tools/_dispatch_agent_job.py`）→ `build_model(role="sub")` が `_select_endpoint(preferred_model=...)` へ渡す（`src/llm/routing.py`）。contextvar なのでジョブ内の再構築・圧縮用の `build_model()` にも同じ指定が効き、メインエージェントや他のジョブへは漏れない。
   - `dispatch_agent`/`dispatch_agent_batch` の `model` 引数（5節）で1回の委譲ごとに上書きできる（引数が優先）。
 

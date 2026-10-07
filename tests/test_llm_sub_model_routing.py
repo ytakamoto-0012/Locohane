@@ -118,3 +118,48 @@ def test_agent_type_frontmatter_model_inherit_is_unspecified(tmp_path) -> None:
     by_name = {a.name: a for a in scan_agent_types(tmp_path)}
     assert by_name["inherit-model"].model is None
     assert by_name["empty-model"].model is None
+
+
+class _StopBuild(Exception):
+    pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("job_model", "default_model", "expected"),
+    [(None, "B", "B"), ("A", "B", "A"), (None, None, None)],
+)
+async def test_build_model_uses_sub_default_model_when_unspecified(monkeypatch, tmp_path, job_model, default_model, expected) -> None:
+    import dataclasses
+
+    from src.config import load_config
+    from src.llm import chat_model
+
+    config = dataclasses.replace(load_config(overrides_path=tmp_path / "missing.json"), sub_default_model=default_model)
+    captured: dict = {}
+
+    async def _fake_select_endpoint(*args, **kwargs):
+        captured["preferred_model"] = kwargs.get("preferred_model")
+        raise _StopBuild
+
+    monkeypatch.setattr(chat_model, "_select_endpoint", _fake_select_endpoint)
+    token = llm.set_preferred_sub_model(job_model)
+    try:
+        with pytest.raises(_StopBuild):
+            await llm.build_model(config, role="sub")
+        assert captured["preferred_model"] == expected
+        # メインエージェントには適用しない。
+        with pytest.raises(_StopBuild):
+            await llm.build_model(config, role="main")
+        assert captured["preferred_model"] is None
+    finally:
+        llm.reset_preferred_sub_model(token)
+
+
+def test_sub_default_model_config_parsing(monkeypatch, tmp_path) -> None:
+    from src.config import load_config
+
+    monkeypatch.setenv("LLM_SUB_DEFAULT_MODEL", "  B  ")
+    assert load_config(overrides_path=tmp_path / "missing.json").sub_default_model == "B"
+    monkeypatch.setenv("LLM_SUB_DEFAULT_MODEL", "")
+    assert load_config(overrides_path=tmp_path / "missing.json").sub_default_model is None

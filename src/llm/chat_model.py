@@ -431,6 +431,8 @@ async def build_model(
             そのまま継承する。role="sub" で set_preferred_sub_model() により
             モデル名が指定されている場合は、その model の接続先だけから選ぶ
             （一致する接続先が無ければ指定を無視。_select_endpoint() 参照）。
+            指定が無い場合は config.sub_default_model（[llm].sub_default_model）
+            を同じ扱いで使う。
         wait_when_busy: main_routing_strategy/sub_routing_strategy=round_robin
             かつ provider="llama_cpp" の接続先が全てビジーだった場合、空きが
             出るまで待つか（True、既定）。False の場合は待たずにフェイル
@@ -469,7 +471,10 @@ async def build_model(
         probe_timeout_seconds=config.round_robin_slots_probe_timeout_seconds,
         busy_poll_interval_seconds=config.round_robin_busy_poll_interval_seconds,
         wait_when_busy=wait_when_busy,
-        preferred_model=get_preferred_sub_model() if role == "sub" else None,
+        # 委譲ごとの指定（frontmatter model / dispatch_agent の model 引数）が
+        # 無ければ [llm].sub_default_model を使う。sub_url に軽量・高性能モデルを
+        # 混在させたとき、未指定の委譲が無作為にどちらかへ振られるのを防ぐ。
+        preferred_model=(get_preferred_sub_model() or config.sub_default_model) if role == "sub" else None,
     )
     logger.info(
         "build_model()呼び出し: role=%s routing_strategy=%s session_id=%r -> "

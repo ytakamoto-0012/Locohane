@@ -158,6 +158,10 @@
 `model: inherit`（ClaudeCode の定義ファイル由来）と空文字は指定なしとして扱う。
 一致する接続先が無い（または全て `start`/`end` の時間帯外の）場合は指定を無視し、通常のルーティング規則に従う。
 `dispatch_agent`/`dispatch_agent_batch` の `model` 引数でも1回の委譲ごとに指定でき、frontmatter より優先される。
+どちらも無い場合は `[llm].sub_default_model`（空欄なら従来どおりモデル名を見ずに選ぶ）が同じ扱いで使われる。
+`sub_url` 未指定でメインの接続先を引き継ぐ設定でも `sub_default_model` は有効なため、メインが別モデルの接続先を
+使っていると引き継がず、`main_url` のうち `sub_default_model` のモデルの接続先から選ぶ点に注意
+（メインと同じ接続先を使わせたいなら空欄にする）。
 ジョブ内の再構築・圧縮用のモデル構築にも同じ指定が適用される（`src/llm/routing.py` の `_PREFERRED_SUB_MODEL`）。
 
 ```markdown
@@ -953,6 +957,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[llm]` | `main_routing_strategy` | `main_url` が複数件のときの選び方（`round_robin`/`random`/`priority_failover`。`round_robin`はprovider="llama_cpp"の接続先を選ぶ前にGET /slotsで空きを確認し、無ければスキップ、全滅なら待機する） | `LLM_MAIN_ROUTING_STRATEGY` |
 | `[llm]` | `sub_url` | サブエージェント（`dispatch_agent`）用のLLM接続先リスト。形式は `main_url` と同じ | `LLM_SUB_URL` |
 | `[llm]` | `sub_routing_strategy` | `sub_url` が複数件のときの選び方。形式は `main_routing_strategy` と同じ。サブエージェントにモデル指定（`agents/*.md` の `model` / `dispatch_agent` の `model` 引数）がある場合は、そのモデルの接続先だけを候補にこの規則で選ぶ（一致する接続先が無ければ指定は無視） | `LLM_SUB_ROUTING_STRATEGY` |
+| `[llm]` | `sub_default_model` | サブエージェントにモデル指定が無い場合に使うモデル名（`sub_url` の `model` と大文字小文字を区別せず照合）。`sub_url` に軽量・高性能モデルを混在させる場合に、未指定の委譲が無作為に振られるのを防ぐ。空欄なら従来どおりモデル名を見ずに選ぶ（一致する接続先が無ければ無視）。**`sub_url` 未指定（メインの接続先を引き継ぐ設定）でも有効で、メインが別モデルの接続先を使っていると引き継がず、`main_url` のうちこのモデルの接続先から選ぶ** | `LLM_SUB_DEFAULT_MODEL` |
 | `[llm]` | `temperature` | 生成のばらつき | `LLM_TEMPERATURE` |
 | `[llm]` | `top_p` | 累積確率上位のみサンプリング（空欄で未指定） | `LLM_TOP_P` |
 | `[llm]` | `top_k` | 上位k候補のみサンプリング（llama.cpp/vLLM拡張、空欄で未指定） | `LLM_TOP_K` |

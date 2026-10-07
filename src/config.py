@@ -187,6 +187,14 @@ class Config:
         sub_routing_strategy: sub_endpoints が複数ある場合の選び方
             （sub_endpoints_inherit_main が True の場合は無視される）。
             形式は main_routing_strategy と同じ。
+        sub_default_model: サブエージェントにモデル指定（agents/*.md の
+            frontmatter model・dispatch_agent の model 引数）が無い場合に
+            優先するモデル名（[llm].sub_default_model）。None（空欄）なら
+            従来どおりモデル名を見ずに sub_routing_strategy で選ぶ。
+            sub_endpoints に一致する model が無ければ無視される
+            （src/llm/chat_model.py の build_model 参照）。
+            sub_endpoints_inherit_main が True でも有効で、メインが直近
+            使った接続先が別モデルなら継承せず、このモデルの接続先から選ぶ。
         temperature: 生成時のtemperature。
         top_p: 累積確率上位のみサンプリングする閾値。None なら未指定
             （llama-server既定に委ねる）。
@@ -864,6 +872,7 @@ class Config:
     sub_endpoints: tuple[LLMEndpoint, ...]
     sub_endpoints_inherit_main: bool
     sub_routing_strategy: str
+    sub_default_model: str | None
     temperature: float
     top_p: float | None
     top_k: int | None
@@ -2430,6 +2439,7 @@ def load_config(
             os.getenv("LLM_SUB_ROUTING_STRATEGY", llm.get("sub_routing_strategy", "round_robin")),
             "sub_routing_strategy",
         ),
+        sub_default_model=str(os.getenv("LLM_SUB_DEFAULT_MODEL", llm.get("sub_default_model", "")) or "").strip() or None,
         temperature=float(os.getenv("LLM_TEMPERATURE", llm.get("temperature", 0.3))),
         top_p=_as_optional_float(os.getenv("LLM_TOP_P", llm.get("top_p", ""))),
         top_k=_as_optional_int(os.getenv("LLM_TOP_K", llm.get("top_k", ""))),
