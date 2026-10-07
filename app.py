@@ -1702,14 +1702,25 @@ async def _setup() -> None:
         ],
     )
     logging.getLogger(__name__).info(
-        "LLM接続先設定（起動時読込み）: sub_endpoints_inherit_main=%s sub_routing_strategy=%s sub_endpoints=%s",
+        "LLM接続先設定（起動時読込み）: sub_endpoints_inherit_main=%s sub_routing_strategy=%s sub_default_model=%r sub_endpoints=%s",
         _config.sub_endpoints_inherit_main,
         _config.sub_routing_strategy,
+        _config.sub_default_model,
         [
             f"[{i}] base_url={e.base_url} model={e.model} start={e.start} end={e.end} provider={e.provider}"
             for i, e in enumerate(_config.sub_endpoints)
         ],
     )
+    # 既定モデル名の誤りは委譲のたびではなく起動時に1回だけ知らせる
+    # （_select_endpoint は委譲ごとには INFO に留める）。
+    if _config.sub_default_model and not any(
+        (e.model or "").strip().casefold() == _config.sub_default_model.casefold() for e in _config.sub_endpoints
+    ):
+        logging.getLogger(__name__).warning(
+            "[llm].sub_default_model=%r に一致する model の接続先が %s に無いため、既定モデルの指定は無視されます",
+            _config.sub_default_model,
+            "main_url（sub_url 未指定のため継承）" if _config.sub_endpoints_inherit_main else "sub_url",
+        )
 
     # 第1段階 Discovery: スキルを走査して name+description をシステムプロンプトへ。
     # skills_dir と locohane_skills_dirs をマージ（同名は locohane 側優先）。

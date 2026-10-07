@@ -127,7 +127,7 @@ class _StopBuild(Exception):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("job_model", "default_model", "expected"),
-    [(None, "B", "B"), ("A", "B", "A"), (None, None, None)],
+    [(None, "B", (None, "B")), ("A", "B", ("A", "B")), (None, None, (None, None))],
 )
 async def test_build_model_uses_sub_default_model_when_unspecified(monkeypatch, tmp_path, job_model, default_model, expected) -> None:
     import dataclasses
@@ -139,7 +139,7 @@ async def test_build_model_uses_sub_default_model_when_unspecified(monkeypatch, 
     captured: dict = {}
 
     async def _fake_select_endpoint(*args, **kwargs):
-        captured["preferred_model"] = kwargs.get("preferred_model")
+        captured["models"] = (kwargs.get("preferred_model"), kwargs.get("fallback_model"))
         raise _StopBuild
 
     monkeypatch.setattr(chat_model, "_select_endpoint", _fake_select_endpoint)
@@ -147,11 +147,11 @@ async def test_build_model_uses_sub_default_model_when_unspecified(monkeypatch, 
     try:
         with pytest.raises(_StopBuild):
             await llm.build_model(config, role="sub")
-        assert captured["preferred_model"] == expected
+        assert captured["models"] == expected
         # メインエージェントには適用しない。
         with pytest.raises(_StopBuild):
             await llm.build_model(config, role="main")
-        assert captured["preferred_model"] is None
+        assert captured["models"] == (None, None)
     finally:
         llm.reset_preferred_sub_model(token)
 
@@ -163,3 +163,98 @@ def test_sub_default_model_config_parsing(monkeypatch, tmp_path) -> None:
     assert load_config(overrides_path=tmp_path / "missing.json").sub_default_model == "B"
     monkeypatch.setenv("LLM_SUB_DEFAULT_MODEL", "")
     assert load_config(overrides_path=tmp_path / "missing.json").sub_default_model is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["round_robin", "random", "priority_failover"])
+async def test_fallback_model_used_when_unspecified(strategy: str) -> None:
+    session_id = _unique_session_id(f"fallback-{strategy}")
+    try:
+        llm.set_current_session(session_id)
+        picks = {(await llm._select_endpoint("sub", _endpoints(), strategy, fallback_model="a")).base_url for _ in range(8)}
+        assert picks <= {"http://a0/v1", "http://a2/v1"}
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_unknown_preferred_model_falls_back_to_default_model() -> None:
+    session_id = _unique_session_id("fallback-unknown")
+    try:
+        llm.set_current_session(session_id)
+        picks = {
+            (await llm._select_endpoint("sub", _endpoints(), "round_robin", preferred_model="Z", fallback_model="B")).base_url
+            for _ in range(4)
+        }
+        assert picks == {"http://b1/v1"}
+        # 指定モデルが有効ならそちらが優先される。
+        picked = await llm._select_endpoint("sub", _endpoints(), "priority_failover", preferred_model="C", fallback_model="B")
+        assert picked.base_url == "http://c3/v1"
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["round_robin", "priority_failover"])
+async def test_preferred_model_outside_time_window_falls_back_to_default_model(strategy: str) -> None:
+    endpoints = (
+        LLMEndpoint(base_url="http://a0/v1", api_key="dummy", model="A"),
+        LLMEndpoint(base_url="http://b1/v1", api_key="dummy", model="B"),
+        LLMEndpoint(base_url="http://x2/v1", api_key="dummy", model="X", start=0.0, end=0.0001),
+    )
+    session_id = _unique_session_id(f"fallback-window-{strategy}")
+    try:
+        llm.set_current_session(session_id)
+        for _ in range(3):
+            picked = await llm._select_endpoint("sub", endpoints, strategy, preferred_model="X", fallback_model="B")
+            assert picked.base_url == "http://b1/v1"
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_unknown_default_model_falls_back_to_normal_routing() -> None:
+    session_id = _unique_session_id("fallback-none")
+    try:
+        llm.set_current_session(session_id)
+        picks = {(await llm._select_endpoint("sub", _endpoints(), "round_robin", fallback_model="Z")).base_url for _ in range(4)}
+        assert picks == {e.base_url for e in _endpoints()}
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_inherit_from_main_with_default_model() -> None:
+    endpoints = _endpoints()
+    session_id = _unique_session_id("fallback-inherit")
+    try:
+        llm.set_current_session(session_id)
+        main_pick = await llm._select_endpoint("main", endpoints, "priority_failover")
+        assert main_pick.model == "A"
+        # メインが既定モデルと同じなら継承する。
+        same = await llm._select_endpoint("sub", endpoints, "priority_failover", inherit_from_role="main", fallback_model="A")
+        assert same.base_url == main_pick.base_url
+        # 別モデルなら継承せず既定モデルの接続先から選ぶ。
+        other = await llm._select_endpoint("sub", endpoints, "priority_failover", inherit_from_role="main", fallback_model="B")
+        assert other.base_url == "http://b1/v1"
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_inherit_kept_when_models_outside_time_window() -> None:
+    endpoints = (
+        LLMEndpoint(base_url="http://a0/v1", api_key="dummy", model="A"),
+        LLMEndpoint(base_url="http://b1/v1", api_key="dummy", model="B"),
+        LLMEndpoint(base_url="http://x2/v1", api_key="dummy", model="X", start=0.0, end=0.0001),
+    )
+    session_id = _unique_session_id("inherit-window")
+    try:
+        llm.set_current_session(session_id)
+        main_pick = await llm._select_endpoint("main", endpoints, "priority_failover")
+        # 指定・既定モデルが全て時間帯外なら、モデル指定が無いのと同じくメインを継承する。
+        for _ in range(4):
+            picked = await llm._select_endpoint("sub", endpoints, "round_robin", inherit_from_role="main", preferred_model="X")
+            assert picked.base_url == main_pick.base_url
+    finally:
+        llm.forget_session(session_id)

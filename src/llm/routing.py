@@ -351,24 +351,29 @@ def _model_matching_indices(endpoints: tuple[LLMEndpoint, ...], model: str | Non
     return matched or None
 
 
-def _narrow_to_model(eligible_indices: list[int], model_indices: list[int] | None) -> list[int]:
-    """使用可能な接続先（eligible_indices）を、指定モデルの接続先だけに絞り込む。
+def _narrow_to_model(eligible_indices: list[int], model_candidates: list[list[int]]) -> tuple[list[int], int | None]:
+    """使用可能な接続先（eligible_indices）を、モデル候補の優先順に絞り込む。
 
-    指定モデルの接続先が全て時間帯外の場合は、指定が無いのと同じく
-    eligible_indices をそのまま返す（「指定モデルが存在しない場合は無視」と
-    同じ扱い）。
+    model_candidates は「指定モデルの接続先」「既定モデル（[llm].sub_default_model）
+    の接続先」のように優先順に並べた index 一覧のリスト。先頭から見て、時間帯内の
+    接続先が1件以上残る最初の候補で絞り込む。どの候補も全て時間帯外なら、
+    指定が無いのと同じく eligible_indices をそのまま返す（「指定モデルが存在
+    しない場合は無視」と同じ扱い）。
 
     Args:
         eligible_indices: _compute_eligible_indices() の結果。
-        model_indices: _model_matching_indices() の結果。None なら絞り込まない。
+        model_candidates: _model_matching_indices() の結果（None を除いたもの）を
+            優先順に並べたリスト。空なら絞り込まない。
 
     Returns:
-        絞り込み後の index 一覧（1件以上）。
+        (絞り込み後の index 一覧（1件以上）, 採用した候補の model_candidates 内の
+        位置。どの候補も使えなかった／候補が無い場合は None)。
     """
-    if model_indices is None:
-        return eligible_indices
-    narrowed = [i for i in eligible_indices if i in model_indices]
-    return narrowed or eligible_indices
+    for position, model_indices in enumerate(model_candidates):
+        narrowed = [i for i in eligible_indices if i in model_indices]
+        if narrowed:
+            return narrowed, position
+    return eligible_indices, None
 
 
 async def _select_round_robin_endpoint(
@@ -378,7 +383,7 @@ async def _select_round_robin_endpoint(
     probe_timeout_seconds: float,
     busy_poll_interval_seconds: float,
     wait_when_busy: bool = True,
-    model_indices: list[int] | None = None,
+    model_candidates: list[list[int]] | None = None,
 ) -> int:
     """round_robin戦略の本体。呼び出しごとに順番を回しつつ、provider="llama_cpp"
     の接続先だけは選ぶ前に GET /slots で空きスロットの有無を確認する。
@@ -405,17 +410,18 @@ async def _select_round_robin_endpoint(
         busy_poll_interval_seconds: [llm].round_robin_busy_poll_interval_seconds。
         wait_when_busy: False の場合、全候補ビジー時に待機せず即座に
             フェイルセーフ選択する。
-        model_indices: 指定モデルの接続先の index 一覧（_model_matching_indices
-            参照）。指定時は候補をそれらに絞り込み、順番も指定モデル専用の
+        model_candidates: モデル候補（指定モデル・既定モデルの接続先の index 一覧）を
+            優先順に並べたリスト（_narrow_to_model 参照）。指定時は待機の周回ごとに
+            時間帯内の接続先が残る最初の候補へ絞り込み、順番もその候補専用の
             カウンタで回す。
 
     Returns:
         選ばれた接続先の index（endpoints に対する）。
     """
     attempt = 0
-    counter_key = role if model_indices is None else f"{role}|{','.join(map(str, model_indices))}"
     while True:
-        eligible_indices = _narrow_to_model(_compute_eligible_indices(endpoints), model_indices)
+        eligible_indices, position = _narrow_to_model(_compute_eligible_indices(endpoints), model_candidates or [])
+        counter_key = role if position is None else f"{role}|{','.join(map(str, model_candidates[position]))}"
         counter = _ROUND_ROBIN_COUNTERS.get(counter_key, 0)
         _ROUND_ROBIN_COUNTERS[counter_key] = counter + 1
         order = [eligible_indices[(counter + offset) % len(eligible_indices)] for offset in range(len(eligible_indices))]
@@ -481,6 +487,7 @@ async def _select_endpoint(
     busy_poll_interval_seconds: float = 2.0,
     wait_when_busy: bool = True,
     preferred_model: str | None = None,
+    fallback_model: str | None = None,
 ) -> LLMEndpoint:
     """config.ini [llm].main_routing_strategy / sub_routing_strategy に従って接続先を1つ選ぶ。
 
@@ -519,8 +526,15 @@ async def _select_endpoint(
         preferred_model: 指定時、model が一致する接続先だけを候補にして
             strategy に従って選ぶ（サブエージェントのモデル指定。
             _PREFERRED_SUB_MODEL 参照）。一致する接続先が無い（または全て
-            時間帯外の）場合は指定を無視して通常どおり選ぶ。inherit_from_role
-            の継承は、継承する接続先が指定モデルと一致する場合のみ行う。
+            時間帯外の）場合は fallback_model、それも使えなければ指定を無視して
+            通常どおり選ぶ。inherit_from_role の継承は、継承する接続先が実際に
+            採用したモデルと一致する場合のみ行う。
+        fallback_model: preferred_model が未指定、または使えない（一致する
+            接続先が無い／全て時間帯外）場合に代わりに使うモデル名
+            （[llm].sub_default_model）。扱いは preferred_model と同じ。
+            設定値由来のため、一致する接続先が無い・時間帯外のログは INFO に
+            留める（名前の誤りは app.py が起動時に1回だけ WARNING を出す。
+            時間帯外は時間帯指定の運用上の正常状態のため）。
 
     Returns:
         選ばれた LLMEndpoint。使用可能な接続先が1件かつ strategy が
@@ -539,36 +553,67 @@ async def _select_endpoint(
 
     logger.info(
         "接続先選択[開始]: role=%s strategy=%s session_id=%r inherit_from_role=%r preferred_model=%r "
-        "endpoints_total=%d endpoints=%s",
+        "fallback_model=%r endpoints_total=%d endpoints=%s",
         role,
         strategy,
         session_id,
         inherit_from_role,
         preferred_model,
+        fallback_model,
         len(endpoints),
         [f"[{i}] {e.base_url} model={e.model} start={e.start} end={e.end}" for i, e in enumerate(endpoints)],
     )
 
-    model_indices = _model_matching_indices(endpoints, preferred_model)
-    if preferred_model and model_indices is None:
-        logger.warning(
-            "接続先選択: role=%s session_id=%r 指定モデル %r の接続先が無いため、指定を無視して通常のルーティングに従います",
+    # 優先順に並べたモデル候補（指定モデル → 既定モデル）。一致する接続先が
+    # 無いものは除く。model_labels は model_candidates と同じ並びのログ用ラベル。
+    model_candidates: list[list[int]] = []
+    model_labels: list[str] = []
+    for kind, name in (("指定", preferred_model), ("既定", fallback_model)):
+        if not name:
+            continue
+        indices = _model_matching_indices(endpoints, name)
+        if indices is None:
+            # 指定モデル（LLM・定義ファイル由来）の誤りは WARNING、既定モデル
+            # （設定値由来）は app.py が起動時に1回だけ WARNING を出すため INFO。
+            logger.log(
+                logging.WARNING if kind == "指定" else logging.INFO,
+                "接続先選択: role=%s session_id=%r %sモデル %r の接続先が無いため、この指定を無視します",
+                role,
+                session_id,
+                kind,
+                name,
+            )
+        elif indices not in model_candidates:
+            model_candidates.append(indices)
+            model_labels.append(f"{kind}モデル {name!r}")
+
+    # round_robin戦略はこのあと _select_round_robin_endpoint 内で待機の
+    # 周回ごとに自前で再計算するため、ここでの eligible_indices は
+    # 「継承可否・単一候補の早期リターン判定」と下記ログ用のスナップショットに過ぎない。
+    time_eligible_indices = _compute_eligible_indices(endpoints)
+    eligible_indices, position = _narrow_to_model(time_eligible_indices, model_candidates)
+    for skipped in range(len(model_candidates) if position is None else position):
+        # 指定モデルの時間帯外は WARNING、既定モデル（時間帯指定の運用上の正常状態）は INFO。
+        logger.log(
+            logging.WARNING if model_labels[skipped].startswith("指定") else logging.INFO,
+            "接続先選択: role=%s session_id=%r %s の接続先が全て時間帯外のため、%sに従います",
             role,
             session_id,
-            preferred_model,
+            model_labels[skipped],
+            f"{model_labels[position]} のルーティング" if position is not None else "モデル指定を無視して通常のルーティング",
         )
 
     if inherit_from_role is not None:
         inherited_index = _LAST_SELECTED_INDEX.get((inherit_from_role, tab_id))
-        if inherited_index is not None and model_indices is not None and inherited_index not in model_indices:
+        if inherited_index is not None and position is not None and inherited_index not in model_candidates[position]:
             logger.info(
-                "接続先選択: role=%s session_id=%r inherit_from_role=%s の直近選択 index=%d は指定モデル %r でないため、"
-                "継承せず指定モデルの接続先から選びます",
+                "接続先選択: role=%s session_id=%r inherit_from_role=%s の直近選択 index=%d はモデル %r でないため、"
+                "継承せずそのモデルの接続先から選びます",
                 role,
                 session_id,
                 inherit_from_role,
                 inherited_index,
-                preferred_model,
+                model_labels[position],
             )
         elif inherited_index is not None and inherited_index < len(endpoints):
             _LAST_SELECTED_INDEX[state_key] = inherited_index
@@ -594,18 +639,6 @@ async def _select_endpoint(
                 tab_id,
             )
 
-    # round_robin戦略はこのあと _select_round_robin_endpoint 内で待機の
-    # 周回ごとに自前で再計算するため、ここでの eligible_indices は
-    # 「単一候補の早期リターン判定」と下記ログ用のスナップショットに過ぎない。
-    time_eligible_indices = _compute_eligible_indices(endpoints)
-    eligible_indices = _narrow_to_model(time_eligible_indices, model_indices)
-    if model_indices is not None and eligible_indices == time_eligible_indices and not set(eligible_indices) <= set(model_indices):
-        logger.warning(
-            "接続先選択: role=%s session_id=%r 指定モデル %r の接続先が全て時間帯外のため、指定を無視して通常のルーティングに従います",
-            role,
-            session_id,
-            preferred_model,
-        )
     excluded_indices = [i for i in range(len(endpoints)) if i not in time_eligible_indices]
     if excluded_indices:
         logger.info(
@@ -670,7 +703,7 @@ async def _select_endpoint(
             probe_timeout_seconds=probe_timeout_seconds,
             busy_poll_interval_seconds=busy_poll_interval_seconds,
             wait_when_busy=wait_when_busy,
-            model_indices=model_indices,
+            model_candidates=model_candidates,
         )
 
     _LAST_SELECTED_INDEX[state_key] = index
