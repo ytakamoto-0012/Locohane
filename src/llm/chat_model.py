@@ -433,7 +433,7 @@ async def build_model(
             （一致する接続先が無ければ指定を無視。_select_endpoint() 参照）。
             指定が無い・使えない場合は config.sub_default_model
             （[llm].sub_default_model）を同じ扱いで使う。
-        wait_when_busy: main_routing_strategy/sub_routing_strategy=round_robin
+        wait_when_busy: main_routing_strategy/sub_routing_strategy=round_robin/priority_failover
             かつ provider="llama_cpp" の接続先が全てビジーだった場合、空きが
             出るまで待つか（True、既定）。False の場合は待たずにフェイル
             セーフ選択する。build_model() はグラフ構築時にしか呼ばれず

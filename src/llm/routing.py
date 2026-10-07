@@ -252,8 +252,8 @@ async def _probe_llama_cpp_slots_available(base_url: str, timeout_seconds: float
 
     通信エラー・タイムアウト・想定外のレスポンス形式など、確実な判定が
     できない場合は必ず None を返す（例外は外へ伝播させない）。呼び出し元
-    （_select_round_robin_endpoint）は None を「わからない＝空きありとみなす」
-    フェイルセーフとして扱う（round_robinは元々スロット確認なしで即座に
+    （_select_endpoint_with_slots_probe）は None を「わからない＝空きありとみなす」
+    フェイルセーフとして扱う（round_robin/priority_failoverは元々スロット確認なしで即座に
     選んでいたため、確認できない場合は従来動作に寄せて選択を止めない）。
 
     Args:
@@ -376,44 +376,93 @@ def _narrow_to_model(eligible_indices: list[int], model_candidates: list[list[in
     return eligible_indices, None
 
 
-async def _select_round_robin_endpoint(
+def _round_robin_order(role: str, eligible_indices: list[int], counter_key: str) -> list[int]:
+    """round_robin戦略の候補の並び順。呼び出しごとに先頭を1つずつ回す。
+
+    Args:
+        role: "main" または "sub"（ログ用。カウンタは counter_key で分ける）。
+        eligible_indices: 候補の index 一覧（1件以上）。
+        counter_key: _ROUND_ROBIN_COUNTERS のキー。
+
+    Returns:
+        先頭から順に試す index 一覧。
+    """
+    counter = _ROUND_ROBIN_COUNTERS.get(counter_key, 0)
+    _ROUND_ROBIN_COUNTERS[counter_key] = counter + 1
+    return [eligible_indices[(counter + offset) % len(eligible_indices)] for offset in range(len(eligible_indices))]
+
+
+def _priority_failover_order(role: str, eligible_indices: list[int]) -> list[int]:
+    """priority_failover戦略の候補の並び順。クールダウン中でない接続先を優先順のまま並べる。
+
+    全てクールダウン中の場合は、安全側として候補全件を優先順のまま返す
+    （先頭＝使用可能な先頭へフォールバックする従来動作と同じ）。
+
+    Args:
+        role: "main" または "sub"（_ENDPOINT_COOLDOWN_UNTIL のキー）。
+        eligible_indices: 候補の index 一覧（1件以上、優先順）。
+
+    Returns:
+        先頭から順に試す index 一覧。
+    """
+    now = time.time()
+    order = [i for i in eligible_indices if _ENDPOINT_COOLDOWN_UNTIL.get((role, i), 0.0) <= now]
+    logger.info(
+        "接続先選択[priority_failover]: role=%s eligible_indices=%s "
+        "cooldown_until(role別全件)=%s now=%.3f -> order=%s",
+        role,
+        eligible_indices,
+        {k: v for k, v in _ENDPOINT_COOLDOWN_UNTIL.items() if k[0] == role},
+        now,
+        order or eligible_indices,
+    )
+    return order or list(eligible_indices)
+
+
+async def _select_endpoint_with_slots_probe(
     role: str,
     endpoints: tuple[LLMEndpoint, ...],
+    strategy: str,
     *,
     probe_timeout_seconds: float,
     busy_poll_interval_seconds: float,
     wait_when_busy: bool = True,
     model_candidates: list[list[int]] | None = None,
 ) -> int:
-    """round_robin戦略の本体。呼び出しごとに順番を回しつつ、provider="llama_cpp"
-    の接続先だけは選ぶ前に GET /slots で空きスロットの有無を確認する。
+    """round_robin / priority_failover 戦略の本体。戦略ごとの並び順で候補を
+    先頭から試しつつ、provider="llama_cpp" の接続先だけは選ぶ前に GET /slots で
+    空きスロットの有無を確認する。
+
+    並び順は round_robin なら呼び出しごとに先頭を回した順（_round_robin_order）、
+    priority_failover ならクールダウン中でない接続先の優先順（_priority_failover_order）。
 
     空きが無い（全スロット生成中）候補はスキップして次点へ回し、候補を一巡
     しても1件も空きが見つからなければ、wait_when_busy=True（既定）なら
     busy_poll_interval_seconds 秒待ってから再試行する（空きが出るまで無期限に
-    待機する）。wait_when_busy=False なら待たずに次点の候補（order[0]）を
+    待機する）。wait_when_busy=False なら待たずに並び順の先頭（order[0]）を
     暫定選択して即座に返す（呼び出し元が「今すぐ何らかの接続先が確定すれば
     よく、生成の予定が無い/未確定の操作」の場合に使う。build_model() 参照）。
     provider="openai_compatible"の接続先は確認を行わず、従来通り即座に選ぶ
     （空き状況が分からないサーバー種別のため）。
 
-    候補（時間帯で使用可能な接続先）は待機の周回ごとに _compute_eligible_indices
-    で再計算する。空き待ちが長引いて start/end の境界をまたいでも、次の周回では
-    最新の使用可能時間帯に追従する（呼び出し時点の候補一覧を固定してしまうと、
-    待機中に使用可能時間帯を外れた接続先を待ち続けたり、新しく使用可能になった
-    接続先を見逃したりするため）。
+    候補（時間帯で使用可能な接続先）と並び順は待機の周回ごとに再計算する。
+    空き待ちが長引いて start/end の境界をまたいだり、クールダウンが明けたり
+    しても、次の周回では最新の状態に追従する（呼び出し時点の候補一覧を
+    固定してしまうと、待機中に使用可能時間帯を外れた接続先を待ち続けたり、
+    新しく使用可能になった接続先を見逃したりするため）。
 
     Args:
         role: "main" または "sub"。
         endpoints: 選択対象の接続先タプル。
+        strategy: "round_robin" または "priority_failover"。
         probe_timeout_seconds: [llm].round_robin_slots_probe_timeout_seconds。
         busy_poll_interval_seconds: [llm].round_robin_busy_poll_interval_seconds。
         wait_when_busy: False の場合、全候補ビジー時に待機せず即座に
             フェイルセーフ選択する。
         model_candidates: モデル候補（指定モデル・既定モデルの接続先の index 一覧）を
             優先順に並べたリスト（_narrow_to_model 参照）。指定時は待機の周回ごとに
-            時間帯内の接続先が残る最初の候補へ絞り込み、順番もその候補専用の
-            カウンタで回す。
+            時間帯内の接続先が残る最初の候補へ絞り込む（round_robin は順番も
+            その候補専用のカウンタで回す）。
 
     Returns:
         選ばれた接続先の index（endpoints に対する）。
@@ -421,16 +470,18 @@ async def _select_round_robin_endpoint(
     attempt = 0
     while True:
         eligible_indices, position = _narrow_to_model(_compute_eligible_indices(endpoints), model_candidates or [])
-        counter_key = role if position is None else f"{role}|{','.join(map(str, model_candidates[position]))}"
-        counter = _ROUND_ROBIN_COUNTERS.get(counter_key, 0)
-        _ROUND_ROBIN_COUNTERS[counter_key] = counter + 1
-        order = [eligible_indices[(counter + offset) % len(eligible_indices)] for offset in range(len(eligible_indices))]
+        if strategy == "priority_failover":
+            order = _priority_failover_order(role, eligible_indices)
+        else:
+            counter_key = role if position is None else f"{role}|{','.join(map(str, model_candidates[position]))}"
+            order = _round_robin_order(role, eligible_indices, counter_key)
         for index in order:
             endpoint = endpoints[index]
             if endpoint.provider != "llama_cpp":
                 logger.info(
-                    "接続先選択[round_robin]: role=%s order=%s -> index=%d "
+                    "接続先選択[%s]: role=%s order=%s -> index=%d "
                     "(理由: provider=%s のため空き確認なしで選択)",
+                    strategy,
                     role,
                     order,
                     index,
@@ -440,8 +491,9 @@ async def _select_round_robin_endpoint(
             available = await _probe_llama_cpp_slots_available(endpoint.base_url, probe_timeout_seconds)
             if available is not False:
                 logger.info(
-                    "接続先選択[round_robin]: role=%s order=%s -> index=%d base_url=%s "
+                    "接続先選択[%s]: role=%s order=%s -> index=%d base_url=%s "
                     "(理由: GET /slots 確認結果=%s。Trueは空きあり、Noneは確認不能につきフェイルセーフで選択)",
+                    strategy,
                     role,
                     order,
                     index,
@@ -450,7 +502,8 @@ async def _select_round_robin_endpoint(
                 )
                 return index
             logger.info(
-                "接続先選択[round_robin]: role=%s index=%d base_url=%s は空きスロットが無いためスキップ",
+                "接続先選択[%s]: role=%s index=%d base_url=%s は空きスロットが無いためスキップ",
+                strategy,
                 role,
                 index,
                 endpoint.base_url,
@@ -459,16 +512,18 @@ async def _select_round_robin_endpoint(
         if not wait_when_busy:
             index = order[0]
             logger.warning(
-                "接続先選択[round_robin]: role=%s 候補%s全ての空きスロットが無いですが、"
+                "接続先選択[%s]: role=%s 候補%s全ての空きスロットが無いですが、"
                 "wait_when_busy=False のため待機せず index=%d を暫定選択します",
+                strategy,
                 role,
                 order,
                 index,
             )
             return index
         logger.warning(
-            "接続先選択[round_robin]: role=%s 候補%s全ての空きスロットが無いため%.1f秒待機します"
+            "接続先選択[%s]: role=%s 候補%s全ての空きスロットが無いため%.1f秒待機します"
             "（試行%d回目、次回は使用可能時間帯を再確認します）",
+            strategy,
             role,
             order,
             busy_poll_interval_seconds,
@@ -497,8 +552,9 @@ async def _select_endpoint(
     常時使用可能な接続先を要求しており、絞り込み結果が空になることは無い
     （念のため空になった場合は全件にフォールバックする）。
 
-    round_robin戦略でGET /slotsによる空き確認・空き待ち（_select_round_robin_endpoint
-    参照）を行うため async def。build_model()からawaitで呼ぶ。
+    round_robin/priority_failover戦略でGET /slotsによる空き確認・空き待ち
+    （_select_endpoint_with_slots_probe 参照）を行うため async def。
+    build_model()からawaitで呼ぶ。
 
     Args:
         role: "main" または "sub"（ルーティング状態を役割ごとに分けるためのキー）。
@@ -516,11 +572,11 @@ async def _select_endpoint(
             （このセッションでメインエージェントが一度もLLM呼び出しをして
             いない）場合のみ、安全側として通常のロジックへフォールバックする。
         probe_timeout_seconds: [llm].round_robin_slots_probe_timeout_seconds。
-            round_robin戦略でGET /slots問い合わせ自体のタイムアウト秒数。
+            round_robin/priority_failover戦略でGET /slots問い合わせ自体のタイムアウト秒数。
         busy_poll_interval_seconds: [llm].round_robin_busy_poll_interval_seconds。
-            round_robin戦略で候補の全接続先に空きスロットが無かった場合、
-            再確認までに待機する秒数。
-        wait_when_busy: round_robin戦略で候補の全接続先がビジーだった場合に
+            round_robin/priority_failover戦略で候補の全接続先に空きスロットが
+            無かった場合、再確認までに待機する秒数。
+        wait_when_busy: round_robin/priority_failover戦略で候補の全接続先がビジーだった場合に
             空きが出るまで待つか（True、既定）、待たずにフェイルセーフ選択
             するか（False）。build_model() の同名引数を参照。
         preferred_model: 指定時、model が一致する接続先だけを候補にして
@@ -538,7 +594,7 @@ async def _select_endpoint(
 
     Returns:
         選ばれた LLMEndpoint。使用可能な接続先が1件かつ strategy が
-        round_robin 以外の場合は常にそれを返す（round_robin は1件しか
+        random の場合は常にそれを返す（round_robin/priority_failover は1件しか
         無い場合でも GET /slots による空き確認・待機を行う）。
     """
     # ログ表示・呼び出し元の把握用（会話単位のID）。未設定（サブエージェント
@@ -587,7 +643,7 @@ async def _select_endpoint(
             model_candidates.append(indices)
             model_labels.append(f"{kind}モデル {name!r}")
 
-    # round_robin戦略はこのあと _select_round_robin_endpoint 内で待機の
+    # round_robin/priority_failover戦略はこのあと _select_endpoint_with_slots_probe 内で待機の
     # 周回ごとに自前で再計算するため、ここでの eligible_indices は
     # 「継承可否・単一候補の早期リターン判定」と下記ログ用のスナップショットに過ぎない。
     time_eligible_indices = _compute_eligible_indices(endpoints)
@@ -650,7 +706,7 @@ async def _select_endpoint(
             [f"[{i}] base_url={endpoints[i].base_url} start={endpoints[i].start} end={endpoints[i].end}" for i in excluded_indices],
         )
 
-    if len(eligible_indices) == 1 and strategy != "round_robin":
+    if len(eligible_indices) == 1 and strategy == "random":
         index = eligible_indices[0]
         _LAST_SELECTED_INDEX[state_key] = index
         logger.info(
@@ -676,30 +732,11 @@ async def _select_endpoint(
             eligible_indices,
             index,
         )
-    elif strategy == "priority_failover":
-        # 使用可能な接続先を先頭から順に見て、クールダウン中でない最初の
-        # 接続先を使う。全滅時は安全側として使用可能な先頭へフォールバック
-        # する。
-        now = time.time()
-        index = eligible_indices[0]
-        for i in eligible_indices:
-            if _ENDPOINT_COOLDOWN_UNTIL.get((role, i), 0.0) <= now:
-                index = i
-                break
-        logger.info(
-            "接続先選択[priority_failover]: role=%s session_id=%r eligible_indices=%s "
-            "cooldown_until(role別全件)=%s now=%.3f -> index=%d",
-            role,
-            session_id,
-            eligible_indices,
-            {k: v for k, v in _ENDPOINT_COOLDOWN_UNTIL.items() if k[0] == role},
-            now,
-            index,
-        )
-    else:  # "round_robin"（既定）
-        index = await _select_round_robin_endpoint(
+    else:  # "round_robin"（既定）/ "priority_failover"
+        index = await _select_endpoint_with_slots_probe(
             role,
             endpoints,
+            "priority_failover" if strategy == "priority_failover" else "round_robin",
             probe_timeout_seconds=probe_timeout_seconds,
             busy_poll_interval_seconds=busy_poll_interval_seconds,
             wait_when_busy=wait_when_busy,

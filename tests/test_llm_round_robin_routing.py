@@ -3,9 +3,10 @@
 round_robin は呼び出しごとに順番に接続先を回すが、provider="llama_cpp" の
 接続先だけは選ぶ前に GET /slots で空きスロットの有無を確認する
 （_probe_llama_cpp_slots_available）。空きが無ければスキップして次点へ回し、
-候補全てが埋まっていれば空きが出るまで待機する（_select_round_robin_endpoint）。
+候補全てが埋まっていれば空きが出るまで待機する（_select_endpoint_with_slots_probe）。
 provider="openai_compatible"（既定）の接続先は確認を行わず、従来通り即座に
-選ばれる。
+選ばれる。priority_failover 戦略も同じ空き確認・待機を行う（並び順だけが
+「クールダウン中でない接続先の優先順」になる）。
 
 sticky戦略は「ルーティングとして有効ではなかった」ため完全に削除された
 （本ファイルが置き換えたテストは以前 tests/test_llm_sticky_routing.py に
@@ -150,7 +151,7 @@ async def test_round_robin_waits_until_a_llama_cpp_slot_frees_up(monkeypatch: py
 @pytest.mark.asyncio
 async def test_round_robin_single_endpoint_still_waits_for_free_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     """接続先が1件しか無くても、round_robinはstrategyに関わらず即座に選ぶ早期リターンを通らず、
-    空き確認・待機を行うこと（random/priority_failoverとの違い）。
+    空き確認・待機を行うこと（randomとの違い）。
     """
     call_count = 0
 
@@ -179,23 +180,150 @@ async def test_round_robin_single_endpoint_still_waits_for_free_slot(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_non_round_robin_strategies_skip_probe_for_single_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    """random/priority_failoverは従来通り、接続先が1件なら空き確認なしで即座に選ぶこと。"""
+async def test_random_strategy_skips_probe_for_single_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """randomは従来通り、接続先が1件なら空き確認なしで即座に選ぶこと。"""
 
     async def _fail_if_called(base_url: str, timeout_seconds: float) -> bool | None:
-        raise AssertionError("単一接続先ではprobeを呼んではいけない（round_robin以外の戦略）")
+        raise AssertionError("単一接続先ではprobeを呼んではいけない（random戦略）")
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fail_if_called)
 
     endpoints = _llama_cpp_endpoints(1)
-    for strategy in ("random", "priority_failover"):
-        session_id = _unique_session_id(f"fastpath-{strategy}")
-        try:
-            llm.set_current_session(session_id)
-            picked = await llm._select_endpoint("main", endpoints, strategy)
+    session_id = _unique_session_id("fastpath-random")
+    try:
+        llm.set_current_session(session_id)
+        picked = await llm._select_endpoint("main", endpoints, "random")
+        assert picked.base_url == endpoints[0].base_url
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_priority_failover_skips_busy_head_and_uses_next(monkeypatch: pytest.MonkeyPatch) -> None:
+    """priority_failoverでも、先頭のllama_cpp接続先が空き無しなら次点が選ばれ、
+    先頭に空きがあれば常に先頭が選ばれること（round_robinのように回さない）。
+    """
+    endpoints = _llama_cpp_endpoints(3)
+    busy: set[str] = {endpoints[0].base_url}
+
+    async def _fake_probe(base_url: str, timeout_seconds: float) -> bool | None:
+        return base_url not in busy
+
+    monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fake_probe)
+
+    session_id = _unique_session_id("pf-skip-busy")
+    try:
+        llm.set_current_session(session_id)
+        for _ in range(3):
+            picked = await llm._select_endpoint(
+                "main", endpoints, "priority_failover", probe_timeout_seconds=1.0, busy_poll_interval_seconds=0.01
+            )
+            assert picked.base_url == endpoints[1].base_url
+        busy.clear()
+        for _ in range(3):
+            picked = await llm._select_endpoint(
+                "main", endpoints, "priority_failover", probe_timeout_seconds=1.0, busy_poll_interval_seconds=0.01
+            )
             assert picked.base_url == endpoints[0].base_url
-        finally:
-            llm.forget_session(session_id)
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_priority_failover_does_not_probe_openai_compatible_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """priority_failoverでも、provider=openai_compatibleの接続先は確認なしで即座に選ばれること。"""
+
+    async def _fail_if_called(base_url: str, timeout_seconds: float) -> bool | None:
+        raise AssertionError("openai_compatible の接続先で /slots を呼んではいけない")
+
+    monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fail_if_called)
+
+    endpoints = _endpoints(2)
+    session_id = _unique_session_id("pf-plain")
+    try:
+        llm.set_current_session(session_id)
+        picked = await llm._select_endpoint("main", endpoints, "priority_failover")
+        assert picked.base_url == endpoints[0].base_url
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_priority_failover_skips_cooldown_endpoint_before_probing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """クールダウン中の接続先は空き確認の対象にもならず、次点から確認されること。"""
+    endpoints = _llama_cpp_endpoints(2)
+    probed: list[str] = []
+
+    async def _fake_probe(base_url: str, timeout_seconds: float) -> bool | None:
+        probed.append(base_url)
+        return True
+
+    monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fake_probe)
+    monkeypatch.setattr(llm.routing, "_ENDPOINT_COOLDOWN_UNTIL", {})
+
+    session_id = _unique_session_id("pf-cooldown")
+    try:
+        llm.set_current_session(session_id)
+        first = await llm._select_endpoint("main", endpoints, "priority_failover")
+        assert first.base_url == endpoints[0].base_url
+        llm.mark_last_endpoint_failed("main")
+        probed.clear()
+        picked = await llm._select_endpoint("main", endpoints, "priority_failover")
+        assert picked.base_url == endpoints[1].base_url
+        assert probed == [endpoints[1].base_url]
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_priority_failover_single_endpoint_waits_for_free_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """priority_failoverでも、接続先が1件しか無くても空き確認・待機を行うこと。"""
+    call_count = 0
+
+    async def _fake_probe(base_url: str, timeout_seconds: float) -> bool | None:
+        nonlocal call_count
+        call_count += 1
+        return call_count > 2
+
+    monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fake_probe)
+
+    endpoints = _llama_cpp_endpoints(1)
+    session_id = _unique_session_id("pf-single-wait")
+    try:
+        llm.set_current_session(session_id)
+        picked = await llm._select_endpoint(
+            "main", endpoints, "priority_failover", probe_timeout_seconds=1.0, busy_poll_interval_seconds=0.01
+        )
+        assert picked.base_url == endpoints[0].base_url
+        assert call_count == 3
+    finally:
+        llm.forget_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_priority_failover_wait_when_busy_false_picks_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    """priority_failoverで全候補ビジーかつwait_when_busy=Falseなら、待たずに優先順の先頭を選ぶこと。"""
+
+    async def _always_busy(base_url: str, timeout_seconds: float) -> bool | None:
+        return False
+
+    monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _always_busy)
+
+    endpoints = _llama_cpp_endpoints(2)
+    session_id = _unique_session_id("pf-no-wait")
+    try:
+        llm.set_current_session(session_id)
+        picked = await llm._select_endpoint(
+            "main",
+            endpoints,
+            "priority_failover",
+            probe_timeout_seconds=1.0,
+            busy_poll_interval_seconds=5.0,
+            wait_when_busy=False,
+        )
+        assert picked.base_url == endpoints[0].base_url
+    finally:
+        llm.forget_session(session_id)
 
 
 @pytest.mark.asyncio
@@ -234,7 +362,7 @@ async def test_round_robin_treats_unknown_probe_result_as_available(monkeypatch:
 async def test_round_robin_recomputes_eligible_endpoints_on_each_busy_wait_cycle(monkeypatch: pytest.MonkeyPatch) -> None:
     """待機の周回ごとに使用可能時間帯（eligible_indices）を再計算すること。
 
-    _select_round_robin_endpoint が候補一覧を最初の1回だけ計算して固定して
+    _select_endpoint_with_slots_probe が候補一覧を最初の1回だけ計算して固定して
     しまうと、空き待ちが長引いて start/end の境界をまたいだ場合に、新しく
     使用可能になった接続先を見逃してしまう（過去に見つかった問題の回帰）。
     """
@@ -258,9 +386,10 @@ async def test_round_robin_recomputes_eligible_endpoints_on_each_busy_wait_cycle
     plain_endpoint = LLMEndpoint(base_url="http://plain/v1", api_key="dummy", model="m")
     endpoints = (busy_endpoint, plain_endpoint)
 
-    index = await llm.routing._select_round_robin_endpoint(
+    index = await llm.routing._select_endpoint_with_slots_probe(
         "main",
         endpoints,
+        "round_robin",
         probe_timeout_seconds=1.0,
         busy_poll_interval_seconds=0.01,
     )

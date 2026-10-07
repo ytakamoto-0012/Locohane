@@ -171,9 +171,9 @@ class Config:
             参照）。
         main_routing_strategy: main_endpoints が複数ある場合の選び方
             （"round_robin"/"random"/"priority_failover" のいずれか）。
-            "round_robin" かつ provider="llama_cpp" の接続先は、選ぶ前に
-            GET /slots で空きスロットの有無を確認する（src/llm/routing.py
-            の _select_round_robin_endpoint() 参照）。
+            "round_robin"/"priority_failover" かつ provider="llama_cpp" の
+            接続先は、選ぶ前に GET /slots で空きスロットの有無を確認する
+            （src/llm/routing.py の _select_endpoint_with_slots_probe() 参照）。
         sub_endpoints: サブエージェント（dispatch_agent）用のLLM接続先リスト
             （[llm].sub_url）。形式は main_endpoints と同じ。sub_url が未指定
             （キー無し、または値が空）の場合は main_url をそのまま使う。
@@ -270,15 +270,15 @@ class Config:
             間隔」の上限）。build_model（src/llm.py）がChatLlamaCppの
             コンストラクタに渡す。大きなコンテキストのプロンプト処理(prefill)
             に時間がかかる環境ほどこの秒数に到達しやすい。
-        round_robin_slots_probe_timeout_seconds: round_robin戦略が
+        round_robin_slots_probe_timeout_seconds: round_robin/priority_failover戦略が
             provider="llama_cpp"の接続先を候補にする際に送る GET /slots
             問い合わせ自体のタイムアウト秒数。短く、確認できなければ
             fail-safe側（＝空きとみなして選ぶ）に倒す
             （src/llm/routing.py の _probe_llama_cpp_slots_available() 参照）。
-        round_robin_busy_poll_interval_seconds: round_robin戦略で、時間帯
+        round_robin_busy_poll_interval_seconds: round_robin/priority_failover戦略で、時間帯
             制約の対象となっている全接続先のスロットが埋まっていた場合に、
             再度空き状況を確認するまで待機する秒数
-            （src/llm/routing.py の _select_round_robin_endpoint() 参照）。
+            （src/llm/routing.py の _select_endpoint_with_slots_probe() 参照）。
         skills_dir: スキル群を格納するディレクトリの絶対パス。
         agents_dir: エージェント種別定義（dispatch_agent の agent_type、
             ClaudeCode の .claude/agents/*.md 相当）を格納するディレクトリの
