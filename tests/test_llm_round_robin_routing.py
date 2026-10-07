@@ -17,6 +17,11 @@ import pytest
 
 from src import llm
 from src.config import LLMEndpoint
+from src.llm.routing import SlotCounts
+
+
+def _slots(free: bool) -> SlotCounts:
+    return SlotCounts(free=1 if free else 0, total=1)
 
 
 def _endpoints(n: int) -> tuple[LLMEndpoint, ...]:
@@ -35,7 +40,7 @@ def _unique_session_id(suffix: str) -> str:
 async def test_round_robin_cycles_through_openai_compatible_endpoints_without_probing(monkeypatch: pytest.MonkeyPatch) -> None:
     """provider未指定（openai_compatible）は /slots を一切呼ばず、従来通り順番に回ること。"""
 
-    async def _fail_if_called(base_url: str, timeout_seconds: float) -> bool | None:
+    async def _fail_if_called(base_url: str, timeout_seconds: float) -> SlotCounts | None:
         raise AssertionError("openai_compatible の接続先で /slots を呼んではいけない")
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fail_if_called)
@@ -65,8 +70,8 @@ async def test_round_robin_skips_busy_llama_cpp_endpoint_and_uses_free_one(monke
     busy_url = endpoints[0].base_url
     free_url = endpoints[1].base_url
 
-    async def _fake_probe(base_url: str, timeout_seconds: float) -> bool | None:
-        return base_url != busy_url
+    async def _fake_probe(base_url: str, timeout_seconds: float) -> SlotCounts | None:
+        return _slots(base_url != busy_url)
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fake_probe)
 
@@ -94,8 +99,8 @@ async def test_round_robin_prefers_llama_cpp_only_when_openai_compatible_alterna
     plain_endpoint = LLMEndpoint(base_url="http://plain/v1", api_key="dummy", model="m")
     endpoints = (llama_endpoint, plain_endpoint)
 
-    async def _always_busy(base_url: str, timeout_seconds: float) -> bool | None:
-        return False
+    async def _always_busy(base_url: str, timeout_seconds: float) -> SlotCounts | None:
+        return _slots(False)
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _always_busy)
 
@@ -121,10 +126,10 @@ async def test_round_robin_waits_until_a_llama_cpp_slot_frees_up(monkeypatch: py
 
     calls: dict[str, int] = {}
 
-    async def _fake_probe(base_url: str, timeout_seconds: float) -> bool | None:
+    async def _fake_probe(base_url: str, timeout_seconds: float) -> SlotCounts | None:
         calls[base_url] = calls.get(base_url, 0) + 1
         # 各接続先とも1回目は busy、2回目以降は空きとして扱う。
-        return calls[base_url] > 1
+        return _slots(calls[base_url] > 1)
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fake_probe)
 
@@ -155,10 +160,10 @@ async def test_round_robin_single_endpoint_still_waits_for_free_slot(monkeypatch
     """
     call_count = 0
 
-    async def _fake_probe(base_url: str, timeout_seconds: float) -> bool | None:
+    async def _fake_probe(base_url: str, timeout_seconds: float) -> SlotCounts | None:
         nonlocal call_count
         call_count += 1
-        return call_count > 2
+        return _slots(call_count > 2)
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fake_probe)
 
@@ -183,7 +188,7 @@ async def test_round_robin_single_endpoint_still_waits_for_free_slot(monkeypatch
 async def test_random_strategy_skips_probe_for_single_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     """randomは従来通り、接続先が1件なら空き確認なしで即座に選ぶこと。"""
 
-    async def _fail_if_called(base_url: str, timeout_seconds: float) -> bool | None:
+    async def _fail_if_called(base_url: str, timeout_seconds: float) -> SlotCounts | None:
         raise AssertionError("単一接続先ではprobeを呼んではいけない（random戦略）")
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fail_if_called)
@@ -206,8 +211,8 @@ async def test_priority_failover_skips_busy_head_and_uses_next(monkeypatch: pyte
     endpoints = _llama_cpp_endpoints(3)
     busy: set[str] = {endpoints[0].base_url}
 
-    async def _fake_probe(base_url: str, timeout_seconds: float) -> bool | None:
-        return base_url not in busy
+    async def _fake_probe(base_url: str, timeout_seconds: float) -> SlotCounts | None:
+        return _slots(base_url not in busy)
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fake_probe)
 
@@ -233,7 +238,7 @@ async def test_priority_failover_skips_busy_head_and_uses_next(monkeypatch: pyte
 async def test_priority_failover_does_not_probe_openai_compatible_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     """priority_failoverでも、provider=openai_compatibleの接続先は確認なしで即座に選ばれること。"""
 
-    async def _fail_if_called(base_url: str, timeout_seconds: float) -> bool | None:
+    async def _fail_if_called(base_url: str, timeout_seconds: float) -> SlotCounts | None:
         raise AssertionError("openai_compatible の接続先で /slots を呼んではいけない")
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fail_if_called)
@@ -254,9 +259,9 @@ async def test_priority_failover_skips_cooldown_endpoint_before_probing(monkeypa
     endpoints = _llama_cpp_endpoints(2)
     probed: list[str] = []
 
-    async def _fake_probe(base_url: str, timeout_seconds: float) -> bool | None:
+    async def _fake_probe(base_url: str, timeout_seconds: float) -> SlotCounts | None:
         probed.append(base_url)
-        return True
+        return _slots(True)
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fake_probe)
     monkeypatch.setattr(llm.routing, "_ENDPOINT_COOLDOWN_UNTIL", {})
@@ -280,10 +285,10 @@ async def test_priority_failover_single_endpoint_waits_for_free_slot(monkeypatch
     """priority_failoverでも、接続先が1件しか無くても空き確認・待機を行うこと。"""
     call_count = 0
 
-    async def _fake_probe(base_url: str, timeout_seconds: float) -> bool | None:
+    async def _fake_probe(base_url: str, timeout_seconds: float) -> SlotCounts | None:
         nonlocal call_count
         call_count += 1
-        return call_count > 2
+        return _slots(call_count > 2)
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _fake_probe)
 
@@ -304,8 +309,8 @@ async def test_priority_failover_single_endpoint_waits_for_free_slot(monkeypatch
 async def test_priority_failover_wait_when_busy_false_picks_head(monkeypatch: pytest.MonkeyPatch) -> None:
     """priority_failoverで全候補ビジーかつwait_when_busy=Falseなら、待たずに優先順の先頭を選ぶこと。"""
 
-    async def _always_busy(base_url: str, timeout_seconds: float) -> bool | None:
-        return False
+    async def _always_busy(base_url: str, timeout_seconds: float) -> SlotCounts | None:
+        return _slots(False)
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _always_busy)
 
@@ -332,7 +337,7 @@ async def test_round_robin_treats_unknown_probe_result_as_available(monkeypatch:
 
     calls = 0
 
-    async def _fake_unknown(base_url: str, timeout_seconds: float) -> bool | None:
+    async def _fake_unknown(base_url: str, timeout_seconds: float) -> SlotCounts | None:
         nonlocal calls
         calls += 1
         return None
@@ -377,8 +382,8 @@ async def test_round_robin_recomputes_eligible_endpoints_on_each_busy_wait_cycle
 
     monkeypatch.setattr(llm.routing, "_compute_eligible_indices", _fake_eligible_indices)
 
-    async def _always_busy(base_url: str, timeout_seconds: float) -> bool | None:
-        return False
+    async def _always_busy(base_url: str, timeout_seconds: float) -> SlotCounts | None:
+        return _slots(False)
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _always_busy)
 
@@ -412,10 +417,10 @@ async def test_round_robin_wait_when_busy_false_skips_wait_and_picks_immediately
     """
     calls = 0
 
-    async def _always_busy(base_url: str, timeout_seconds: float) -> bool | None:
+    async def _always_busy(base_url: str, timeout_seconds: float) -> SlotCounts | None:
         nonlocal calls
         calls += 1
-        return False
+        return _slots(False)
 
     monkeypatch.setattr(llm.routing, "_probe_llama_cpp_slots_available", _always_busy)
 

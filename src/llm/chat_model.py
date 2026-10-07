@@ -26,7 +26,14 @@ from .diagnostics import (
     describe_current_task,
 )
 from .loop_guard import ThinkingLoopDetected, _chunk_delta_text, _ThinkingLoopDetector
-from .routing import _active_async_clients, _CURRENT_SESSION_ID, _select_endpoint, get_preferred_sub_model
+from .routing import (
+    _active_async_clients,
+    _CURRENT_SESSION_ID,
+    _select_endpoint,
+    get_preferred_sub_model,
+    release_slot_reservation,
+    reserve_slot,
+)
 from .thinking_control import (
     ThinkingControlSettings,
     apply_level,
@@ -97,6 +104,9 @@ class ChatLlamaCpp(ChatOpenAI):
     thinking_control: ThinkingControlSettings | None = None
     # ログ用の役割名（"main" / "sub"、enable_thinking_control() が注入する）。
     thinking_control_role: str = ""
+    # 接続先選択時に入れた空きスロットの予約（routing.reserve_slot、build_model() が
+    # 注入する）。最初のリクエスト送信時に _release_slot_reservation が解除する。
+    slot_reservation_token: int | None = None
 
     def _get_request_payload(self, input_: Any, *, stop: list[str] | None = None, **kwargs: Any) -> dict:
         """思考レベルの差し替えと、reasoning_preserve 有効時の履歴の thinking の載せ直しを行う。
@@ -242,14 +252,21 @@ class ChatLlamaCpp(ChatOpenAI):
         """
         sem = _LLM_REQUEST_SEMAPHORE
         if sem is None:
+            self._release_slot_reservation()
             async for chunk in self._astream_guarded(*args, **kwargs):
                 yield chunk
             return
         if sem.locked():
             logger.debug("空きスロットが無いため待機します（llm concurrent guard）")
         async with sem:
+            self._release_slot_reservation()
             async for chunk in self._astream_guarded(*args, **kwargs):
                 yield chunk
+
+    def _release_slot_reservation(self) -> None:
+        """接続先選択時の予約を、最初のリクエスト送信直前に解除する（routing.release_slot_reservation）。"""
+        token, self.slot_reservation_token = self.slot_reservation_token, None
+        release_slot_reservation(self.openai_api_base or "", token)
 
     async def _astream_guarded(self, *args: Any, **kwargs: Any) -> Any:
         """_astream の本体（ループ検知・finally節）。
@@ -371,10 +388,12 @@ class ChatLlamaCpp(ChatOpenAI):
         """
         sem = _LLM_REQUEST_SEMAPHORE
         if sem is None:
+            self._release_slot_reservation()
             return await super()._agenerate(*args, **kwargs)
         if sem.locked():
             logger.debug("空きスロットが無いため待機します（llm concurrent guard）")
         async with sem:
+            self._release_slot_reservation()
             return await super()._agenerate(*args, **kwargs)
 
     def _generate(self, *args: Any, **kwargs: Any) -> Any:
@@ -478,6 +497,12 @@ async def build_model(
         # 無作為にどちらかへ振られるのを防ぐ。
         fallback_model=config.sub_default_model if role == "sub" else None,
     )
+    # 選択（GET /slots の確認）から最初のリクエスト送信までの間に、同時に
+    # 選択中の他の build_model() が同じ空きを選ばないよう予約する。選択直後で
+    # await を挟まないこと（挟むと予約前に他の選択が割り込む）。直後に生成する
+    # とは限らない wait_when_busy=False の呼び出し元では予約しない（使われない
+    # 予約が失効まで他の選択を次点へ追いやるため）。
+    slot_reservation_token = reserve_slot(endpoint) if wait_when_busy else None
     logger.info(
         "build_model()呼び出し: role=%s routing_strategy=%s session_id=%r -> "
         "base_url=%s model=%s [diag] %s",
@@ -569,6 +594,7 @@ async def build_model(
         loop_guard_include_content=config.thinking_loop_guard_target != "thinking_only",
         preserve_reasoning_content=bool(config.reasoning_preserve),
         reasoning_dialect=endpoint.provider,
+        slot_reservation_token=slot_reservation_token,
     )
 
 

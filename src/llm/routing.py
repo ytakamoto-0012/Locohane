@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import itertools
 import logging
 import random
 import time
 import weakref
+from typing import NamedTuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -240,9 +242,81 @@ _ENDPOINT_COOLDOWN_UNTIL: dict[tuple[str, int], float] = {}
 # priority_failover 戦略で、通信エラーを検知した接続先を一時的に避ける秒数。
 _ENDPOINT_FAILOVER_COOLDOWN_SECONDS = 60.0
 
+# --- GET /slots による空き確認を補う、自プロセス側の予約 ---
+# build_model() が選んだが、まだ最初のリクエストを送っていない接続先の予約
+# （llama-server のルート（_server_key、scheme+netloc）→ トークン→有効期限）。
+# main_url と sub_url に同じサーバーを書いた場合も1台として数える。
+# GET /slots は「送信済み」のリクエストしか反映しないため、複数の build_model() が
+# 同時に同じ空きを見て全員がそこを選ぶ（priority_failover では全員が先頭を
+# 優先するため必ず起きる）のを防ぐ。最初のリクエスト送信時（release_slot_reservation）に
+# 解除し、送信されないまま捨てられたモデルの分は _SLOT_RESERVATION_TTL_SECONDS で
+# 自然に失効させる。
+_SLOT_RESERVATIONS: dict[str, dict[int, float]] = {}
+_SLOT_RESERVATION_TTL_SECONDS = 30.0
+_SLOT_RESERVATION_TOKENS = itertools.count(1)
 
-async def _probe_llama_cpp_slots_available(base_url: str, timeout_seconds: float) -> bool | None:
-    """llama.cpp server の管理API GET /slots を叩き、空きスロットがあるか確認する。
+
+class SlotCounts(NamedTuple):
+    """GET /slots の集計結果。"""
+
+    free: int
+    total: int
+
+
+def _server_key(base_url: str) -> str | None:
+    """base_url（"http://host:port/v1" 等）から llama-server のルート（scheme+netloc）を取り出す。"""
+    parsed = urlsplit(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _active_reservations(key: str) -> int:
+    """key のサーバーに対する有効な予約数（失効分はここで掃除する）。"""
+    reservations = _SLOT_RESERVATIONS.get(key)
+    if not reservations:
+        return 0
+    now = time.time()
+    for token in [t for t, expires_at in reservations.items() if expires_at <= now]:
+        del reservations[token]
+    return len(reservations)
+
+
+def reserve_slot(endpoint: LLMEndpoint) -> int | None:
+    """build_model() が選んだ provider="llama_cpp" の接続先に、最初のリクエスト送信までの予約を入れる。
+
+    Args:
+        endpoint: 選ばれた接続先。
+
+    Returns:
+        予約トークン（release_slot_reservation に渡す）。llama_cpp 以外・base_url が
+        不正な場合は None（予約しない）。
+    """
+    key = _server_key(endpoint.base_url)
+    if endpoint.provider != "llama_cpp" or key is None:
+        return None
+    token = next(_SLOT_RESERVATION_TOKENS)
+    _SLOT_RESERVATIONS.setdefault(key, {})[token] = time.time() + _SLOT_RESERVATION_TTL_SECONDS
+    return token
+
+
+def release_slot_reservation(base_url: str, reservation_token: int | None) -> None:
+    """reserve_slot の予約を解除する。
+
+    ChatLlamaCpp が同時実行数ガード（_LLM_REQUEST_SEMAPHORE）の内側、つまり
+    実際にサーバーへ送る直前に呼ぶ（以後はサーバー側の GET /slots に反映される）。
+
+    Args:
+        base_url: 予約した接続先の base_url。
+        reservation_token: reserve_slot の戻り値。None なら何もしない。
+    """
+    key = _server_key(base_url)
+    if key is not None and reservation_token is not None:
+        _SLOT_RESERVATIONS.get(key, {}).pop(reservation_token, None)
+
+
+async def _probe_llama_cpp_slots_available(base_url: str, timeout_seconds: float) -> SlotCounts | None:
+    """llama.cpp server の管理API GET /slots を叩き、空きスロット数と総数を返す。
 
     provider="llama_cpp" の接続先のみが対象（llama-server起動時に --slots が
     有効な場合のみ機能する）。base_url は "http://host:port/v1" のように
@@ -262,14 +336,13 @@ async def _probe_llama_cpp_slots_available(base_url: str, timeout_seconds: float
             round_robin_slots_probe_timeout_seconds）。
 
     Returns:
-        True: 少なくとも1スロットが待機中（空きあり）。
-        False: 全スロットが生成中（空きなし）。
-        None: 確認できなかった（通信エラー・想定外のレスポンス形式等）。
+        SlotCounts(free=待機中のスロット数, total=スロット総数)。
+        None: 確認できなかった（通信エラー・想定外のレスポンス形式・スロット0件等）。
     """
-    parsed = urlsplit(base_url)
-    if not parsed.scheme or not parsed.netloc:
+    key = _server_key(base_url)
+    if key is None:
         return None
-    slots_url = f"{parsed.scheme}://{parsed.netloc}/slots"
+    slots_url = f"{key}/slots"
     timeout = httpx.Timeout(timeout_seconds, connect=min(2.0, timeout_seconds))
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -279,12 +352,13 @@ async def _probe_llama_cpp_slots_available(base_url: str, timeout_seconds: float
     except (httpx.TransportError, httpx.HTTPStatusError, ValueError) as exc:
         logger.debug("GET %s の確認に失敗しました（空きありとみなします）", slots_url, exc_info=exc)
         return None
-    if not isinstance(slots, list):
+    if not isinstance(slots, list) or not slots:
         return None
     try:
-        return any(not slot.get("is_processing", True) for slot in slots)
+        free = sum(1 for slot in slots if not slot.get("is_processing", True))
     except AttributeError:
         return None
+    return SlotCounts(free=free, total=len(slots))
 
 
 def _endpoint_available_now(endpoint: LLMEndpoint) -> bool:
@@ -436,8 +510,9 @@ async def _select_endpoint_with_slots_probe(
     並び順は round_robin なら呼び出しごとに先頭を回した順（_round_robin_order）、
     priority_failover ならクールダウン中でない接続先の優先順（_priority_failover_order）。
 
-    空きが無い（全スロット生成中）候補はスキップして次点へ回し、候補を一巡
-    しても1件も空きが見つからなければ、wait_when_busy=True（既定）なら
+    空き数からは自プロセスの未送信予約（_SLOT_RESERVATIONS、reserve_slot 参照）を
+    差し引く。空きが無い（全スロット生成中）候補はスキップして次点へ回し、
+    候補を一巡しても1件も空きが見つからなければ、wait_when_busy=True（既定）なら
     busy_poll_interval_seconds 秒待ってから再試行する（空きが出るまで無期限に
     待機する）。wait_when_busy=False なら待たずに並び順の先頭（order[0]）を
     暫定選択して即座に返す（呼び出し元が「今すぐ何らかの接続先が確定すれば
@@ -488,25 +563,45 @@ async def _select_endpoint_with_slots_probe(
                     endpoint.provider,
                 )
                 return index
-            available = await _probe_llama_cpp_slots_available(endpoint.base_url, probe_timeout_seconds)
-            if available is not False:
+            counts = await _probe_llama_cpp_slots_available(endpoint.base_url, probe_timeout_seconds)
+            if counts is None:
                 logger.info(
                     "接続先選択[%s]: role=%s order=%s -> index=%d base_url=%s "
-                    "(理由: GET /slots 確認結果=%s。Trueは空きあり、Noneは確認不能につきフェイルセーフで選択)",
+                    "(理由: GET /slots で確認できないためフェイルセーフで選択)",
                     strategy,
                     role,
                     order,
                     index,
                     endpoint.base_url,
-                    available,
+                )
+                return index
+            # 予約数は probe の await 後に読む（同時に選択中の他の build_model() が
+            # その間に入れた予約を反映するため）。
+            reserved = _active_reservations(_server_key(endpoint.base_url) or "")
+            if counts.free - reserved > 0:
+                logger.info(
+                    "接続先選択[%s]: role=%s order=%s -> index=%d base_url=%s "
+                    "(理由: GET /slots 空き=%d/%d、自プロセスの未送信予約=%d)",
+                    strategy,
+                    role,
+                    order,
+                    index,
+                    endpoint.base_url,
+                    counts.free,
+                    counts.total,
+                    reserved,
                 )
                 return index
             logger.info(
-                "接続先選択[%s]: role=%s index=%d base_url=%s は空きスロットが無いためスキップ",
+                "接続先選択[%s]: role=%s index=%d base_url=%s は空きスロットが無いためスキップ "
+                "(空き=%d/%d、自プロセスの未送信予約=%d)",
                 strategy,
                 role,
                 index,
                 endpoint.base_url,
+                counts.free,
+                counts.total,
+                reserved,
             )
         attempt += 1
         if not wait_when_busy:
