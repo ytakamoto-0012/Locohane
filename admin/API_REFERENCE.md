@@ -411,6 +411,36 @@ rem インスタンス専用画像を削除して共通に戻す（instance 必�
 %C% -X DELETE "%BASE%/api/settings/images/icon?instance=default" -H %H%
 ```
 
+## モニター（稼働状況・会話閲覧・トークン推移・ログ・LLM接続先）
+
+すべて読み取り専用（GET）。`<name>` はインスタンス名。会話内容の取得
+（`/monitor/threads/<thread_id>`）だけは、閲覧した事実を変更履歴へ
+`conversation_view` として記録する。
+
+```bash
+# 全インスタンスの接続中ユーザー・セッション数・生成中スレッド数
+$C "$BASE/api/monitor/overview"
+# 1インスタンスの詳細（接続中セッション・生成中スレッド・直近24時間の警告件数）
+$C "$BASE/api/instances/default/monitor/runtime"
+# ユーザー別のスレッド数・トークン累計・最終利用日時
+$C "$BASE/api/instances/default/monitor/users"
+# スレッド一覧（owner・q（名前/IDの部分一致）・limit・offset で絞り込み）
+$C "$BASE/api/instances/default/monitor/threads?owner=alice&limit=50"
+# 会話内容（internal=true でツール実行・思考・UI制御メッセージも含める）
+$C "$BASE/api/instances/default/monitor/threads/<thread_id>?internal=false"
+# LLM呼び出しごとのトークン使用量（アプリログから復元）
+$C "$BASE/api/instances/default/monitor/threads/<thread_id>/tokens"
+# アプリログ（level 以上を新しい順に。q・thread_id で絞り込み）
+$C "$BASE/api/instances/default/monitor/logs?level=WARNING&limit=200"
+# LLM接続先の到達確認（llama_cpp はスロット使用状況も）
+$C "$BASE/api/instances/default/monitor/endpoints"
+```
+
+```bat
+%C% "%BASE%/api/instances/default/monitor/runtime"
+%C% "%BASE%/api/instances/default/monitor/threads/<thread_id>/tokens"
+```
+
 ## 変更履歴
 
 新しい順に最大 `limit` 件（既定200）。`instance` で絞り込める。

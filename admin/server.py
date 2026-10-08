@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets as _secrets
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,7 @@ from pydantic import BaseModel
 
 from src.config import PROJECT_ROOT, load_config, resolve_instances_root
 
-from . import api_docs, audit, auth, env_files, env_overrides, overrides, settings_files, supervisor
+from . import api_docs, audit, auth, env_files, env_overrides, monitor, overrides, settings_files, supervisor
 from . import instances as inst
 from .ini_catalog import parse_file as parse_ini_file
 
@@ -850,6 +851,143 @@ def delete_setting_text(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _audit_settings(request, user, instance, "settings_reset_to_shared", filename)
     return {"success": True}
+
+
+# ---------------------------------------------------------------------------
+# モニター（稼働状況・会話閲覧・トークン推移・ログ・LLM接続先。読み取り専用）
+# ---------------------------------------------------------------------------
+
+
+def _monitor_config(name: str):
+    _require_instance(name)
+    try:
+        return monitor.instance_config(INSTANCES_ROOT, CONFIG_INI_PATH, name)
+    except monitor.MonitorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _runtime_view(name: str, cfg) -> dict[str, Any]:
+    status = _supervisor.status(name)
+    raw = None
+    if status.state in (supervisor.InstanceState.RUNNING, supervisor.InstanceState.EXTERNAL):
+        raw = monitor.read_runtime_status(cfg.common_data_dir)
+        # 異常終了で前回プロセスのファイルが残っている場合は使わない。
+        if raw is not None and status.pid is not None and raw.get("pid") != status.pid:
+            raw = None
+    ids = [s.get("thread_id") for s in (raw or {}).get("sessions", [])]
+    ids += [g.get("thread_id") for g in (raw or {}).get("generating", [])]
+    try:
+        names = monitor.thread_names(cfg.thread_store_db, ids)
+    except (monitor.MonitorError, sqlite3.Error):
+        names = {}
+    return {"state": status.state.value, **monitor.summarize_runtime(raw, names)}
+
+
+@app.get("/api/monitor/overview")
+def get_monitor_overview(user: str = Depends(require_login)):
+    """全インスタンスの接続中ユーザー数・生成中スレッド数（インスタンス一覧のカード用）。"""
+    result = []
+    for name in inst.list_instance_names(INSTANCES_ROOT):
+        try:
+            cfg = monitor.instance_config(INSTANCES_ROOT, CONFIG_INI_PATH, name)
+        except monitor.MonitorError:
+            continue
+        view = _runtime_view(name, cfg)
+        result.append(
+            {
+                "name": name,
+                "available": view["available"],
+                "users": [u["user"] for u in view["users"]],
+                "sessions": len(view["sessions"]),
+                "generating": len(view["generating"]),
+            }
+        )
+    return {"instances": result}
+
+
+@app.get("/api/instances/{name}/monitor/runtime")
+def get_monitor_runtime(name: str, user: str = Depends(require_login)):
+    cfg = _monitor_config(name)
+    view = _runtime_view(name, cfg)
+    view["log_counts_24h"] = monitor.recent_level_counts(cfg.log_dir)
+    return view
+
+
+@app.get("/api/instances/{name}/monitor/users")
+def get_monitor_users(name: str, user: str = Depends(require_login)):
+    cfg = _monitor_config(name)
+    try:
+        return {"users": monitor.user_summary(cfg.thread_store_db)}
+    except (monitor.MonitorError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/instances/{name}/monitor/threads")
+def get_monitor_threads(
+    name: str,
+    owner: str | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    user: str = Depends(require_login),
+):
+    cfg = _monitor_config(name)
+    try:
+        return monitor.list_threads(cfg.thread_store_db, owner=owner, query=q, limit=min(max(limit, 1), 500), offset=max(offset, 0))
+    except (monitor.MonitorError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/instances/{name}/monitor/threads/{thread_id}")
+def get_monitor_thread(
+    name: str, thread_id: str, request: Request, internal: bool = False, user: str = Depends(require_login)
+):
+    """会話内容。利用者の会話を管理者が閲覧した事実を変更履歴へ残す。"""
+    cfg = _monitor_config(name)
+    try:
+        detail = monitor.thread_detail(cfg.thread_store_db, thread_id, include_internal=internal)
+    except (monitor.MonitorError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if detail is None:
+        raise HTTPException(status_code=404, detail="スレッドが見つかりません。")
+    audit.append(
+        AUDIT_LOG_PATH,
+        {
+            "instance": name,
+            "actor": user,
+            "remote_addr": _client_ip(request),
+            "action": "conversation_view",
+            "thread_id": thread_id,
+            "thread_owner": detail["owner"],
+        },
+    )
+    return detail
+
+
+@app.get("/api/instances/{name}/monitor/threads/{thread_id}/tokens")
+def get_monitor_thread_tokens(name: str, thread_id: str, user: str = Depends(require_login)):
+    cfg = _monitor_config(name)
+    return {"points": monitor.token_history(cfg.log_dir, thread_id)}
+
+
+@app.get("/api/instances/{name}/monitor/logs")
+def get_monitor_logs(
+    name: str,
+    level: str = "WARNING",
+    limit: int = 200,
+    q: str | None = None,
+    thread_id: str | None = None,
+    user: str = Depends(require_login),
+):
+    cfg = _monitor_config(name)
+    entries = monitor.tail_log(cfg.log_dir, min_level=level, limit=min(max(limit, 1), 2000), query=q, thread_id=thread_id)
+    return {"entries": entries}
+
+
+@app.get("/api/instances/{name}/monitor/endpoints")
+def get_monitor_endpoints(name: str, user: str = Depends(require_login)):
+    cfg = _monitor_config(name)
+    return {"endpoints": monitor.probe_endpoints(cfg)}
 
 
 # ---------------------------------------------------------------------------

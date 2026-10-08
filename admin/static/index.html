@@ -62,12 +62,14 @@
       <span class="addr"></span>
       <span class="state-label"></span>
     </div>
+    <div class="card-activity hint"></div>
     <div class="card-actions">
       <a class="open-link" target="_blank" rel="noopener">開く ↗</a>
       <button class="btn-start">起動</button>
       <button class="btn-stop">停止</button>
       <button class="btn-restart">再起動</button>
       <button class="btn-edit">編集</button>
+      <button class="btn-monitor">モニター</button>
       <button class="btn-config">設定</button>
       <button class="btn-delete">削除</button>
     </div>
@@ -145,9 +147,12 @@
   <div class="view-instance-detail">
     <div class="view-header">
       <button class="back-btn">← インスタンス一覧</button>
-      <h2><span class="detail-name"></span> の設定</h2>
+      <h2>インスタンス: <span class="detail-name"></span></h2>
     </div>
     <nav class="subtabs">
+      <button data-subview="monitor" class="subtab-btn">モニター</button>
+      <button data-subview="threads" class="subtab-btn">会話</button>
+      <button data-subview="logs" class="subtab-btn">ログ</button>
       <button data-subview="config" class="subtab-btn active">config.ini</button>
       <button data-subview="users" class="subtab-btn">ユーザー</button>
       <button data-subview="env" class="subtab-btn">環境変数</button>

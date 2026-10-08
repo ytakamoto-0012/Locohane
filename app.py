@@ -113,6 +113,7 @@ from src.files import extract_generated_files
 from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
 from src.images import IMAGE_REFS_KEY, image_ref, is_image_file, load_image_bytes, to_data_url
 from src import instance_lock
+from src import runtime_status
 from src.llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -289,6 +290,9 @@ _generating_owner_threads: dict[str, str] = {}
 # 発火し、URLに?threadが無い新規チャットとして再接続され「無題の会話」が
 # 増殖するバグがあった）。
 _generating_thread_session_ids: dict[str, str] = {}
+# thread_id -> ターン処理を開始した日時（ISO 8601、UTC）。設定ダッシュボードの
+# 「生成中スレッド」の経過時間表示用（_collect_runtime_status 参照）。
+_generating_thread_started_at: dict[str, str] = {}
 # session.emit を中継してよいイベントの許可リスト（内容の表示に関わるものだけ）。
 # 'ask'系プロンプトは session.emit_call 経由で送られるため中継対象に含まれず、
 # 閲覧側セッションに二重の承認UIが出る心配は無い。task_start/task_end もあえて
@@ -300,6 +304,7 @@ _RELAYED_EMIT_EVENTS = frozenset(
 
 def _mark_thread_generating(thread_id: str, owner: str | None = None, session_id: str | None = None) -> None:
     _generating_thread_ids.add(thread_id)
+    _generating_thread_started_at[thread_id] = runtime_status.now_iso()
     if owner is not None:
         _generating_owner_threads[owner] = thread_id
     if session_id is not None:
@@ -310,6 +315,7 @@ def _unmark_thread_generating(thread_id: str, owner: str | None = None) -> None:
     _generating_thread_ids.discard(thread_id)
     _generating_thread_tasks.pop(thread_id, None)
     _generating_thread_session_ids.pop(thread_id, None)
+    _generating_thread_started_at.pop(thread_id, None)
     if owner is not None and _generating_owner_threads.get(owner) == thread_id:
         _generating_owner_threads.pop(owner, None)
 
@@ -1010,6 +1016,45 @@ if _config.thread_store_enabled:
     _reorder_locohane_routes_before_spa_catchall()
 
 
+_RUNTIME_STATUS_INTERVAL_SECONDS = 3.0
+_runtime_status_task: "asyncio.Task | None" = None
+
+
+def _collect_runtime_status() -> dict:
+    """設定ダッシュボード向けに、接続中セッションと生成中スレッドを集める（src/runtime_status.py 参照）。
+
+    Chainlit は切断後もタイムアウト（[project].session_timeout）まで
+    WebsocketSession を ws_sessions_id に残すため、Socket.IO の接続状態で
+    「今つながっているか」を判定する。
+    """
+    from chainlit.server import sio
+    from chainlit.session import ws_sessions_id
+
+    sessions = []
+    for session in list(ws_sessions_id.values()):
+        if not sio.manager.is_connected(session.socket_id, "/"):
+            continue
+        sessions.append(
+            {
+                "session_id": session.id,
+                "user": thread_store.resolve_owner(session.user),
+                "thread_id": session.thread_id,
+                "has_first_interaction": bool(session.has_first_interaction),
+            }
+        )
+    owners_by_thread = {thread_id: owner for owner, thread_id in _generating_owner_threads.items()}
+    generating = [
+        {
+            "thread_id": thread_id,
+            "owner": owners_by_thread.get(thread_id),
+            "started_at": _generating_thread_started_at.get(thread_id),
+            "waiting_for_user": thread_id in _pending_asks,
+        }
+        for thread_id in sorted(_generating_thread_ids)
+    ]
+    return {"pid": os.getpid(), "sessions": sessions, "generating": generating}
+
+
 @cl.on_app_startup
 async def _on_app_startup() -> None:
     """プロセス起動時（最初のセッション接続より前）に一度だけ呼ばれる。
@@ -1055,6 +1100,15 @@ async def _on_app_startup() -> None:
 
     _patch_chainlit_websocket_ping_timeout()
 
+    global _runtime_status_task
+    _runtime_status_task = asyncio.create_task(
+        runtime_status.run_writer_loop(
+            _config.common_data_dir / runtime_status.RUNTIME_STATUS_FILENAME,
+            _collect_runtime_status,
+            _RUNTIME_STATUS_INTERVAL_SECONDS,
+        )
+    )
+
     global _thread_store_conn, _thread_data_layer
     if _config.thread_store_enabled:
         _thread_store_conn = await thread_store.init_db(_config.thread_store_db)
@@ -1096,6 +1150,10 @@ async def _on_app_shutdown() -> None:
     DB接続を保留中タスクの後始末を待ってから閉じる
     （_close_checkpointer_gracefully 参照）。
     """
+    if _runtime_status_task is not None:
+        _runtime_status_task.cancel()
+    # 停止後に古い「接続中」情報が管理ツールに残らないよう消しておく。
+    runtime_status.remove(_config.common_data_dir / runtime_status.RUNTIME_STATUS_FILENAME)
     await shutdown_mcp_tools()
     await _close_checkpointer_gracefully()
     if _thread_store_conn is not None:

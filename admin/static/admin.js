@@ -136,6 +136,7 @@ function showShell(username) {
 }
 
 function navigate(view) {
+  stopMonitorPolling();
   if (view === "instances") return renderInstances();
   if (view === "settings") return renderSettings();
   if (view === "audit") return renderAudit();
@@ -208,8 +209,32 @@ async function refreshInstanceCards() {
     btnDelete.addEventListener("click", () => openDeleteInstanceModal(inst));
     btnEdit.addEventListener("click", () => openEditInstanceModal(inst));
     card.querySelector(".btn-config").addEventListener("click", () => renderInstanceDetail(inst.name));
+    card.querySelector(".btn-monitor").addEventListener("click", () => renderInstanceDetail(inst.name, "monitor"));
+    card.dataset.instance = inst.name;
 
     container.appendChild(card);
+  }
+  refreshCardActivity();
+}
+
+// カードに「接続中ユーザー・生成中スレッド」を表示する（取得失敗時は何も出さない）。
+async function refreshCardActivity() {
+  let data;
+  try {
+    data = await api("/api/monitor/overview");
+  } catch (e) {
+    return;
+  }
+  for (const item of data.instances) {
+    const card = $(`.instance-card[data-instance="${CSS.escape(item.name)}"]`);
+    if (!card) continue;
+    const el = card.querySelector(".card-activity");
+    if (!item.available) {
+      el.textContent = "";
+      continue;
+    }
+    const users = item.users.length ? item.users.join(", ") : "なし";
+    el.textContent = `接続中: ${item.sessions}セッション（${users}） / 生成中: ${item.generating}スレッド`;
   }
 }
 
@@ -409,25 +434,34 @@ async function openDeleteInstanceModal(inst) {
 
 let currentInstanceName = null;
 
-async function renderInstanceDetail(name) {
+async function renderInstanceDetail(name, initialView) {
+  stopMonitorPolling();
   currentInstanceName = name;
   mainEl.innerHTML = "";
   mainEl.appendChild(clone("tpl-instance-detail"));
   $(".detail-name").textContent = name;
-  $(".back-btn").addEventListener("click", () => renderInstances());
-  $$(".subtab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      $$(".subtab-btn").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      renderInstanceSubview(btn.dataset.subview);
-    });
+  $(".back-btn").addEventListener("click", () => {
+    stopMonitorPolling();
+    renderInstances();
   });
-  await renderInstanceSubview("config");
+  $$(".subtab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => selectInstanceSubview(btn.dataset.subview));
+  });
+  await selectInstanceSubview(initialView || "config");
 }
 
-function renderInstanceSubview(view) {
+function selectInstanceSubview(view, opts) {
+  $$(".subtab-btn").forEach((b) => b.classList.toggle("active", b.dataset.subview === view));
+  return renderInstanceSubview(view, opts);
+}
+
+function renderInstanceSubview(view, opts) {
+  stopMonitorPolling();
   const container = $("#instance-subview");
   container.innerHTML = "";
+  if (view === "monitor") return renderMonitor(container);
+  if (view === "threads") return renderThreads(container, opts || {});
+  if (view === "logs") return renderLogs(container, opts || {});
   if (view === "config") return renderConfigEditor(container);
   if (view === "users") return renderUsers(container);
   if (view === "env") return renderEnvVars(container);
@@ -1840,10 +1874,582 @@ function summarizeAuditEntry(entry) {
   if (entry.changes && entry.changes.length) {
     return entry.changes.map((c) => `[${c.section}].${c.key}`).join(", ");
   }
+  if (entry.action === "conversation_view") return `会話閲覧: ${entry.thread_owner || ""} / ${entry.thread_id || ""}`;
   if (entry.target_user) return `対象: ${entry.target_user}`;
   if (entry.file) return `ファイル: ${entry.file}`;
   if (entry.key) return `キー: ${entry.key}`;
   return "";
+}
+
+/* ------------------------------------------------------------ モニター */
+/* 稼働状況・会話閲覧・トークン推移・ログ・LLM接続先（読み取り専用。admin/monitor.py 参照） */
+
+const MONITOR_POLL_MS = 5000;
+let monitorTimer = null;
+
+function stopMonitorPolling() {
+  if (monitorTimer) clearInterval(monitorTimer);
+  monitorTimer = null;
+}
+
+// textContent だけで要素を組み立てる（ユーザー名・会話内容等は信頼できないデータのため innerHTML を使わない）。
+function el(tag, props, children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v === undefined || v === null) continue;
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  for (const c of [].concat(children || [])) {
+    if (c === null || c === undefined) continue;
+    node.append(c instanceof Node ? c : String(c));
+  }
+  return node;
+}
+
+function monitorPath(suffix) {
+  return `/api/instances/${encodeURIComponent(currentInstanceName)}/monitor${suffix}`;
+}
+
+function fmtNum(n) {
+  return n === null || n === undefined ? "-" : Number(n).toLocaleString("ja-JP");
+}
+
+function fmtCompact(n) {
+  if (n >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${+(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
+  return String(n);
+}
+
+// ISO 8601（UTC の "+00:00"/"Z" 付き、またはローカル時刻）をローカル表示へ。
+function fmtTime(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  return d.toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function fmtElapsed(iso) {
+  if (!iso) return "-";
+  const sec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (sec < 60) return `${sec}秒`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}分${sec % 60}秒`;
+  return `${Math.floor(sec / 3600)}時間${Math.floor((sec % 3600) / 60)}分`;
+}
+
+function dataTable(headers, rows, emptyText) {
+  const tbody = el("tbody");
+  for (const cells of rows) tbody.append(el("tr", {}, cells.map((c) => el("td", {}, c))));
+  if (!rows.length) tbody.append(el("tr", {}, el("td", { colspan: headers.length, class: "hint", text: emptyText || "なし" })));
+  return el("table", { class: "data-table" }, [el("thead", {}, el("tr", {}, headers.map((h) => el("th", { text: h })))), tbody]);
+}
+
+function linkBtn(text, onClick) {
+  return el("button", { class: "link-btn inline-link", text, onclick: onClick });
+}
+
+function statTile(label, value, sub) {
+  return el("div", { class: "stat-tile" }, [
+    el("div", { class: "stat-value", text: value }),
+    el("div", { class: "stat-label", text: label }),
+    sub ? el("div", { class: "stat-sub", text: sub }) : null,
+  ]);
+}
+
+/* --- 稼働状況 --- */
+
+async function renderMonitor(container) {
+  const tiles = el("div", { class: "stat-row" });
+  const body = el("div");
+  const updated = el("span", { class: "hint" });
+  const endpointsBox = el("div");
+  container.append(
+    el("div", { class: "monitor-toolbar" }, [updated, el("span", { class: "hint", text: `（${MONITOR_POLL_MS / 1000}秒ごとに自動更新）` })]),
+    tiles,
+    body,
+    el("section", { class: "monitor-section" }, [
+      el("div", { class: "section-head" }, [
+        el("h3", { text: "LLM接続先" }),
+        el("button", { text: "状態を確認", onclick: () => loadEndpoints(endpointsBox) }),
+      ]),
+      el("p", { class: "hint", text: "[llm] main_url / sub_url の各接続先へ問い合わせます（llama_cpp は GET /slots でスロット使用状況も表示）。" }),
+      endpointsBox,
+    ])
+  );
+
+  const refresh = async () => {
+    let data;
+    try {
+      data = await api(monitorPath("/runtime"));
+    } catch (e) {
+      body.replaceChildren(el("div", { class: "error", text: e.message }));
+      return;
+    }
+    if (!document.body.contains(container)) return stopMonitorPolling();
+    updated.textContent = `状態: ${STATE_LABELS[data.state] || data.state}` + (data.updated_at ? ` ／ 本体の最終更新 ${fmtTime(data.updated_at)}` : "");
+    const lc = data.log_counts_24h || {};
+    tiles.replaceChildren(
+      statTile("接続中ユーザー", data.available ? String(data.users.filter((u) => u.sessions > 0).length) : "-"),
+      statTile("接続セッション", data.available ? String(data.sessions.length) : "-"),
+      statTile("生成中スレッド", data.available ? String(data.generating.length) : "-", data.available ? `うち応答待ち ${data.generating.filter((g) => g.waiting_for_user).length}` : null),
+      statTile("直近24時間の警告", `${fmtNum(lc.WARNING || 0)}`, `ERROR ${fmtNum(lc.ERROR || 0)} / CRITICAL ${fmtNum(lc.CRITICAL || 0)}`)
+    );
+    if (!data.available) {
+      body.replaceChildren(
+        el("p", {
+          class: "hint",
+          text:
+            data.state === "running" || data.state === "external"
+              ? "実行状態を取得できません（本体が更新前のバージョン、または起動直後です）。"
+              : "インスタンスが停止しているため、接続中のユーザーはいません。",
+        })
+      );
+      return;
+    }
+    const openThread = (id) => () => selectInstanceSubview("threads", { openThreadId: id });
+    const threadCell = (id, name) => (id && name ? linkBtn(name, openThread(id)) : el("span", { class: "hint", text: id ? "（未送信の新規チャット）" : "-" }));
+    body.replaceChildren(
+      el("section", { class: "monitor-section" }, [
+        el("h3", { text: "実行中のユーザー" }),
+        dataTable(
+          ["ユーザー", "接続セッション", "生成中スレッド", ""],
+          data.users.map((u) => [u.user, String(u.sessions), String(u.generating), linkBtn("会話一覧", () => selectInstanceSubview("threads", { owner: u.user }))]),
+          "接続中のユーザーはいません。"
+        ),
+      ]),
+      el("section", { class: "monitor-section" }, [
+        el("h3", { text: "生成中のスレッド" }),
+        dataTable(
+          ["ユーザー", "スレッド", "経過時間", "状態"],
+          data.generating.map((g) => [
+            g.owner || "-",
+            threadCell(g.thread_id, g.thread_name || g.thread_id),
+            fmtElapsed(g.started_at),
+            g.waiting_for_user ? el("span", { class: "badge warn", text: "ユーザーの応答待ち" }) : el("span", { class: "badge ok", text: "生成中" }),
+          ]),
+          "生成中のスレッドはありません。"
+        ),
+      ]),
+      el("section", { class: "monitor-section" }, [
+        el("h3", { text: "接続中のセッション（ブラウザタブ）" }),
+        dataTable(
+          ["ユーザー", "開いているスレッド"],
+          data.sessions.map((s) => [s.user, threadCell(s.thread_id, s.has_first_interaction ? s.thread_name || s.thread_id : null)]),
+          "接続中のセッションはありません。"
+        ),
+      ])
+    );
+  };
+  await refresh();
+  stopMonitorPolling();
+  monitorTimer = setInterval(refresh, MONITOR_POLL_MS);
+}
+
+async function loadEndpoints(box) {
+  box.replaceChildren(el("p", { class: "hint", text: "確認中..." }));
+  try {
+    const data = await api(monitorPath("/endpoints"));
+    box.replaceChildren(
+      dataTable(
+        ["用途", "接続先", "モデル", "provider", "状態", "スロット使用中", "応答時間"],
+        data.endpoints.map((e) => [
+          e.role,
+          e.base_url,
+          e.model,
+          e.provider,
+          e.reachable ? el("span", { class: "badge ok", text: "✓ 応答あり" }) : el("span", { class: "badge critical", text: "✕ 応答なし", title: e.error || "" }),
+          e.slots_total === null ? "-" : `${e.slots_busy} / ${e.slots_total}`,
+          `${fmtNum(e.latency_ms)} ms`,
+        ])
+      )
+    );
+  } catch (e) {
+    box.replaceChildren(el("div", { class: "error", text: e.message }));
+  }
+}
+
+/* --- 会話（スレッド一覧・閲覧） --- */
+
+const THREADS_PAGE_SIZE = 50;
+
+async function renderThreads(container, opts) {
+  const state = { owner: opts.owner || "", q: "", offset: 0 };
+  const usersBox = el("div");
+  const ownerSelect = el("select", { class: "inline-select" }, el("option", { value: "", text: "（全ユーザー）" }));
+  const search = el("input", { type: "search", placeholder: "スレッド名・IDで検索..." });
+  const listBox = el("div");
+  const pager = el("div", { class: "pager" });
+  const viewer = el("div", { class: "thread-viewer" });
+
+  container.append(
+    el("section", { class: "monitor-section" }, [el("h3", { text: "ユーザー別の利用状況" }), usersBox]),
+    el("section", { class: "monitor-section" }, [el("h3", { text: "スレッド一覧" }), el("div", { class: "filter-row" }, [ownerSelect, search]), listBox, pager]),
+    viewer
+  );
+
+  try {
+    const users = (await api(monitorPath("/users"))).users;
+    for (const u of users) ownerSelect.append(el("option", { value: u.user, text: u.user }));
+    usersBox.replaceChildren(
+      dataTable(
+        ["ユーザー", "スレッド数", "トークン累計", "最終利用"],
+        users.map((u) => [
+          linkBtn(u.user, () => {
+            ownerSelect.value = u.user;
+            state.owner = u.user;
+            state.offset = 0;
+            loadList();
+          }),
+          fmtNum(u.threads),
+          fmtNum(u.tokens_total),
+          fmtTime(u.last_active),
+        ])
+      )
+    );
+  } catch (e) {
+    usersBox.replaceChildren(el("div", { class: "error", text: e.message }));
+  }
+  ownerSelect.value = state.owner;
+
+  async function loadList() {
+    const params = new URLSearchParams({ limit: THREADS_PAGE_SIZE, offset: state.offset });
+    if (state.owner) params.set("owner", state.owner);
+    if (state.q) params.set("q", state.q);
+    let data;
+    try {
+      data = await api(monitorPath(`/threads?${params}`));
+    } catch (e) {
+      listBox.replaceChildren(el("div", { class: "error", text: e.message }));
+      return;
+    }
+    listBox.replaceChildren(
+      dataTable(
+        ["最終更新", "ユーザー", "スレッド", "発言数", "トークン累計"],
+        data.threads.map((t) => [fmtTime(t.updated_at), t.owner, linkBtn(t.name || t.id, () => openThreadViewer(viewer, t.id)), fmtNum(t.user_messages), fmtNum(t.tokens_total)]),
+        "該当するスレッドはありません。"
+      )
+    );
+    const from = data.total ? state.offset + 1 : 0;
+    const to = Math.min(state.offset + THREADS_PAGE_SIZE, data.total);
+    pager.replaceChildren(
+      el("button", { text: "← 前へ", disabled: state.offset === 0 ? "" : null, onclick: () => { state.offset -= THREADS_PAGE_SIZE; loadList(); } }),
+      el("span", { class: "hint", text: `${from}–${to} / ${data.total}件` }),
+      el("button", { text: "次へ →", disabled: to >= data.total ? "" : null, onclick: () => { state.offset += THREADS_PAGE_SIZE; loadList(); } })
+    );
+  }
+
+  ownerSelect.addEventListener("change", () => {
+    state.owner = ownerSelect.value;
+    state.offset = 0;
+    loadList();
+  });
+  let searchTimer = null;
+  search.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      state.q = search.value.trim();
+      state.offset = 0;
+      loadList();
+    }, 300);
+  });
+  await loadList();
+  if (opts.openThreadId) openThreadViewer(viewer, opts.openThreadId);
+}
+
+const STEP_LABELS = { user_message: "ユーザー", assistant_message: "AI", system_message: "システム", tool: "ツール", llm: "思考" };
+
+async function openThreadViewer(viewer, threadId, internal) {
+  viewer.replaceChildren(el("p", { class: "hint", text: "読み込み中..." }));
+  let detail, tokens;
+  try {
+    [detail, tokens] = await Promise.all([
+      api(monitorPath(`/threads/${encodeURIComponent(threadId)}?internal=${internal ? "true" : "false"}`)),
+      api(monitorPath(`/threads/${encodeURIComponent(threadId)}/tokens`)),
+    ]);
+  } catch (e) {
+    viewer.replaceChildren(el("div", { class: "error", text: e.message }));
+    return;
+  }
+  const cum = detail.token_usage_cumulative || {};
+  const internalCb = el("input", { type: "checkbox" });
+  internalCb.checked = !!internal;
+  internalCb.addEventListener("change", () => openThreadViewer(viewer, threadId, internalCb.checked));
+
+  const messages = el("div", { class: "conversation" });
+  for (const s of detail.steps) {
+    const role = s.type === "user_message" ? "user" : s.type === "assistant_message" || s.type === "system_message" ? "ai" : "internal";
+    const head = el("div", { class: "msg-head" }, [
+      el("strong", { text: s.type === "tool" ? `ツール: ${s.name || ""}` : STEP_LABELS[s.type] || s.type }),
+      el("span", { class: "hint", text: fmtTime(s.created_at) }),
+      s.truncated ? el("span", { class: "badge warn", text: "長いため一部省略" }) : null,
+    ]);
+    let bodyNode;
+    if (role === "internal" || s.is_control) {
+      bodyNode = el("details", {}, [
+        el("summary", { text: (s.output || s.input || "").split("\n")[0].slice(0, 120) || "（内容なし）" }),
+        s.input ? el("pre", { class: "msg-pre" }, [el("span", { class: "hint", text: "入力:\n" }), s.input]) : null,
+        el("pre", { class: "msg-pre", text: s.output }),
+      ]);
+    } else {
+      bodyNode = el("pre", { class: "msg-body", text: s.output });
+    }
+    messages.append(el("div", { class: `msg msg-${role}` }, [head, bodyNode]));
+  }
+  if (!detail.steps.length) messages.append(el("p", { class: "hint", text: "表示できるメッセージがありません。" }));
+
+  viewer.replaceChildren(
+    el("section", { class: "monitor-section viewer-section" }, [
+      el("div", { class: "section-head" }, [
+        el("h3", { text: detail.name || detail.id }),
+        el("button", { text: "閉じる", onclick: () => viewer.replaceChildren() }),
+      ]),
+      el("div", { class: "thread-meta hint" }, [
+        `ユーザー: ${detail.owner} ／ 作成: ${fmtTime(detail.created_at)} ／ 最終更新: ${fmtTime(detail.updated_at)} ／ thread_id: ${detail.id}`,
+        detail.work_dir ? ` ／ 作業ディレクトリ: ${detail.work_dir}` : "",
+      ]),
+      el("div", { class: "stat-row" }, [
+        statTile("トークン累計（合計）", fmtNum(cum.total)),
+        statTile("入力", fmtNum(cum.input)),
+        statTile("出力", fmtNum(cum.output)),
+        statTile("LLM呼び出し回数", fmtNum(tokens.points.length), "アプリログに残っている分"),
+      ]),
+      buildTokenCharts(tokens.points),
+      el("div", { class: "section-head" }, [
+        el("h3", { text: "会話内容" }),
+        el("div", { class: "filter-row" }, [
+          el("label", { class: "checkbox" }, [internalCb, " ツール実行・思考・UI制御メッセージも表示"]),
+          linkBtn("このスレッドのログを見る", () => selectInstanceSubview("logs", { threadId: detail.id })),
+        ]),
+      ]),
+      messages,
+    ])
+  );
+  viewer.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* --- トークン推移グラフ（インラインSVG。外部ライブラリは使わない＝完全オフライン） --- */
+
+// 系列色は濃色パネル（--panel）上で配色検証済み（明度帯・色覚多様性での識別・コントラスト）。
+const SERIES_BLUE = "#3987e5";
+const SERIES_ORANGE = "#d95926";
+
+function buildTokenCharts(points) {
+  const wrap = el("div", { class: "token-charts" });
+  if (!points.length) {
+    wrap.append(
+      el("p", {
+        class: "hint",
+        text: "トークン推移のデータがありません（[llm] track_token_usage=false、またはアプリログがローテーション・削除済み）。",
+      })
+    );
+    return wrap;
+  }
+  const compactions = points.map((p, i) => (p.compacted ? i : -1)).filter((i) => i >= 0);
+  const hasSub = points.some((p) => p.is_sub);
+  const grid = el("div", { class: "chart-grid-row" });
+  wrap.append(grid);
+  grid.append(
+    lineChart({
+      title: "会話の累積トークン使用量の推移",
+      note: "メイン累計はコンテキスト圧縮のたびに0へ戻ります（縦の破線）。",
+      points,
+      series: [
+        { key: "cumulative_total", label: "累計（サブエージェント含む）", color: SERIES_BLUE },
+        { key: "cumulative_main_total", label: "メインエージェント累計", color: SERIES_ORANGE },
+      ],
+      markers: compactions,
+    }),
+    lineChart({
+      title: "LLMリクエストごとの入力トークン（コンテキスト長）",
+      note: hasSub ? "サブエージェント内部の呼び出しは点で表示します。" : null,
+      points,
+      series: [
+        { key: "call_in", label: "メインエージェント", color: SERIES_BLUE, filter: (p) => !p.is_sub },
+        ...(hasSub ? [{ key: "call_in", label: "サブエージェント", color: SERIES_ORANGE, filter: (p) => p.is_sub, dotsOnly: true }] : []),
+      ],
+      markers: compactions,
+    })
+  );
+  const table = dataTable(
+    ["#", "日時", "種別", "入力", "出力", "このターン累計", "会話累計", "メイン累計"],
+    points.map((p, i) => [
+      String(i + 1),
+      fmtTime(p.ts),
+      (p.is_sub ? "サブ" : "メイン") + (p.compacted ? "（圧縮後）" : ""),
+      fmtNum(p.call_in),
+      fmtNum(p.call_out),
+      fmtNum(p.turn_total),
+      fmtNum(p.cumulative_total),
+      fmtNum(p.cumulative_main_total),
+    ])
+  );
+  wrap.append(el("details", { class: "chart-table" }, [el("summary", { text: "数値を表で表示" }), table]));
+  return wrap;
+}
+
+function niceTicks(max, count) {
+  if (max <= 0) return [0];
+  const raw = max / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+  const ticks = [];
+  for (let v = 0; v <= max + step * 0.001; v += step) ticks.push(v);
+  if (ticks[ticks.length - 1] < max) ticks.push(ticks[ticks.length - 1] + step);
+  return ticks;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  return node;
+}
+
+/* x = LLM呼び出しの順番（時刻は呼び出しが偏在して読みにくいため、ツールチップで示す）。 */
+function lineChart({ title, note, points, series, markers }) {
+  const W = 720, H = 240, M = { top: 16, right: 16, bottom: 30, left: 56 };
+  const iw = W - M.left - M.right, ih = H - M.top - M.bottom;
+  const n = points.length;
+  const yMax = Math.max(1, ...series.flatMap((s) => points.filter(s.filter || (() => true)).map((p) => p[s.key])));
+  const ticks = niceTicks(yMax, 4);
+  const top = ticks[ticks.length - 1];
+  const x = (i) => M.left + (n === 1 ? iw / 2 : (i / (n - 1)) * iw);
+  const y = (v) => M.top + ih - (v / top) * ih;
+
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart-svg", role: "img", "aria-label": title });
+  for (const t of ticks) {
+    svg.append(svgEl("line", { x1: M.left, x2: W - M.right, y1: y(t), y2: y(t), class: t === 0 ? "chart-baseline" : "chart-grid" }));
+    const label = svgEl("text", { x: M.left - 8, y: y(t) + 4, "text-anchor": "end", class: "chart-axis-text" });
+    label.textContent = fmtCompact(t);
+    svg.append(label);
+  }
+  // x軸: 最初・最後と途中数か所に呼び出し番号。
+  const xTickIdx = n <= 1 ? [0] : [...new Set([0, Math.round((n - 1) / 3), Math.round((2 * (n - 1)) / 3), n - 1])];
+  for (const i of xTickIdx) {
+    const t = svgEl("text", { x: x(i), y: H - 10, "text-anchor": "middle", class: "chart-axis-text" });
+    t.textContent = `${i + 1}回目`;
+    svg.append(t);
+  }
+  for (const i of markers || []) {
+    svg.append(svgEl("line", { x1: x(i), x2: x(i), y1: M.top, y2: M.top + ih, class: "chart-marker" }));
+    const t = svgEl("text", { x: x(i) + 3, y: M.top + 10, class: "chart-axis-text" });
+    t.textContent = "圧縮";
+    svg.append(t);
+  }
+  for (const s of series) {
+    const idx = points.map((p, i) => i).filter((i) => !s.filter || s.filter(points[i]));
+    if (!s.dotsOnly && idx.length > 1) {
+      const d = idx.map((i, k) => `${k ? "L" : "M"}${x(i).toFixed(1)},${y(points[i][s.key]).toFixed(1)}`).join("");
+      svg.append(svgEl("path", { d, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    }
+    if (s.dotsOnly || idx.length <= 1 || n <= 40) {
+      for (const i of idx) {
+        svg.append(svgEl("circle", { cx: x(i), cy: y(points[i][s.key]), r: s.dotsOnly ? 4 : 3, fill: s.color, stroke: "var(--panel)", "stroke-width": 2 }));
+      }
+    }
+  }
+  // ホバー: 最寄りの呼び出し位置へ吸着する縦線＋全系列の値を出すツールチップ。
+  const cross = svgEl("line", { y1: M.top, y2: M.top + ih, class: "chart-crosshair", visibility: "hidden" });
+  svg.append(cross);
+  const hit = svgEl("rect", { x: M.left, y: M.top, width: iw, height: ih, fill: "transparent", tabindex: 0 });
+  svg.append(hit);
+
+  const tooltip = el("div", { class: "chart-tooltip hidden" });
+  const box = el("div", { class: "chart-box" }, [svg, tooltip]);
+  const showAt = (i) => {
+    const p = points[i];
+    cross.setAttribute("x1", x(i));
+    cross.setAttribute("x2", x(i));
+    cross.setAttribute("visibility", "visible");
+    const rows = [el("div", { class: "hint", text: `${i + 1}回目 ・ ${fmtTime(p.ts)}${p.compacted ? " ・ 圧縮後" : ""}` })];
+    for (const s of series) {
+      if (s.filter && !s.filter(p)) continue;
+      rows.push(el("div", { class: "tt-row" }, [el("span", { class: "tt-key", style: `background:${s.color}` }), el("strong", { text: fmtNum(p[s.key]) }), el("span", { class: "hint", text: s.label })]));
+    }
+    tooltip.replaceChildren(...rows);
+    tooltip.classList.remove("hidden");
+    const rect = svg.getBoundingClientRect();
+    const px = (x(i) / W) * rect.width;
+    tooltip.style.left = `${px + 12 + tooltip.offsetWidth > rect.width ? Math.max(0, px - 12 - tooltip.offsetWidth) : px + 12}px`;
+    tooltip.style.top = "8px";
+  };
+  const hide = () => {
+    cross.setAttribute("visibility", "hidden");
+    tooltip.classList.add("hidden");
+  };
+  let focusIdx = n - 1;
+  hit.addEventListener("pointermove", (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const sx = ((ev.clientX - rect.left) / rect.width) * W;
+    focusIdx = n === 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round(((sx - M.left) / iw) * (n - 1))));
+    showAt(focusIdx);
+  });
+  hit.addEventListener("pointerleave", hide);
+  hit.addEventListener("focus", () => showAt(focusIdx));
+  hit.addEventListener("blur", hide);
+  hit.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowLeft") focusIdx = Math.max(0, focusIdx - 1);
+    else if (ev.key === "ArrowRight") focusIdx = Math.min(n - 1, focusIdx + 1);
+    else return;
+    ev.preventDefault();
+    showAt(focusIdx);
+  });
+
+  const legend =
+    series.length > 1
+      ? el("div", { class: "chart-legend" }, series.map((s) => el("span", { class: "legend-item" }, [el("span", { class: s.dotsOnly ? "legend-dot" : "legend-line", style: `background:${s.color}` }), s.label])))
+      : null;
+  return el("figure", { class: "chart-card" }, [el("figcaption", { text: title }), legend, box, note ? el("div", { class: "hint", text: note }) : null]);
+}
+
+/* --- アプリログ --- */
+
+async function renderLogs(container, opts) {
+  const level = el("select", { class: "inline-select" }, ["WARNING", "ERROR", "INFO", "DEBUG"].map((l) => el("option", { value: l, text: `${l} 以上` })));
+  const search = el("input", { type: "search", placeholder: "メッセージで絞り込み..." });
+  const threadInput = el("input", { type: "search", placeholder: "thread_id で絞り込み" });
+  threadInput.value = opts.threadId || "";
+  if (opts.threadId) level.value = "INFO";
+  const listBox = el("div", { class: "log-list" });
+  container.append(
+    el("div", { class: "filter-row" }, [level, search, threadInput, el("button", { text: "再読み込み", onclick: () => load() })]),
+    el("p", { class: "hint", text: "[log] dir の app_*.log を新しい順に最大500件表示します。" }),
+    listBox
+  );
+  async function load() {
+    const params = new URLSearchParams({ level: level.value, limit: 500 });
+    if (search.value.trim()) params.set("q", search.value.trim());
+    if (threadInput.value.trim()) params.set("thread_id", threadInput.value.trim());
+    listBox.replaceChildren(el("p", { class: "hint", text: "読み込み中..." }));
+    try {
+      const data = await api(monitorPath(`/logs?${params}`));
+      listBox.replaceChildren(
+        ...data.entries.map((e) =>
+          el("div", { class: `log-entry log-${e.level.toLowerCase()}` }, [
+            el("div", { class: "log-head" }, [
+              el("span", { class: "badge " + ({ WARNING: "warn", ERROR: "critical", CRITICAL: "critical" }[e.level] || "") , text: e.level }),
+              el("span", { class: "hint", text: `${fmtTime(e.ts)} ・ ${e.logger}${e.thread_id ? " ・ " + e.thread_id : ""}` }),
+            ]),
+            el("pre", { class: "msg-pre", text: e.message }),
+          ])
+        )
+      );
+      if (!data.entries.length) listBox.append(el("p", { class: "hint", text: "該当するログはありません。" }));
+    } catch (e) {
+      listBox.replaceChildren(el("div", { class: "error", text: e.message }));
+    }
+  }
+  level.addEventListener("change", load);
+  let t = null;
+  for (const input of [search, threadInput]) {
+    input.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(load, 400);
+    });
+  }
+  await load();
 }
 
 /* ---------------------------------------------------- APIリファレンス */
