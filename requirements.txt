@@ -22,7 +22,7 @@ mcp==1.28.1                           # 公式Python SDK。chainlitの推移的�
 fastmcp==3.4.7                        # 非公式サードパーティ製ラッパー（Anthropic公式ではない）。SkillsDirectoryProviderを使用
 
 # --- UI ---
-chainlit==2.11.1
+chainlit==2.12.0
 
 # --- 設定ダッシュボード（管理ツール、admin/ パッケージ、admin.bat） ---
 # 3つともchainlitの推移的依存として環境には既に導入済みだが、admin/server.py
