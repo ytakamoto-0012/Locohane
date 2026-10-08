@@ -51,7 +51,7 @@ const DEFAULT_TAB_TITLE = 'Locohane';
 
 function App() {
   const { data: authData, isReady: authReady, isAuthenticated } = useAuth();
-  const { connect } = useChatSession();
+  const { connect, session } = useChatSession();
   const { setIdToResume, uploadFile } = useChatInteract();
   const { messages } = useChatMessages();
   const { loading } = useChatData();
@@ -147,6 +147,31 @@ function App() {
     connect({ userEnv: {} });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canConnect, seeded]);
+
+  // ページを離れる（スレッド切り替え・新規チャット・再読み込み・タブを閉じる）時点で
+  // Socket.IO 接続を明示的に閉じる。socket.io-client は既定ではページ離脱時に接続を
+  // 閉じない（closeOnBeforeunload=false）ため、サーバーは ping 応答が途絶えるまで
+  // 切断に気付けず、[websocket] ping_timeout（既定120秒）＋ping_interval の間、
+  // 古いセッションが「接続中」のまま残っていた（2026-10-08、設定ダッシュボードの
+  // 「接続中のセッション」がスレッドを切り替えるたびに積み上がって見えた）。
+  // 生成中に離れた場合もバックエンドの処理は on_chat_end 経由で継続する（切断の
+  // 検知が早まるだけで、従来の遅れて検知された場合と同じ経路）。
+  useEffect(() => {
+    const socket = session?.socket;
+    if (!socket) return;
+    const onPageHide = () => socket.close();
+    // 戻る/進むでページが bfcache から復元された場合、閉じた接続は自動では
+    // 繋ぎ直されないため、読み込み直して新しいセッションで接続する。
+    const onPageShow = (ev: PageTransitionEvent) => {
+      if (ev.persisted) window.location.reload();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('pageshow', onPageShow);
+    };
+  }, [session?.socket]);
 
   // 生成中に別スレッドへ移動すると、元のセッションはソケット切断され
   // ライブストリーミングが届かなくなる（バックエンド側の処理自体は
