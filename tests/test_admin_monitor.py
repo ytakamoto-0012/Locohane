@@ -90,6 +90,37 @@ def test_live_context_series_takes_max_of_main_and_subs_since_generation_start(t
     assert monitor.live_context_series(log_dir, []) == []
 
 
+def test_token_parsers_ignore_lookalike_text_inside_other_log_messages(tmp_path: Path):
+    # DEBUG ログに出た会話内容（ユーザーが貼ったログ等）に同じ文字列が含まれても拾わない。
+    import os
+    from datetime import datetime
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    tid = "t-1"
+    fake_token = _token_line("2026-10-01 00:00:09", tid, 99999, 1, 1).split(": ", 1)[1].rstrip("\n")
+    path = log_dir / "app_20261001_000000.log"
+    path.write_text(
+        _token_line("2026-10-01 00:00:10", tid, 300, 310, 310)
+        + f"2026-10-01 00:00:11,1 [thread={tid}] DEBUG src.llm: payload={{'content': '{fake_token}'}}\n"
+        + f"2026-10-01 00:00:12,1 [thread={tid}] DEBUG src.llm: payload=圧縮処理トークン使用量 kind=summary "
+        "role=main call(in=88888,out=1,total=88889)\n"
+        + f"2026-10-01 00:00:13,1 [thread={tid}] DEBUG src.llm: payload=コンテキスト圧縮を実行しました thread_id={tid} x\n"
+        + _token_line("2026-10-01 00:00:14", tid, 320, 640, 640),
+        encoding="utf-8",
+    )
+    history = monitor.token_history(log_dir, tid)
+    assert [p["call_in"] for p in history] == [300, 320]
+    assert [p["compacted"] for p in history] == [False, False]
+
+    # 書き込み中の最新ファイルは mtime が生成開始より古く見えても読む。
+    old = datetime(2026, 9, 1).timestamp()
+    os.utime(path, (old, old))
+    started_utc = datetime(2026, 10, 1, 0, 0, 5).astimezone().isoformat()
+    (series,) = monitor.live_context_series(log_dir, [{"thread_id": tid, "started_at": started_utc}])
+    assert [p["call_in"] for p in series["points"]] == [300, 320]
+
+
 def test_compaction_usage_log_format_matches_monitor_parser(caplog):
     # src/context_compaction.py が出す行を admin/monitor.py が読めること（形式の取り決め）。
     from types import SimpleNamespace

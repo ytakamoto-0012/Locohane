@@ -320,12 +320,15 @@ def live_context_series(log_dir: Path, generating: list[dict]) -> list[dict]:
         return []
     cutoff = datetime.fromisoformat(min(starts.values())).timestamp()
     state = {tid: {"prev_main_logged": None, "main_in": None, "sub_max": None, "points": []} for tid in starts}
-    for path in _log_files(log_dir):
-        try:
-            if path.stat().st_mtime < cutoff:
+    paths = _log_files(log_dir)
+    for i, path in enumerate(paths):
+        # 書き込み中の最新ファイルは mtime によらず必ず読む。
+        if i < len(paths) - 1:
+            try:
+                if path.stat().st_mtime < cutoff:
+                    continue
+            except OSError:
                 continue
-        except OSError:
-            continue
         for line in _read_lines(path):
             if "トークン使用量" not in line:
                 continue
@@ -333,7 +336,9 @@ def live_context_series(log_dir: Path, generating: list[dict]) -> list[dict]:
             if not head:
                 continue
             ts = head.group(1).replace(" ", "T")
-            m = _TOKEN_RE.search(line)
+            # メッセージ先頭で照合する（DEBUG ログに出た会話内容等に同じ文字列が含まれても拾わない）。
+            message = head.group(5)
+            m = _TOKEN_RE.match(message)
             if m:
                 tid = m.group(1)
                 st = state.get(tid)
@@ -345,7 +350,7 @@ def live_context_series(log_dir: Path, generating: list[dict]) -> list[dict]:
                 kind = "main" if _is_main_call(st["prev_main_logged"], main_logged, call_total) else "sub"
                 st["prev_main_logged"] = main_logged
             else:
-                m = _COMPACTION_USAGE_RE.search(line)
+                m = _COMPACTION_USAGE_RE.match(message)
                 tid = head.group(2)
                 st = state.get(tid)
                 if not m or st is None:
@@ -385,7 +390,6 @@ def token_history(log_dir: Path, thread_id: str) -> list[dict]:
         （app.py の「コンテキスト圧縮を実行しました」行）。
     """
     token_needle = f"トークン使用量 thread_id={thread_id} "
-    compaction_usage_needle = f"[thread={thread_id}] "
     compaction_done_needle = f"コンテキスト圧縮を実行しました thread_id={thread_id} "
     points: list[dict] = []
     prev_main_logged: int | None = None
@@ -396,15 +400,18 @@ def token_history(log_dir: Path, thread_id: str) -> list[dict]:
         for line in _read_lines(path):
             if thread_id not in line:
                 continue
-            if compaction_done_needle in line:
-                pending_compaction = True
-                continue
             head = _LOG_LINE_RE.match(line.rstrip("\n"))
             if not head:
                 continue
+            # 各行はメッセージ先頭で照合する（DEBUG ログに出た会話内容等に同じ文字列が
+            # 含まれていても、偽の呼び出し・圧縮として拾わない）。
+            message = head.group(5)
+            if message.startswith(compaction_done_needle):
+                pending_compaction = True
+                continue
             ts = head.group(1).replace(" ", "T")
-            if token_needle in line:
-                m = _TOKEN_RE.search(line)
+            if message.startswith(token_needle):
+                m = _TOKEN_RE.match(message)
                 if not m or m.group(1) != thread_id:
                     continue
                 v = [int(x) for x in m.groups()[1:]]
@@ -412,8 +419,8 @@ def token_history(log_dir: Path, thread_id: str) -> list[dict]:
                 kind = "main" if _is_main_call(prev_main_logged, main_logged, call_total) else "sub"
                 prev_main_logged = main_logged
                 call_in, call_out, turn_total = v[0], v[1], v[5]
-            elif compaction_usage_needle in line and "圧縮処理トークン使用量" in line:
-                m = _COMPACTION_USAGE_RE.search(line)
+            elif head.group(2) == thread_id:
+                m = _COMPACTION_USAGE_RE.match(message)
                 if not m:
                     continue
                 kind = "compaction"

@@ -890,9 +890,14 @@ def get_monitor_overview(user: str = Depends(require_login)):
             continue
         view = _runtime_view(name, cfg)
         generating = {g.get("thread_id"): g for g in view["generating"]}
+        try:
+            series = monitor.live_context_series(cfg.log_dir, view["generating"])
+        except Exception:  # noqa: BLE001 - グラフ用の付帯情報のため、失敗してもカードの稼働状況は返す
+            logger.warning("インスタンス %s の入力トークン推移を取得できませんでした", name, exc_info=True)
+            series = []
         context_series = [
             {**s, "thread_name": generating[s["thread_id"]].get("thread_name"), "owner": generating[s["thread_id"]].get("owner")}
-            for s in monitor.live_context_series(cfg.log_dir, view["generating"])
+            for s in series
         ]
         result.append(
             {

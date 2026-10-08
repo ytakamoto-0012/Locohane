@@ -289,17 +289,24 @@ function renderCardContextChart(box, item) {
     else drawn.push({ ...s, color: THREAD_COLORS[slot], label: s.thread_name || s.thread_id, owner: s.owner || "（不明）" });
   }
   drawn.sort((a, b) => THREAD_COLORS.indexOf(a.color) - THREAD_COLORS.indexOf(b.color));
+  // 生成中は数秒ごとに点が増えて描き直すため、ホバー位置を box に覚えておき、描き直し後も同じ位置で出し直す。
+  box._hover = box._hover || { clientX: null };
+  const chart = contextMiniChart(drawn, box._hover);
   box.replaceChildren(
     ...[
       el("div", { class: "card-context-title", text: "LLMリクエストごとの入力トークン" }),
-      contextMiniChart(drawn),
+      chart,
       hidden ? el("div", { class: "hint", text: `ほか ${hidden} スレッドは色の上限のため非表示` }) : null,
     ].filter(Boolean) // replaceChildren は null を "null" という文字列として挿入するため除く
   );
+  // 要素を差し替えた瞬間はポインタが外れても pointerleave が届かないことがあるため、:hover でも確かめる。
+  if (box._hover.clientX !== null && box.matches(":hover")) chart._showAtClientX(box._hover.clientX);
+  else box._hover.clientX = null;
 }
 
-// ツールチップに出すスレッド名（＝多くは最初の指示文）の最大文字数。カードの幅からはみ出さないように。
+// ツールチップに出すスレッド名（＝多くは最初の指示文）とユーザー名の最大文字数。カードの幅からはみ出さないように。
 const CONTEXT_TOOLTIP_LABEL_MAX = 20;
+const CONTEXT_TOOLTIP_OWNER_MAX = 16;
 
 function truncateText(text, max) {
   const chars = [...(text || "")];
@@ -307,19 +314,25 @@ function truncateText(text, max) {
 }
 
 // x = 時刻（スレッドごとに呼び出し時刻が異なるため）、y = 入力トークン。
-function contextMiniChart(series) {
+// 時刻はどちらもサーバーのローカル時刻（タイムゾーンなし）で届くため、ブラウザの
+// タイムゾーンによらずサーバー側の時刻のまま表示される（アプリログの時刻と一致する）。
+function contextMiniChart(series, hover) {
   const W = 300, H = 130, M = { top: 8, right: 10, bottom: 20, left: 38 };
   const iw = W - M.left - M.right, ih = H - M.top - M.bottom;
   const toMs = (ts) => new Date(ts).getTime();
-  for (const s of series) s.pts = s.points.map((p) => ({ ...p, t: toMs(p.ts) }));
+  for (const s of series) s.pts = s.points.map((p) => ({ ...p, t: toMs(p.ts) })).filter((p) => Number.isFinite(p.t));
   const all = series.flatMap((s) => s.pts);
-  const tMin = Math.min(...series.map((s) => toMs(s.started_at)), ...all.map((p) => p.t));
-  const tMax = Math.max(tMin + 1000, ...all.map((p) => p.t));
-  const ticks = niceTicks(Math.max(1, ...all.map((p) => p.value)), 3);
+  // 点が多くても Math.min(...配列) の引数上限に当たらないよう reduce で求める。
+  const times = [...series.map((s) => toMs(s.started_at)), ...all.map((p) => p.t)].filter(Number.isFinite);
+  const tMin = times.length ? times.reduce((a, b) => Math.min(a, b)) : Date.now();
+  const tMax = Math.max(tMin + 1000, times.reduce((a, b) => Math.max(a, b), tMin));
+  const ticks = niceTicks(all.reduce((m, p) => Math.max(m, p.value), 1), 3);
   const top = ticks[ticks.length - 1];
   const x = (t) => M.left + ((t - tMin) / (tMax - tMin)) * iw;
   const y = (v) => M.top + ih - (v / top) * ih;
-  const hhmm = (t) => new Date(t).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+  // 短い時間幅では分までだと両端が同じ表示になるため秒まで出す。
+  const timeOpts = tMax - tMin < 10 * 60 * 1000 ? { hour: "2-digit", minute: "2-digit", second: "2-digit" } : { hour: "2-digit", minute: "2-digit" };
+  const axisTime = (t) => new Date(t).toLocaleTimeString("ja-JP", timeOpts);
 
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart-svg", role: "img", "aria-label": "生成中スレッドのLLMリクエストごとの入力トークン" });
   for (const t of ticks) {
@@ -330,12 +343,15 @@ function contextMiniChart(series) {
   }
   for (const [t, anchor] of [[tMin, "start"], [tMax, "end"]]) {
     const label = svgEl("text", { x: x(t), y: H - 5, "text-anchor": anchor, class: "chart-axis-text card-chart-text" });
-    label.textContent = hhmm(t);
+    label.textContent = axisTime(t);
     svg.append(label);
   }
   for (const s of series) {
     if (s.pts.length > 1) {
-      const d = s.pts.map((p, k) => `${k ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.value).toFixed(1)}`).join("");
+      // 階段状に描く（次のリクエストまでコンテキスト長は変わらない。ツールチップの値とも一致させる）。
+      const d = s.pts
+        .map((p, k) => `${k ? `H${x(p.t).toFixed(1)}V` : `M${x(p.t).toFixed(1)},`}${y(p.value).toFixed(1)}`)
+        .join("");
       svg.append(svgEl("path", { d, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
     }
     // 現在値（最後の点）だけ強調する。
@@ -349,9 +365,10 @@ function contextMiniChart(series) {
 
   const tooltip = el("div", { class: "chart-tooltip hidden" });
   const box = el("div", { class: "chart-box" }, [svg, tooltip]);
-  hit.addEventListener("pointermove", (ev) => {
+  const showAtClientX = (clientX) => {
     const rect = svg.getBoundingClientRect();
-    const sx = ((ev.clientX - rect.left) / rect.width) * W;
+    if (!rect.width) return;
+    const sx = ((clientX - rect.left) / rect.width) * W;
     const t = tMin + (Math.max(0, Math.min(iw, sx - M.left)) / iw) * (tMax - tMin);
     cross.setAttribute("x1", x(t));
     cross.setAttribute("x2", x(t));
@@ -365,18 +382,23 @@ function contextMiniChart(series) {
         el("div", { class: "tt-row" }, [
           el("span", { class: "tt-key", style: `background:${s.color}` }),
           el("strong", { text: fmtNum(p.value) }),
-          el("span", { text: s.owner }),
+          el("span", { text: truncateText(s.owner, CONTEXT_TOOLTIP_OWNER_MAX) }),
           el("span", { class: "hint", text: truncateText(s.label, CONTEXT_TOOLTIP_LABEL_MAX) }),
         ])
       );
     }
     tooltip.replaceChildren(...rows);
     tooltip.classList.remove("hidden");
-    const px = ((sx / W) * rect.width);
+    const px = (x(t) / W) * rect.width;
     tooltip.style.left = `${px + 12 + tooltip.offsetWidth > rect.width ? Math.max(0, px - 12 - tooltip.offsetWidth) : px + 12}px`;
     tooltip.style.top = "4px";
+  };
+  hit.addEventListener("pointermove", (ev) => {
+    hover.clientX = ev.clientX;
+    showAtClientX(ev.clientX);
   });
   hit.addEventListener("pointerleave", () => {
+    hover.clientX = null;
     cross.setAttribute("visibility", "hidden");
     tooltip.classList.add("hidden");
   });
@@ -391,8 +413,12 @@ function contextMiniChart(series) {
       ])
     )
   );
-  const empty = all.length ? null : el("div", { class: "hint", text: "まだLLMリクエストがありません" });
-  return el("div", {}, [legend, box, empty]);
+  const empty = all.length
+    ? null
+    : el("div", { class: "hint", text: "LLMリクエストの記録がまだありません（[log] level が INFO より上、または [llm] track_token_usage=false の場合は記録されません）" });
+  const wrap = el("div", {}, [legend, box, empty]);
+  wrap._showAtClientX = showAtClientX;
+  return wrap;
 }
 
 function cardStat(label, value, sub) {
