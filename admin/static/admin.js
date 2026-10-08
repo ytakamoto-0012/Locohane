@@ -166,6 +166,12 @@ async function renderInstances() {
   mainEl.appendChild(clone("tpl-instances"));
   $("#add-instance-btn").addEventListener("click", openCreateInstanceModal);
   await refreshInstanceCards();
+  // カードの稼働状況だけを定期更新する（カード全体を作り直すと操作中のボタンが消えるため）。
+  stopMonitorPolling();
+  monitorTimer = setInterval(() => {
+    if (!$("#instance-cards")) return stopMonitorPolling();
+    refreshCardActivity();
+  }, MONITOR_POLL_MS);
 }
 
 async function refreshInstanceCards() {
@@ -228,14 +234,25 @@ async function refreshCardActivity() {
   for (const item of data.instances) {
     const card = $(`.instance-card[data-instance="${CSS.escape(item.name)}"]`);
     if (!card) continue;
-    const el = card.querySelector(".card-activity");
-    if (!item.available) {
-      el.textContent = "";
-      continue;
-    }
-    const users = item.users.length ? item.users.join(", ") : "なし";
-    el.textContent = `接続中: ${item.sessions}セッション（${users}） / 生成中: ${item.generating}スレッド`;
+    const box = card.querySelector(".card-activity");
+    const lc = item.log_counts_24h || {};
+    const live = (v) => (item.available ? String(v) : "-");
+    const tiles = [
+      cardStat("接続中ユーザー", live(item.users.length), item.available && item.users.length ? item.users.join(", ") : null),
+      cardStat("接続セッション", live(item.sessions)),
+      cardStat("生成中スレッド", live(item.generating), item.available && item.waiting ? `うち応答待ち ${item.waiting}` : null),
+      cardStat("24時間の警告", fmtNum(lc.WARNING || 0), `ERROR ${fmtNum(lc.ERROR || 0)} / CRITICAL ${fmtNum(lc.CRITICAL || 0)}`),
+    ];
+    box.replaceChildren(...tiles);
   }
+}
+
+function cardStat(label, value, sub) {
+  return el("div", { class: "card-stat", title: sub || "" }, [
+    el("div", { class: "card-stat-value", text: value }),
+    el("div", { class: "card-stat-label", text: label }),
+    sub ? el("div", { class: "card-stat-sub", text: sub }) : null,
+  ]);
 }
 
 async function runInstanceAction(name, action, card) {

@@ -85,6 +85,21 @@ def read_runtime_status(common_data_dir: Path) -> dict | None:
         return None
 
 
+def read_live_runtime_status(common_data_dir: Path, *, is_live: bool) -> dict | None:
+    """稼働中（is_live）のインスタンスについてだけ runtime_status.json を読む。
+
+    停止中・異常終了なら前回プロセスの残骸ファイルがあっても読まない。稼働中なら
+    本体が起動直後の最初の収集で必ず上書きする（src/runtime_status.py）ため、
+    古い内容が見えるのは起動後の数秒だけ。
+
+    ファイル内の pid を管理ツールが起動した子プロセスの pid と照合してはいけない
+    （venv の python.exe はランチャーで、本物のインタプリタを別プロセスとして
+    起動するため一致しない。照合していた初版では稼働中でも常に「取得できません」
+    になっていた）。
+    """
+    return read_runtime_status(common_data_dir) if is_live else None
+
+
 def summarize_runtime(status: dict | None, thread_names: dict[str, str | None]) -> dict:
     """runtime_status.json の内容を画面表示用に整形する。
 

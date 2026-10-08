@@ -127,6 +127,16 @@ def test_summarize_runtime_groups_by_user():
     assert monitor.summarize_runtime(None, {})["available"] is False
 
 
+def test_read_live_runtime_status_ignores_pid_and_skips_stopped(tmp_path: Path):
+    # 書き出し元の pid は管理ツールが Popen した pid と一致しない（venv ランチャー経由）
+    # ため、pid に関係なく稼働中なら読む。
+    (tmp_path / runtime_status.RUNTIME_STATUS_FILENAME).write_text(
+        json.dumps({"pid": 99999, "sessions": [], "generating": []}), encoding="utf-8"
+    )
+    assert monitor.read_live_runtime_status(tmp_path, is_live=True)["pid"] == 99999
+    assert monitor.read_live_runtime_status(tmp_path, is_live=False) is None
+
+
 def test_runtime_status_writer_writes_only_on_change(tmp_path: Path):
     path = tmp_path / runtime_status.RUNTIME_STATUS_FILENAME
     snapshots = [{"sessions": [1]}, {"sessions": [1]}, {"sessions": [2]}]

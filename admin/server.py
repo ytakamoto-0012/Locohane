@@ -868,12 +868,8 @@ def _monitor_config(name: str):
 
 def _runtime_view(name: str, cfg) -> dict[str, Any]:
     status = _supervisor.status(name)
-    raw = None
-    if status.state in (supervisor.InstanceState.RUNNING, supervisor.InstanceState.EXTERNAL):
-        raw = monitor.read_runtime_status(cfg.common_data_dir)
-        # 異常終了で前回プロセスのファイルが残っている場合は使わない。
-        if raw is not None and status.pid is not None and raw.get("pid") != status.pid:
-            raw = None
+    is_live = status.state in (supervisor.InstanceState.RUNNING, supervisor.InstanceState.EXTERNAL)
+    raw = monitor.read_live_runtime_status(cfg.common_data_dir, is_live=is_live)
     ids = [s.get("thread_id") for s in (raw or {}).get("sessions", [])]
     ids += [g.get("thread_id") for g in (raw or {}).get("generating", [])]
     try:
@@ -897,9 +893,12 @@ def get_monitor_overview(user: str = Depends(require_login)):
             {
                 "name": name,
                 "available": view["available"],
-                "users": [u["user"] for u in view["users"]],
+                # 接続中（セッションあり）のユーザー。生成だけ裏で続いているユーザーは含めない。
+                "users": [u["user"] for u in view["users"] if u["sessions"] > 0],
                 "sessions": len(view["sessions"]),
                 "generating": len(view["generating"]),
+                "waiting": sum(1 for g in view["generating"] if g.get("waiting_for_user")),
+                "log_counts_24h": monitor.recent_level_counts(cfg.log_dir),
             }
         )
     return {"instances": result}
