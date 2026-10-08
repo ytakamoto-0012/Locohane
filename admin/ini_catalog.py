@@ -139,8 +139,8 @@ _LLM_URL = {
 _KEY_SCHEMAS: dict[tuple[str, str], dict[str, Any]] = {
     ("llm", "main_url"): _LLM_URL,
     ("llm", "sub_url"): _LLM_URL,
-    ("scripts", "plan_approval_exempt_scripts"): {"type": "list", "item": _SKILL_SCRIPT},
-    ("scripts", "agent_type_run_script_allowlist"): {
+    ("plan", "plan_approval_exempt_scripts"): {"type": "list", "item": _SKILL_SCRIPT},
+    ("subagent", "agent_type_run_script_allowlist"): {
         "type": "grouped",
         "group_label": "agent_type",
         "group_placeholder": "例: explore",

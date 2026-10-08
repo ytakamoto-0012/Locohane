@@ -490,10 +490,10 @@ class Config:
             進捗メモの最大文字数。全量を表示するとコンテキストを圧迫する
             ため切り詰める。dispatch_agent の進捗表示（_dispatch_agent_job.py）
             も同じ値を共有する。
-        script_plan_approval_exempt_scripts: run_script/run_script_background
+        plan_approval_exempt_scripts: run_script/run_script_background
             の計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト（{(スキル名, スクリプトファイル名), ...}）。
-        script_agent_type_run_script_allowlist: dispatch_agent サブエージェントの
+        subagent_agent_type_run_script_allowlist: dispatch_agent サブエージェントの
             agent_type ごとに run_script で呼べるスキル/
             スクリプトを制限するホワイトリスト（{(agent_type, 対象), ...}）。
             対象は文字列1件（例: "web-search"）ならそのスキル配下の全スクリプトを
@@ -989,10 +989,10 @@ class Config:
     script_background_job_output_tail_chars: int
 
     # --- run_script/run_script_background の計画承認免除ホワイトリスト ---
-    script_plan_approval_exempt_scripts: frozenset[tuple[str, str]]
+    plan_approval_exempt_scripts: frozenset[tuple[str, str]]
 
     # --- dispatch_agent のagent_typeごとに run_script で呼べるスキル/スクリプトを制限するホワイトリスト ---
-    script_agent_type_run_script_allowlist: frozenset[tuple[str, str | tuple[str, str]]]
+    subagent_agent_type_run_script_allowlist: frozenset[tuple[str, str | tuple[str, str]]]
 
     # --- Read/Glob/Grep/json_query 重複呼び出しガード（src/tools.py の _check_file_tools_duplicate） ---
     file_tools_duplicate_guard_enabled: bool
@@ -1863,7 +1863,7 @@ def _parse_auth_users(value: str | None) -> dict[str, str]:
 
 
 def _parse_plan_approval_exempt_scripts(value: str | None) -> frozenset[tuple[str, str]]:
-    """config.ini の [scripts].plan_approval_exempt_scripts をパースする。
+    """config.ini の [plan].plan_approval_exempt_scripts をパースする。
 
     run_script/run_script_background の計画承認（Plan Mode）を免除する、
     副作用のない読み取り専用スクリプトのホワイトリスト。Python風の
@@ -1899,7 +1899,7 @@ def _parse_plan_approval_exempt_scripts(value: str | None) -> frozenset[tuple[st
 
 
 def _parse_agent_type_run_script_allowlist(value: str | None) -> frozenset[tuple[str, str | tuple[str, str]]]:
-    """config.ini の [scripts].agent_type_run_script_allowlist をパースする。
+    """config.ini の [subagent].agent_type_run_script_allowlist をパースする。
 
     dispatch_agent サブエージェントの agent_type ごとに、run_script
     で呼んでよいスキル/スクリプトを制限するホワイトリスト
@@ -2121,12 +2121,12 @@ def _parse_allow_sandbox_dir(value: str | None, base: Path) -> tuple[SandboxDirE
 def render_plan_approval_exempt_scripts_block(entries: frozenset[tuple[str, str]]) -> str:
     """system_prompt.md の {{plan_approval_exempt_scripts}} へ差し込むテキストを組み立てる。
 
-    config.ini の [scripts].plan_approval_exempt_scripts（frozenset）は集合の
+    config.ini の [plan].plan_approval_exempt_scripts（frozenset）は集合の
     ため反復順序が不定。プロンプトへ差し込む表示を安定させるため、
     スキル名→スクリプトファイル名の順にソートしてから箇条書きへ整形する。
 
     Args:
-        entries: {(スキル名, スクリプトファイル名), ...}（config.script_plan_approval_exempt_scripts）。
+        entries: {(スキル名, スクリプトファイル名), ...}（config.plan_approval_exempt_scripts）。
 
     Returns:
         差し込み用テキスト。空集合の場合は「（登録なし）」を返す。
@@ -2142,14 +2142,14 @@ def render_agent_type_run_script_allowlist_block(agent_type: str, entries: froze
     agent_type ごとに異なる内容を差し込む（`{{skills}}` も同じエントリで
     src/skills.py の filter_skills_for_agent_type が絞り込む）。呼び出し元
     （app.py/evals/run_case.py）が AgentType 1件ずつに対して agent_type を
-    渡して呼ぶ）。config.ini の [scripts].agent_type_run_script_allowlist
-    （script_agent_type_run_script_allowlist）は全 agent_type 分の
+    渡して呼ぶ）。config.ini の [subagent].agent_type_run_script_allowlist
+    （subagent_agent_type_run_script_allowlist）は全 agent_type 分の
     (agent_type, 対象) をまとめて持つ frozenset のため、ここで対象の
     agent_type 分だけへ絞り込む。表示を安定させるため対象文字列でソートする。
 
     Args:
         agent_type: 差し込み先の agents/*.md の frontmatter name。
-        entries: config.script_agent_type_run_script_allowlist（全 agent_type 分）。
+        entries: config.subagent_agent_type_run_script_allowlist（全 agent_type 分）。
 
     Returns:
         差し込み用テキスト。対象の agent_type のエントリが1件も無い場合は
@@ -2626,10 +2626,10 @@ def load_config(
                 scripts.get("background_job_output_tail_chars", 4000),
             )
         ),
-        script_plan_approval_exempt_scripts=_parse_plan_approval_exempt_scripts(
+        plan_approval_exempt_scripts=_parse_plan_approval_exempt_scripts(
             os.getenv(
-                "SCRIPT_PLAN_APPROVAL_EXEMPT_SCRIPTS",
-                scripts.get(
+                "PLAN_APPROVAL_EXEMPT_SCRIPTS",
+                plan_section.get(
                     "plan_approval_exempt_scripts",
                     '[["excel-vba-read","read_vba.py"],["excel-read","read_excel.py"],'
                     '["excel-render","render_excel.py"],'
@@ -2641,10 +2641,10 @@ def load_config(
                 ),
             )
         ),
-        script_agent_type_run_script_allowlist=_parse_agent_type_run_script_allowlist(
+        subagent_agent_type_run_script_allowlist=_parse_agent_type_run_script_allowlist(
             os.getenv(
-                "SCRIPT_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST",
-                scripts.get(
+                "SUBAGENT_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST",
+                subagent.get(
                     "agent_type_run_script_allowlist",
                     '[["explore","docx-render"],["explore","docx-read"],'
                     '["explore","excel-render"],["explore","excel-read"],'

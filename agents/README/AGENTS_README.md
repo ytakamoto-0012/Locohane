@@ -69,10 +69,10 @@ read_memory, search_memory, list_memories
 - `_resolve_agent_types()`（`src/tools/_state.py` 603-642行）が `tool_lookup = {t.name: t for t in registry._SUBAGENT_TOOLS}`（620行）を作り、frontmatterの `tools:` に書かれた名前と突き合わせて解決する。**未知のツール名は例外を出さず警告してスキップ**（630-634行）— 誤字に気づきにくいので、追加・変更時はアプリ起動ログを必ず確認すること。
 - 上記リストに **`dispatch_agent` 自体は含まれていない**。これが「サブエージェントはさらに別のサブエージェントへ委譲できない」という制約の実体（各.md本文にある「委譲する手段を持たない」という注記は、この一点のみで担保される説明であり、それ以外の特別な強制ロジックは無い）。
 
-## 4. `{{skills}}`/`{{agent_types}}` プレースホルダーと共通注意事項の自動連結
+## 4. `{{skills}}`/`{{all_skills}}`/`{{agent_types}}` プレースホルダーと共通注意事項の自動連結
 
 - `app.py` 525-527行。`scan_agent_types()` の後、`render_skills_block(skills)`（`src/skills.py`、`name: description` 形式のスキル一覧）を各エージェントの `system_prompt` 内の `{{skills}}` へ `str.replace` で差し込む（`dataclasses.replace` でイミュータブルに更新）。**スキルの本文そのものは含まれず、一覧のみ**（skills側の progressive disclosure 第1段階と同じ扱い）。
-- `{{skills}}` に載るスキルは `filter_skills_for_agent_type()`（`src/skills.py`）で種別ごとに絞り込む。`config.ini` の `[scripts].agent_type_run_script_allowlist` にその種別の登録が1件でもあれば、登録したスキル（`["スキル名","スクリプト名"]` 指定はそのスキル）だけを載せる（`scripts/` を持たない知識系スキルも、未登録なら載せない）。登録が無い種別（`worker` 等）は全スキルを載せる。`{{run_script_allowlist}}` には同じ登録内容が種別ごとに差し込まれる。
+- `{{skills}}` に載るスキルは `filter_skills_for_agent_type()`（`src/skills.py`）で種別ごとに絞り込む。`config.ini` の `[subagent].agent_type_run_script_allowlist` にその種別の登録が1件でもあれば、登録したスキル（`["スキル名","スクリプト名"]` 指定はそのスキル）だけを載せる（`scripts/` を持たない知識系スキルも、未登録なら載せない）。登録が無い種別（`worker` 等）は全スキルを載せる。絞り込みを掛けたくない種別は、本文に `{{skills}}` の代わりに `{{all_skills}}` と書くと、登録の有無に関係なく全スキル一覧が載る（`run_script` の実行制限自体は変わらない）。`{{run_script_allowlist}}` には同じ登録内容が種別ごとに差し込まれる。
 - 同じ箇所で `render_agent_types_block(agent_type_defs)`（`src/agent_types.py`、`name: description` に続けて frontmatter の `tools`（省略時は既定ツール一式を継承する旨）を「使用可能ツール:」行として添えたエージェント種別一覧。メインの `system_prompt.md` に差し込む `{{agent_types}}` と同じブロックを使い回す）を各エージェントの `system_prompt` 内の `{{agent_types}}` へも差し込む。ただし現状、本文で `{{agent_types}}` を使うエージェント種別は無い（旧 `planner` 種別のみが使っていたが2026-09-29に廃止）。サブエージェントは `dispatch_agent` を持たず孫委譲できないため `{{agent_types}}` を本文に書く必要はない。
 - `app.py` 550行。`system_prompt/subagent_common.md`（作業量・トークン上限に達した際の振る舞いに加え、`write_scratch_note` での途中経過の書き残し方・最終回答を生データの羅列にせず簡潔にまとめる指示を含む共通文）を**全エージェントの system_prompt 末尾に自動連結**する。個々の `agents/*.md` 側で同様の注意書きを重複して書く必要はない。
 

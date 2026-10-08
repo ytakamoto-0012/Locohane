@@ -65,7 +65,7 @@ _SUBAGENT_AGENT_TYPE: contextvars.ContextVar[str | None] = contextvars.ContextVa
 # 呼び出さない」とプロンプト上で強く約束しているため、同じ理由でここに含める。
 #
 # ここでの初期値は init_tools() 未実行時（テスト等）のフォールバック。通常起動時は
-# config.ini の [scripts].agent_type_run_script_allowlist から
+# config.ini の [subagent].agent_type_run_script_allowlist から
 # init_tools() が上書きする（他の値と異なり _script_job.py 側は
 # `_state._AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` と属性アクセスで参照すること。
 # `from ._state import _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` は再代入が反映されないため禁止）。
@@ -276,7 +276,7 @@ _PLAN_AUTO_APPROVE: bool = False
 # run_script は本来「書き込み系ツール」として一律に計画承認を要求するが、
 # 副作用のない純粋な読み取り専用スクリプトはここに (skill_name, script_filename)
 # を明示的に登録することで承認チェックを免除できる。init_tools() が config.ini の
-# [scripts].plan_approval_exempt_scripts から注入するため、ここでは空集合で初期化する。
+# [plan].plan_approval_exempt_scripts から注入するため、ここでは空集合で初期化する。
 _PLAN_APPROVAL_EXEMPT_SCRIPTS: set[tuple[str, str]] = set()
 
 
@@ -488,11 +488,11 @@ def init_tools(
         plan_approval_exempt_scripts: run_script/run_script_background の
             計画承認（Plan Mode）を免除する、副作用のない読み取り専用
             スクリプトのホワイトリスト。(skill_name, script_filename) の
-            並び（config.ini の [scripts].plan_approval_exempt_scripts 由来）。
+            並び（config.ini の [plan].plan_approval_exempt_scripts 由来）。
         agent_type_run_script_allowlist: dispatch_agent サブエージェントの
             agent_type ごとに run_script で呼んでよい
             スキル/スクリプトを制限するホワイトリスト。(agent_type, 対象) の
-            並び（config.ini の [scripts].agent_type_run_script_allowlist 由来）。
+            並び（config.ini の [subagent].agent_type_run_script_allowlist 由来）。
             対象はスキル名の文字列（そのスキル配下の全スクリプトを許可）、
             または (skill_name, script_filename) のタプル（そのスクリプト
             のみ許可）。None を渡すとモジュール既定値

@@ -1785,23 +1785,26 @@ async def _setup() -> None:
     # 各種別のシステムプロンプトにも {{skills}}/{{agent_types}} を差し込む
     # （本文で {{agent_types}} を使う種別が dispatch_agent の委譲先一覧を参照できるようにするため）。
     # agents_dir と locohane_agents_dirs をマージ（同名は locohane 側優先）。
-    # {{skills}} は [scripts].agent_type_run_script_allowlist に登録がある種別だけ
+    # {{skills}} は [subagent].agent_type_run_script_allowlist に登録がある種別だけ
     # 登録スキルへ絞る（run_script で呼べないスキルを載せても拒否されるだけのため）。
+    # 絞り込みたくない種別は {{all_skills}} を使うと全スキル一覧が載る。
     agent_type_defs = scan_agent_types([_config.agents_dir, *_config.locohane_agents_dirs])
     agent_types_block = render_agent_types_block(agent_type_defs)
+    all_skills_block = render_skills_block(skills)
     agent_type_defs = [
         replace(
             a,
             system_prompt=a.system_prompt.replace(
                 "{{skills}}",
                 render_skills_block(
-                    filter_skills_for_agent_type(skills, a.name, _config.script_agent_type_run_script_allowlist)
+                    filter_skills_for_agent_type(skills, a.name, _config.subagent_agent_type_run_script_allowlist)
                 ),
             )
+            .replace("{{all_skills}}", all_skills_block)
             .replace("{{agent_types}}", agent_types_block)
             .replace(
                 "{{run_script_allowlist}}",
-                render_agent_type_run_script_allowlist_block(a.name, _config.script_agent_type_run_script_allowlist),
+                render_agent_type_run_script_allowlist_block(a.name, _config.subagent_agent_type_run_script_allowlist),
             ),
         )
         for a in agent_type_defs
@@ -1815,7 +1818,7 @@ async def _setup() -> None:
     # {{plan_approval_exempt_scripts}} へ差し込む（config.ini の値が唯一の正）。
     system_prompt = system_prompt.replace(
         "{{plan_approval_exempt_scripts}}",
-        render_plan_approval_exempt_scripts_block(_config.script_plan_approval_exempt_scripts),
+        render_plan_approval_exempt_scripts_block(_config.plan_approval_exempt_scripts),
     )
     # config.ini の値を ${変数名} として埋め込めるよう展開する（{{...}}置換完了後に行う）。
     system_prompt = expand_config_vars(system_prompt, _config)
@@ -1872,8 +1875,8 @@ async def _setup() -> None:
         dispatch_agent_background_llm_timeout_max_retries=_config.subagent_background_llm_timeout_max_retries,
         dispatch_agent_batch_max_groups=_config.subagent_batch_max_groups,
         dispatch_agent_batch_stop_after_unreachable_groups=_config.subagent_batch_stop_after_unreachable_groups,
-        plan_approval_exempt_scripts=_config.script_plan_approval_exempt_scripts,
-        agent_type_run_script_allowlist=_config.script_agent_type_run_script_allowlist,
+        plan_approval_exempt_scripts=_config.plan_approval_exempt_scripts,
+        agent_type_run_script_allowlist=_config.subagent_agent_type_run_script_allowlist,
         plans_dir=_config.plans_dir,
         allow_sandbox_dirs=_config.allow_sandbox_dirs,
         plan_reset_approval_on_recreate=_config.plan_reset_approval_on_recreate,

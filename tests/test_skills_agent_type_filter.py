@@ -1,6 +1,6 @@
 """filter_skills_for_agent_type() の回帰テスト。
 
-サブエージェントの {{skills}} は [scripts].agent_type_run_script_allowlist に
+サブエージェントの {{skills}} は [subagent].agent_type_run_script_allowlist に
 その agent_type の登録があれば登録スキルだけに絞り、登録が無ければ全件を返す。
 """
 

@@ -177,7 +177,7 @@ skills ルート配下は相対パス、作業ディレクトリ配下は絶対�
 上記スキルの本文（SKILL.md）は`read_skill`ですべて読めるが、`run_script`で
 実際に実行できるのは次に列挙された読み取り専用スクリプト（`read_*.py`/
 `render_*.py`）のみに限定される（`config.ini`の
-`[scripts].agent_type_run_script_allowlist`による制限）。それ以外（書き込み系は
+`[subagent].agent_type_run_script_allowlist`による制限）。それ以外（書き込み系は
 もちろん、列挙されていないスキルの読み込み専用スクリプトも含む）を`run_script`で
 呼ぼうとするとエラーになる。
 

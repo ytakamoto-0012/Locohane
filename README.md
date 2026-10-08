@@ -1015,8 +1015,6 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[scripts]` | `background_inline_wait_max_seconds` | `run_script_background`/`execute_python_code_background` がジョブ完了をLLMを介さずコード側で待つ上限秒数。超過時のみ `job_id` を返してLLMへ制御を戻す | `SCRIPT_BACKGROUND_INLINE_WAIT_MAX_SECONDS` |
 | `[scripts]` | `background_progress_push_interval_seconds` | 待機中、人間向けに経過秒数・標準出力/標準エラー末尾をチャットへ直接送る間隔（秒） | `SCRIPT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS` |
 | `[scripts]` | `background_job_output_tail_chars` | 進捗表示・`check_script_job`/`stop_script_job`/`read_thread_note`が末尾のみ表示する際の標準出力/標準エラー/進捗メモの最大文字数（`[subagent]`配下の同種表示も共有） | `SCRIPT_BACKGROUND_JOB_OUTPUT_TAIL_CHARS` |
-| `[scripts]` | `plan_approval_exempt_scripts` | `run_script`/`run_script_background`の計画承認（Plan Mode）を免除する読み取り専用スクリプトのホワイトリスト（`[["スキル名","スクリプトファイル名"], ...]`形式、空欄なら既定7件）。免除は承認のみで、`[main_agent_tool_guard]`によるメインエージェントからの直接呼び出し制限は別枠 | `SCRIPT_PLAN_APPROVAL_EXEMPT_SCRIPTS` |
-| `[scripts]` | `agent_type_run_script_allowlist` | `dispatch_agent`の`agent_type`ごとに`run_script`で呼べるスキル/スクリプトを絞り込むホワイトリスト（`[[agent_type, 対象], ...]`形式、対象は`"スキル名"`または`["スキル名","スクリプトファイル名"]`、空欄なら既定19件。登録がある`agent_type`は`{{skills}}`の一覧も登録スキルのみに絞られる） | `SCRIPT_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` |
 | `[file_tools_duplicate_guard]` | `enabled` | Read/Glob/Grep/json_query ツールの同一引数繰り返し呼び出しを防止するガードの有効/無効 | `FILE_TOOLS_DUPLICATE_GUARD_ENABLED` |
 | `[file_tools_duplicate_guard]` | `max_calls` | 同一シグネチャの呼び出しを許可する回数（既定1回） | `FILE_TOOLS_DUPLICATE_GUARD_MAX_CALLS` |
 | `[file_tools_duplicate_guard]` | `carry_over_to_main` | サブエージェント内の呼び出し履歴をメイン判定へ持ち越すかどうか | `FILE_TOOLS_DUPLICATE_GUARD_CARRY_OVER` |
@@ -1045,6 +1043,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[subagent]` | `background_inline_wait_max_seconds` | `dispatch_agent` がジョブ完了をLLMを介さずコード側で待つ上限秒数。超過時のみ `job_id` を返してLLMへ制御を戻す | `SUBAGENT_BACKGROUND_INLINE_WAIT_MAX_SECONDS` |
 | `[subagent]` | `background_progress_push_interval_seconds` | 待機中、人間向けに経過秒数・反復回数・進捗メモをチャットへ直接送る間隔（秒） | `SUBAGENT_BACKGROUND_PROGRESS_PUSH_INTERVAL_SECONDS` |
 | `[subagent]` | `background_llm_timeout_max_retries` | 実行中のLLM呼び出しがタイムアウトした場合、モデルを再構築して同じ反復を再試行する最大回数 | `SUBAGENT_BACKGROUND_LLM_TIMEOUT_MAX_RETRIES` |
+| `[subagent]` | `agent_type_run_script_allowlist` | `dispatch_agent`の`agent_type`ごとに`run_script`で呼べるスキル/スクリプトを絞り込むホワイトリスト（`[[agent_type, 対象], ...]`形式、対象は`"スキル名"`または`["スキル名","スクリプトファイル名"]`、空欄なら既定19件。登録がある`agent_type`は`{{skills}}`の一覧も登録スキルのみに絞られる（絞り込みたくない場合は`{{skills}}`の代わりに`{{all_skills}}`を使う）） | `SUBAGENT_AGENT_TYPE_RUN_SCRIPT_ALLOWLIST` |
 | `[user_response_timeouts]` | `approval_seconds` | `approve_plan`／`run_script`・`execute_python_code`の個別実行確認でユーザー応答を待つ秒数。`0`で無期限待ち | `APPROVAL_TIMEOUT_SECONDS` |
 | `[user_response_timeouts]` | `ask_user_question_seconds` | `AskUserQuestion`（自由記述質問。`labels`省略時は単一入力、指定時は複数項目フォーム）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_QUESTION_TIMEOUT_SECONDS` |
 | `[user_response_timeouts]` | `ask_user_choice_seconds` | `ask_user_choice`（選択肢質問）でユーザー応答を待つ秒数。`0`で無期限待ち | `ASK_USER_CHOICE_TIMEOUT_SECONDS` |
@@ -1052,6 +1051,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[plan]` | `reset_approval_on_recreate` | 承認済み（Edit Automatically）状態で`create_plan`を再度呼んだ際、`plan_approved`を無条件でリセットしてPlan Modeへ戻すか。`false`なら承認状態を維持したままstepsだけ差し替える | `PLAN_RESET_APPROVAL_ON_RECREATE` |
 | `[plan]` | `reset_approval_on_new_message` | 新しいユーザーメッセージを受け取るたびに`plan_approved`を無条件でリセットしてPlan Modeへ戻すか。`false`なら承認状態をメッセージをまたいで維持する（`thinking_loop_guard`のリトライ上限到達後、ユーザーが続行メッセージを送っても再承認が不要になる） | `PLAN_RESET_APPROVAL_ON_NEW_MESSAGE` |
 | `[plan]` | `auto_approve` | `approve_plan`呼び出し時にユーザーへの承認/却下確認を一切行わず自動承認するか（`false`が既定。書き込み系ツールが人の確認なしに実行されるため、無人自動化用途以外での使用は推奨しない） | `PLAN_AUTO_APPROVE` |
+| `[plan]` | `plan_approval_exempt_scripts` | `run_script`/`run_script_background`の計画承認（Plan Mode）を免除する読み取り専用スクリプトのホワイトリスト（`[["スキル名","スクリプトファイル名"], ...]`形式、空欄なら既定7件）。免除は承認のみで、`[main_agent_tool_guard]`によるメインエージェントからの直接呼び出し制限は別枠 | `PLAN_APPROVAL_EXEMPT_SCRIPTS` |
 | `[default_workdir]` | `dir` | エージェントの既定の作業ディレクトリのベース。実際の書き込み・`run_script`のcwdはこの配下の自セッション専用サブディレクトリ`_tmp_<name>`に限定される（`dir`直下への書き込みは許可されない） | `DEFAULT_WORKDIR` |
 | `[default_workdir]` | `allow_sandbox_dir` | セッション分離の外側で常時書き込みを許可する追加ディレクトリのリスト（`[{"dir": "パス", "allow_entries": [["スキル名","スクリプトファイル名"], ...]}, ...]`形式）。各要素の`allow_entries`を空リストにすると、対象を問わずそのディレクトリへ無制限に書き込み可能になる。登録したディレクトリはスレッドを問わず常時書き込み可能になる点に注意（既定は空リストで無効） | `ALLOW_SANDBOX_DIR` |
 | `[default_workdir]` | `retention_days` | 上記 `dir` 配下のファイル保持日数（0以下で自動削除無効） | `DEFAULT_WORKDIR_RETENTION_DAYS` |

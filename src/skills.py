@@ -367,7 +367,7 @@ def filter_skills_for_agent_type(
     entries: Iterable[tuple[str, str | tuple[str, str]]],
 ) -> list[Skill]:
     """サブエージェント（agents/*.md）の `{{skills}}` へ載せるスキルを、
-    [scripts].agent_type_run_script_allowlist に登録されたものだけに絞り込む。
+    [subagent].agent_type_run_script_allowlist に登録されたものだけに絞り込む。
 
     その agent_type のエントリが1件でもあれば、run_script で呼べない
     スキルを一覧に載せても拒否されるだけなので、対象スキル（文字列指定は
@@ -378,7 +378,7 @@ def filter_skills_for_agent_type(
     Args:
         skills: scan_skills() が返した有効な Skill のリスト。
         agent_type: 差し込み先の agents/*.md の frontmatter name。
-        entries: config.script_agent_type_run_script_allowlist（全 agent_type 分）。
+        entries: config.subagent_agent_type_run_script_allowlist（全 agent_type 分）。
 
     Returns:
         絞り込み後のスキルリスト（元の並び順を保つ）。

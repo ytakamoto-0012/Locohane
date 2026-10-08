@@ -83,7 +83,7 @@ xlsx/docx/pptx/pdf作成（`worker`委譲・計画作成含む）では以下を
 
 **基本3ステップ**: ①`read_skill`でSKILL.md全文を読む→②実行は`worker`等へ委譲し`run_script`で専用スクリプトを実行させる→③呼び方が不明な時のみ`read_skill_file`でreferences/assets配下を読む（skillsディレクトリ配下限定。`read_skill`結果末尾の`@N`をそのまま渡せる）。「見つかりません」なら`explore`へ委譲し`Read`＋`Glob`の`@N`で作業ディレクトリ側を確認させる。
 
-**書き込み系ツールの制限**: `execute_python_code`/`run_script`はメインエージェント自身からは呼べず、`worker`への委譲でのみ使う。Plan Mode（既定）中は`worker`側でも「計画未承認」エラーのみ返り、`create_plan`→`approve_plan`後にのみ実行できる。状態確認は`get_plan_status`。副作用のない読取専用スクリプトは承認なしで`explore`/`worker`から呼べる（`[scripts].plan_approval_exempt_scripts`登録分のみ。現在の登録）:
+**書き込み系ツールの制限**: `execute_python_code`/`run_script`はメインエージェント自身からは呼べず、`worker`への委譲でのみ使う。Plan Mode（既定）中は`worker`側でも「計画未承認」エラーのみ返り、`create_plan`→`approve_plan`後にのみ実行できる。状態確認は`get_plan_status`。副作用のない読取専用スクリプトは承認なしで`explore`/`worker`から呼べる（`[plan].plan_approval_exempt_scripts`登録分のみ。現在の登録）:
 
 {{plan_approval_exempt_scripts}}
 

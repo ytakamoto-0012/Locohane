@@ -339,13 +339,14 @@ async def _run(case: EvalCase) -> dict:
                 system_prompt=a.system_prompt.replace(
                     "{{skills}}",
                     render_skills_block(
-                        filter_skills_for_agent_type(skills, a.name, config.script_agent_type_run_script_allowlist)
+                        filter_skills_for_agent_type(skills, a.name, config.subagent_agent_type_run_script_allowlist)
                     ),
                 )
+                .replace("{{all_skills}}", render_skills_block(skills))
                 .replace("{{agent_types}}", agent_types_block)
                 .replace(
                     "{{run_script_allowlist}}",
-                    render_agent_type_run_script_allowlist_block(a.name, config.script_agent_type_run_script_allowlist),
+                    render_agent_type_run_script_allowlist_block(a.name, config.subagent_agent_type_run_script_allowlist),
                 ),
             )
             for a in agent_type_defs
@@ -402,8 +403,8 @@ async def _run(case: EvalCase) -> dict:
             dispatch_agent_batch_max_groups=config.subagent_batch_max_groups,
             dispatch_agent_batch_stop_after_unreachable_groups=config.subagent_batch_stop_after_unreachable_groups,
             plans_dir=config.plans_dir,
-            plan_approval_exempt_scripts=config.script_plan_approval_exempt_scripts,
-            agent_type_run_script_allowlist=config.script_agent_type_run_script_allowlist,
+            plan_approval_exempt_scripts=config.plan_approval_exempt_scripts,
+            agent_type_run_script_allowlist=config.subagent_agent_type_run_script_allowlist,
             plan_badge_allow_unlock=config.plan_badge_allow_unlock,
             plan_reset_approval_on_recreate=config.plan_reset_approval_on_recreate,
             plan_auto_approve=config.plan_auto_approve,

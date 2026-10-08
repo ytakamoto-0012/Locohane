@@ -95,7 +95,7 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
 
     _resolve_run_script_command に加え、作業ディレクトリ解決 → 計画承認
     チェックを行う。(skill_name, script_filename) が config.ini の
-    [scripts].plan_approval_exempt_scripts に登録されている場合は
+    [plan].plan_approval_exempt_scripts に登録されている場合は
     計画未承認でも実行できる。
 
     メインエージェント自身の直接呼び出し回数ガード（[main_agent_tool_guard]）は

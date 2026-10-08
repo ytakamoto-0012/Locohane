@@ -170,7 +170,7 @@ def build_production_system_prompt(config) -> tuple[str, str]:
     system_prompt = system_prompt.replace("{{agent_types}}", agent_types_block)
     system_prompt = system_prompt.replace(
         "{{plan_approval_exempt_scripts}}",
-        render_plan_approval_exempt_scripts_block(config.script_plan_approval_exempt_scripts),
+        render_plan_approval_exempt_scripts_block(config.plan_approval_exempt_scripts),
     )
     system_prompt = expand_config_vars(system_prompt, config)
     system_prompt = system_prompt.replace(
@@ -226,13 +226,14 @@ def build_subagent_agent_types(config) -> list[dict]:
             a.system_prompt.replace(
                 "{{skills}}",
                 render_skills_block(
-                    filter_skills_for_agent_type(skills, a.name, config.script_agent_type_run_script_allowlist)
+                    filter_skills_for_agent_type(skills, a.name, config.subagent_agent_type_run_script_allowlist)
                 ),
             )
+            .replace("{{all_skills}}", render_skills_block(skills))
             .replace("{{agent_types}}", agent_types_block)
             .replace(
                 "{{run_script_allowlist}}",
-                render_agent_type_run_script_allowlist_block(a.name, config.script_agent_type_run_script_allowlist),
+                render_agent_type_run_script_allowlist_block(a.name, config.subagent_agent_type_run_script_allowlist),
             )
         )
         production_system_prompt = f"{expanded}\n\n{subagent_common}"
