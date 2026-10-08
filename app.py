@@ -79,6 +79,7 @@ import uuid
 import aiosqlite
 import chainlit as cl
 from chainlit.config import FILES_DIRECTORY as CHAINLIT_FILES_DIRECTORY
+from chainlit.context import ChainlitContextException
 from chainlit.input_widget import TextInput
 from chainlit.utils import utc_now
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
@@ -107,6 +108,7 @@ from src.context_compaction import (
     force_write_thread_note,
     is_compaction_blocked_by_missing_note,
     maybe_compact,
+    register_compaction_usage_listener,
     should_compact,
 )
 from src.files import extract_generated_files
@@ -2592,6 +2594,65 @@ async def _persist_plan_state() -> None:
 register_plan_persist(_persist_plan_state)
 
 
+async def _persist_token_usage() -> None:
+    """トークン使用量の累計を、ターン完了を待たずに即座に thread_store へ保存する。
+
+    _persist_plan_state と同じ理由・同じパターン: 累計はターン完了時のまとめて
+    スナップショット（_on_message_impl 末尾）でしか保存していなかったため、
+    生成中にブラウザが切断される・停止ボタン・通信エラー等でターンが完了
+    しないと一度も保存されず、スレッド再開（on_chat_resume）で 0 から数え直しに
+    なっていた（2026-10-08、設定ダッシュボードのトークン推移グラフで発覚。
+    会話一覧の「トークン累計」やチャット画面のトークン使用量カードも少なく出ていた）。
+
+    on_chat_model_end（LLM呼び出し1回）ごとに呼ばれる。保存の失敗で進行中の
+    ターンを止める価値は無いため、例外は警告ログに留める。
+    """
+    if not (_config.thread_store_enabled and _thread_store_conn is not None):
+        return
+    thread_id = cl.user_session.get("thread_id")
+    if thread_id is None:
+        return
+    try:
+        await thread_store.save_thread(
+            _thread_store_conn,
+            thread_id,
+            metadata={
+                "token_usage_cumulative": cl.user_session.get("token_usage_cumulative"),
+                "token_usage_cumulative_main": cl.user_session.get("token_usage_cumulative_main"),
+            },
+        )
+    except Exception:  # noqa: BLE001 - 付帯状態の保存失敗で会話を止めない
+        logging.getLogger(__name__).warning("トークン使用量累計の即時保存に失敗しました thread_id=%s", thread_id, exc_info=True)
+
+
+COMPACTION_USAGE_LABEL = "圧縮処理（直近1回）"
+
+
+async def _on_compaction_usage(kind: str, role: str, usage: dict) -> None:
+    """圧縮処理自身のLLM呼び出し（要約・write_thread_note 強制実行）のトークンを会話累計へ加算する。
+
+    これらはグラフ外の ainvoke のため on_chat_model_end では捕捉されず、従来は
+    会話累計（トークン使用量カード・スレッドの token_usage_cumulative）に一切
+    含まれていなかった（src/context_compaction.py _record_compaction_usage 参照）。
+    token_usage_cumulative_main（圧縮の発火判定用）には加算しない。圧縮の直後に
+    0 へ戻す値であり、圧縮コストを含めると判定の意味が変わるため。
+    """
+    try:
+        cumulative = cl.user_session.get("token_usage_cumulative") or _new_usage_totals()
+    except ChainlitContextException:
+        # Chainlit のセッション文脈外（テスト・evals 等）では集計しない（ログには残っている）。
+        return
+    _accumulate_usage(cumulative, usage)
+    cl.user_session.set("token_usage_cumulative", cumulative)
+    await _persist_token_usage()
+    call_totals = _new_usage_totals()
+    _accumulate_usage(call_totals, usage)
+    await _send_token_usage({"compaction": {"label": COMPACTION_USAGE_LABEL, **call_totals}})
+
+
+register_compaction_usage_listener(_on_compaction_usage)
+
+
 @cl.on_settings_update
 async def on_settings_update(settings: dict) -> None:
     """ChatSettings（歯車アイコン）で作業ディレクトリが変更されたときに呼ばれるフック。
@@ -3600,6 +3661,9 @@ async def _run_context_compaction(
     # 圧縮により古い履歴が要約へ置き換わったため、次にまた同じ閾値で
     # 即座に発火し続けないよう、メインエージェントの累積トークン数をリセットする。
     cl.user_session.set("token_usage_cumulative_main", _new_usage_totals())
+    # 保存しないと、直後に切断→再開した場合に圧縮前の値が復元され、
+    # 再開直後にまた圧縮が発火してしまう。
+    await _persist_token_usage()
     # write_thread_note見送りカウンタも、実際に圧縮が完了した時点でのみリセットする
     # （is_compaction_blocked_by_missing_noteがFalseを返した直後ではなく、maybe_compact/
     # aupdate_stateの成功を確認してから。ここより前でリセットすると、要約LLM呼び出しの
@@ -4172,6 +4236,9 @@ async def _on_message_impl(message: cl.Message) -> None:
                             cumulative_main["output"],
                             cumulative_main["total"],
                         )
+                        # ターンが完了しないまま切断・停止されても再開時に累計が
+                        # 0 に戻らないよう、加算のたびに保存する（関数docstring参照）。
+                        await _persist_token_usage()
                         # ツール呼び出しを挟んで長く動くターンでも、LLM呼び出しの
                         # たびにサイドパネルの表示を更新する（ターン完了まで待たないと
                         # 見えない、という問題を避けるため）。表示は「このターン」の

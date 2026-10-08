@@ -242,6 +242,7 @@ select.le-type { width: auto; padding: 4px; font-size: 12px; flex-shrink: 0; }
 .monitor-section h3 { margin: 0 0 10px; font-size: 14px; }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .section-head h3 { margin: 0; }
+.section-head > button { flex-shrink: 0; white-space: nowrap; }
 .stat-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .stat-tile { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
 .stat-value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }

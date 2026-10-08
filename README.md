@@ -1136,7 +1136,7 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[ui]` | `max_display_side_steps` | サイドパネルに描画するツール呼び出し等のStepの最大件数（表示専用の間引き、`0`で無制限） | `UI_MAX_DISPLAY_SIDE_STEPS` |
 | `[ui]` | `paste_as_attachment_threshold_chars` | 入力欄へこの文字数以上のテキストを貼り付けると、入力欄へ展開せず「貼り付けテキスト」カード（`pasted-text-*.txt` 添付）にする。送信時はパスではなく本文としてLLMへ渡す（`0`以下で無効） | `UI_PASTE_AS_ATTACHMENT_THRESHOLD_CHARS` |
 | `[ui]` | `max_input_chars` | 1回の送信の最大文字数（入力欄＋貼り付けテキストの合計）。超過中は送信不可、バックエンドも拒否する（`0`以下で無制限） | `UI_MAX_INPUT_CHARS` |
-| `[ui]` | `token_usage_warn_threshold` | トークン使用量カードの「リクエスト1回あたり」行（メインと実行中のサブエージェント/一括委譲のグループごとに1行。行ごとに判定）の合計トークン数がこの値以上でオレンジ太字表示（`0`以下で無効） | `UI_TOKEN_USAGE_WARN_THRESHOLD` |
+| `[ui]` | `token_usage_warn_threshold` | トークン使用量カードの「リクエスト1回あたり」行（メインと実行中のサブエージェント/一括委譲のグループごとに1行。コンテキスト圧縮の要約呼び出しは「圧縮処理（直近1回）」行として出し、会話累計にも加算する。行ごとに判定）の合計トークン数がこの値以上でオレンジ太字表示（`0`以下で無効） | `UI_TOKEN_USAGE_WARN_THRESHOLD` |
 | `[ui]` | `token_usage_alert_threshold` | 同上、この値以上で赤太字表示（`token_usage_warn_threshold`より優先、`0`以下で無効） | `UI_TOKEN_USAGE_ALERT_THRESHOLD` |
 | `[websocket]` | `ping_interval_seconds` | ブラウザ⇔サーバー間WebSocket（Socket.IO）の生存確認ping送信間隔秒数。`[llm].stream_chunk_timeout_seconds`（LLMサーバーとの通信）とは別レイヤー | `WEBSOCKET_PING_INTERVAL_SECONDS` |
 | `[websocket]` | `ping_timeout_seconds` | 直近pingへの応答をこの秒数待っても受信できない場合に切断とみなす。LLM応答待ちでイベントループがブロッキング気味の時間帯（`dispatch_agent`の長時間実行中等）に短すぎると誤切断しやすい | `WEBSOCKET_PING_TIMEOUT_SECONDS` |
@@ -1441,9 +1441,12 @@ header.md・tab_title.md・welcome.md・icon・favicon は、トップの「表�
   到達確認と、`provider="llama_cpp"` ならスロット使用状況。
 - **会話**: ユーザー別のスレッド数・トークン累計・最終利用日時、スレッド一覧
   （ユーザー・名前で絞り込み）。スレッドを選ぶと会話内容と、その会話の
-  累積トークン使用量の推移グラフ（サブエージェント含む累計／メイン
-  エージェント累計。コンテキスト圧縮の位置を破線で表示）・LLMリクエスト
-  ごとの入力トークン（コンテキスト長）のグラフを表示する。会話内容は既定で
+  累積トークン使用量の推移グラフ（全体＝サブエージェント・圧縮処理を含む／
+  メインエージェントのみ）・LLMリクエストごとの入力トークン（コンテキスト長）
+  のグラフを表示する。コンテキスト圧縮の実行位置は破線で示す。累計はログの
+  各呼び出しを管理ツール側で足し上げた値で、本体のセッション内カウンタ
+  （生成中に切断したスレッドを再開すると0から数え直し、圧縮のたびに
+  メイン分を0に戻す）とは独立している。会話内容は既定で
   ユーザー発言とAIの応答のみで、ツール実行・思考も表示に切り替えられる。
   **会話内容を開くたびに、閲覧した事実（閲覧者・対象スレッド・所有者）を
   変更履歴へ `conversation_view` として記録する。**
@@ -1456,7 +1459,7 @@ header.md・tab_title.md・welcome.md・icon・favicon は、トップの「表�
 |---|---|
 | 接続中セッション・生成中スレッド | `<common_data_dir>/runtime_status.json`（本体が3秒ごとに変化があれば書き出し、終了時に削除。`src/runtime_status.py`） |
 | スレッド一覧・会話内容 | `[thread_store] db`（`[thread_store] enabled=false` だと閲覧できない） |
-| トークン推移 | `app_*.log` の `トークン使用量 thread_id=...` 行（`[llm] track_token_usage=true` の場合のみ出力。ログがローテーション・削除された分は表示されない） |
+| トークン推移 | `app_*.log` の `トークン使用量 thread_id=...` 行（会話本体の呼び出し）、`圧縮処理トークン使用量` 行（要約・write_thread_note 強制実行。`src/context_compaction.py`）、`コンテキスト圧縮を実行しました` 行（破線の位置）。`[llm] track_token_usage=true` の場合のみ出力され、ログがローテーション・削除された分は表示されない |
 
 本体と HTTP で通信せずファイルを読む方式にしているのは、`app.bat` で直接
 起動した（管理ツールが起動に関与しない）インスタンスでも同じように見える

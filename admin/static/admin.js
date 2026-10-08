@@ -2189,7 +2189,18 @@ async function openThreadViewer(viewer, threadId, internal) {
     viewer.replaceChildren(el("div", { class: "error", text: e.message }));
     return;
   }
-  const cum = detail.token_usage_cumulative || {};
+  // ログが残っていればログの合計を使う。スレッドに保存された累計（token_usage_cumulative）は
+  // ターン完了時にしか保存されず、生成中に切断→再開すると 0 からやり直しになって少なく出るため。
+  const pts = tokens.points;
+  const fromLog = pts.length > 0;
+  const cum = fromLog
+    ? {
+        total: pts[pts.length - 1].cumulative_total,
+        input: pts.reduce((s, p) => s + p.call_in, 0),
+        output: pts.reduce((s, p) => s + p.call_out, 0),
+      }
+    : detail.token_usage_cumulative || {};
+  const cumSource = fromLog ? "アプリログの合計" : "スレッドに保存された値";
   const internalCb = el("input", { type: "checkbox" });
   internalCb.checked = !!internal;
   internalCb.addEventListener("change", () => openThreadViewer(viewer, threadId, internalCb.checked));
@@ -2227,9 +2238,9 @@ async function openThreadViewer(viewer, threadId, internal) {
         detail.work_dir ? ` ／ 作業ディレクトリ: ${detail.work_dir}` : "",
       ]),
       el("div", { class: "stat-row" }, [
-        statTile("トークン累計（合計）", fmtNum(cum.total)),
-        statTile("入力", fmtNum(cum.input)),
-        statTile("出力", fmtNum(cum.output)),
+        statTile("トークン累計（合計）", fmtNum(cum.total), cumSource),
+        statTile("入力", fmtNum(cum.input), cumSource),
+        statTile("出力", fmtNum(cum.output), cumSource),
         statTile("LLM呼び出し回数", fmtNum(tokens.points.length), "アプリログに残っている分"),
       ]),
       buildTokenCharts(tokens.points),
@@ -2251,6 +2262,9 @@ async function openThreadViewer(viewer, threadId, internal) {
 // 系列色は濃色パネル（--panel）上で配色検証済み（明度帯・色覚多様性での識別・コントラスト）。
 const SERIES_BLUE = "#3987e5";
 const SERIES_ORANGE = "#d95926";
+const SERIES_AQUA = "#199e70";
+
+const TOKEN_KIND_LABELS = { main: "メイン", sub: "サブ", compaction: "圧縮処理" };
 
 function buildTokenCharts(points) {
   const wrap = el("div", { class: "token-charts" });
@@ -2264,37 +2278,39 @@ function buildTokenCharts(points) {
     return wrap;
   }
   const compactions = points.map((p, i) => (p.compacted ? i : -1)).filter((i) => i >= 0);
-  const hasSub = points.some((p) => p.is_sub);
+  const hasSub = points.some((p) => p.kind === "sub");
+  const hasCompactionCall = points.some((p) => p.kind === "compaction");
   const grid = el("div", { class: "chart-grid-row" });
   wrap.append(grid);
   grid.append(
     lineChart({
       title: "会話の累積トークン使用量の推移",
-      note: "メイン累計はコンテキスト圧縮のたびに0へ戻ります（縦の破線）。",
+      note: "各LLM呼び出しの入力＋出力を足し上げた値です。縦の破線はコンテキスト圧縮の実行位置です。",
       points,
       series: [
-        { key: "cumulative_total", label: "累計（サブエージェント含む）", color: SERIES_BLUE },
-        { key: "cumulative_main_total", label: "メインエージェント累計", color: SERIES_ORANGE },
+        { key: "cumulative_total", label: "全体（サブエージェント・圧縮処理を含む）", color: SERIES_BLUE },
+        { key: "cumulative_main_total", label: "メインエージェントのみ", color: SERIES_ORANGE },
       ],
       markers: compactions,
     }),
     lineChart({
       title: "LLMリクエストごとの入力トークン（コンテキスト長）",
-      note: hasSub ? "サブエージェント内部の呼び出しは点で表示します。" : null,
+      note: "圧縮が効くと、破線の後でメインエージェントの値が下がります。" + (hasSub || hasCompactionCall ? "サブエージェント・圧縮処理の呼び出しは点で表示します。" : ""),
       points,
       series: [
-        { key: "call_in", label: "メインエージェント", color: SERIES_BLUE, filter: (p) => !p.is_sub },
-        ...(hasSub ? [{ key: "call_in", label: "サブエージェント", color: SERIES_ORANGE, filter: (p) => p.is_sub, dotsOnly: true }] : []),
+        { key: "call_in", label: "メインエージェント", color: SERIES_BLUE, filter: (p) => p.kind === "main" },
+        ...(hasSub ? [{ key: "call_in", label: "サブエージェント", color: SERIES_ORANGE, filter: (p) => p.kind === "sub", dotsOnly: true }] : []),
+        ...(hasCompactionCall ? [{ key: "call_in", label: "圧縮処理", color: SERIES_AQUA, filter: (p) => p.kind === "compaction", dotsOnly: true }] : []),
       ],
       markers: compactions,
     })
   );
   const table = dataTable(
-    ["#", "日時", "種別", "入力", "出力", "このターン累計", "会話累計", "メイン累計"],
+    ["#", "日時", "種別", "入力", "出力", "このターン累計", "全体累計", "メイン累計"],
     points.map((p, i) => [
       String(i + 1),
       fmtTime(p.ts),
-      (p.is_sub ? "サブ" : "メイン") + (p.compacted ? "（圧縮後）" : ""),
+      (TOKEN_KIND_LABELS[p.kind] || p.kind) + (p.compacted ? "（圧縮後）" : ""),
       fmtNum(p.call_in),
       fmtNum(p.call_out),
       fmtNum(p.turn_total),

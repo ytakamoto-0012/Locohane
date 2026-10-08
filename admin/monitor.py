@@ -55,6 +55,10 @@ _TOKEN_RE = re.compile(
     r"cumulative\(in=(\d+),out=(\d+),total=(\d+)\) "
     r"cumulative_main\(in=(\d+),out=(\d+),total=(\d+)\)"
 )
+# src/context_compaction.py の _log_compaction_usage が出す行。
+_COMPACTION_USAGE_RE = re.compile(
+    r"圧縮処理トークン使用量 kind=(\S+) role=(\S+) call\(in=(\d+),out=(\d+),total=(\d+)\)"
+)
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
@@ -267,38 +271,85 @@ def _log_files(log_dir: Path) -> list[Path]:
 def token_history(log_dir: Path, thread_id: str) -> list[dict]:
     """そのスレッドの LLM 呼び出しごとのトークン使用量を時系列で返す。
 
-    is_sub は、その呼び出しで cumulative_main が増えていない（＝サブエージェント
-    内部の呼び出し）こと。compacted は、cumulative_main が前回より減った（＝
-    コンテキスト圧縮で 0 にリセットされた後の最初の呼び出し）こと。
+    累計（cumulative_total / cumulative_main_total）は、本体がログに出す
+    cumulative(...) の値ではなく、ここで各呼び出しの total を足し上げて作る。
+    本体のセッション内カウンタは、生成中に切断されたスレッドを再開すると
+    0 に戻り（ターン完了時にしかスレッドへ保存されないため）、
+    cumulative_main はコンテキスト圧縮のたびに 0 に戻る（圧縮の発火判定用）ため、
+    そのまま描くと累計なのに途中で下がってしまう。
+
+    kind:
+        "main" / "sub": 会話本体の LLM 呼び出し（app.py の「トークン使用量」行）。
+            ログの cumulative_main が呼び出し分だけ増えていればメイン、
+            増えていなければサブエージェント内部の呼び出し。
+        "compaction": 圧縮処理自身の呼び出し（要約・write_thread_note の強制実行。
+            src/context_compaction.py の「圧縮処理トークン使用量」行）。
+            累計にだけ加算し、メイン累計には含めない。
+    compacted: この点の直前でメインエージェントのコンテキスト圧縮が実行された
+        （app.py の「コンテキスト圧縮を実行しました」行）。
     """
-    needle = f"トークン使用量 thread_id={thread_id} "
+    token_needle = f"トークン使用量 thread_id={thread_id} "
+    compaction_usage_needle = f"[thread={thread_id}] "
+    compaction_done_needle = f"コンテキスト圧縮を実行しました thread_id={thread_id} "
     points: list[dict] = []
-    prev_main_total: int | None = None
+    prev_main_logged: int | None = None
+    cum_all = 0
+    cum_main = 0
+    pending_compaction = False
     for path in _log_files(log_dir):
         with path.open("r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                if needle not in line:
+                if thread_id not in line:
+                    continue
+                if compaction_done_needle in line:
+                    pending_compaction = True
                     continue
                 head = _LOG_LINE_RE.match(line.rstrip("\n"))
-                m = _TOKEN_RE.search(line)
-                if not head or not m or m.group(1) != thread_id:
+                if not head:
                     continue
-                v = [int(x) for x in m.groups()[1:]]
-                main_total = v[11]
+                ts = head.group(1).replace(" ", "T")
+                if token_needle in line:
+                    m = _TOKEN_RE.search(line)
+                    if not m or m.group(1) != thread_id:
+                        continue
+                    v = [int(x) for x in m.groups()[1:]]
+                    call_total, main_logged = v[2], v[11]
+                    # 圧縮・再開でカウンタが 0 に戻った直後は main_logged == call_total になる。
+                    is_main = (
+                        prev_main_logged is None
+                        or main_logged == prev_main_logged + call_total
+                        or main_logged == call_total
+                    )
+                    prev_main_logged = main_logged
+                    kind = "main" if is_main else "sub"
+                    call_in, call_out, turn_total = v[0], v[1], v[5]
+                elif compaction_usage_needle in line and "圧縮処理トークン使用量" in line:
+                    m = _COMPACTION_USAGE_RE.search(line)
+                    if not m:
+                        continue
+                    kind = "compaction"
+                    call_in, call_out, call_total = int(m.group(3)), int(m.group(4)), int(m.group(5))
+                    turn_total = None
+                else:
+                    continue
+                cum_all += call_total
+                if kind == "main":
+                    cum_main += call_total
                 points.append(
                     {
-                        "ts": head.group(1).replace(" ", "T"),
-                        "call_in": v[0],
-                        "call_out": v[1],
-                        "call_total": v[2],
-                        "turn_total": v[5],
-                        "cumulative_total": v[8],
-                        "cumulative_main_total": main_total,
-                        "is_sub": prev_main_total is not None and main_total == prev_main_total,
-                        "compacted": prev_main_total is not None and main_total < prev_main_total,
+                        "ts": ts,
+                        "kind": kind,
+                        "is_sub": kind == "sub",
+                        "call_in": call_in,
+                        "call_out": call_out,
+                        "call_total": call_total,
+                        "turn_total": turn_total,
+                        "cumulative_total": cum_all,
+                        "cumulative_main_total": cum_main,
+                        "compacted": pending_compaction,
                     }
                 )
-                prev_main_total = main_total
+                pending_compaction = False
     return points
 
 

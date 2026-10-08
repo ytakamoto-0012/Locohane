@@ -99,6 +99,23 @@ async def test_save_thread_and_upsert_thread_stub_race_safely_on_new_thread(tmp_
 
 
 @pytest.mark.asyncio
+async def test_concurrent_save_thread_does_not_lose_metadata_keys(tmp_path) -> None:
+    """save_thread のメタデータ統合（SELECT→update→UPDATE）が並行呼び出しで
+    後勝ちにならないこと。トークン累計を LLM 呼び出しごとに保存するようにした
+    （app.py _persist_token_usage）ことで plan 等の即時保存と並行しやすくなった。
+    ロック無しでは20並行で1キーしか残らなかった（2026-10-08 再現）。
+    """
+    conn = await thread_store.init_db(tmp_path / "chat_threads.sqlite")
+    try:
+        await thread_store.save_thread(conn, "t1", owner="anonymous")
+        await asyncio.gather(*(thread_store.save_thread(conn, "t1", metadata={f"k{i}": i}) for i in range(20)))
+        meta = (await thread_store.get_thread_detail(conn, "t1"))["metadata"]
+        assert meta == {f"k{i}": i for i in range(20)}
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_get_thread_detail_id_always_matches_requested_id(tmp_path) -> None:
     """@chainlit/react-client の resume_thread ハンドラは thread.id が要求した
     thread_id と異なると window.location.href='/thread/<id>' へハードナビゲート

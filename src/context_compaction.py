@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -39,6 +40,57 @@ from .llm import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+CompactionUsageListener = Callable[[str, str, dict], Awaitable[None]]
+# app.py が登録する、圧縮処理のトークン使用量をセッションの会話累計へ加算する関数。
+# app.py を直接 import すると `chainlit run` が app.py を別モジュールとして再実行して
+# 壊れるため、src/plan_persist.py と同じ登録方式にしている。
+_usage_listener: CompactionUsageListener | None = None
+
+
+def register_compaction_usage_listener(fn: CompactionUsageListener | None) -> None:
+    global _usage_listener
+    _usage_listener = fn
+
+
+def _log_compaction_usage(kind: str, role: str, response) -> dict | None:
+    """圧縮処理自身のLLM呼び出しのトークン使用量をログへ残し、usage を返す。
+
+    これらの呼び出しはグラフ外の ainvoke のため app.py の on_chat_model_end
+    （「トークン使用量 thread_id=...」行）では捕捉されない。設定ダッシュボードの
+    トークン推移グラフ（admin/monitor.py の token_history）がこの行を読んで累計へ
+    加算する。thread_id はログのフォーマット側（[thread=...]）で付く。
+    """
+    usage = getattr(response, "usage_metadata", None)
+    # [llm].track_token_usage=false なら None。dict 以外（テストのスタブ等）も記録しない
+    # （ここで例外を出すと呼び出し元の except に捕まり、要約自体が失敗扱いになる）。
+    if not isinstance(usage, dict) or not usage:
+        return None
+    logger.info(
+        "圧縮処理トークン使用量 kind=%s role=%s call(in=%d,out=%d,total=%d)",
+        kind,
+        role,
+        usage.get("input_tokens", 0) or 0,
+        usage.get("output_tokens", 0) or 0,
+        usage.get("total_tokens", 0) or 0,
+    )
+    return usage
+
+
+async def _record_compaction_usage(kind: str, role: str, response) -> None:
+    """ログへ残した上で、登録済みのリスナー（app.py）でセッションの会話累計へ加算する。
+
+    集計の失敗で要約・圧縮そのものを失敗させないよう、リスナーの例外は握りつぶす。
+    """
+    usage = _log_compaction_usage(kind, role, response)
+    if usage is None or _usage_listener is None:
+        return
+    try:
+        await _usage_listener(kind, role, usage)
+    except Exception:  # noqa: BLE001 - 付帯の集計で圧縮を止めない
+        logger.warning("圧縮処理のトークン使用量の集計に失敗しました", exc_info=True)
+
 
 _SUMMARY_HEADER = "[自動要約: コンテキスト圧縮のため、以前の会話の一部を要約しました。" "この内容を踏まえて続きの作業を行ってください]\n"
 _PLAN_STATUS_HEADER = "[承認済みの実行計画（最優先タスク）。要約とは無関係にコード側が機械的に付与しています]\n"
@@ -257,6 +309,7 @@ async def force_write_thread_note(
     try:
         bound_model = model.bind_tools([write_thread_note], tool_choice="required")
         response = await bound_model.ainvoke([HumanMessage(content=prompt)])
+        await _record_compaction_usage("thread_note", "-", response)
     except ThinkingLoopDetected:
         # maybe_compact の except ThinkingLoopDetected と同じ理由で、この
         # モデルインスタンス専用のクライアントを無条件に強制クローズする
@@ -619,6 +672,7 @@ async def maybe_compact(
     while True:
         try:
             response = await current_model.ainvoke(local_input)
+            await _record_compaction_usage("summary", role, response)
             break
         except LLM_CONNECTION_ERRORS as exc:
             # config属性へのアクセスをexcept節内に留めているのは、テスト用の

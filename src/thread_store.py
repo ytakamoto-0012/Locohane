@@ -23,6 +23,7 @@ import logging
 import re
 import shutil
 import uuid
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,10 @@ from . import chat_log
 logger = logging.getLogger(__name__)
 
 ANONYMOUS_OWNER = chat_log.ANONYMOUS_USERNAME
+
+# thread_id -> save_thread のメタデータ統合を直列化する Lock（save_thread 参照）。
+# 誰も参照しなくなった Lock は GC で自動的に消える（app.py の _chat_log_locks と同じ方式）。
+_save_thread_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS threads (
@@ -183,26 +188,35 @@ async def save_thread(
     )
     await conn.commit()
 
-    cursor = await conn.execute("SELECT owner, metadata_json, tags_json FROM threads WHERE id = ?", (thread_id,))
-    row = await cursor.fetchone()
-    existing_owner, existing_metadata_json, existing_tags_json = row
-    merged_metadata = json.loads(existing_metadata_json or "{}")
-    if metadata:
-        merged_metadata.update(metadata)
-    new_tags_json = json.dumps(tags, ensure_ascii=False) if tags is not None else existing_tags_json
-    await conn.execute(
-        "UPDATE threads SET owner = ?, name = COALESCE(?, name), updated_at = ?, "
-        "metadata_json = ?, tags_json = ? WHERE id = ?",
-        (
-            owner or existing_owner,
-            name,
-            now,
-            json.dumps(merged_metadata, ensure_ascii=False),
-            new_tags_json,
-            thread_id,
-        ),
-    )
-    await conn.commit()
+    # SELECT→dict.update()→UPDATE の read-modify-write は await を挟むため、同じ
+    # thread_id へ並行して呼ばれると後勝ちで他方のキーを消す（lost update。
+    # 20並行で19キーが消えることを確認済み）。トークン累計を LLM 呼び出しごとに
+    # 保存するようにした（app.py _persist_token_usage、2026-10-08）ことで、
+    # plan の即時保存等と並行する頻度が上がったため、thread_id 単位で直列化する。
+    lock = _save_thread_locks.get(thread_id)
+    if lock is None:
+        lock = _save_thread_locks[thread_id] = asyncio.Lock()
+    async with lock:
+        cursor = await conn.execute("SELECT owner, metadata_json, tags_json FROM threads WHERE id = ?", (thread_id,))
+        row = await cursor.fetchone()
+        existing_owner, existing_metadata_json, existing_tags_json = row
+        merged_metadata = json.loads(existing_metadata_json or "{}")
+        if metadata:
+            merged_metadata.update(metadata)
+        new_tags_json = json.dumps(tags, ensure_ascii=False) if tags is not None else existing_tags_json
+        await conn.execute(
+            "UPDATE threads SET owner = ?, name = COALESCE(?, name), updated_at = ?, "
+            "metadata_json = ?, tags_json = ? WHERE id = ?",
+            (
+                owner or existing_owner,
+                name,
+                now,
+                json.dumps(merged_metadata, ensure_ascii=False),
+                new_tags_json,
+                thread_id,
+            ),
+        )
+        await conn.commit()
 
 
 async def rename_thread(conn: aiosqlite.Connection, thread_id: str, name: str) -> None:

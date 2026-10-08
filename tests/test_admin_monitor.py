@@ -21,26 +21,53 @@ def _token_line(ts: str, thread_id: str, call_in: int, cum: int, cum_main: int) 
     )
 
 
-def test_token_history_classifies_sub_calls_and_compaction(tmp_path: Path):
+def test_token_history_cumulative_never_drops_and_marks_real_compaction(tmp_path: Path):
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
     tid = "t-1"
     (log_dir / "app_20261001_000000.log").write_text(
+        # メイン（total=110）
         _token_line("2026-10-01 00:00:01", tid, 100, 110, 110)
         + _token_line("2026-10-01 00:00:02", "other", 999, 999, 999)
-        # サブエージェント: cumulative_main が増えない
-        + _token_line("2026-10-01 00:00:03", tid, 50, 170, 110),
+        # サブエージェント（total=60）: cumulative_main が増えない
+        + _token_line("2026-10-01 00:00:03", tid, 50, 170, 110)
+        # 生成中の切断→再開で本体のカウンタが 0 に戻った後のメイン（total=40）
+        + _token_line("2026-10-01 00:00:04", tid, 30, 40, 40),
         encoding="utf-8",
     )
-    # 後のファイル。圧縮で cumulative_main が 0 に戻った後の呼び出し
+    # 後のファイル。圧縮処理自身の呼び出し → 圧縮実行 → 圧縮後のメイン（total=20）
     (log_dir / "app_20261001_120000.log").write_text(
-        _token_line("2026-10-01 12:00:00", tid, 30, 210, 40), encoding="utf-8"
+        f"2026-10-01 12:00:00,1 [thread={tid}] INFO src.context_compaction: "
+        "圧縮処理トークン使用量 kind=summary role=main call(in=500,out=50,total=550)\n"
+        f"2026-10-01 12:00:01,1 [thread={tid}] WARNING app.py: "
+        f"コンテキスト圧縮を実行しました thread_id={tid} messages=40->6\n"
+        + _token_line("2026-10-01 12:00:02", tid, 10, 20, 20),
+        encoding="utf-8",
     )
     points = monitor.token_history(log_dir, tid)
-    assert [p["call_in"] for p in points] == [100, 50, 30]
-    assert [p["is_sub"] for p in points] == [False, True, False]
-    assert [p["compacted"] for p in points] == [False, False, True]
+    assert [p["kind"] for p in points] == ["main", "sub", "main", "compaction", "main"]
+    assert [p["cumulative_total"] for p in points] == [110, 170, 210, 760, 780]
+    # メイン累計は圧縮処理・サブを含まず、圧縮でも 0 に戻らない
+    assert [p["cumulative_main_total"] for p in points] == [110, 110, 150, 150, 170]
+    # 再開によるカウンタのリセットは圧縮扱いしない。実際の圧縮ログの直後の点だけ
+    assert [p["compacted"] for p in points] == [False, False, False, False, True]
     assert points[0]["ts"] == "2026-10-01T00:00:01"
+
+
+def test_compaction_usage_log_format_matches_monitor_parser(caplog):
+    # src/context_compaction.py が出す行を admin/monitor.py が読めること（形式の取り決め）。
+    from types import SimpleNamespace
+
+    from src import context_compaction
+
+    usage = {"input_tokens": 500, "output_tokens": 50, "total_tokens": 550}
+    with caplog.at_level("INFO", logger="src.context_compaction"):
+        context_compaction._log_compaction_usage("summary", "main", SimpleNamespace(usage_metadata=usage))
+        context_compaction._log_compaction_usage("summary", "main", SimpleNamespace(usage_metadata=None))
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 1
+    m = monitor._COMPACTION_USAGE_RE.search(messages[0])
+    assert m and m.groups() == ("summary", "main", "500", "50", "550")
 
 
 def test_tail_log_filters_level_and_joins_multiline(tmp_path: Path):
