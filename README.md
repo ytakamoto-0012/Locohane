@@ -1267,6 +1267,8 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 追加する等）。各インスタンスは会話履歴・永続メモリー・アップロード等の
 データ、設定の上書き差分、ログインユーザーが完全に分離される。
 
+![Dashboad](admin/Dashboad_01.png)
+
 ### 起動方法
 
 ```cmd
