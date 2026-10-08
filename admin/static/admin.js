@@ -167,11 +167,9 @@ async function renderInstances() {
   $("#add-instance-btn").addEventListener("click", openCreateInstanceModal);
   await refreshInstanceCards();
   // カードの稼働状況だけを定期更新する（カード全体を作り直すと操作中のボタンが消えるため）。
-  stopMonitorPolling();
-  monitorTimer = setInterval(() => {
-    if (!$("#instance-cards")) return stopMonitorPolling();
-    refreshCardActivity();
-  }, MONITOR_POLL_MS);
+  // 一覧の取得中に別の画面へ移っていたら始めない。
+  const cards = $("#instance-cards");
+  if (cards) startMonitorPolling(cards, refreshCardActivity);
 }
 
 async function refreshInstanceCards() {
@@ -1909,6 +1907,41 @@ function stopMonitorPolling() {
   monitorTimer = null;
 }
 
+// container を表示している間だけ fn を定期実行する。前回の fn が終わるまで次を出さない
+// （取得が間隔より遅いと要求が積み上がるため）。container が画面から外れたら自分の
+// タイマーだけを止める（stopMonitorPolling() だと、その間に別の画面が始めた
+// ポーリングまで止めてしまう）。
+function startMonitorPolling(container, fn) {
+  stopMonitorPolling();
+  let busy = false;
+  const timer = setInterval(async () => {
+    if (!document.body.contains(container)) {
+      clearInterval(timer);
+      if (monitorTimer === timer) monitorTimer = null;
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    try {
+      await fn();
+    } finally {
+      busy = false;
+    }
+  }, MONITOR_POLL_MS);
+  monitorTimer = timer;
+}
+
+// 連続して投げた要求のうち、最後のもの以外の応答を捨てるための連番
+// （検索語の入力中などに、古い条件の応答が後から届いて表示を上書きしないように）。
+function nextRequestSeq(target) {
+  target._requestSeq = (target._requestSeq || 0) + 1;
+  return target._requestSeq;
+}
+
+function isLatestRequest(target, seq) {
+  return target._requestSeq === seq;
+}
+
 // textContent だけで要素を組み立てる（ユーザー名・会話内容等は信頼できないデータのため innerHTML を使わない）。
 function el(tag, props, children) {
   const node = document.createElement(tag);
@@ -2004,7 +2037,7 @@ async function renderMonitor(container) {
       body.replaceChildren(el("div", { class: "error", text: e.message }));
       return;
     }
-    if (!document.body.contains(container)) return stopMonitorPolling();
+    if (!document.body.contains(container)) return;
     updated.textContent = `状態: ${STATE_LABELS[data.state] || data.state}` + (data.updated_at ? ` ／ 本体の最終更新 ${fmtTime(data.updated_at)}` : "");
     const lc = data.log_counts_24h || {};
     tiles.replaceChildren(
@@ -2060,14 +2093,16 @@ async function renderMonitor(container) {
     );
   };
   await refresh();
-  stopMonitorPolling();
-  monitorTimer = setInterval(refresh, MONITOR_POLL_MS);
+  // 初回の取得中に別のタブへ移っていたら始めない（移動先の画面のポーリングを止めてしまうため）。
+  if (document.body.contains(container)) startMonitorPolling(container, refresh);
 }
 
 async function loadEndpoints(box) {
+  const seq = nextRequestSeq(box);
   box.replaceChildren(el("p", { class: "hint", text: "確認中..." }));
   try {
     const data = await api(monitorPath("/endpoints"));
+    if (!isLatestRequest(box, seq)) return;
     box.replaceChildren(
       dataTable(
         ["用途", "接続先", "モデル", "provider", "状態", "スロット使用中", "応答時間"],
@@ -2076,13 +2111,14 @@ async function loadEndpoints(box) {
           e.base_url,
           e.model,
           e.provider,
-          e.reachable ? el("span", { class: "badge ok", text: "✓ 応答あり" }) : el("span", { class: "badge critical", text: "✕ 応答なし", title: e.error || "" }),
-          e.slots_total === null ? "-" : `${e.slots_busy} / ${e.slots_total}`,
+          e.reachable ? el("span", { class: "badge ok", text: "✓ 応答あり", title: e.error || "" }) : el("span", { class: "badge critical", text: "✕ 応答なし", title: e.error || "" }),
+          e.slots_total === null ? el("span", { class: "hint", text: "-", title: e.reachable ? e.error || "" : "" }) : `${e.slots_busy} / ${e.slots_total}`,
           `${fmtNum(e.latency_ms)} ms`,
         ])
       )
     );
   } catch (e) {
+    if (!isLatestRequest(box, seq)) return;
     box.replaceChildren(el("div", { class: "error", text: e.message }));
   }
 }
@@ -2134,13 +2170,15 @@ async function renderThreads(container, opts) {
     const params = new URLSearchParams({ limit: THREADS_PAGE_SIZE, offset: state.offset });
     if (state.owner) params.set("owner", state.owner);
     if (state.q) params.set("q", state.q);
+    const seq = nextRequestSeq(listBox);
     let data;
     try {
       data = await api(monitorPath(`/threads?${params}`));
     } catch (e) {
-      listBox.replaceChildren(el("div", { class: "error", text: e.message }));
+      if (isLatestRequest(listBox, seq)) listBox.replaceChildren(el("div", { class: "error", text: e.message }));
       return;
     }
+    if (!isLatestRequest(listBox, seq)) return;
     listBox.replaceChildren(
       dataTable(
         ["最終更新", "ユーザー", "スレッド", "発言数", "トークン累計"],
@@ -2178,6 +2216,7 @@ async function renderThreads(container, opts) {
 const STEP_LABELS = { user_message: "ユーザー", assistant_message: "AI", system_message: "システム", tool: "ツール", llm: "思考" };
 
 async function openThreadViewer(viewer, threadId, internal) {
+  const seq = nextRequestSeq(viewer);
   viewer.replaceChildren(el("p", { class: "hint", text: "読み込み中..." }));
   let detail, tokens;
   try {
@@ -2186,11 +2225,14 @@ async function openThreadViewer(viewer, threadId, internal) {
       api(monitorPath(`/threads/${encodeURIComponent(threadId)}/tokens`)),
     ]);
   } catch (e) {
-    viewer.replaceChildren(el("div", { class: "error", text: e.message }));
+    if (isLatestRequest(viewer, seq)) viewer.replaceChildren(el("div", { class: "error", text: e.message }));
     return;
   }
-  // ログが残っていればログの合計を使う。スレッドに保存された累計（token_usage_cumulative）は
-  // ターン完了時にしか保存されず、生成中に切断→再開すると 0 からやり直しになって少なく出るため。
+  // 別のスレッドを開き直した（または表示切替を重ねた）後に届いた古い応答は捨てる。
+  if (!isLatestRequest(viewer, seq)) return;
+  // ログが残っていればログの合計を使う。スレッドに保存された累計（token_usage_cumulative）は、
+  // 2026-10-08 の修正（LLM呼び出しごとの即時保存・圧縮処理分の加算）より前の会話では、
+  // 生成中の切断→再開で 0 からやり直しになったり圧縮処理分が抜けたりして少なく出るため。
   const pts = tokens.points;
   const fromLog = pts.length > 0;
   const cum = fromLog
@@ -2231,7 +2273,13 @@ async function openThreadViewer(viewer, threadId, internal) {
     el("section", { class: "monitor-section viewer-section" }, [
       el("div", { class: "section-head" }, [
         el("h3", { text: detail.name || detail.id }),
-        el("button", { text: "閉じる", onclick: () => viewer.replaceChildren() }),
+        el("button", {
+          text: "閉じる",
+          onclick: () => {
+            nextRequestSeq(viewer); // 読み込み中の応答で開き直さないように
+            viewer.replaceChildren();
+          },
+        }),
       ]),
       el("div", { class: "thread-meta hint" }, [
         `ユーザー: ${detail.owner} ／ 作成: ${fmtTime(detail.created_at)} ／ 最終更新: ${fmtTime(detail.updated_at)} ／ thread_id: ${detail.id}`,
@@ -2455,9 +2503,11 @@ async function renderLogs(container, opts) {
     const params = new URLSearchParams({ level: level.value, limit: 500 });
     if (search.value.trim()) params.set("q", search.value.trim());
     if (threadInput.value.trim()) params.set("thread_id", threadInput.value.trim());
+    const seq = nextRequestSeq(listBox);
     listBox.replaceChildren(el("p", { class: "hint", text: "読み込み中..." }));
     try {
       const data = await api(monitorPath(`/logs?${params}`));
+      if (!isLatestRequest(listBox, seq)) return;
       listBox.replaceChildren(
         ...data.entries.map((e) =>
           el("div", { class: `log-entry log-${e.level.toLowerCase()}` }, [
@@ -2471,7 +2521,7 @@ async function renderLogs(container, opts) {
       );
       if (!data.entries.length) listBox.append(el("p", { class: "hint", text: "該当するログはありません。" }));
     } catch (e) {
-      listBox.replaceChildren(el("div", { class: "error", text: e.message }));
+      if (isLatestRequest(listBox, seq)) listBox.replaceChildren(el("div", { class: "error", text: e.message }));
     }
   }
   level.addEventListener("change", load);

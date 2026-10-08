@@ -26,6 +26,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 RUNTIME_STATUS_FILENAME = "runtime_status.json"
+# 書き出しの PermissionError がこの回数連続したら警告する（run_writer_loop 参照）。
+_PERMISSION_FAILURES_BEFORE_WARNING = 3
 
 
 def now_iso() -> str:
@@ -61,14 +63,29 @@ async def run_writer_loop(path: Path, collect: Callable[[], dict], interval_seco
         interval_seconds: 収集間隔（秒）。
     """
     previous: dict | None = None
+    # Windows では管理ツールがファイルを読んでいる瞬間に os.replace すると
+    # PermissionError（WinError 5）になる。previous を更新しなければ次の周期で
+    # 書き直されるため、一時的な衝突では警告を出さない（警告ログは管理ツールの
+    # 「24時間の警告」件数や monitor-app-log の起票対象になるため）。
+    permission_failures = 0
     while True:
         try:
             snapshot = collect()
             if snapshot != previous:
                 write_atomic(path, {**snapshot, "updated_at": now_iso()})
                 previous = snapshot
+            permission_failures = 0
         except asyncio.CancelledError:
             raise
+        except PermissionError:
+            permission_failures += 1
+            logger.log(
+                logging.WARNING if permission_failures == _PERMISSION_FAILURES_BEFORE_WARNING else logging.DEBUG,
+                "実行状態ファイル %s の書き出しに失敗しました（%d回連続）",
+                path,
+                permission_failures,
+                exc_info=True,
+            )
         except Exception:  # noqa: BLE001 - 監視用の付帯機能のため本体の動作は止めない
             logger.warning("実行状態ファイル %s の書き出しに失敗しました", path, exc_info=True)
         await asyncio.sleep(interval_seconds)

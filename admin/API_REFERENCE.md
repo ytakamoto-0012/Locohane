@@ -432,7 +432,8 @@ $C "$BASE/api/instances/default/monitor/threads/<thread_id>?internal=false"
 $C "$BASE/api/instances/default/monitor/threads/<thread_id>/tokens"
 # アプリログ（level 以上を新しい順に。q・thread_id で絞り込み）
 $C "$BASE/api/instances/default/monitor/logs?level=WARNING&limit=200"
-# LLM接続先の到達確認（llama_cpp はスロット使用状況も）
+# LLM接続先の到達確認（llama_cpp はスロット使用状況も。/slots が無効なサーバーは
+# /health で到達を確認し、reachable=true のまま error にその旨が入る）
 $C "$BASE/api/instances/default/monitor/endpoints"
 ```
 

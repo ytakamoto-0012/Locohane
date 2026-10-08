@@ -167,8 +167,10 @@ def list_threads(
         where.append("owner = ?")
         params.append(owner)
     if query:
-        where.append("(name LIKE ? OR id LIKE ?)")
-        params += [f"%{query}%", f"%{query}%"]
+        # "_" や "%" を含む検索語がワイルドカードとして働かないようエスケープする。
+        pattern = "%" + re.sub(r"([\\%_])", r"\\\1", query) + "%"
+        where.append("(name LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\')")
+        params += [pattern, pattern]
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     with closing(_connect(db_path)) as conn:
         total = conn.execute(f"SELECT COUNT(*) FROM threads {where_sql}", params).fetchone()[0]
@@ -268,6 +270,17 @@ def _log_files(log_dir: Path) -> list[Path]:
     return sorted(log_dir.glob("app_*.log"))
 
 
+def _read_lines(path: Path):
+    """ログファイルの行を返す。一覧取得後に消えた（本体の retention_days による
+    削除等）・読めないファイルは空として扱う（1ファイルの失敗で画面全体を
+    エラーにしないため）。"""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            yield from f
+    except OSError:
+        return
+
+
 def token_history(log_dir: Path, thread_id: str) -> list[dict]:
     """そのスレッドの LLM 呼び出しごとのトークン使用量を時系列で返す。
 
@@ -297,82 +310,80 @@ def token_history(log_dir: Path, thread_id: str) -> list[dict]:
     cum_main = 0
     pending_compaction = False
     for path in _log_files(log_dir):
-        with path.open("r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if thread_id not in line:
+        for line in _read_lines(path):
+            if thread_id not in line:
+                continue
+            if compaction_done_needle in line:
+                pending_compaction = True
+                continue
+            head = _LOG_LINE_RE.match(line.rstrip("\n"))
+            if not head:
+                continue
+            ts = head.group(1).replace(" ", "T")
+            if token_needle in line:
+                m = _TOKEN_RE.search(line)
+                if not m or m.group(1) != thread_id:
                     continue
-                if compaction_done_needle in line:
-                    pending_compaction = True
-                    continue
-                head = _LOG_LINE_RE.match(line.rstrip("\n"))
-                if not head:
-                    continue
-                ts = head.group(1).replace(" ", "T")
-                if token_needle in line:
-                    m = _TOKEN_RE.search(line)
-                    if not m or m.group(1) != thread_id:
-                        continue
-                    v = [int(x) for x in m.groups()[1:]]
-                    call_total, main_logged = v[2], v[11]
-                    # 圧縮・再開でカウンタが 0 に戻った直後は main_logged == call_total になる。
-                    is_main = (
-                        prev_main_logged is None
-                        or main_logged == prev_main_logged + call_total
-                        or main_logged == call_total
-                    )
-                    prev_main_logged = main_logged
-                    kind = "main" if is_main else "sub"
-                    call_in, call_out, turn_total = v[0], v[1], v[5]
-                elif compaction_usage_needle in line and "圧縮処理トークン使用量" in line:
-                    m = _COMPACTION_USAGE_RE.search(line)
-                    if not m:
-                        continue
-                    kind = "compaction"
-                    call_in, call_out, call_total = int(m.group(3)), int(m.group(4)), int(m.group(5))
-                    turn_total = None
-                else:
-                    continue
-                cum_all += call_total
-                if kind == "main":
-                    cum_main += call_total
-                points.append(
-                    {
-                        "ts": ts,
-                        "kind": kind,
-                        "is_sub": kind == "sub",
-                        "call_in": call_in,
-                        "call_out": call_out,
-                        "call_total": call_total,
-                        "turn_total": turn_total,
-                        "cumulative_total": cum_all,
-                        "cumulative_main_total": cum_main,
-                        "compacted": pending_compaction,
-                    }
+                v = [int(x) for x in m.groups()[1:]]
+                call_total, main_logged = v[2], v[11]
+                # 圧縮・再開でカウンタが 0 に戻った直後は main_logged == call_total になる。
+                is_main = (
+                    prev_main_logged is None
+                    or main_logged == prev_main_logged + call_total
+                    or main_logged == call_total
                 )
-                pending_compaction = False
+                prev_main_logged = main_logged
+                kind = "main" if is_main else "sub"
+                call_in, call_out, turn_total = v[0], v[1], v[5]
+            elif compaction_usage_needle in line and "圧縮処理トークン使用量" in line:
+                m = _COMPACTION_USAGE_RE.search(line)
+                if not m:
+                    continue
+                kind = "compaction"
+                call_in, call_out, call_total = int(m.group(3)), int(m.group(4)), int(m.group(5))
+                turn_total = None
+            else:
+                continue
+            cum_all += call_total
+            if kind == "main":
+                cum_main += call_total
+            points.append(
+                {
+                    "ts": ts,
+                    "kind": kind,
+                    "is_sub": kind == "sub",
+                    "call_in": call_in,
+                    "call_out": call_out,
+                    "call_total": call_total,
+                    "turn_total": turn_total,
+                    "cumulative_total": cum_all,
+                    "cumulative_main_total": cum_main,
+                    "compacted": pending_compaction,
+                }
+            )
+            pending_compaction = False
     return points
 
 
 def _parse_log_entries(path: Path) -> list[dict]:
     """1ファイル分のログを、複数行のエントリ（トレースバック等）をまとめた形で返す。"""
     entries: list[dict] = []
-    with path.open("r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            m = _LOG_LINE_RE.match(line)
-            if m:
-                entries.append(
-                    {
-                        "ts": m.group(1).replace(" ", "T"),
-                        "thread_id": None if m.group(2) == "-" else m.group(2),
-                        "level": m.group(3),
-                        "logger": m.group(4),
-                        "message": m.group(5),
-                        "file": path.name,
-                    }
-                )
-            elif entries:
-                entries[-1]["message"] += "\n" + line
+    for line in _read_lines(path):
+        line = line.rstrip("\n")
+        m = _LOG_LINE_RE.match(line)
+        if m:
+            entries.append(
+                {
+                    "ts": m.group(1).replace(" ", "T"),
+                    "thread_id": None if m.group(2) == "-" else m.group(2),
+                    "level": m.group(3),
+                    "logger": m.group(4),
+                    "message": m.group(5),
+                    "file": path.name,
+                }
+            )
+        elif entries:
+            entries[-1]["message"] += "\n" + line
     return entries
 
 
@@ -460,11 +471,17 @@ def probe_endpoints(cfg, timeout_seconds: float = 2.0) -> list[dict]:
             try:
                 if ep.provider == "llama_cpp":
                     resp = client.get(f"{_server_root(ep.base_url)}/slots")
-                    resp.raise_for_status()
-                    slots = resp.json()
-                    if isinstance(slots, list):
-                        probe.slots_total = len(slots)
-                        probe.slots_busy = sum(1 for s in slots if isinstance(s, dict) and s.get("is_processing"))
+                    if resp.is_error:
+                        # --no-slots で起動したサーバーは /slots が 501 になるが、サーバー自体は
+                        # 動いている。到達可否は /health で判断する（スロット数は不明のまま）。
+                        slots_status = resp.status_code
+                        client.get(f"{_server_root(ep.base_url)}/health").raise_for_status()
+                        probe.error = f"GET /slots が HTTP {slots_status} のためスロット使用状況は不明"
+                    else:
+                        slots = resp.json()
+                        if isinstance(slots, list):
+                            probe.slots_total = len(slots)
+                            probe.slots_busy = sum(1 for s in slots if isinstance(s, dict) and s.get("is_processing"))
                 else:
                     resp = client.get(f"{ep.base_url.rstrip('/')}/models", headers={"Authorization": f"Bearer {ep.api_key}"})
                     resp.raise_for_status()

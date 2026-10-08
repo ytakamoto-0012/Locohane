@@ -191,3 +191,146 @@ def test_runtime_status_writer_writes_only_on_change(tmp_path: Path):
     assert json.loads(path.read_text(encoding="utf-8"))["sessions"] == [2]
     runtime_status.remove(path)
     assert not path.exists()
+
+
+def test_runtime_status_writer_retries_transient_permission_error_without_warning(tmp_path: Path, caplog):
+    # Windows では管理ツールが読んでいる瞬間の os.replace が PermissionError になる。
+    # 一時的な衝突は警告せず、次の周期で同じ内容を書き直す。
+    path = tmp_path / runtime_status.RUNTIME_STATUS_FILENAME
+    snapshots = [{"sessions": [1]}, {"sessions": [1]}]
+    attempts: list[dict] = []
+    original = runtime_status.write_atomic
+
+    def flaky(p, data):
+        attempts.append(data)
+        if len(attempts) == 1:
+            raise PermissionError(13, "Access is denied")
+        original(p, data)
+
+    def collect():
+        if not snapshots:
+            raise asyncio.CancelledError
+        return snapshots.pop(0)
+
+    async def run():
+        with pytest.raises(asyncio.CancelledError):
+            await runtime_status.run_writer_loop(path, collect, 0)
+
+    import logging
+    import unittest.mock
+
+    with caplog.at_level(logging.DEBUG, logger="src.runtime_status"), unittest.mock.patch.object(
+        runtime_status, "write_atomic", flaky
+    ):
+        asyncio.run(run())
+    assert len(attempts) == 2
+    assert json.loads(path.read_text(encoding="utf-8"))["sessions"] == [1]
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_runtime_status_writer_warns_on_persistent_permission_error(tmp_path: Path, caplog):
+    path = tmp_path / runtime_status.RUNTIME_STATUS_FILENAME
+    snapshots = [{"sessions": [1]}] * 5
+
+    def always_denied(p, data):
+        raise PermissionError(13, "Access is denied")
+
+    def collect():
+        if not snapshots:
+            raise asyncio.CancelledError
+        return snapshots.pop(0)
+
+    async def run():
+        with pytest.raises(asyncio.CancelledError):
+            await runtime_status.run_writer_loop(path, collect, 0)
+
+    import logging
+    import unittest.mock
+
+    with caplog.at_level(logging.DEBUG, logger="src.runtime_status"), unittest.mock.patch.object(
+        runtime_status, "write_atomic", always_denied
+    ):
+        asyncio.run(run())
+    # 連続失敗が閾値に達した1回だけ警告する（毎周期は出さない）。
+    assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
+
+
+def test_list_threads_query_treats_wildcards_literally(thread_db: Path):
+    conn = sqlite3.connect(thread_db)
+    conn.execute("INSERT INTO threads VALUES ('t3','carol','a_b','2026-10-01T00:00:00','2026-10-01T03:00:00','{}',NULL)")
+    conn.execute("INSERT INTO threads VALUES ('t4','carol','axb','2026-10-01T00:00:00','2026-10-01T04:00:00','{}',NULL)")
+    conn.execute("INSERT INTO threads VALUES ('t5','carol','100%達成','2026-10-01T00:00:00','2026-10-01T05:00:00','{}',NULL)")
+    conn.commit()
+    conn.close()
+    assert [t["id"] for t in monitor.list_threads(thread_db, query="a_b")["threads"]] == ["t3"]
+    assert [t["id"] for t in monitor.list_threads(thread_db, query="%")["threads"]] == ["t5"]
+
+
+def test_log_readers_skip_file_deleted_after_listing(tmp_path: Path, monkeypatch):
+    # 一覧取得後に本体の retention_days 削除等でファイルが消えても、画面全体をエラーにしない。
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "app_20261001_000000.log").write_text(
+        "2026-10-01 00:00:01,1 [thread=t1] WARNING x: warn\n", encoding="utf-8"
+    )
+    gone = log_dir / "app_20261002_000000.log"
+    original = monitor._log_files
+    monkeypatch.setattr(monitor, "_log_files", lambda d: [*original(d), gone])
+    assert [e["message"] for e in monitor.tail_log(log_dir)] == ["warn"]
+    assert monitor.token_history(log_dir, "t1") == []
+    assert monitor.recent_level_counts(log_dir, hours=24 * 365 * 100)["WARNING"] == 1
+
+
+class _FakeLlamaServer:
+    """probe_endpoints 用の httpx.MockTransport ハンドラ。"""
+
+    def __init__(self, slots_status: int, health_status: int = 200):
+        self.slots_status = slots_status
+        self.health_status = health_status
+
+    def __call__(self, request):
+        import httpx
+
+        if request.url.path == "/slots":
+            if self.slots_status != 200:
+                return httpx.Response(self.slots_status, json={"error": "not supported"})
+            return httpx.Response(200, json=[{"is_processing": True}, {"is_processing": False}])
+        if request.url.path == "/health":
+            return httpx.Response(self.health_status, json={"status": "ok"})
+        return httpx.Response(404)
+
+
+def _probe_with(handler):
+    import types
+    import unittest.mock
+
+    import httpx
+
+    from src.config import LLMEndpoint
+
+    ep = LLMEndpoint(base_url="http://llm.local:8080/v1", model="m", api_key="x", start=None, end=None, provider="llama_cpp")
+    cfg = types.SimpleNamespace(main_endpoints=(ep,), sub_endpoints=(ep,), sub_endpoints_inherit_main=True)
+    real_client = httpx.Client
+    with unittest.mock.patch.object(
+        monitor.httpx, "Client", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
+    ):
+        return monitor.probe_endpoints(cfg)[0]
+
+
+def test_probe_endpoints_reports_slots():
+    probe = _probe_with(_FakeLlamaServer(200))
+    assert probe["reachable"] is True
+    assert (probe["slots_busy"], probe["slots_total"]) == (1, 2)
+
+
+def test_probe_endpoints_server_without_slots_endpoint_is_still_reachable():
+    # --no-slots で起動した llama-server は /slots が 501 だが、サーバー自体は動いている。
+    probe = _probe_with(_FakeLlamaServer(501))
+    assert probe["reachable"] is True
+    assert probe["slots_total"] is None
+    assert "501" in probe["error"]
+
+
+def test_probe_endpoints_unhealthy_server_is_unreachable():
+    probe = _probe_with(_FakeLlamaServer(501, health_status=503))
+    assert probe["reachable"] is False
