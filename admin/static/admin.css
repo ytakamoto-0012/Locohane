@@ -233,6 +233,13 @@ select.le-type { width: auto; padding: 4px; font-size: 12px; flex-shrink: 0; }
 
 /* モニター（稼働状況・会話閲覧・トークン推移・ログ） */
 .card-activity { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+.card-context:not(:empty) { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 10px; }
+.card-context-title { font-size: 11px; color: var(--text-dim); margin-bottom: 2px; }
+.card-context-legend { flex-wrap: wrap; gap: 4px 10px; font-size: 11px; }
+.card-context-legend .legend-item { max-width: 100%; min-width: 0; }
+.card-context-legend .legend-line { flex-shrink: 0; }
+.card-context-legend .legend-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 12em; }
+.card-chart-text { font-size: 10px; }
 .card-stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; min-width: 0; }
 .card-stat-value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .card-stat-label { font-size: 11px; color: var(--text-dim); }

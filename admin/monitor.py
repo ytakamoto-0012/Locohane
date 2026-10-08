@@ -281,6 +281,89 @@ def _read_lines(path: Path):
         return
 
 
+def _is_main_call(prev_main_logged: int | None, main_logged: int, call_total: int) -> bool:
+    """「トークン使用量」行がメインエージェントの呼び出しか（サブエージェント内部なら False）。
+
+    ログの cumulative_main が呼び出し分だけ増えていればメイン。圧縮・再開で
+    カウンタが 0 に戻った直後は main_logged == call_total になる。
+    """
+    return prev_main_logged is None or main_logged in (prev_main_logged + call_total, call_total)
+
+
+def _local_log_ts(iso: str | None) -> str | None:
+    """runtime_status.json の UTC 時刻を、アプリログと同じローカル時刻の "YYYY-MM-DDTHH:MM:SS" へ。"""
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime("%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
+
+
+def live_context_series(log_dir: Path, generating: list[dict]) -> list[dict]:
+    """生成中スレッドごとに、今回の生成開始以降の LLM リクエストの入力トークンを返す。
+
+    インスタンス一覧のカードのグラフ用。各点の value は「そのスレッドで今
+    処理しているコンテキストのうち最大のもの」で、メインの直近の入力と、
+    直近のメイン呼び出し以降のサブエージェント（並列委譲を含む）・圧縮処理の
+    入力の最大値をとる。ログ行にはサブエージェントの識別子が無いため、
+    メインが再び呼ばれた時点でサブ側はすべて終わったものとして捨てる。
+
+    5秒おきに呼ばれるため、生成開始より前に更新が止まったログファイルは読まない。
+
+    Args:
+        generating: summarize_runtime() の generating（thread_id・started_at を使う）。
+    """
+    starts = {g["thread_id"]: _local_log_ts(g.get("started_at")) for g in generating if g.get("thread_id")}
+    starts = {tid: ts for tid, ts in starts.items() if ts}
+    if not starts:
+        return []
+    cutoff = datetime.fromisoformat(min(starts.values())).timestamp()
+    state = {tid: {"prev_main_logged": None, "main_in": None, "sub_max": None, "points": []} for tid in starts}
+    for path in _log_files(log_dir):
+        try:
+            if path.stat().st_mtime < cutoff:
+                continue
+        except OSError:
+            continue
+        for line in _read_lines(path):
+            if "トークン使用量" not in line:
+                continue
+            head = _LOG_LINE_RE.match(line.rstrip("\n"))
+            if not head:
+                continue
+            ts = head.group(1).replace(" ", "T")
+            m = _TOKEN_RE.search(line)
+            if m:
+                tid = m.group(1)
+                st = state.get(tid)
+                if st is None:
+                    continue
+                v = [int(x) for x in m.groups()[1:]]
+                call_in, call_total, main_logged = v[0], v[2], v[11]
+                # 生成開始より前の行も、メイン／サブの判定（直前の cumulative_main）のために読む。
+                kind = "main" if _is_main_call(st["prev_main_logged"], main_logged, call_total) else "sub"
+                st["prev_main_logged"] = main_logged
+            else:
+                m = _COMPACTION_USAGE_RE.search(line)
+                tid = head.group(2)
+                st = state.get(tid)
+                if not m or st is None:
+                    continue
+                kind, call_in = "compaction", int(m.group(3))
+            if ts < starts[tid]:
+                continue
+            if kind == "main":
+                st["main_in"], st["sub_max"] = call_in, None
+            else:
+                st["sub_max"] = max(st["sub_max"] or 0, call_in)
+            value = max(st["main_in"] or 0, st["sub_max"] or 0)
+            st["points"].append({"ts": ts, "kind": kind, "call_in": call_in, "value": value})
+    return [
+        {"thread_id": tid, "started_at": starts[tid], "points": st["points"]} for tid, st in state.items()
+    ]
+
+
 def token_history(log_dir: Path, thread_id: str) -> list[dict]:
     """そのスレッドの LLM 呼び出しごとのトークン使用量を時系列で返す。
 
@@ -326,14 +409,8 @@ def token_history(log_dir: Path, thread_id: str) -> list[dict]:
                     continue
                 v = [int(x) for x in m.groups()[1:]]
                 call_total, main_logged = v[2], v[11]
-                # 圧縮・再開でカウンタが 0 に戻った直後は main_logged == call_total になる。
-                is_main = (
-                    prev_main_logged is None
-                    or main_logged == prev_main_logged + call_total
-                    or main_logged == call_total
-                )
+                kind = "main" if _is_main_call(prev_main_logged, main_logged, call_total) else "sub"
                 prev_main_logged = main_logged
-                kind = "main" if is_main else "sub"
                 call_in, call_out, turn_total = v[0], v[1], v[5]
             elif compaction_usage_needle in line and "圧縮処理トークン使用量" in line:
                 m = _COMPACTION_USAGE_RE.search(line)

@@ -242,7 +242,157 @@ async function refreshCardActivity() {
       cardStat("24時間の警告", fmtNum(lc.WARNING || 0), `ERROR ${fmtNum(lc.ERROR || 0)} / CRITICAL ${fmtNum(lc.CRITICAL || 0)}`),
     ];
     box.replaceChildren(...tiles);
+    renderCardContextChart(card.querySelector(".card-context"), item);
   }
+}
+
+/* --- カードの「生成中スレッドの入力トークン」グラフ --- */
+
+// 濃色パネル上で検証済みのカテゴリ色（dataviz の既定パレット・濃色版）。先頭3色は SERIES_* と同じ。
+const THREAD_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
+// "<インスタンス名>/<thread_id>" -> 色番号。生成中の間は同じ色を使い続ける
+// （他のスレッドの生成が終わっても色を詰め直さない）。
+const threadColorSlots = new Map();
+
+function assignThreadColors(instance, threadIds) {
+  const prefix = `${instance}/`;
+  const keep = new Set(threadIds.map((t) => prefix + t));
+  for (const key of [...threadColorSlots.keys()]) {
+    if (key.startsWith(prefix) && !keep.has(key)) threadColorSlots.delete(key);
+  }
+  const used = new Set([...threadColorSlots].filter(([k]) => k.startsWith(prefix)).map(([, v]) => v));
+  for (const t of threadIds) {
+    const key = prefix + t;
+    if (threadColorSlots.has(key)) continue;
+    const free = THREAD_COLORS.findIndex((_, i) => !used.has(i));
+    if (free < 0) continue; // 色が足りない分は描かない（色を使い回すと区別できないため）
+    threadColorSlots.set(key, free);
+    used.add(free);
+  }
+}
+
+function renderCardContextChart(box, item) {
+  const series = item.available ? item.context_series || [] : [];
+  const sig = JSON.stringify(series);
+  if (box.dataset.sig === sig) return; // 変化がなければ描き直さない（ホバー中のツールチップを消さないため）
+  box.dataset.sig = sig;
+  if (!series.length) {
+    box.replaceChildren();
+    return;
+  }
+  assignThreadColors(item.name, series.map((s) => s.thread_id));
+  const drawn = [];
+  let hidden = 0;
+  for (const s of series) {
+    const slot = threadColorSlots.get(`${item.name}/${s.thread_id}`);
+    if (slot === undefined) hidden++;
+    else drawn.push({ ...s, color: THREAD_COLORS[slot], label: s.thread_name || s.thread_id, owner: s.owner || "（不明）" });
+  }
+  drawn.sort((a, b) => THREAD_COLORS.indexOf(a.color) - THREAD_COLORS.indexOf(b.color));
+  box.replaceChildren(
+    ...[
+      el("div", { class: "card-context-title", text: "LLMリクエストごとの入力トークン" }),
+      contextMiniChart(drawn),
+      hidden ? el("div", { class: "hint", text: `ほか ${hidden} スレッドは色の上限のため非表示` }) : null,
+    ].filter(Boolean) // replaceChildren は null を "null" という文字列として挿入するため除く
+  );
+}
+
+// ツールチップに出すスレッド名（＝多くは最初の指示文）の最大文字数。カードの幅からはみ出さないように。
+const CONTEXT_TOOLTIP_LABEL_MAX = 20;
+
+function truncateText(text, max) {
+  const chars = [...(text || "")];
+  return chars.length > max ? `${chars.slice(0, max).join("")}…` : chars.join("");
+}
+
+// x = 時刻（スレッドごとに呼び出し時刻が異なるため）、y = 入力トークン。
+function contextMiniChart(series) {
+  const W = 300, H = 130, M = { top: 8, right: 10, bottom: 20, left: 38 };
+  const iw = W - M.left - M.right, ih = H - M.top - M.bottom;
+  const toMs = (ts) => new Date(ts).getTime();
+  for (const s of series) s.pts = s.points.map((p) => ({ ...p, t: toMs(p.ts) }));
+  const all = series.flatMap((s) => s.pts);
+  const tMin = Math.min(...series.map((s) => toMs(s.started_at)), ...all.map((p) => p.t));
+  const tMax = Math.max(tMin + 1000, ...all.map((p) => p.t));
+  const ticks = niceTicks(Math.max(1, ...all.map((p) => p.value)), 3);
+  const top = ticks[ticks.length - 1];
+  const x = (t) => M.left + ((t - tMin) / (tMax - tMin)) * iw;
+  const y = (v) => M.top + ih - (v / top) * ih;
+  const hhmm = (t) => new Date(t).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart-svg", role: "img", "aria-label": "生成中スレッドのLLMリクエストごとの入力トークン" });
+  for (const t of ticks) {
+    svg.append(svgEl("line", { x1: M.left, x2: W - M.right, y1: y(t), y2: y(t), class: t === 0 ? "chart-baseline" : "chart-grid" }));
+    const label = svgEl("text", { x: M.left - 6, y: y(t) + 4, "text-anchor": "end", class: "chart-axis-text card-chart-text" });
+    label.textContent = fmtCompact(t);
+    svg.append(label);
+  }
+  for (const [t, anchor] of [[tMin, "start"], [tMax, "end"]]) {
+    const label = svgEl("text", { x: x(t), y: H - 5, "text-anchor": anchor, class: "chart-axis-text card-chart-text" });
+    label.textContent = hhmm(t);
+    svg.append(label);
+  }
+  for (const s of series) {
+    if (s.pts.length > 1) {
+      const d = s.pts.map((p, k) => `${k ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.value).toFixed(1)}`).join("");
+      svg.append(svgEl("path", { d, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    }
+    // 現在値（最後の点）だけ強調する。
+    const last = s.pts[s.pts.length - 1];
+    if (last) svg.append(svgEl("circle", { cx: x(last.t), cy: y(last.value), r: 4, fill: s.color, stroke: "var(--panel)", "stroke-width": 2 }));
+  }
+  const cross = svgEl("line", { y1: M.top, y2: M.top + ih, class: "chart-crosshair", visibility: "hidden" });
+  svg.append(cross);
+  const hit = svgEl("rect", { x: M.left, y: M.top, width: iw, height: ih, fill: "transparent" });
+  svg.append(hit);
+
+  const tooltip = el("div", { class: "chart-tooltip hidden" });
+  const box = el("div", { class: "chart-box" }, [svg, tooltip]);
+  hit.addEventListener("pointermove", (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const sx = ((ev.clientX - rect.left) / rect.width) * W;
+    const t = tMin + (Math.max(0, Math.min(iw, sx - M.left)) / iw) * (tMax - tMin);
+    cross.setAttribute("x1", x(t));
+    cross.setAttribute("x2", x(t));
+    cross.setAttribute("visibility", "visible");
+    const rows = [el("div", { class: "hint", text: new Date(t).toLocaleTimeString("ja-JP") })];
+    for (const s of series) {
+      // その時刻までの最後のリクエストの値（まだ呼び出しが無ければ出さない）。
+      const p = s.pts.filter((q) => q.t <= t).pop();
+      if (!p) continue;
+      rows.push(
+        el("div", { class: "tt-row" }, [
+          el("span", { class: "tt-key", style: `background:${s.color}` }),
+          el("strong", { text: fmtNum(p.value) }),
+          el("span", { text: s.owner }),
+          el("span", { class: "hint", text: truncateText(s.label, CONTEXT_TOOLTIP_LABEL_MAX) }),
+        ])
+      );
+    }
+    tooltip.replaceChildren(...rows);
+    tooltip.classList.remove("hidden");
+    const px = ((sx / W) * rect.width);
+    tooltip.style.left = `${px + 12 + tooltip.offsetWidth > rect.width ? Math.max(0, px - 12 - tooltip.offsetWidth) : px + 12}px`;
+    tooltip.style.top = "4px";
+  });
+  hit.addEventListener("pointerleave", () => {
+    cross.setAttribute("visibility", "hidden");
+    tooltip.classList.add("hidden");
+  });
+
+  const legend = el(
+    "div",
+    { class: "chart-legend card-context-legend" },
+    series.map((s) =>
+      el("span", { class: "legend-item", title: `${s.owner}: ${s.label}\n現在 ${fmtNum(s.pts.length ? s.pts[s.pts.length - 1].value : null)} トークン` }, [
+        el("span", { class: "legend-line", style: `background:${s.color}` }),
+        el("span", { class: "legend-text", text: s.label }),
+      ])
+    )
+  );
+  const empty = all.length ? null : el("div", { class: "hint", text: "まだLLMリクエストがありません" });
+  return el("div", {}, [legend, box, empty]);
 }
 
 function cardStat(label, value, sub) {

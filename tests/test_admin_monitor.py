@@ -54,6 +54,42 @@ def test_token_history_cumulative_never_drops_and_marks_real_compaction(tmp_path
     assert points[0]["ts"] == "2026-10-01T00:00:01"
 
 
+def test_live_context_series_takes_max_of_main_and_subs_since_generation_start(tmp_path: Path):
+    from datetime import datetime
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    tid = "t-1"
+    (log_dir / "app_20261001_000000.log").write_text(
+        # 生成開始より前（メイン／サブ判定の基準にだけ使い、点には出さない）
+        _token_line("2026-10-01 00:00:01", tid, 100, 110, 110)
+        # ここから今回の生成。メイン 300
+        + _token_line("2026-10-01 00:00:10", tid, 300, 420, 420)
+        # 並列サブ 2 本（cumulative_main は増えない）: 500, 200
+        + _token_line("2026-10-01 00:00:11", tid, 500, 930, 420)
+        + _token_line("2026-10-01 00:00:12", tid, 200, 1140, 420)
+        + _token_line("2026-10-01 00:00:13", "other", 999, 999, 999)
+        # メインに戻るとサブの値は捨てる
+        + _token_line("2026-10-01 00:00:14", tid, 350, 1500, 780)
+        + f"2026-10-01 00:00:15,1 [thread={tid}] INFO src.context_compaction: "
+        "圧縮処理トークン使用量 kind=summary role=main call(in=900,out=50,total=950)\n",
+        encoding="utf-8",
+    )
+    started_utc = datetime(2026, 10, 1, 0, 0, 5).astimezone().isoformat()
+    series = monitor.live_context_series(
+        log_dir,
+        [{"thread_id": tid, "started_at": started_utc}, {"thread_id": "no-calls", "started_at": started_utc}],
+    )
+    by_id = {s["thread_id"]: s for s in series}
+    points = by_id[tid]["points"]
+    assert [p["kind"] for p in points] == ["main", "sub", "sub", "main", "compaction"]
+    assert [p["call_in"] for p in points] == [300, 500, 200, 350, 900]
+    assert [p["value"] for p in points] == [300, 500, 500, 350, 900]
+    assert points[0]["ts"] == "2026-10-01T00:00:10"
+    assert by_id["no-calls"]["points"] == []
+    assert monitor.live_context_series(log_dir, []) == []
+
+
 def test_compaction_usage_log_format_matches_monitor_parser(caplog):
     # src/context_compaction.py が出す行を admin/monitor.py が読めること（形式の取り決め）。
     from types import SimpleNamespace

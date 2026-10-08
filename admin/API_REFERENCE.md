@@ -418,7 +418,9 @@ rem インスタンス専用画像を削除して共通に戻す（instance 必�
 `conversation_view` として記録する。
 
 ```bash
-# 全インスタンスの接続中ユーザー・セッション数・生成中スレッド数
+# 全インスタンスの接続中ユーザー・セッション数・生成中スレッド数。context_series に
+# 生成中スレッドごとの今回の生成開始以降のLLMリクエストの入力トークン
+# （points[].value はメイン直近とその後のサブ・圧縮処理の最大値）
 $C "$BASE/api/monitor/overview"
 # 1インスタンスの詳細（接続中セッション・生成中スレッド・直近24時間の警告件数）
 $C "$BASE/api/instances/default/monitor/runtime"

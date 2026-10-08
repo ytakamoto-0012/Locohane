@@ -889,6 +889,11 @@ def get_monitor_overview(user: str = Depends(require_login)):
         except monitor.MonitorError:
             continue
         view = _runtime_view(name, cfg)
+        generating = {g.get("thread_id"): g for g in view["generating"]}
+        context_series = [
+            {**s, "thread_name": generating[s["thread_id"]].get("thread_name"), "owner": generating[s["thread_id"]].get("owner")}
+            for s in monitor.live_context_series(cfg.log_dir, view["generating"])
+        ]
         result.append(
             {
                 "name": name,
@@ -899,6 +904,8 @@ def get_monitor_overview(user: str = Depends(require_login)):
                 "generating": len(view["generating"]),
                 "waiting": sum(1 for g in view["generating"] if g.get("waiting_for_user")),
                 "log_counts_24h": monitor.recent_level_counts(cfg.log_dir),
+                # 生成中スレッドごとの LLM リクエストの入力トークン（メイン・サブの最大値）。
+                "context_series": context_series,
             }
         )
     return {"instances": result}
