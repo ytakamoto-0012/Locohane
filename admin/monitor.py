@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -137,11 +137,24 @@ def summarize_runtime(status: dict | None, thread_names: dict[str, str | None]) 
 # ---------------------------------------------------------------------------
 
 
+def _sqlite_ro_uri(db_path: Path) -> str:
+    """SQLite に読み取り専用で開かせる file: URI を返す。
+
+    Path.as_uri() は UNC パス（\\\\server\\share\\...）を file://server/share/... と
+    ホスト名を authority に置いた形にするが、SQLite は authority に localhost
+    以外を許さず「invalid uri authority」で開けない。authority を空にして
+    パス側に //server/share/... を入れる file:////server/share/... の形にする。
+    """
+    posix = db_path.as_posix()
+    prefix = "file://" if posix.startswith("/") else "file:///"
+    return f"{prefix}{quote(posix, safe='/:')}?mode=ro"
+
+
 def _connect(db_path: Path) -> sqlite3.Connection:
     if not db_path.is_file():
         raise MonitorError(f"スレッドDBがありません: {db_path}（[thread_store] enabled=false、または未使用）")
     # 本体が書き込み中のDBを読むため、読み取り専用で開き、ロック待ちも許す。
-    conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True, timeout=5)
+    conn = sqlite3.connect(_sqlite_ro_uri(db_path), uri=True, timeout=5)
     conn.row_factory = sqlite3.Row
     return conn
 

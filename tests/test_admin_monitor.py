@@ -202,6 +202,14 @@ def test_list_threads_and_user_summary(thread_db: Path):
     assert summary["bob"]["threads"] == 1
 
 
+def test_sqlite_ro_uri_keeps_authority_empty_for_unc_path():
+    # Path.as_uri() の file://server/... は SQLite が「invalid uri authority」で拒否する。
+    unc = monitor._sqlite_ro_uri(Path(r"\\fileserver\share$\data\chat_threads.sqlite"))
+    assert unc == "file:////fileserver/share%24/data/chat_threads.sqlite?mode=ro"
+    local = monitor._sqlite_ro_uri(Path(r"C:\data\a b#c.sqlite"))
+    assert local == "file:///C:/data/a%20b%23c.sqlite?mode=ro"
+
+
 def test_summarize_runtime_groups_by_user():
     status = {
         "pid": 1,
