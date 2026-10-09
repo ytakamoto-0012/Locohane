@@ -40,8 +40,9 @@ from pathlib import Path
 # run_script 用の別環境（このファイル自身を実行している環境）であり、
 # evals.run_case 等 Locohane 本体のモジュールを import できるとは限らない
 # ため区別する。python_env.bat が設定する LOCOHANE_PYTHON（本体起動時に
-# 継承される）をデフォルトにし、未設定なら自身の Python を使う。
-# 各スクリプトは --python-exe で上書きできるようにする。
+# 継承される）を使い、未設定なら自身の Python を使う。評価プロセスは書き込み
+# ガードを外して起動する（_eval_env）ため、LLM が引数で任意の実行ファイルを
+# 指定できないよう、上書き用の引数は設けない。
 DEFAULT_MAIN_PYTHON = os.environ.get("LOCOHANE_PYTHON") or sys.executable
 
 # src/skill_drafts.py と同じ名前（本体を import しないため値を複製している）。
@@ -63,8 +64,10 @@ _OTHER_USER_OPS = {
 }
 _OP_LABELS = {"list": "一覧表示", "read": "読み取り", "exec": "実行", "write": "書き込み・評価"}
 
-# ハッシュ・コピーの対象から外すもの（来歴・ケース・キャッシュはスキル本体ではない）。
-_TREE_EXCLUDE = {DRAFT_META_FILENAME, DRAFT_EVALS_DIRNAME, "__pycache__"}
+# ハッシュ・コピーの対象から外すもの（evals/skill_tree.py と同じ規則）。直下の
+# 来歴・ケースと、全階層のキャッシュはスキル本体ではない。
+_TOP_LEVEL_EXCLUDE = frozenset({DRAFT_META_FILENAME, DRAFT_EVALS_DIRNAME})
+_ANY_LEVEL_EXCLUDE = frozenset({"__pycache__"})
 
 
 class SkillCreatorError(Exception):
@@ -253,34 +256,71 @@ def write_meta(ref: DraftRef, meta: dict) -> None:
 
 
 def touch_meta(ctx: DraftContext, ref: DraftRef, **updates) -> dict:
-    """最終編集者・更新日時（と updates）を meta に反映して返す。"""
+    """ドラフトの中身（スキル本体・ケース）を変更したときに呼び、meta を更新して返す。
+
+    最終編集者・更新日時（と updates）を反映するほか、次の2つを行う:
+    - スキル安定化トライアウトの記録（tryouts）を空にする。中身が変われば
+      それまでの合格回数は今のドラフトの根拠にならないため、0から数え直す。
+    - 差し戻し（promote-skill が status=returned にする）中なら status を
+      draft に戻す。修正すれば再び昇格の候補になる（不採用の rejected は戻さない）。
+    """
     meta = read_meta(ref)
     meta.update(updates)
     meta["last_editor"] = ctx.user
     meta["updated_at"] = now_iso()
+    if meta.get("tryouts"):
+        meta["tryouts"] = []
+        meta["tryouts_reset_at"] = meta["updated_at"]
+    if meta.get("status") == "returned":
+        meta["status"] = "draft"
+        meta["resubmitted_at"] = meta["updated_at"]
     write_meta(ref, meta)
     return meta
 
 
-def tree_sha256(skill_dir: Path) -> str:
-    """スキルフォルダの中身のハッシュ（来歴・evals・キャッシュは除く）。
+def _excluded(rel_parts: tuple[str, ...]) -> bool:
+    return rel_parts[0] in _TOP_LEVEL_EXCLUDE or any(part in _ANY_LEVEL_EXCLUDE for part in rel_parts)
 
-    改善案ドラフトの元にした正式スキルが、昇格までの間に変わっていないかの
-    確認に使う（promote-skill スキルが同じ規則で再計算する）。
+
+def tree_sha256(skill_dir: Path) -> str:
+    """スキルフォルダの中身のハッシュ（直下の来歴・evals と、全階層のキャッシュは除く）。
+
+    改善案ドラフトの元にした正式スキルが昇格までの間に変わっていないかの確認と、
+    トライアウトで評価した内容が今のドラフトと同じかの確認に使う
+    （evals/skill_tree.py の tree_sha256 と同じ規則）。
     """
     digest = hashlib.sha256()
     for path in sorted(p for p in skill_dir.rglob("*") if p.is_file()):
         rel = path.relative_to(skill_dir)
-        if rel.parts[0] in _TREE_EXCLUDE or "__pycache__" in rel.parts:
+        if _excluded(rel.parts):
             continue
         digest.update(rel.as_posix().encode("utf-8") + b"\0")
         digest.update(path.read_bytes() + b"\0")
     return digest.hexdigest()
 
 
-def copy_ignore(_dir: str, names: list[str]) -> set[str]:
-    """shutil.copytree の ignore（来歴・evals・キャッシュを複製しない）。"""
-    return {n for n in names if n in _TREE_EXCLUDE}
+def cases_sha256(cases_dir: Path) -> str:
+    """ケースフォルダ直下の *.yaml のハッシュ（evals/skill_tree.py の cases_sha256 と同じ規則）。"""
+    digest = hashlib.sha256()
+    for path in sorted(cases_dir.glob("*.yaml")):
+        digest.update(path.name.encode("utf-8") + b"\0")
+        digest.update(path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def copy_ignore_for(root: Path):
+    """root を複製する shutil.copytree の ignore（tree_sha256 と同じ範囲を除く）。
+
+    直下の来歴・evals だけを除き、references/evals/ のような下の階層の同名
+    フォルダはスキル本体の一部として複製する。
+    """
+    root_resolved = Path(root).resolve()
+
+    def _ignore(directory: str, names: list[str]) -> set[str]:
+        at_root = Path(directory).resolve() == root_resolved
+        return {n for n in names if n in _ANY_LEVEL_EXCLUDE or (at_root and n in _TOP_LEVEL_EXCLUDE)}
+
+    return _ignore
 
 
 # --- 評価のバックグラウンド実行 ---------------------------------------------

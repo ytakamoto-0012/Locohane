@@ -17,7 +17,13 @@ project_locohane_dir を含む）の上に重ねるため、評価中のスキ�
 （例: my-skill）になる。改善案ドラフトは同名の正式スキルを上書きした状態で評価される。
 
 結果（status）は _draft_meta.json の tryouts にも記録される。昇格（promote-skill）では
-スキル開発者が同じ評価を実行し直すため、ここでの記録は参考扱い。
+スキル開発者が同じ評価を実行し直すため、ここでの記録は参考扱い。評価は開始時点の
+ドラフトとケースを固定して行い（evals/run_all.py が一時フォルダへ写す）、その内容の
+ハッシュが今のドラフトと違えば（評価中・評価後に修正が入れば）結果は記録しない
+（修正が入った時点で合格回数は0から数え直す。_common.touch_meta 参照）。
+
+評価は今の会話と同じインスタンス・同じ Python 環境（LOCOHANE_PYTHON）で行う
+（評価プロセスは書き込みガード無しで動くため、実行ファイルを引数で変えられない）。
 
 ローカルの llama.cpp server は1つなので、評価は1件ずつ（前のジョブが finished に
 なってから次を start する）。
@@ -35,6 +41,7 @@ from _common import (
     DEFAULT_MAIN_PYTHON,
     DRAFT_EVALS_DIRNAME,
     SkillCreatorError,
+    cases_sha256,
     draft_context,
     is_process_alive,
     load_job,
@@ -46,6 +53,7 @@ from _common import (
     resolve_draft,
     run_main,
     start_background,
+    tree_sha256,
     workspace_dir,
     write_meta,
 )
@@ -82,7 +90,7 @@ def _cmd_start(args: argparse.Namespace) -> int:
     results_root = ws / "results" / args.mode
     existing = sorted(p.name for p in results_root.iterdir()) if results_root.is_dir() else []
     cmd = [
-        args.python_exe,
+        DEFAULT_MAIN_PYTHON,
         str(project_root() / "evals" / "run_all.py"),
         *args.case,
         "--cases-dir",
@@ -94,8 +102,6 @@ def _cmd_start(args: argparse.Namespace) -> int:
     ]
     if args.mode == "with_skill":
         cmd += ["--skill-overlay", str(ref.dir)]
-    if args.instance:
-        cmd += ["--instance", args.instance]
     job = start_background(
         cmd,
         ws,
@@ -157,9 +163,10 @@ def _cmd_status(args: argparse.Namespace) -> int:
     else:
         verdict = "pass"
 
+    stale = _is_stale(out_dir, ref, job["mode"])
     meta = read_meta(ref)
     tryouts = meta.setdefault("tryouts", [])
-    if not any(t.get("job_id") == args.job_id for t in tryouts):
+    if not stale and not any(t.get("job_id") == args.job_id for t in tryouts):
         tryouts.append(
             {
                 "job_id": args.job_id,
@@ -180,12 +187,32 @@ def _cmd_status(args: argparse.Namespace) -> int:
             "mode": job["mode"],
             "repeat": job["repeat"],
             "verdict": verdict,
+            "stale": stale,
+            **(
+                {"note": "評価中または評価後にドラフト（SKILL.md・scripts 等・ケース）が変更されたため、この結果は記録しません。今の内容でもう一度評価してください。"}
+                if stale
+                else {}
+            ),
             "cases": cases,
             "runs": runs,
             "results_path": str(out_dir / "results.json"),
         }
     )
     return 0
+
+
+def _is_stale(out_dir: Path, ref, mode: str) -> bool:
+    """評価した内容（evals/run_all.py が tryout.json に残すハッシュ）が今のドラフトと違うか。"""
+    tryout_path = out_dir / "tryout.json"
+    if not tryout_path.is_file():
+        return True
+    tryout = json.loads(tryout_path.read_text(encoding="utf-8"))
+    if tryout.get("cases_sha256") != cases_sha256(ref.dir / DRAFT_EVALS_DIRNAME):
+        return True
+    if mode != "with_skill":
+        return False
+    evaluated = [o.get("sha256") for o in tryout.get("skill_overlays") or [] if Path(o.get("path", "")).resolve() == ref.dir.resolve()]
+    return evaluated != [tree_sha256(ref.dir)]
 
 
 def main() -> int:
@@ -197,8 +224,6 @@ def main() -> int:
     p_start.add_argument("--mode", choices=["with_skill", "without_skill"], default="with_skill")
     p_start.add_argument("--repeat", type=int, default=1, help="各ケースの繰り返し回数（スキル安定化トライアウト）")
     p_start.add_argument("--case", action="append", default=[], help="実行するケースID（複数可。省略時は全ケース）")
-    p_start.add_argument("--instance", default=None, help="評価に使うインスタンス（省略時は今のインスタンス）")
-    p_start.add_argument("--python-exe", default=DEFAULT_MAIN_PYTHON)
 
     p_status = sub.add_parser("status")
     p_status.add_argument("--name", required=True)

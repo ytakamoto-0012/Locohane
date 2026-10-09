@@ -64,10 +64,13 @@ python delete_draft.py --name my-skill [--path references/old.md]
 python list_drafts.py
 ```
 
-出力: `{"user", "drafts": [{"draft", "own", "kind", "base_skill", "status", "description", "updated_at", "eval_cases", "last_tryout", "returned_reason"}]}`
+出力: `{"user", "drafts": [{"draft", "own", "readable", "kind", "base_skill", "status", "description", "updated_at", "eval_cases", "last_tryout", "returned_reason"}]}`
+（読み取りできない他ユーザーの分は `{"draft", "own": false, "readable": false}` だけ）
 
 - `kind`: `new`（新規）/ `improve`（既存スキルの改善案）
 - `status`: `draft` / `promoted`（正式化済み）/ `returned`（差し戻し。理由は `returned_reason`）/ `rejected`
+- `returned` のドラフトは、`write_draft_file.py`・`make_eval_case.py`・`delete_draft.py --path` で中身を直すと `draft` に戻り、再び昇格の候補になる。
+- 中身を直すと `tryouts`（トライアウトの記録）は空になる（合格回数は0から数え直し）。
 
 ## validate_skill.py
 
@@ -100,7 +103,7 @@ python make_eval_case.py --name my-skill --case-id 001_basic \
 ## run_isolated_eval.py
 
 ```
-python run_isolated_eval.py start --name my-skill [--mode with_skill|without_skill] [--repeat N] [--case <ID> ...] [--instance <名前>]
+python run_isolated_eval.py start --name my-skill [--mode with_skill|without_skill] [--repeat N] [--case <ID> ...]
 python run_isolated_eval.py status --name my-skill --job-id <job_id>
 ```
 
@@ -115,6 +118,7 @@ python run_isolated_eval.py status --name my-skill --job-id <job_id>
 {
   "status": "finished", "mode": "with_skill", "repeat": 10,
   "verdict": "pass | fail | needs_judge",
+  "stale": false,
   "cases": {"001_basic": {"pass": 10, "fail": 0, "judge": 0, "error": 0}},
   "runs": [{"case_id", "repeat_index", "outcome", "failed_rules", "judge", "error", "final_answer"}],
   "results_path": "...\\results.json"
@@ -122,7 +126,7 @@ python run_isolated_eval.py status --name my-skill --job-id <job_id>
 ```
 
 - `needs_judge`: ルール上は不合格が無いが judge 付きのケースがある。`runs` の `judge` と `final_answer`（詳しくは `results_path` の `transcript`）を読んで判定する。
-- 完了結果はドラフトの `_draft_meta.json` の `tryouts` にも記録される。
+- 完了結果はドラフトの `_draft_meta.json` の `tryouts` にも記録される。ただし評価中・評価後にドラフト（ケースを含む）が変わっていたら `stale: true` になり記録しない（今の内容で評価し直す）。
 
 ## aggregate_results.py
 

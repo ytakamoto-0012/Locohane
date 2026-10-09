@@ -18,6 +18,7 @@ metadata:
 - 正式スキルにするのはスキル開発者の仕事。完了したら「正式化はスキル開発者に依頼してください」と伝える。
 - 評価（`run_isolated_eval.py` `run_trigger_eval.py`）は1件ずつ。`status` が `finished` になるまで次を `start` しない。`running` の間は1分ほど待ってから `status` を呼ぶ。
 - このスキルのスクリプトは計画承認なしで自分で直接実行できる。
+- ドラフトを1か所でも直すと、トライアウトの合格回数は0に戻る。直した後は `--repeat 10` から評価し直す。
 
 ## 流れ
 
@@ -132,6 +133,7 @@ python run_isolated_eval.py status --name my-skill --job-id <job_id>
 ```
 
 - `verdict` が `pass` なら全回合格、`fail` なら不合格あり、`needs_judge` なら `runs` の `judge` と `final_answer` を読んで自分で判定する。判定の根拠は報告に書く。
+- `stale: true` なら評価中にドラフトが変わっている。結果は使わず、もう一度 `start` する。
 - with_skill と without_skill の比較表: `python aggregate_results.py --name my-skill --input with_skill=<results_path> --input without_skill=<results_path>`
 
 ## 5. 直し方
@@ -140,6 +142,7 @@ python run_isolated_eval.py status --name my-skill --job-id <job_id>
 - 冗長な手順は削る。
 - 同じ処理を何度も書くなら scripts/ に1つまとめる。
 - 直したら同じケースで評価し直す。
+- スキル開発者に差し戻されたドラフトは、`list_drafts.py` の `returned_reason` を読んで直す。直すと自動で再提出の状態に戻る。
 
 ## 6.（任意）トリガー精度を上げる
 

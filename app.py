@@ -2120,14 +2120,15 @@ def _apply_session_draft_skills() -> str:
     グラフを組み立てるたびにここで一覧へ差し替える。あわせて、read_skill の
     選択肢へ足すドラフト名（読み取りできるものだけ）を cl.user_session の
     "visible_draft_names" に入れる（src/tools/session_tools.py 参照）。
-    skill-creator がドラフトを作成・削除した後に立てる "drafts_dirty" はここで下ろす。
+    組み立てに使ったドラフトの要約（skill_drafts.drafts_signature）も
+    "drafts_signature" に残し、on_message が変化を検知して組み直せるようにする。
     """
     user = cl.user_session.get("user")
-    draft_user = resolve_log_username(user.identifier if user else None)
+    draft_user = skill_drafts.draft_owner_name(user.identifier if user else None)
     cl.user_session.set(skill_drafts.SESSION_USER_KEY, draft_user)
     drafts = skill_drafts.scan_visible_drafts(_config, draft_user)
     cl.user_session.set("visible_draft_names", [d.skill.name for d in drafts if d.readable])
-    cl.user_session.set("drafts_dirty", False)
+    cl.user_session.set("drafts_signature", skill_drafts.drafts_signature(drafts))
     return _system_prompt.replace(skill_drafts.DRAFT_SKILLS_MARKER, skill_drafts.render_draft_skills_block(drafts))
 
 
@@ -3821,10 +3822,13 @@ async def _on_message_impl(message: cl.Message) -> None:
     # tab_id=cl.context.session.id: 同じ thread_id を複数タブで同時に開いた
     # 場合の _LAST_SELECTED_INDEX 混線防止（_rebuild_graph 内の同種コメント参照）。
     set_current_session(thread_id, tab_id=cl.context.session.id)
-    # skill-creator でドラフトを作成・削除・description 変更した後は、スキル一覧と
-    # read_skill の選択肢を更新するためグラフを組み直す（本文の変更は読み込み時に
-    # 反映されるため不要。src/tools/_script_job.py が "drafts_dirty" を立てる）。
-    if cl.user_session.get("drafts_dirty"):
+    # ドラフトが作成・削除・description 変更された後は、スキル一覧と read_skill /
+    # run_script の選択肢を更新するためグラフを組み直す（本文の変更は読み込み時に
+    # 反映されるため不要）。skill-creator の実行時にフラグを立てる方式だと、
+    # run_script_background の完了前に組み直してフラグを下ろしてしまい、新しい
+    # ドラフトが出ないままになるため、毎回実際のドラフトの状態と比べる。
+    current_drafts = skill_drafts.scan_visible_drafts(_config, cl.user_session.get(skill_drafts.SESSION_USER_KEY))
+    if skill_drafts.drafts_signature(current_drafts) != cl.user_session.get("drafts_signature"):
         await _rebuild_graph(thread_id, wait_when_busy=False)
     graph = cl.user_session.get("graph")
     config = {

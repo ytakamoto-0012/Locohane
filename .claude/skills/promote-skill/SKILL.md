@@ -33,6 +33,10 @@ Locohane はミスが許されない専門業務が前提のため、正式ス�
    - 正式スキルの必須ルール・禁止事項を消している
    - ケースが中身を確かめておらず、合格しても安全性・正確性の根拠にならない
 4. 差分の要点と、気になった点をユーザーに短く伝える。
+5. `register_entries`（scripts/ のスクリプト）を控える。ドラフトのスクリプトは会話では計画承認・
+   main_agent_tool_guard を免除されていたため、昇格時にインスタンスの `config_overrides.json` へ
+   `plan_approval_exempt_scripts` と `allow_entries`（max_calls=-1）として登録し、昇格後も同じ挙動にする
+   （トライアウトも登録済みと同じ状態で評価される）。
 
 ## 手順2: スキル安定化トライアウト
 
@@ -43,6 +47,8 @@ Locohane はミスが許されない専門業務が前提のため、正式ス�
    python evals/run_all.py --cases-dir <draft>/evals --skill-overlay <draft> --repeat <N> --instance <instance> --results-dir evals/results/promote_<スキル名>
    ```
    時間がかかるため、Bash の `run_in_background` で起動し、完了の通知を待つ。
+   トライアウト中もドラフトは一時フォルダに固定されるが、トライアウト後にドラフトが1か所でも
+   変わると合格回数は0に戻り、`install` が拒否する（その場合は今の内容でトライアウトし直す）。
 3. 出力の「スキル安定化トライアウト」節と `tryout.json` を見る:
    - `pass`: 全ケース N/N 合格。
    - `fail`: 不合格・エラーがある。`results.json` で該当回の `rule_results`・`final_answer` を確かめ、手順4へ。
@@ -56,19 +62,31 @@ Locohane はミスが許されない専門業務が前提のため、正式ス�
    - `kind: improve` は元の正式スキルの場所に固定（補助スクリプトが確かめる）。
    - `kind: new` は `AskUserQuestion` で、一覧の `skills_roots`（`skills/` と各 project_locohane_dir の `skills/`）から選ばせる。
      会社専用のスキルは project_locohane_dir 側を推奨にする。
-2. `AskUserQuestion` で最終承認を得る（昇格先・トライアウト結果・差分の要点を説明に書く）。拒否されたら何もせず終える。
-3. 承認されたら実行する:
+2. `register_entries` がある場合、設定を登録するインスタンスを決める。設定はインスタンスごとの
+   `config_overrides.json` にあるため、昇格先を走査する他のインスタンス（`list` の `skills_roots` で分かる。
+   `skills/` は全インスタンス共通）にも登録が要る。`AskUserQuestion`（multiSelect）で、昇格先を走査する
+   インスタンスから選ばせる（`<instance>` を推奨）。選ばれなかったインスタンスではスクリプトが計画承認・
+   委譲の対象になり、トライアウトと挙動が変わる旨を説明に書く。
+3. `AskUserQuestion` で最終承認を得る（昇格先・登録先インスタンスと登録内容・トライアウト結果・差分の要点を説明に書く）。
+   拒否されたら何もせず終える。
+4. 承認されたら実行する:
    ```
-   python H install <draft> --dest <昇格先の skills ルート> --instance <instance> --tryout <tryout.json のパス> [--judged-pass] [--note "判定メモ"]
+   python H install <draft> --dest <昇格先の skills ルート> --instance <instance> --tryout <tryout.json のパス> --register-instance <登録先> [--register-instance <登録先> ...] [--judged-pass] [--note "判定メモ"]
    ```
-   改善案は置き換え前の正式スキルを `evals/history/promote/` に退避してから上書きする。ケースは `evals/cases/<スキル名>/` へ写され、
-   以後 tune-prompt の対象になる。記録は `evals/promotion_log.md` に追記される。
-4. Locohane の再起動で全ユーザーのスキル一覧に出る旨を報告する。
+   - `tryout.json` が今のドラフト（全ケース・`<N>` 回以上・トライアウト後に変更なし）のものでなければ止まる。
+   - 設定は管理ツールと同じ処理で `instances/<登録先>/config_overrides.json` に保存される（検証・バックアップ・
+     `instances/admin_changes.log` への記録つき）。登録先の `.env` に `PLAN_APPROVAL_EXEMPT_SCRIPTS` /
+     `MAIN_AGENT_TOOL_GUARD_ALLOW_ENTRIES` があると登録が効かないため止まる（ユーザーに .env の見直しを頼む）。
+   - 改善案は置き換え前の正式スキルを `evals/history/promote/` に退避してから上書きする。ケースは `evals/cases/<スキル名>/` へ写され、
+     以後 tune-prompt の対象になる。記録は `evals/promotion_log.md` に追記される。
+5. 登録先インスタンスと、昇格先を走査するインスタンス（出力の `instances_using_dest`）の再起動で、
+   全ユーザーのスキル一覧に出て設定も効く旨を報告する。
 
 ## 手順4: 差し戻し
 
 1. 作成者が直せるよう、理由を具体的に書く（どのケースが何回中何回落ちたか、何が足りないか）。
 2. `python H return <draft> --reason "<理由>"` を実行する（作成者の skill-creator の `list_drafts.py` に理由が出る）。
+   作成者がドラフトを直すと自動で `status: draft` に戻り、再び手順0の候補になる（合格回数は0から）。
    採用の見込みが無いと判断したときだけ、ユーザーに確認してから `--reject` を付ける。
 3. 報告して終える。ドラフトの中身は直さない。
 

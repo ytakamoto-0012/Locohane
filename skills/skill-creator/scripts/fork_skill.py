@@ -25,7 +25,7 @@ import shutil
 from _common import (
     DRAFT_EVALS_DIRNAME,
     SkillCreatorError,
-    copy_ignore,
+    copy_ignore_for,
     draft_context,
     find_official_skill,
     now_iso,
@@ -51,7 +51,7 @@ def main() -> int:
     if ref.dir.exists():
         raise SkillCreatorError(f"同じ名前のドラフトが既にあります: {ref.full_name}（続きはそのドラフトを編集してください）")
 
-    shutil.copytree(base_dir, ref.dir, ignore=copy_ignore)
+    shutil.copytree(base_dir, ref.dir, ignore=copy_ignore_for(base_dir))
     evals_dir = ref.dir / DRAFT_EVALS_DIRNAME
     evals_dir.mkdir(exist_ok=True)
     official_cases = project_root() / "evals" / "cases" / args.name

@@ -65,9 +65,16 @@ def _cmd_start(args: argparse.Namespace) -> int:
     eval_set_path = Path(args.eval_set)
     if not eval_set_path.is_file():
         raise SkillCreatorError(f"eval-set が見つかりません: {eval_set_path}")
-    queries = json.loads(eval_set_path.read_text(encoding="utf-8"))
-    if not isinstance(queries, list) or not queries:
-        raise SkillCreatorError("eval-set は1件以上のオブジェクトを持つJSON配列にしてください。")
+    try:
+        queries = json.loads(eval_set_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise SkillCreatorError(f"eval-set を読めません: {e}") from e
+    if (
+        not isinstance(queries, list)
+        or not queries
+        or not all(isinstance(q, dict) and isinstance(q.get("query"), str) and "should_trigger" in q for q in queries)
+    ):
+        raise SkillCreatorError('eval-set は [{"query": "発話", "should_trigger": true}, ...] の形のJSON配列にしてください。')
     if args.repeats < 1:
         raise SkillCreatorError("--repeats は1以上にしてください。")
 
@@ -89,7 +96,7 @@ def _cmd_start(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
     cmd = [
-        args.python_exe,
+        DEFAULT_MAIN_PYTHON,
         str(project_root() / "evals" / "run_all.py"),
         "--cases-dir",
         str(cases_dir),
@@ -161,7 +168,6 @@ def main() -> int:
     p_start.add_argument("--name", required=True, help="ドラフト名（自分のドラフトはスキル名だけでよい）")
     p_start.add_argument("--eval-set", required=True, help='[{"query":str,"should_trigger":bool}, ...] のJSONファイル')
     p_start.add_argument("--repeats", type=int, default=3)
-    p_start.add_argument("--python-exe", default=DEFAULT_MAIN_PYTHON)
 
     p_status = sub.add_parser("status")
     p_status.add_argument("--name", required=True)

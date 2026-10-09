@@ -11,7 +11,7 @@ read_skill_file / run_script の既存のパス解決がそのまま使える）
 （SKILL_DRAFT_VISIBILITY_MODES）。本人のドラフトは常に全操作できる。
 
 「誰の会話か」は cl.user_session["draft_user"]（app.py がセッション開始・
-再開時に resolve_log_username() の結果を入れる）だけで判定する。このキーが
+再開時に draft_owner_name() の結果を入れる）だけで判定する。このキーが
 無い文脈（evals のヘッドレス実行・Chainlit のセッション文脈外）では
 ドラフトは一切見えない・使えない扱いになる（評価の再現性を保つため。
 evals でドラフトを評価する場合は run_case.py の --skill-overlay で明示的に重ねる）。
@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from .chat_log import resolve_log_username
 from .skills import Skill, _parse_frontmatter, _skill_has_scripts, _validate
 
 if TYPE_CHECKING:
@@ -75,6 +77,30 @@ class DraftSkill:
     own: bool
     readable: bool
     executable: bool
+
+
+# Windows の予約デバイス名（フォルダ名に使うと別物を指してしまう）。
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+)
+_OWNER_TRAILING_RE = re.compile(r"[ .]+$")
+
+
+def draft_owner_name(identifier: str | None) -> str:
+    """ログインユーザーの識別子を、ドラフト置き場のユーザーフォルダ名へ変換する。
+
+    resolve_log_username()（使えない文字の置換）に加えて、フォルダ名として
+    別の場所を指しうる形を潰す。`..` のままだと `<draft_dir>/..` が自分の
+    フォルダになり、skill-creator の書き込み範囲が draft_dir の外へ広がる。
+    Windows は末尾のドット・空白を無視し、大文字小文字も区別しないため、
+    `alice.` や `Alice` が `alice` のフォルダと同一視される。そこで末尾の
+    ドット・空白を除き、小文字に揃え、空・`_` 始まり（_workspace 等の予約）・
+    予約デバイス名は `u-` を前置して別名にする。
+    """
+    name = _OWNER_TRAILING_RE.sub("", resolve_log_username(identifier)).lower()
+    if not name or name.startswith("_") or name.split(".", 1)[0] in _WINDOWS_RESERVED_NAMES:
+        name = f"u-{name}"
+    return name
 
 
 def current_draft_user() -> str | None:
@@ -135,20 +161,89 @@ def access_error(path: Path, op: DraftOp, config: "Config | None", user: str | N
     return f"エラー: 他ユーザーのドラフトスキル（{owner}）は{_OP_LABELS[op]}できません。"
 
 
-def unreadable_dirs(config: "Config | None", user: str | None) -> list[Path]:
-    """user が読み取れない他ユーザーのドラフトフォルダの一覧を返す。
-
-    Glob/Grep の再帰検索からの除外と、execute_python_code / run_script の
-    書き込みガード（読み取りも禁止するルート）に使う。
-    """
+def _other_owner_dirs(config: "Config | None", user: str | None, op: DraftOp) -> list[Path]:
+    """user に op が許されない他ユーザーのドラフトフォルダ（解決済み）の一覧。"""
     draft_dir = getattr(config, "skill_draft_dir", None)
-    if draft_dir is None or "read" in _OTHER_USER_OPS.get(config.skill_other_users_drafts, frozenset()):
+    if draft_dir is None or op in _OTHER_USER_OPS.get(config.skill_other_users_drafts, frozenset()):
         return []
     try:
         entries = list(draft_dir.iterdir())
     except OSError:
         return []
     return [e.resolve() for e in entries if e.is_dir() and e.name != user]
+
+
+def unreadable_dirs(config: "Config | None", user: str | None) -> list[Path]:
+    """user が読み取れない他ユーザーのドラフトフォルダの一覧を返す。
+
+    Glob/Grep の再帰検索からの除外と、execute_python_code / run_script の
+    書き込みガード（読み取りも禁止するルート）に使う。
+    """
+    return _other_owner_dirs(config, user, "read")
+
+
+def unlistable_dirs(config: "Config | None", user: str | None) -> list[Path]:
+    """user がスキル名の一覧すら見られない他ユーザーのドラフトフォルダの一覧を返す。
+
+    Python 実行の書き込みガードが一覧取得（os.listdir 等）を判定するのに使う。
+    listed モードでは他ユーザーのフォルダ直下（スキル名）の一覧は見せるが、
+    その中（ファイル名）は unreadable_dirs() 側で隠す。
+    """
+    return _other_owner_dirs(config, user, "list")
+
+
+def unwritable_dirs(config: "Config | None", user: str | None) -> list[Path]:
+    """user が書き込めない他ユーザーのドラフトフォルダの一覧を返す。
+
+    execute_python_code / run_script の書き込みガードに使う。作業ディレクトリ
+    （ツールバーで任意に切り替えられる）や allow_sandbox_dir が draft_dir を
+    含んでいても、readable モード等で他ユーザーのドラフトを書き換えられない
+    ようにする（読み取り禁止の unreadable_dirs() だけでは readable モードが漏れる）。
+    """
+    return _other_owner_dirs(config, user, "write")
+
+
+def drafts_signature(drafts: list[DraftSkill]) -> tuple:
+    """スキル一覧・read_skill の選択肢を組み直すべきかの判定に使う、見えるドラフトの要約。
+
+    app.py の on_message が毎回 scan_visible_drafts() の結果と前回値を比べ、
+    違えばグラフを組み直す（skill-creator の実行タイミングではなく実際の
+    状態で判定するため、バックグラウンド実行や手作業の変更にも追従する）。
+    """
+    return tuple((d.skill.name, d.skill.description, d.readable, d.executable, d.skill.has_scripts) for d in drafts)
+
+
+def guard_exempt_entries_for_skill(skill_name: str, skill_dir: Path) -> list[tuple[str, str]]:
+    """ドラフトと同じ扱い（計画承認・main_agent_tool_guard の免除）を正式スキルで
+    再現するために登録する (スキル名, スクリプトファイル名) の一覧。
+
+    ドラフトのスクリプトは会話では無条件に免除されるが、昇格後の正式スキルは
+    [plan].plan_approval_exempt_scripts と [main_agent_tool_guard].allow_entries
+    に登録しない限り免除されない。evals/run_case.py の --skill-overlay
+    （トライアウト）と promote-skill の昇格処理がこの一覧を共有し、試した挙動・
+    評価した挙動・昇格後の挙動を揃える。対象は scripts/ 直下の *.py
+    （`_` 始まりの共通モジュールは除く。src/skills.py の _skill_has_scripts と同じ範囲）。
+    """
+    scripts_dir = skill_dir / "scripts"
+    if not scripts_dir.is_dir():
+        return []
+    return [(skill_name, p.name) for p in sorted(scripts_dir.glob("*.py")) if p.is_file() and not p.name.startswith("_")]
+
+
+def merge_guard_exempt_entries(
+    plan_exempt: frozenset[tuple[str, str]],
+    allow_entries: frozenset[tuple[str | tuple[str, str], int]],
+    entries: list[tuple[str, str]],
+) -> tuple[frozenset[tuple[str, str]], frozenset[tuple[str | tuple[str, str], int]]]:
+    """entries を plan_approval_exempt_scripts と allow_entries（max_calls=-1）へ足した値を返す。
+
+    allow_entries に同じ対象が既にあれば（max_calls=0 で明示的に禁止している等）
+    その設定を尊重して上書きしない（_parse_main_agent_tool_guard_allow_entries は
+    同じ対象の重複登録をエラーにするため、足すこともできない）。
+    """
+    registered = {key for key, _ in allow_entries}
+    new_allow = set(allow_entries) | {(e, -1) for e in entries if e not in registered}
+    return frozenset(plan_exempt | set(entries)), frozenset(new_allow)
 
 
 # 一覧に出さないドラフトの状態（_draft_meta.json の status）。昇格済みは正式スキルと

@@ -19,14 +19,24 @@ evals/cases/<target>/*.yaml を昇順に glob し、ケースごとに
 かけないための配慮）。結果は evals/results/<target>/<timestamp>/ 配下に
 results.json（全件の生データ）と summary.md（pass/fail 一覧 + judge待ち
 ケースの transcript 抜粋）として保存し、同じ内容を標準出力にも表示する。
+
+--repeat N（スキル安定化トライアウト）・--skill-overlay・--cases-dir は
+ドラフトスキルの評価と昇格（promote-skill）に使う。開始時にケースと
+--skill-overlay のスキルを一時フォルダへ写して固定し、全回をその内容で
+評価する（途中でドラフトが編集されても回ごとに中身が変わらない）。
+評価した内容のハッシュ（evals/skill_tree.py）とケースごとの合格回数を
+tryout.json に残し、昇格時に今のドラフトと照合する（修正が入っていれば
+合格回数は0に戻ったものとして昇格させない）。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -38,6 +48,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from evals.case_schema import load_case  # noqa: E402
 from evals.instance import resolve_instance_name  # noqa: E402
+from evals.skill_tree import cases_sha256, tree_sha256  # noqa: E402
 # 無言終了時の自動リトライ（src/graph.py の ainvoke_ensuring_final_text、
 # 既定 max_retries=2）や大量画像を扱うケースはグラフの ainvoke が複数回・
 # 長時間かかることがあるため、600秒では単体実行なら成功するケースまで
@@ -157,6 +168,8 @@ def _tryout_report(results: list[dict], repeat: int) -> dict:
 
     Returns:
         {"repeat", "cases": {case_id: {"pass", "fail", "judge", "error"}}, "verdict"}。
+        main() はこれに評価した内容のハッシュ等（cases_dir, cases_sha256,
+        case_files, skill_overlays）と instance を足して tryout.json に書く。
     """
     cases: dict[str, dict[str, int]] = {}
     for r in results:
@@ -300,33 +313,56 @@ def main() -> int:
     if not case_paths:
         print(f"対象ケースが1件もありません: {cases_dir or PROJECT_ROOT / 'evals' / 'cases' / target}", file=sys.stderr)
         return 1
-
-    extra_args: list[str] = []
-    for d in args.skill_overlay:
-        extra_args += ["--skill-overlay", str(Path(d).resolve())]
-    for name in args.exclude_skill:
-        extra_args += ["--exclude-skill", name]
+    source_cases_dir = case_paths[0].parent
 
     print(f"対象インスタンス: {instance_name}", file=sys.stderr)
-    results = []
-    # 同じケースを続けて回すより、ケースを一巡してから次の回へ進む方が、
-    # 途中で打ち切っても全ケースの回数が揃う（各結果には repeat_index を付ける）。
-    for repeat_index in range(1, args.repeat + 1):
-        for path in case_paths:
-            label = f"（{repeat_index}/{args.repeat}回目）" if args.repeat > 1 else ""
-            print(f"実行中: {path.name}{label}", file=sys.stderr)
-            try:
-                result = _run_one(path, instance_name, extra_args)
-            except subprocess.TimeoutExpired as e:
-                result = {
-                    "case_id": path.stem,
-                    "instance": instance_name,
-                    "error": "timeout",
-                    "detail": f"{e.timeout:.0f}秒でタイムアウトしました。",
-                }
-            if args.repeat > 1:
-                result["repeat_index"] = repeat_index
-            results.append(result)
+    with tempfile.TemporaryDirectory(prefix="evals_run_all_", ignore_cleanup_errors=True) as tmp:
+        # ケースと --skill-overlay のスキルを開始時点の内容で固定する。--repeat の
+        # 途中でドラフトが編集されても、全回を同じ内容で評価するため。ケースは
+        # 対象外のものも含めてフォルダごと写し、ハッシュはその写しで求める
+        # （昇格時に今のドラフトと照合する。evals/skill_tree.py）。
+        snapshot_cases_dir = Path(tmp) / "cases"
+        snapshot_cases_dir.mkdir()
+        for yaml_path in source_cases_dir.glob("*.yaml"):
+            shutil.copy2(yaml_path, snapshot_cases_dir / yaml_path.name)
+        run_paths = [snapshot_cases_dir / p.name for p in case_paths]
+        overlays = []
+        extra_args: list[str] = []
+        for i, d in enumerate(args.skill_overlay):
+            source = Path(d).resolve()
+            snapshot = Path(tmp) / "overlays" / str(i) / source.name
+            shutil.copytree(source, snapshot, ignore=shutil.ignore_patterns("__pycache__"))
+            overlays.append({"path": str(source), "name": source.name, "sha256": tree_sha256(snapshot)})
+            extra_args += ["--skill-overlay", str(snapshot)]
+        for name in args.exclude_skill:
+            extra_args += ["--exclude-skill", name]
+        snapshot_info = {
+            "cases_dir": str(source_cases_dir),
+            "cases_sha256": cases_sha256(snapshot_cases_dir),
+            "case_files": [p.stem for p in case_paths],
+            "skill_overlays": overlays,
+        }
+
+        results = []
+        # 同じケースを続けて回すより、ケースを一巡してから次の回へ進む方が、
+        # 途中で打ち切っても全ケースの回数が揃う（各結果には repeat_index を付ける）。
+        for repeat_index in range(1, args.repeat + 1):
+            for path in run_paths:
+                label = f"（{repeat_index}/{args.repeat}回目）" if args.repeat > 1 else ""
+                print(f"実行中: {path.name}{label}", file=sys.stderr)
+                try:
+                    result = _run_one(path, instance_name, extra_args)
+                except subprocess.TimeoutExpired as e:
+                    result = {
+                        # 集計キーを run_case.py の結果（yaml の id）と揃える。
+                        "case_id": load_case(path).id,
+                        "instance": instance_name,
+                        "error": "timeout",
+                        "detail": f"{e.timeout:.0f}秒でタイムアウトしました。",
+                    }
+                if args.repeat > 1:
+                    result["repeat_index"] = repeat_index
+                results.append(result)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     results_root = args.results_dir.resolve() if args.results_dir else PROJECT_ROOT / "evals" / "results" / target
@@ -336,9 +372,11 @@ def main() -> int:
         json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     summary = _render_summary(target, instance_name, results)
+    # tryout.json は --repeat 1 でも必ず書く（昇格の照合と skill-creator の
+    # run_isolated_eval.py が、評価した内容のハッシュを読むため）。
+    report = {**_tryout_report(results, args.repeat), "instance": instance_name, **snapshot_info}
+    (out_dir / "tryout.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.repeat > 1:
-        report = _tryout_report(results, args.repeat)
-        (out_dir / "tryout.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         summary = f"{summary}\n{_render_tryout(report)}"
     (out_dir / "summary.md").write_text(summary, encoding="utf-8")
 

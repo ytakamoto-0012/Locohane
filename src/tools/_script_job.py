@@ -13,7 +13,6 @@ from pathlib import Path
 
 import chainlit as cl
 
-from .. import skill_drafts
 from . import _state
 from ._duplicate_guard import _track_failure_streak
 from ._path_memory_helpers import _resolve_path_memory_token
@@ -123,10 +122,6 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
     is_plan_exempt = (skill_name, script_filename) in _state._PLAN_APPROVAL_EXEMPT_SCRIPTS or _is_guard_exempt_script(
         skill_name, script_filename
     )
-    # skill-creator はドラフトの作成・削除・description 変更を行いうるため、次の
-    # メッセージでスキル一覧と read_skill の選択肢を組み直させる（app.py の on_message）。
-    if skill_name == skill_drafts.SKILL_CREATOR_NAME and _is_guard_exempt_script(skill_name, script_filename):
-        cl.user_session.set("drafts_dirty", True)
     if not is_plan_exempt and not cl.user_session.get("plan_approved"):
         logger.info("run_script: 計画未承認のためブロック skill=%s script=%s", skill_name, script_filename)
         return (

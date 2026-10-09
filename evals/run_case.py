@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -232,6 +233,23 @@ def _evaluate_expect(expect: Expect, transcript: list[dict], final_answer: str) 
     return results
 
 
+def _with_overlay_guard_exemptions(config, overlay_root: Path):
+    """overlay_root 直下の各スキルのスクリプトを、昇格時と同じく計画承認・
+    [main_agent_tool_guard] の免除に登録した Config を返す（src/skill_drafts.py の
+    guard_exempt_entries_for_skill / merge_guard_exempt_entries）。"""
+    from src import skill_drafts
+
+    entries = [
+        entry
+        for skill_dir in sorted(p for p in overlay_root.iterdir() if p.is_dir())
+        for entry in skill_drafts.guard_exempt_entries_for_skill(skill_dir.name, skill_dir)
+    ]
+    plan_exempt, allow_entries = skill_drafts.merge_guard_exempt_entries(
+        config.plan_approval_exempt_scripts, config.main_agent_tool_guard_allow_entries, entries
+    )
+    return dataclasses.replace(config, plan_approval_exempt_scripts=plan_exempt, main_agent_tool_guard_allow_entries=allow_entries)
+
+
 async def _run(case: EvalCase, skill_overlays: list[Path] | None = None, exclude_skills: list[str] | None = None) -> dict:
     """対象ファイルを現在の内容のまま読み込み、1ケースを実行する。
 
@@ -239,8 +257,10 @@ async def _run(case: EvalCase, skill_overlays: list[Path] | None = None, exclude
         case: 実行する eval ケース。
         skill_overlays: 本番のスキル構成の上に最優先で重ねるスキルフォルダ
             （SKILL.md を持つフォルダ）の一覧。ドラフトスキルの評価に使う
-            （--skill-overlay）。一時ディレクトリへコピーしてから重ねるため、
-            評価中にドラフトを編集しても結果に混ざらない。
+            （--skill-overlay）。一時ディレクトリへコピーしてから重ねる
+            （--repeat の全回を同じ内容にする固定は呼び出し元の run_all.py が
+            行う）。重ねたスキルのスクリプトは、昇格時に登録されるのと同じく
+            計画承認・[main_agent_tool_guard] を免除した設定で評価する。
         exclude_skills: 走査結果から除くスキル名（--exclude-skill。baseline 用）。
 
     Returns:
@@ -305,6 +325,13 @@ async def _run(case: EvalCase, skill_overlays: list[Path] | None = None, exclude
         for key, value in case.env.items():
             os.environ[key] = value
         config = load_config()
+        # --skill-overlay で重ねたスキルのスクリプトは、昇格時に promote-skill が
+        # インスタンスの config_overrides.json へ登録する（計画承認・
+        # [main_agent_tool_guard] の免除。会話でドラフトを試したときと同じ扱い）
+        # のと同じ状態で評価する。試した挙動・評価した挙動・昇格後の挙動を揃えるため
+        # （src/skill_drafts.py の guard_exempt_entries_for_skill）。
+        if overlay_roots:
+            config = _with_overlay_guard_exemptions(config, overlay_roots[0])
 
         # app.py の _setup() と同様、config.log_level に従いログをファイルへ出す。
         # eval実行中はChainlitのUIが無く進捗を外部から確認する手段が無いため

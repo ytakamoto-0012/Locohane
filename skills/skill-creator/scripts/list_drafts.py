@@ -6,7 +6,9 @@ skill-creator スキルの実行スクリプト（progressive disclosure 第3段
 
 各ドラフトの種類（new=新規 / improve=既存スキルの改善案）・状態・最後の
 スキル安定化トライアウトの結果を返す。他ユーザーの分は
-config.ini [skill_creator].other_users_drafts が listed 以上のときだけ出る。
+config.ini [skill_creator].other_users_drafts が listed 以上のときだけ出る
+（listed では名前だけ。中身を読めるのは readable 以上）。差し戻された
+ドラフト（status=returned）は、中身を修正すると draft に戻り再び昇格候補になる。
 
 自己完結（標準ライブラリのみ）。依存なし。
 """
@@ -30,6 +32,11 @@ def main() -> int:
                 if not skill_dir.is_dir() or skill_dir.name.startswith("_") or not (skill_dir / "SKILL.md").is_file():
                     continue
                 ref = DraftRef(owner_dir.name, skill_dir.name, skill_dir)
+                if not ctx.allowed(ref.owner, "read"):
+                    # listed モード: 名前だけ出す。中身（SKILL.md・来歴）は読み取り禁止で、
+                    # 開こうとすると書き込みガードの PermissionError で一覧全体が失敗する。
+                    drafts.append({"draft": ref.full_name, "own": False, "readable": False})
+                    continue
                 meta = read_meta(ref)
                 fm = parse_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8", errors="replace")) or {}
                 tryouts = meta.get("tryouts") or []
@@ -37,6 +44,7 @@ def main() -> int:
                     {
                         "draft": ref.full_name,
                         "own": ref.owner == ctx.user,
+                        "readable": True,
                         "kind": meta.get("kind"),
                         "base_skill": meta.get("base_skill"),
                         "status": meta.get("status", "draft"),

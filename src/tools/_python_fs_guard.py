@@ -134,6 +134,8 @@ def _python_fs_guard_preamble(
     tmp_dir_roots: Sequence[Path] = (),
     display_roots: Sequence[Path] | None = None,
     deny_roots: Sequence[Path] | None = None,
+    write_deny_roots: Sequence[Path] | None = None,
+    list_deny_roots: Sequence[Path] | None = None,
 ) -> str:
     """execute_python_code / run_script が実行するコードの先頭（または
     サブプロセスの sitecustomize.py）に連結する、書き込みサンドボックス用の
@@ -199,7 +201,20 @@ def _python_fs_guard_preamble(
             ディレクトリの一覧。会話のユーザーが読めない他ユーザーのドラフト
             スキル（src/skill_drafts.py の unreadable_dirs()）に使う。
             省略時（None）はその場で unreadable_dirs() を求めるため、
-            呼び出し元が個別に渡す必要は無い。
+            呼び出し元が個別に渡す必要は無い。`open()` に加えて
+            `os.listdir`/`os.scandir`（`os.walk`・`glob`・`Path.iterdir` も
+            これを経由する）と低水準の `os.open` も対象にする。
+        write_deny_roots: allowed_roots 配下であっても書き込み・削除を
+            ブロックするディレクトリの一覧。会話のユーザーが書き込めない
+            他ユーザーのドラフトスキル（src/skill_drafts.py の
+            unwritable_dirs()）に使う（作業ディレクトリが draft_dir を含む
+            場合でも readable モード等で他人のドラフトを書き換えさせない）。
+            省略時（None）はその場で unwritable_dirs() を求める。
+        list_deny_roots: deny_roots のうち、ルート自体の一覧取得（直下の名前）も
+            ブロックするもの（src/skill_drafts.py の unlistable_dirs()）。
+            deny_roots の中でもここに無いルート（listed モードの他ユーザーの
+            フォルダ）は、直下のスキル名の一覧だけ取得でき、その中は取得できない。
+            省略時（None）はその場で unlistable_dirs() を求める。
 
     Returns:
         コード文字列の先頭に連結する、あるいは sitecustomize.py として
@@ -218,6 +233,12 @@ def _python_fs_guard_preamble(
     if deny_roots is None:
         deny_roots = skill_drafts.unreadable_dirs(_state._LLM_CONFIG, skill_drafts.current_draft_user())
     deny_repr = repr(tuple(str(p) for p in deny_roots))
+    if write_deny_roots is None:
+        write_deny_roots = skill_drafts.unwritable_dirs(_state._LLM_CONFIG, skill_drafts.current_draft_user())
+    write_deny_repr = repr(tuple(str(p) for p in write_deny_roots))
+    if list_deny_roots is None:
+        list_deny_roots = skill_drafts.unlistable_dirs(_state._LLM_CONFIG, skill_drafts.current_draft_user())
+    list_deny_repr = repr(tuple(str(p) for p in list_deny_roots))
     return f'''\
 import builtins as _guard_builtins
 import io as _guard_io
@@ -229,17 +250,41 @@ _GUARD_LIB_CACHE = [_guard_os.path.realpath(_p) for _p in {lib_cache_repr}]
 _GUARD_DISPLAY = list(dict.fromkeys(_guard_os.path.realpath(_p) for _p in {display_repr}))
 _GUARD_TMP_ROOTS = [_guard_os.path.realpath(_p) for _p in {tmp_roots_repr}]
 _GUARD_DENY_ROOTS = [_guard_os.path.realpath(_p) for _p in {deny_repr}]
+_GUARD_WRITE_DENY_ROOTS = [_guard_os.path.realpath(_p) for _p in {write_deny_repr}]
+_GUARD_LIST_DENY_ROOTS = [_guard_os.path.realpath(_p) for _p in {list_deny_repr}]
 _GUARD_OWN_TMP_NAME = "_tmp_" + (_guard_os.environ.get("AGENT_EXEC_TMP_NAME") or _guard_os.environ.get("AGENT_THREAD_ID", "_no_session"))
 
 
-def _guard_check_foreign_tmp(_path):
+def _guard_under(_target, _roots):
+    return any(_target == _root or _target.startswith(_root + _guard_os.sep) for _root in _roots)
+
+
+def _guard_check_deny(_path):
     try:
         _target = _guard_os.path.realpath(_guard_os.fspath(_path))
     except TypeError:
         return
-    for _root in _GUARD_DENY_ROOTS:
-        if _target == _root or _target.startswith(_root + _guard_os.sep):
-            raise PermissionError(f"[ドラフトスキルガード] 他ユーザーのドラフトスキルへはアクセスできません: {{_path}}")
+    if _guard_under(_target, _GUARD_DENY_ROOTS):
+        raise PermissionError(f"[ドラフトスキルガード] 他ユーザーのドラフトスキルへはアクセスできません: {{_path}}")
+
+
+def _guard_check_list(_path):
+    try:
+        _target = _guard_os.path.realpath(_guard_os.fspath(_path))
+    except TypeError:
+        return
+    if _guard_under(_target, _GUARD_LIST_DENY_ROOTS) or any(
+        _target.startswith(_root + _guard_os.sep) for _root in _GUARD_DENY_ROOTS
+    ):
+        raise PermissionError(f"[ドラフトスキルガード] 他ユーザーのドラフトスキルへはアクセスできません: {{_path}}")
+
+
+def _guard_check_foreign_tmp(_path):
+    _guard_check_deny(_path)
+    try:
+        _target = _guard_os.path.realpath(_guard_os.fspath(_path))
+    except TypeError:
+        return
     for _root in _GUARD_TMP_ROOTS:
         if _target == _root:
             return
@@ -261,6 +306,8 @@ def _guard_check(_path, _op):
         _target = _guard_os.path.realpath(_guard_os.fspath(_path))
     except TypeError:
         return
+    if _guard_under(_target, _GUARD_WRITE_DENY_ROOTS):
+        raise PermissionError(f"[ドラフトスキルガード] 他ユーザーのドラフトスキルへは{{_op}}できません: {{_path}}")
     for _root in _GUARD_ALLOWED + _GUARD_LIB_CACHE:
         if _target == _root or _target.startswith(_root + _guard_os.sep):
             return
@@ -335,7 +382,24 @@ for _guard_name in ("copy", "copy2", "copyfile", "copytree"):
     if _guard_orig is not None:
         setattr(_guard_shutil, _guard_name, _guard_make_shutil_copy(_guard_orig, _guard_name))
 
-del _guard_name, _guard_orig
+for _guard_name in ("listdir", "scandir", "open"):
+    # 一覧取得と低水準 open は読み取りだけを見る（書き込み判定は open()/os.* 側）。
+    # 読めない他ユーザーのドラフトの中身・ファイル名を漏らさないため。
+    def _guard_make_read(_orig, _check):
+        def _fn(*_args, **_kwargs):
+            _target = _args[0] if _args else _kwargs.get("path", ".")
+            if _target is not None:
+                _check(_target)
+            return _orig(*_args, **_kwargs)
+
+        return _fn
+
+    _guard_orig = getattr(_guard_os, _guard_name, None)
+    if _guard_orig is not None:
+        _check = _guard_check_deny if _guard_name == "open" else _guard_check_list
+        setattr(_guard_os, _guard_name, _guard_make_read(_guard_orig, _check))
+
+del _guard_name, _guard_orig, _check
 
 import subprocess as _guard_subprocess
 

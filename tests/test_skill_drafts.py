@@ -277,3 +277,143 @@ def test_session_read_skill_adds_draft_names_without_touching_shared_tool(monkey
     enum = convert_to_openai_tool(copy)["function"]["parameters"]["properties"]["skill_name"]["enum"]
     assert enum == ["official", "tanaka/my-tool"]
     assert session_read_skill([]) is read_skill_module.read_skill
+
+
+# --- 2026-10-10 レビュー指摘の修正 ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("identifier", "expected"),
+    [
+        ("Tanaka", "tanaka"),
+        ("alice.", "alice"),
+        ("bob . ", "bob"),
+        ("..", "u-"),
+        (".", "u-"),
+        ("_workspace", "u-_workspace"),
+        ("CON", "u-con"),
+        ("nul.txt", "u-nul.txt"),
+        ("a/b", "a_b"),
+        (None, "anonymous"),
+    ],
+)
+def test_draft_owner_name_never_points_outside_own_folder(identifier, expected):
+    """`..` やWindowsで別名になる形（末尾ドット・大文字小文字・予約名）をフォルダ名にしない。"""
+    assert skill_drafts.draft_owner_name(identifier) == expected
+
+
+def test_unwritable_dirs_cover_other_users_unless_full(env):
+    other = (env.draft_dir / "suzuki").resolve()
+    for mode in ("hidden", "listed", "readable"):
+        env.config.skill_other_users_drafts = mode
+        assert skill_drafts.unwritable_dirs(env.config, "tanaka") == [other]
+    env.config.skill_other_users_drafts = "full"
+    assert skill_drafts.unwritable_dirs(env.config, "tanaka") == []
+
+
+def _run_guarded(script_body: str, workdir: Path, allowed: list[Path]) -> subprocess.CompletedProcess:
+    from src.tools._python_fs_guard import _python_fs_guard_preamble
+
+    script = workdir / "probe.py"
+    script.write_text(_python_fs_guard_preamble(allowed) + script_body, encoding="utf-8")
+    return subprocess.run([sys.executable, str(script)], cwd=str(workdir), capture_output=True, text=True, encoding="utf-8")
+
+
+def test_readable_mode_blocks_writing_other_users_draft_even_inside_work_dir(env, tmp_path):
+    """作業ディレクトリが draft_dir を含んでいても、readable では他人のドラフトへ書けない（自分のには書ける）。"""
+    env.config.skill_other_users_drafts = "readable"
+    other = env.draft_dir / "suzuki" / "their-tool" / "notes.md"
+    own = env.draft_dir / "tanaka" / "my-tool" / "notes.md"
+    body = (
+        f"open(r'{other.parent / 'SKILL.md'}', encoding='utf-8').read()\nprint('OTHER_READ')\n"
+        f"try:\n    open(r'{other}', 'w').write('x')\n    print('OTHER_WRITTEN')\nexcept PermissionError:\n    print('OTHER_BLOCKED')\n"
+        f"open(r'{own}', 'w').write('x')\nprint('OWN_WRITTEN')\n"
+    )
+    result = _run_guarded(body, tmp_path, [env.draft_dir])
+    assert "OTHER_READ" in result.stdout and "OTHER_BLOCKED" in result.stdout and "OWN_WRITTEN" in result.stdout, result.stderr
+    assert not other.exists()
+
+
+def test_hidden_mode_blocks_listing_and_low_level_open(env, tmp_path):
+    """open() 以外の経路（os.listdir・os.walk・Path.iterdir・os.open）でも他人のドラフトを覗けない。"""
+    other_dir = env.draft_dir / "suzuki" / "their-tool"
+    body = (
+        "import os, pathlib\n"
+        "def probe(label, fn):\n"
+        "    try:\n        fn()\n        print(label + '_LEAKED')\n"
+        "    except PermissionError:\n        print(label + '_BLOCKED')\n"
+        f"probe('LISTDIR', lambda: os.listdir(r'{other_dir}'))\n"
+        f"probe('ITERDIR', lambda: list(pathlib.Path(r'{other_dir}').iterdir()))\n"
+        f"probe('OSOPEN', lambda: os.open(r'{other_dir / 'SKILL.md'}', os.O_RDONLY))\n"
+        f"walked = [d for d, _, _ in os.walk(r'{env.draft_dir}')]\n"
+        f"print('WALK_LEAKED' if any('their-tool' in d for d in walked) else 'WALK_BLOCKED')\n"
+        f"print('OWN_LIST', os.listdir(r'{env.draft_dir / 'tanaka' / 'my-tool'}'))\n"
+    )
+    result = _run_guarded(body, tmp_path, [tmp_path])
+    out = result.stdout
+    assert "LEAKED" not in out, out + result.stderr
+    assert all(f"{k}_BLOCKED" in out for k in ("LISTDIR", "ITERDIR", "OSOPEN", "WALK")), out + result.stderr
+    assert "SKILL.md" in out
+
+
+def test_listed_mode_lists_skill_names_but_not_their_files(env, tmp_path):
+    """listed は他ユーザーのスキル名までは一覧できるが、その中のファイル名は見えない。"""
+    env.config.skill_other_users_drafts = "listed"
+    owner_dir = env.draft_dir / "suzuki"
+    body = (
+        "import os\n"
+        f"print('NAMES', os.listdir(r'{owner_dir}'))\n"
+        f"try:\n    os.listdir(r'{owner_dir / 'their-tool'}')\n    print('FILES_LEAKED')\nexcept PermissionError:\n    print('FILES_BLOCKED')\n"
+    )
+    result = _run_guarded(body, tmp_path, [tmp_path])
+    assert "their-tool" in result.stdout and "FILES_BLOCKED" in result.stdout, result.stdout + result.stderr
+
+
+def test_main_agent_run_script_is_limited_to_directly_runnable_skills(env):
+    """guard 有効時、run_script は skill-creator・自分のドラフト・allow_entries 登録分だけを選択肢に持つ。"""
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+
+    from src.tools.tool_node import filter_main_agent_tools
+
+    def enum_of(result, name):
+        tool = next(t for t in result if t.name == name)
+        return convert_to_openai_tool(tool)["function"]["parameters"]["properties"]["skill_name"]["enum"]
+
+    result = filter_main_agent_tools([tools.run_script, tools.run_script_background], env.config)
+    assert enum_of(result, "run_script") == ["skill-creator", "tanaka/my-tool"]
+    assert enum_of(result, "run_script_background") == ["skill-creator", "tanaka/my-tool"]
+    # 共有のツール本体（サブエージェントも使う）は書き換えない
+    assert "enum" not in convert_to_openai_tool(tools.run_script)["function"]["parameters"]["properties"]["skill_name"]
+
+    env.config.main_agent_tool_guard_allow_entries = frozenset({(("official", "run.py"), -1)})
+    assert enum_of(filter_main_agent_tools([tools.run_script], env.config), "run_script") == ["official", "skill-creator", "tanaka/my-tool"]
+
+
+def test_run_script_not_bound_when_nothing_is_directly_runnable(env):
+    from src.tools.tool_node import filter_main_agent_tools
+
+    shutil.rmtree(env.skills_dir / "skill-creator")
+    shutil.rmtree(env.draft_dir / "tanaka" / "my-tool" / "scripts")
+    assert filter_main_agent_tools([tools.run_script], env.config) == []
+
+
+def test_drafts_signature_changes_when_drafts_change(env):
+    before = skill_drafts.drafts_signature(skill_drafts.scan_visible_drafts(env.config, "tanaka"))
+    _make_skill(env.draft_dir / "tanaka", "new-tool", with_script=False)
+    after = skill_drafts.drafts_signature(skill_drafts.scan_visible_drafts(env.config, "tanaka"))
+    assert before != after
+
+
+def test_guard_exempt_entries_skip_private_modules_and_keep_explicit_settings(tmp_path):
+    skill_dir = _make_skill(tmp_path, "my-tool")
+    (skill_dir / "scripts" / "_common.py").write_text("", encoding="utf-8")
+    (skill_dir / "scripts" / "second.py").write_text("", encoding="utf-8")
+    entries = skill_drafts.guard_exempt_entries_for_skill("my-tool", skill_dir)
+    assert entries == [("my-tool", "run.py"), ("my-tool", "second.py")]
+
+    plan, allow = skill_drafts.merge_guard_exempt_entries(
+        frozenset({("other", "x.py")}), frozenset({("Glob", 1), (("my-tool", "second.py"), 0)}), entries
+    )
+    assert plan == {("other", "x.py"), ("my-tool", "run.py"), ("my-tool", "second.py")}
+    # 明示的に禁止（0）しているものは上書きしない
+    assert allow == {("Glob", 1), (("my-tool", "second.py"), 0), (("my-tool", "run.py"), -1)}

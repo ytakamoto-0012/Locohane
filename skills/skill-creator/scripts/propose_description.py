@@ -81,7 +81,7 @@ def _cmd_start(args: argparse.Namespace) -> int:
     with open(fd, "w", encoding="utf-8") as f:
         json.dump({"system": _SYSTEM_PROMPT, "user": user_prompt}, f, ensure_ascii=False)
     helper_path = Path(__file__).resolve().parent / "_llm_helper.py"
-    print_json(start_background([args.python_exe, str(helper_path), input_path], ws))
+    print_json(start_background([DEFAULT_MAIN_PYTHON, str(helper_path), input_path], ws))
     return 0
 
 
@@ -118,7 +118,6 @@ def main() -> int:
     p_start = sub.add_parser("start")
     p_start.add_argument("--name", required=True, help="ドラフト名（自分のドラフトはスキル名だけでよい）")
     p_start.add_argument("--failed-queries", required=True, help="per_query から matched:false を抜き出したJSON配列のファイル")
-    p_start.add_argument("--python-exe", default=DEFAULT_MAIN_PYTHON)
 
     p_status = sub.add_parser("status")
     p_status.add_argument("--name", required=True)

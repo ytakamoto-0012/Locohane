@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
+from pydantic import Field, create_model
 from langgraph.prebuilt import ToolNode
 import chainlit as cl
 import logging
@@ -11,7 +14,7 @@ import logging
 from .. import skill_drafts
 from ..tool_loop_guard import find_leaked_tool_markup, leaked_tool_markup_error
 from . import _state
-from ._safe_path import _is_guard_exempt_script
+from ._safe_path import _is_guard_exempt_script, _safe_path
 from ._duplicate_guard import _record_and_check_duplicate
 from ._state import _IN_SUBAGENT, _tool_call_semaphore_wrap
 from .analyze_image import _with_image_followups
@@ -310,18 +313,43 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
     }
 
 
-def _session_has_guard_exempt_scripts(config) -> bool:
-    """メインエージェントが allow_entries 無しでも直接実行できるスクリプトがあるか。
+def _guard_exempt_skill_names(config) -> list[str]:
+    """allow_entries 無しでもメインエージェントが直接実行できるスキル名の一覧。
 
-    skills_dir 配下の skill-creator 本体、または会話のユーザーに見えて実行できる
-    ドラフトが scripts/ を持つ場合 True（run_script/run_script_background を
-    bind しておかないと、ガードを免除しても呼び出す手段が無くなるため）。
+    skills_dir 配下の skill-creator 本体（同名の .locohane 側スキルが優先される
+    構成では対象外。src/skill_drafts.py の is_builtin_skill_creator）と、
+    会話のユーザーに見えて実行できる、scripts/ を持つドラフト。
     """
-    skills_dir = getattr(config, "skills_dir", None)
-    if skills_dir is not None and (skills_dir / skill_drafts.SKILL_CREATOR_NAME / "scripts").is_dir():
-        return True
+    names: list[str] = []
+    try:
+        scripts_dir = _safe_path(f"{skill_drafts.SKILL_CREATOR_NAME}/scripts", op="exec")
+    except (ValueError, RuntimeError):
+        scripts_dir = None
+    if scripts_dir is not None and scripts_dir.is_dir() and skill_drafts.is_builtin_skill_creator(scripts_dir, config):
+        names.append(skill_drafts.SKILL_CREATOR_NAME)
     drafts = skill_drafts.scan_visible_drafts(config, skill_drafts.current_draft_user())
-    return any(d.executable and d.skill.has_scripts for d in drafts)
+    names.extend(d.skill.name for d in drafts if d.executable and d.skill.has_scripts)
+    return names
+
+
+def _restrict_skill_name(tool: BaseTool, names: tuple[str, ...]) -> BaseTool:
+    """tool の skill_name 引数を names の選択肢（Literal）に制約した複製を返す。
+
+    モジュール共通の run_script/run_script_background（サブエージェントも共有）は
+    書き換えず、メインエージェント用の複製だけを制約する（read_skill の
+    session_read_skill() と同じ方式）。skill_name を持たないツールはそのまま返す。
+    """
+    schema = getattr(tool, "args_schema", None)
+    fields = getattr(schema, "model_fields", None)
+    if not fields or "skill_name" not in fields or not hasattr(tool, "model_copy"):
+        return tool
+    new_fields = {}
+    for field_name, info in fields.items():
+        if field_name == "skill_name":
+            new_fields[field_name] = (Literal[names], Field(description=info.description))
+        else:
+            new_fields[field_name] = (info.annotation, info)
+    return tool.model_copy(update={"args_schema": create_model(tool.name, **new_fields)})
 
 
 def filter_main_agent_tools(tools: list[BaseTool], config) -> list[BaseTool]:
@@ -363,22 +391,33 @@ def filter_main_agent_tools(tools: list[BaseTool], config) -> list[BaseTool]:
         args.script_filename と一致することが無いため、ここではカウントしない
         （このエントリだけしか無い場合に run_script ツール自体を無意味にbindして
         しまわないようにするため）。
+        ドラフトスキル・skill-creator 本体（_guard_exempt_skill_names）も
+        直接実行できるスキルとして数える。bind する run_script/
+        run_script_background は、skill_name をこれら直接実行できるスキル名の
+        選択肢に制約した複製にする（skill-creator は常に同梱されているため、
+        制約しないと allow_entries 未登録の構成でも全スキルが呼べそうに見え、
+        拒否されるだけの往復が起きる）。
     """
     guard_mode = config.main_agent_tool_guard_mode
     if guard_mode == "false":
         return tools
     entries_by_key = dict(config.main_agent_tool_guard_allow_entries)
-    run_script_allowed = any(
-        isinstance(key, tuple) and key[1] != "" and max_calls != 0 for key, max_calls in entries_by_key.items()
-    ) or _session_has_guard_exempt_scripts(config)
+    runnable_skill_names = tuple(
+        dict.fromkeys(
+            [
+                *(key[0] for key, max_calls in entries_by_key.items() if isinstance(key, tuple) and key[1] != "" and max_calls != 0),
+                *_guard_exempt_skill_names(config),
+            ]
+        )
+    )
     filtered = []
     for t in tools:
         if _mcp_tool_always_allowed(t.name, guard_mode):
             filtered.append(t)
             continue
         if t.name in ("run_script", "run_script_background"):
-            if run_script_allowed:
-                filtered.append(t)
+            if runnable_skill_names:
+                filtered.append(_restrict_skill_name(t, runnable_skill_names))
             continue
         max_calls = entries_by_key.get(t.name)
         if max_calls is not None and max_calls != 0:

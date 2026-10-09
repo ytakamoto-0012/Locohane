@@ -91,6 +91,13 @@ python evals/run_all.py system_prompt --repeat 10 --instance <name>
 1回でも不合格・エラーがあれば `fail`、それ以外で judge 付きのケースがあれば `needs_judge`
 （全回の transcript を読んで、全回合格と判断できたときだけ合格とする）。
 
+開始時にケース（フォルダ直下の `*.yaml` 全部）と `--skill-overlay` のスキルを一時フォルダへ写し、
+全回をその内容で評価する（途中でドラフトが編集されても回ごとに中身が変わらない）。`tryout.json` は
+`--repeat 1` でも出力し、評価した内容のハッシュ（`cases_sha256`・`skill_overlays[].sha256`。規則は
+`evals/skill_tree.py`）と実行したケース（`case_files`）も残す。promote-skill の昇格は、このハッシュが
+今のドラフトと一致し、全ケースを `[skill_creator] tryout_repeats` 回以上評価した `tryout.json` でなければ
+受け付けない（ドラフトに修正が入れば合格回数は0に戻る）。
+
 ### 任意のケースフォルダ・スキルを重ねた評価（`--cases-dir` / `--skill-overlay`）
 
 ドラフトスキル（`data/<インスタンス名>/skill_drafts/<ユーザー名>/<スキル名>/`）の評価に使う:
@@ -102,7 +109,10 @@ python evals/run_all.py --cases-dir <ドラフト>/evals --skill-overlay <ドラ
 - `--cases-dir`: `evals/cases/<target>/` の代わりにそのフォルダ直下の `*.yaml` を実行する（target は省略でき、位置引数はケースIDとして扱う）。
 - `--skill-overlay`（複数可）: 本番のスキル構成（`skills_dir`・`project_locohane_dir`）をそのまま残し、
   指定したスキルフォルダを一時ディレクトリへコピーして最優先で重ねる（`run_case.py` にも同名オプションがある）。
-  同名の正式スキルがあれば上書きした状態で評価される。
+  同名の正式スキルがあれば上書きした状態で評価される。重ねたスキルの `scripts/*.py` は、昇格時に
+  promote-skill がインスタンスの `config_overrides.json` へ登録するのと同じく、計画承認と
+  `[main_agent_tool_guard]` を免除した設定（`plan_approval_exempt_scripts`・`allow_entries` に max_calls=-1 で
+  追加した状態）で評価する（`src/skill_drafts.py` の `guard_exempt_entries_for_skill`）。
 - `--exclude-skill`（複数可）: スキル一覧から除く（baseline 用）。
 - `--results-dir`: 結果の出力先ルート（既定 `evals/results/<target>/`）。
 
