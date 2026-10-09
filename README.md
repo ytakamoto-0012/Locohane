@@ -1,8 +1,8 @@
-# Locohane（ローカルAIエージェント）
+# Locohane-Agent（ローカルAIエージェント）
 
 ![Locohane](public/settings/icon.png)
 
-Locohane（ロコハネ）は、**社内サーバーや手元のPCだけで動く AI エージェント**です。
+Locohane（ロコハネ）Agentは、**社内サーバーや手元のPCだけで動く AI エージェント**です。
 ブラウザのチャット画面から話しかけるだけで、Excel・Word・PowerPoint・PDF の読み取りや作成、
 画像の確認、フォルダ内の多数のファイルの一括処理などを、AI が手順を考えながら進めます。
 
@@ -184,7 +184,7 @@ AI が書き込めるのは、この作業フォルダの中だけです。
 - AI の接続先・各種設定の変更（テキストエディタ不要）
 - ログインユーザーの追加・変更
 - 画面のヘッダー・ウェルカムメッセージ・アイコンの変更
-- Locohane を**複数のインスタンス**（別のモデル・別の部署向けなど）として同時に起動・停止・再起動
+- Locohane-Agent を**複数のインスタンス**（別のモデル・別の部署向けなど）として同時に起動・停止・再起動
 - 稼働状況・会話・ログの確認、設定の変更履歴の確認
 
 ![Dashboad](admin/Dashboad_01.png)
@@ -223,5 +223,5 @@ AI が書き込めるのは、この作業フォルダの中だけです。
 | [README_DETAIL.md](README_DETAIL.md) | 管理者・開発者 | 設計・ディレクトリ構成・設定リファレンス・運用の詳細 |
 | [skills/SKILLS_README.md](skills/SKILLS_README.md) | スキル開発者 | スキルの書き方・規約 |
 | [agents/README/AGENTS_README.md](agents/README/AGENTS_README.md) | 開発者 | サブエージェント種別の定義方法 |
-| [mcp_server/MCP_README.md](mcp_server/MCP_README.md) | 開発者 | Locohane のスキルを MCP サーバーとして配布する方法 |
+| [mcp_server/MCP_README.md](mcp_server/MCP_README.md) | 開発者 | Locohane-Agent のスキルを MCP サーバーとして配布する方法 |
 | [evals/README.md](evals/README.md) | 開発者 | 評価ハーネス（スキル安定化トライアウト）の使い方 |
