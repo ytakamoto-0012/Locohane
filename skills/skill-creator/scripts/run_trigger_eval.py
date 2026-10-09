@@ -1,20 +1,19 @@
-"""SKILL.md の description がどれだけ狙い通りにトリガーされるかを評価する。
+"""ドラフトスキルの description がどれだけ狙い通りにトリガーされるかを評価する。
 
 skill-creator スキルの実行スクリプト（progressive disclosure 第3段階）。
-trigger_eval.json（`[{"query": str, "should_trigger": bool}, ...]`）の各
-クエリを複数回（既定3回、ローカルLLMの応答ブレを平均化するため）実行し、
-`read_skill` が対象スキル名で実際に呼ばれたかどうかからトリガー率を集計する。
 
-1クエリ1プロセスで evals.run_case を都度呼ぶのではなく、
-`evals/cases/<target>/` にまとめてケースを生成したうえで
-`python evals/run_all.py <target>` を1プロセスとしてバックグラウンド起動する
-（run_all.py が直列実行してくれるため、ローカルllama-serverへの多重
-リクエストを避けられる）。
+    python run_trigger_eval.py start --name my-skill --eval-set <trigger_eval.json> [--repeats 3]
+    python run_trigger_eval.py status --name my-skill --job-id <job_id>
 
-使い方:
-    python run_trigger_eval.py start --eval-set trigger_eval.json \\
-        --skill-name my-new-skill --workspace <path> [--repeats 3] [--python-exe <path>]
-    python run_trigger_eval.py status --job-id <job_id> --workspace <path>
+trigger_eval.json は `[{"query": "発話", "should_trigger": true}, ...]`。各クエリを
+--repeats 回（既定3回、ローカルLLMの応答ブレを平均化するため）実行し、
+read_skill が対象スキル名で呼ばれたかどうかからトリガー率を集計する。
+
+クエリごとの一時ケースはドラフトの workspace（`_workspace/<スキル名>/trigger/`）に
+作り、evals/run_all.py を `--cases-dir` `--repeat` `--skill-overlay` 付きで
+1プロセスとしてバックグラウンド起動する（run_all.py が直列実行するため、
+ローカル llama-server への多重リクエストを避けられる）。プロジェクトの
+evals/cases/ には書き込まない。
 
 自己完結（標準ライブラリのみ）。依存なし。
 """
@@ -23,11 +22,24 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import uuid
 from pathlib import Path
 
-from _common import DEFAULT_MAIN_PYTHON, _is_process_alive, print_json, project_root, start_background
+from _common import (
+    DEFAULT_MAIN_PYTHON,
+    SkillCreatorError,
+    draft_context,
+    is_process_alive,
+    latest_results_dir,
+    load_job,
+    log_tail,
+    print_json,
+    project_root,
+    resolve_draft,
+    run_main,
+    start_background,
+    workspace_dir,
+)
 
 
 def _make_case_dict(case_id: str, target: str, query: str) -> dict:
@@ -52,128 +64,90 @@ def _make_case_dict(case_id: str, target: str, query: str) -> dict:
 def _cmd_start(args: argparse.Namespace) -> int:
     eval_set_path = Path(args.eval_set)
     if not eval_set_path.is_file():
-        print(f"エラー: eval-set が見つかりません: {eval_set_path}", file=sys.stderr)
-        return 1
-
+        raise SkillCreatorError(f"eval-set が見つかりません: {eval_set_path}")
     queries = json.loads(eval_set_path.read_text(encoding="utf-8"))
     if not isinstance(queries, list) or not queries:
-        print("エラー: eval-set は1件以上のオブジェクトを持つJSON配列である必要があります", file=sys.stderr)
-        return 1
+        raise SkillCreatorError("eval-set は1件以上のオブジェクトを持つJSON配列にしてください。")
+    if args.repeats < 1:
+        raise SkillCreatorError("--repeats は1以上にしてください。")
 
-    root = project_root()
-    target = f"trigger_{args.skill_name}_{uuid.uuid4().hex[:8]}"
-    cases_dir = root / "evals" / "cases" / target
-    cases_dir.mkdir(parents=True, exist_ok=True)
-
+    ctx = draft_context()
+    ref = resolve_draft(ctx, args.name, "write")
+    ws = workspace_dir(ctx, ref)
+    run_dir = ws / "trigger" / uuid.uuid4().hex[:8]
+    cases_dir = run_dir / "cases"
+    cases_dir.mkdir(parents=True)
     meta_queries = []
     for qi, item in enumerate(queries):
-        query = item["query"]
-        should_trigger = bool(item["should_trigger"])
-        meta_queries.append({"query_index": qi, "query": query, "should_trigger": should_trigger})
-        for ri in range(args.repeats):
-            case_id = f"q{qi:03d}_r{ri:02d}"
-            case_dict = _make_case_dict(case_id, target, query)
-            (cases_dir / f"{case_id}.yaml").write_text(
-                json.dumps(case_dict, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-
-    (cases_dir / "_trigger_meta.json").write_text(
-        json.dumps(
-            {"skill_name": args.skill_name, "repeats": args.repeats, "queries": meta_queries},
-            ensure_ascii=False,
-            indent=2,
-        ),
+        case_id = f"q{qi:03d}"
+        meta_queries.append({"case_id": case_id, "query": item["query"], "should_trigger": bool(item["should_trigger"])})
+        (cases_dir / f"{case_id}.yaml").write_text(
+            json.dumps(_make_case_dict(case_id, ref.name, item["query"]), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    (run_dir / "trigger_meta.json").write_text(
+        json.dumps({"skill_name": ref.name, "repeats": args.repeats, "queries": meta_queries}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-
-    workspace = Path(args.workspace)
-    workspace.mkdir(parents=True, exist_ok=True)
-    (workspace / "jobs").mkdir(exist_ok=True)
-
-    cmd = [args.python_exe, str(root / "evals" / "run_all.py"), target]
-    result = start_background(cmd, cwd=root, env=__import__("os").environ.copy(), workspace=workspace)
-
-    meta_path = workspace / "jobs" / result["job_id"] / "meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta["target"] = target
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    result["target"] = target
-    result["case_count"] = len(meta_queries) * args.repeats
-    print_json(result)
+    cmd = [
+        args.python_exe,
+        str(project_root() / "evals" / "run_all.py"),
+        "--cases-dir",
+        str(cases_dir),
+        "--results-dir",
+        str(run_dir / "results"),
+        "--repeat",
+        str(args.repeats),
+        "--skill-overlay",
+        str(ref.dir),
+    ]
+    job = start_background(cmd, ws, {"trigger_run_dir": str(run_dir)})
+    job["case_count"] = len(meta_queries) * args.repeats
+    print_json(job)
     return 0
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    root = project_root()
-    workspace = Path(args.workspace)
-    job_dir = workspace / "jobs" / args.job_id
-    meta_path = job_dir / "meta.json"
-    if not meta_path.is_file():
-        print_json({"error": f"ジョブが見つかりません: {args.job_id}"})
-        return 1
-
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    if _is_process_alive(meta["pid"]):
-        print_json({"job_id": args.job_id, "status": "running", "pid": meta["pid"]})
+    ctx = draft_context()
+    ref = resolve_draft(ctx, args.name, "write")
+    job = load_job(workspace_dir(ctx, ref), args.job_id)
+    if is_process_alive(job["pid"]):
+        print_json({"job_id": args.job_id, "status": "running", "pid": job["pid"]})
         return 0
 
-    target = meta["target"]
-    results_root = root / "evals" / "results" / target
-    if not results_root.is_dir():
-        print_json({"job_id": args.job_id, "status": "finished", "error": "結果ディレクトリが見つかりません", "target": target})
+    run_dir = Path(job["trigger_run_dir"])
+    out_dir = latest_results_dir(run_dir / "results")
+    if out_dir is None:
+        print_json({"job_id": args.job_id, "status": "finished", "error": "結果が生成されていません", "log_tail": log_tail(job)})
         return 1
-
-    timestamp_dirs = sorted(p for p in results_root.iterdir() if p.is_dir())
-    if not timestamp_dirs:
-        print_json({"job_id": args.job_id, "status": "finished", "error": "結果が生成されていません", "target": target})
-        return 1
-
-    results_path = timestamp_dirs[-1] / "results.json"
-    results = json.loads(results_path.read_text(encoding="utf-8"))
-
-    trigger_meta_path = root / "evals" / "cases" / target / "_trigger_meta.json"
-    trigger_meta = json.loads(trigger_meta_path.read_text(encoding="utf-8"))
+    results = json.loads((out_dir / "results.json").read_text(encoding="utf-8"))
+    trigger_meta = json.loads((run_dir / "trigger_meta.json").read_text(encoding="utf-8"))
     skill_name = trigger_meta["skill_name"]
     repeats = trigger_meta["repeats"]
 
-    triggered_by_case: dict[str, bool] = {}
+    triggered: dict[str, int] = {}
     for r in results:
-        case_id = r.get("case_id")
-        transcript = r.get("transcript") or []
-        triggered = False
-        for entry in transcript:
-            for tc in entry.get("tool_calls") or []:
-                if tc.get("name") == "read_skill" and (tc.get("args") or {}).get("skill_name") == skill_name:
-                    triggered = True
-        triggered_by_case[case_id] = triggered
+        hit = any(
+            tc.get("name") == "read_skill" and (tc.get("args") or {}).get("skill_name") == skill_name
+            for entry in (r.get("transcript") or [])
+            for tc in (entry.get("tool_calls") or [])
+        )
+        triggered[r.get("case_id")] = triggered.get(r.get("case_id"), 0) + (1 if hit else 0)
 
     per_query = []
     correct = 0
     for q in trigger_meta["queries"]:
-        qi = q["query_index"]
-        trig_count = sum(1 for ri in range(repeats) if triggered_by_case.get(f"q{qi:03d}_r{ri:02d}"))
-        trigger_rate = trig_count / repeats if repeats else 0.0
-        matched = (trigger_rate >= 0.5) == q["should_trigger"]
+        rate = triggered.get(q["case_id"], 0) / repeats
+        matched = (rate >= 0.5) == q["should_trigger"]
         correct += 1 if matched else 0
-        per_query.append(
-            {
-                "query": q["query"],
-                "should_trigger": q["should_trigger"],
-                "trigger_rate": trigger_rate,
-                "matched": matched,
-            }
-        )
-
+        per_query.append({"query": q["query"], "should_trigger": q["should_trigger"], "trigger_rate": rate, "matched": matched})
     total = len(trigger_meta["queries"])
     print_json(
         {
             "job_id": args.job_id,
             "status": "finished",
-            "target": target,
             "accuracy": (correct / total) if total else None,
             "per_query": per_query,
-            "results_path": str(results_path),
+            "results_path": str(out_dir / "results.json"),
         }
     )
     return 0
@@ -184,22 +158,18 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_start = sub.add_parser("start")
+    p_start.add_argument("--name", required=True, help="ドラフト名（自分のドラフトはスキル名だけでよい）")
     p_start.add_argument("--eval-set", required=True, help='[{"query":str,"should_trigger":bool}, ...] のJSONファイル')
-    p_start.add_argument("--skill-name", required=True)
     p_start.add_argument("--repeats", type=int, default=3)
-    p_start.add_argument("--workspace", required=True)
     p_start.add_argument("--python-exe", default=DEFAULT_MAIN_PYTHON)
 
     p_status = sub.add_parser("status")
+    p_status.add_argument("--name", required=True)
     p_status.add_argument("--job-id", required=True)
-    p_status.add_argument("--workspace", required=True)
 
     args = parser.parse_args()
-    if args.command == "start":
-        return _cmd_start(args)
-    return _cmd_status(args)
+    return _cmd_start(args) if args.command == "start" else _cmd_status(args)
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    sys.exit(main())
+    run_main(main)

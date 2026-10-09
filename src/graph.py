@@ -47,6 +47,7 @@ from .llm import (
 from .main_token_guard import maybe_append_token_guard
 from .tool_loop_guard import raise_if_tool_call_loop
 from .tools import ImageAwareToolNode, filter_main_agent_tools, get_all_tools
+from .tools.session_tools import apply_session_tool_overrides
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ async def _build_handwritten_graph(config: Config, system_prompt: str, checkpoin
         コンパイル済みの LangGraph（CompiledStateGraph）。
         astream_events / ainvoke などで実行できる。
     """
-    main_tools = filter_main_agent_tools(get_all_tools(), config)
+    main_tools = filter_main_agent_tools(apply_session_tool_overrides(get_all_tools()), config)
     model = enable_thinking_control(
         await build_model(config, role="main", wait_when_busy=wait_when_busy), config, "main"
     ).bind_tools(main_tools)
@@ -191,7 +192,7 @@ async def _build_prebuilt_graph(config: Config, system_prompt: str, checkpointer
         astream_events / ainvoke などで実行できる。
     """
     model = enable_thinking_control(await build_model(config, role="main", wait_when_busy=wait_when_busy), config, "main")
-    main_tools = filter_main_agent_tools(get_all_tools(), config)
+    main_tools = filter_main_agent_tools(apply_session_tool_overrides(get_all_tools()), config)
 
     def pre_model_hook(state: MessagesState) -> dict:
         """モデル呼び出し直前に、入力を絞り、必要なら引継ぎ促しを差し込む。

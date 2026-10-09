@@ -105,6 +105,8 @@ python evals/run_all.py <target> <case_id1> <case_id2> ... --instance <instance>
 
 サマリ先頭の`インスタンス:`行が選んだインスタンスになっていることを確認する。
 
+合格が偶然でないか確かめたいとき（最終確認など）は`--repeat N`を付けてよい（スキル安定化トライアウト。各ケースをN回ずつ回し、サマリ末尾の判定が全回合格かを見る）。ドラフトスキルの正式化は`promote-skill`の担当で、このスキルでは行わない。
+
 出力サマリと`evals/results/<target>/<最新timestamp>/results.json`を見る。
 
 ### 2-2. 判定する

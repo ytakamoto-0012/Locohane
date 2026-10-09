@@ -9,6 +9,8 @@ description: Locohane の evals/cases/<target>/*.yaml に新しい eval ケー�
 チューニングループ本体（`tune-prompt`）とは別物で、
 このスキルは「ケースを1件正しく書いて動作確認する」ところまでを担当する。
 
+利用者が skill-creator で作るドラフトスキルのケースは、skill-creator の`make_eval_case.py`がドラフトの`evals/`に作る（このスキルの対象外）。昇格（`promote-skill`）すると`evals/cases/<スキル名>/`へ移り、以後はこのスキルで追加してよい。
+
 ## 前提条件の確認
 
 1. 必ず `AskUserQuestion` ツールを呼び、`instances/` 直下のディレクトリ名

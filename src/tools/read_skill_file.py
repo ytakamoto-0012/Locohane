@@ -7,6 +7,7 @@ import logging
 
 from pathlib import Path
 
+from .. import skill_drafts
 from . import _state
 from ._duplicate_guard import _check_file_tools_duplicate
 from ._path_memory_helpers import _PATH_MEMORY_TOKEN_RE, _resolve_path_memory_token
@@ -38,6 +39,9 @@ def _resolve_skill_file_path(relative_path: str) -> Path:
     path = Path(resolved).resolve()
     if not any(path.is_relative_to(root) for root in _state._SKILLS_ROOTS or []):
         raise ValueError(f"{relative_path} は skills ディレクトリ外のファイルです")
+    draft_error = skill_drafts.access_error(path, "read", _state._LLM_CONFIG, skill_drafts.current_draft_user())
+    if draft_error:
+        raise ValueError(draft_error.removeprefix("エラー: "))
     return path
 
 

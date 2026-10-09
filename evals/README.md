@@ -77,6 +77,37 @@ python -m evals.run_case evals/cases/system_prompt/001_skill_routing_pdf.yaml --
 python -m evals.instance <name>
 ```
 
+### スキル安定化トライアウト（`--repeat`）
+
+1回の合格が偶然でないかを確かめるため、各ケースを N 回ずつ直列に繰り返す:
+
+```
+python evals/run_all.py system_prompt --repeat 10 --instance <name>
+```
+
+ケースを一巡してから次の回へ進む（途中で止めても全ケースの回数が揃う）。各結果には
+`repeat_index` が付き、`summary.md` 末尾の「スキル安定化トライアウト」節と `tryout.json` に
+ケースごとの合格回数と判定を出す。判定は、全ケースが N 回すべてルール合格なら `pass`、
+1回でも不合格・エラーがあれば `fail`、それ以外で judge 付きのケースがあれば `needs_judge`
+（全回の transcript を読んで、全回合格と判断できたときだけ合格とする）。
+
+### 任意のケースフォルダ・スキルを重ねた評価（`--cases-dir` / `--skill-overlay`）
+
+ドラフトスキル（`data/<インスタンス名>/skill_drafts/<ユーザー名>/<スキル名>/`）の評価に使う:
+
+```
+python evals/run_all.py --cases-dir <ドラフト>/evals --skill-overlay <ドラフト> --repeat 10 --instance <name> --results-dir <出力先>
+```
+
+- `--cases-dir`: `evals/cases/<target>/` の代わりにそのフォルダ直下の `*.yaml` を実行する（target は省略でき、位置引数はケースIDとして扱う）。
+- `--skill-overlay`（複数可）: 本番のスキル構成（`skills_dir`・`project_locohane_dir`）をそのまま残し、
+  指定したスキルフォルダを一時ディレクトリへコピーして最優先で重ねる（`run_case.py` にも同名オプションがある）。
+  同名の正式スキルがあれば上書きした状態で評価される。
+- `--exclude-skill`（複数可）: スキル一覧から除く（baseline 用）。
+- `--results-dir`: 結果の出力先ルート（既定 `evals/results/<target>/`）。
+
+skill-creator（`run_isolated_eval.py`）と promote-skill はこの形で呼んでいる。
+
 ## ケースの書き方（`evals/cases/<target>/*.yaml`）
 
 ```yaml

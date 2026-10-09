@@ -1,21 +1,38 @@
 """skill-creator の各スクリプトが共有するヘルパー。
 
-Locohane プロジェクトルート（evals/, src/ を含む）を直接呼び出すための
-経路解決と、run_script の同期実行タイムアウト（config.ini の
-[scripts].timeout、既定値は環境依存で数百秒程度）を超えうる処理（実際に
-llama.cpp サーバーへ問い合わせる eval 実行）をバックグラウンド起動して
-後からポーリングするための最小限のジョブ管理を提供する。
+- ドラフト置き場（ユーザー別、未検証のスキルの置き場）の解決と権限確認
+- 正式スキル名との重複確認・SKILL.md frontmatter の検証
+- ドラフトの来歴（_draft_meta.json）の読み書き
+- 評価（実際に llama.cpp サーバーへ問い合わせる evals）のバックグラウンド
+  起動と、後からのポーリング
 
-自己完結（標準ライブラリのみ）。依存なし。
+ドラフトは `<draft_dir>/<ユーザー名>/<スキル名>/` に置く。draft_dir・
+ユーザー名・他ユーザーのドラフトの扱いは、Locohane 本体が run_script の
+子プロセスへ環境変数で渡す（src/tools/_subprocess_env.py）:
+
+    AGENT_SKILL_DRAFT_DIR     ドラフト置き場（config.ini [skill_creator].draft_dir）
+    AGENT_USER                会話のユーザー名（ドラフトの所有者）
+    AGENT_OTHER_USERS_DRAFTS  他ユーザーのドラフトの扱い（hidden/listed/readable/full）
+    AGENT_SKILL_ROOTS         正式スキルの走査ルート（os.pathsep 区切り、優先順）
+
+これらが無い（ログインユーザーの会話以外から呼ばれた）場合、ドラフト操作は
+すべてエラーにする。
+
+自己完結（標準ライブラリのみ）。Locohane 本体（src/）は import しない
+（run_script は本体とは別の Python 環境で動くことがあるため）。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 # Locohane本体（evals/, src/ 以下。langchain/langgraph/chainlit 等に依存）を
@@ -26,6 +43,32 @@ from pathlib import Path
 # 継承される）をデフォルトにし、未設定なら自身の Python を使う。
 # 各スクリプトは --python-exe で上書きできるようにする。
 DEFAULT_MAIN_PYTHON = os.environ.get("LOCOHANE_PYTHON") or sys.executable
+
+# src/skill_drafts.py と同じ名前（本体を import しないため値を複製している）。
+DRAFT_META_FILENAME = "_draft_meta.json"
+WORKSPACE_DIRNAME = "_workspace"
+# ドラフトの evals ケース置き場（昇格時に evals/cases/<スキル名>/ へ移す）。
+DRAFT_EVALS_DIRNAME = "evals"
+
+_NAME_RE = re.compile(r"^[a-z0-9]+([_-][a-z0-9]+)*$")
+_NAME_MAX = 64
+_DESC_MAX = 1024
+
+# 他ユーザーのドラフトに許す操作（src/skill_drafts.py の _OTHER_USER_OPS と同じ）。
+_OTHER_USER_OPS = {
+    "hidden": frozenset(),
+    "listed": frozenset({"list"}),
+    "readable": frozenset({"list", "read"}),
+    "full": frozenset({"list", "read", "exec", "write"}),
+}
+_OP_LABELS = {"list": "一覧表示", "read": "読み取り", "exec": "実行", "write": "書き込み・評価"}
+
+# ハッシュ・コピーの対象から外すもの（来歴・ケース・キャッシュはスキル本体ではない）。
+_TREE_EXCLUDE = {DRAFT_META_FILENAME, DRAFT_EVALS_DIRNAME, "__pycache__"}
+
+
+class SkillCreatorError(Exception):
+    """利用者へそのまま見せるエラー（main() で stderr に出して終了コード1）。"""
 
 
 def project_root() -> Path:
@@ -38,32 +81,236 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def workspace_dir(skill_dir: Path) -> Path:
-    """スキルディレクトリの兄弟に `<skill-name>-workspace/` を用意して返す。
+def print_json(obj: dict) -> None:
+    """契約どおり1行のJSONを標準出力へ書く。"""
+    print(json.dumps(obj, ensure_ascii=False))
 
-    Args:
-        skill_dir: 評価対象スキルのディレクトリ（例: skills/my-new-skill）。
 
-    Returns:
-        `<skill_dir>-workspace/`（無ければ作成、jobs/ サブディレクトリも用意）。
-    """
-    ws = skill_dir.parent / f"{skill_dir.name}-workspace"
+def run_main(main) -> None:
+    """main() を実行し、SkillCreatorError は stderr へ出して終了コード1にする。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        sys.exit(main())
+    except SkillCreatorError as e:
+        print(f"エラー: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+# --- ドラフト置き場 ---------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DraftContext:
+    """会話のユーザーから見たドラフト置き場。"""
+
+    root: Path
+    user: str
+    mode: str
+
+    def allowed(self, owner: str, op: str) -> bool:
+        return owner == self.user or op in _OTHER_USER_OPS.get(self.mode, frozenset())
+
+
+@dataclass(frozen=True)
+class DraftRef:
+    """1件のドラフト（`<所有者>/<スキル名>`）。"""
+
+    owner: str
+    name: str
+    dir: Path
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.owner}/{self.name}"
+
+
+def draft_context() -> DraftContext:
+    """環境変数からドラフト置き場を求める。無ければ SkillCreatorError。"""
+    root = os.environ.get("AGENT_SKILL_DRAFT_DIR")
+    user = os.environ.get("AGENT_USER")
+    if not root or not user:
+        raise SkillCreatorError(
+            "ドラフト置き場が使えません。skill-creator は Locohane のチャット（ログインしたユーザーの会話）から使ってください。"
+        )
+    return DraftContext(Path(root), user, os.environ.get("AGENT_OTHER_USERS_DRAFTS", "hidden"))
+
+
+def resolve_draft(ctx: DraftContext, name: str, op: str, *, must_exist: bool = True) -> DraftRef:
+    """`<スキル名>`（自分のドラフト）または `<所有者>/<スキル名>` を解決し、op の権限を確かめる。"""
+    owner, _, skill = name.strip().replace("\\", "/").rpartition("/")
+    owner = owner or ctx.user
+    bad_owner = not owner or owner in (".", "..") or owner.startswith("_") or any(c in owner for c in ("/", "\\", ":"))
+    if bad_owner or not _NAME_RE.match(skill or "-"):
+        raise SkillCreatorError(f"ドラフト名が不正です: {name!r}（「スキル名」または「ユーザー名/スキル名」で指定）")
+    if not ctx.allowed(owner, op):
+        raise SkillCreatorError(f"他ユーザーのドラフト（{owner}/{skill}）は{_OP_LABELS[op]}できません。")
+    ref = DraftRef(owner, skill, ctx.root / owner / skill)
+    if must_exist and not (ref.dir / "SKILL.md").is_file():
+        raise SkillCreatorError(f"ドラフトが見つかりません: {ref.full_name}（list_drafts.py で一覧を確認）")
+    return ref
+
+
+def workspace_dir(ctx: DraftContext, ref: DraftRef) -> Path:
+    """ドラフトの評価ジョブ・結果の置き場（`<所有者>/_workspace/<スキル名>/`、昇格対象外）。"""
+    ws = ctx.root / ref.owner / WORKSPACE_DIRNAME / ref.name
     (ws / "jobs").mkdir(parents=True, exist_ok=True)
     return ws
 
 
-def start_background(cmd: list[str], cwd: Path, env: dict[str, str], workspace: Path) -> dict:
+def official_roots() -> list[Path]:
+    """正式スキルの走査ルート（優先順）。"""
+    raw = os.environ.get("AGENT_SKILL_ROOTS", "")
+    return [Path(p) for p in raw.split(os.pathsep) if p]
+
+
+def find_official_skill(name: str) -> Path | None:
+    """正式スキル name のフォルダ（優先順で最初に見つかったもの）。無ければ None。"""
+    for root in official_roots():
+        if (root / name / "SKILL.md").is_file():
+            return root / name
+    return None
+
+
+# --- SKILL.md の検証 --------------------------------------------------------
+
+
+def validate_name_description(name: object, description: object, dir_name: str | None = None) -> str | None:
+    """src/skills.py の _validate() と同一ルール。違反の理由 or None。"""
+    if not isinstance(name, str) or not name:
+        return "name が無い、または文字列でない"
+    if len(name) > _NAME_MAX:
+        return f"name が {_NAME_MAX} 文字を超えている"
+    if "--" in name or "__" in name or "-_" in name or "_-" in name:
+        return "name に区切り文字 (- や _) の連続が含まれる"
+    if not _NAME_RE.match(name):
+        return "name は小文字英数字・ハイフン・アンダースコアのみ・先頭末尾は区切り文字不可"
+    if dir_name is not None and name != dir_name:
+        return f"name '{name}' がフォルダ名 '{dir_name}' と一致しない"
+    if not isinstance(description, str) or not description.strip():
+        return "description が無い、または空"
+    if len(description) > _DESC_MAX:
+        return f"description が {_DESC_MAX} 文字を超えている"
+    return None
+
+
+def parse_frontmatter(text: str) -> dict[str, str] | None:
+    """先頭の `---\\n...\\n---` ブロックから name/description/license を拾う。
+
+    src/skills.py は PyYAML でパースするが、ここでは単純な `key: value` 行のみを
+    対象にした簡易パーサーで代用する（事前検証が目的で、最終的な合否は
+    Locohane 本体の走査が唯一の正）。
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        return None
+    result: dict[str, str] = {}
+    for line in lines[1:end]:
+        if not line.strip() or line.startswith((" ", "\t")) or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if key in ("name", "description", "license") and value:
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            result[key] = value
+    return result
+
+
+def validate_skill_md(skill_dir: Path) -> str | None:
+    """skill_dir/SKILL.md の frontmatter を検証する。違反の理由 or None。"""
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        return f"SKILL.md が見つかりません: {skill_md}"
+    fm = parse_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"))
+    if fm is None:
+        return "frontmatter（先頭の --- ブロック）が見つかりません"
+    return validate_name_description(fm.get("name"), fm.get("description"), skill_dir.name)
+
+
+# --- 来歴（_draft_meta.json） ------------------------------------------------
+
+
+def now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def read_meta(ref: DraftRef) -> dict:
+    path = ref.dir / DRAFT_META_FILENAME
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def write_meta(ref: DraftRef, meta: dict) -> None:
+    (ref.dir / DRAFT_META_FILENAME).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def touch_meta(ctx: DraftContext, ref: DraftRef, **updates) -> dict:
+    """最終編集者・更新日時（と updates）を meta に反映して返す。"""
+    meta = read_meta(ref)
+    meta.update(updates)
+    meta["last_editor"] = ctx.user
+    meta["updated_at"] = now_iso()
+    write_meta(ref, meta)
+    return meta
+
+
+def tree_sha256(skill_dir: Path) -> str:
+    """スキルフォルダの中身のハッシュ（来歴・evals・キャッシュは除く）。
+
+    改善案ドラフトの元にした正式スキルが、昇格までの間に変わっていないかの
+    確認に使う（promote-skill スキルが同じ規則で再計算する）。
+    """
+    digest = hashlib.sha256()
+    for path in sorted(p for p in skill_dir.rglob("*") if p.is_file()):
+        rel = path.relative_to(skill_dir)
+        if rel.parts[0] in _TREE_EXCLUDE or "__pycache__" in rel.parts:
+            continue
+        digest.update(rel.as_posix().encode("utf-8") + b"\0")
+        digest.update(path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def copy_ignore(_dir: str, names: list[str]) -> set[str]:
+    """shutil.copytree の ignore（来歴・evals・キャッシュを複製しない）。"""
+    return {n for n in names if n in _TREE_EXCLUDE}
+
+
+# --- 評価のバックグラウンド実行 ---------------------------------------------
+
+
+def _eval_env() -> dict[str, str]:
+    """評価プロセス（evals/run_all.py → evals.run_case）へ渡す環境変数。
+
+    run_script は子プロセスへ書き込みガード（PYTHONPATH 先頭の sitecustomize、
+    src/tools/_subprocess_env.py）を注入するが、評価プロセスは固定の評価コード
+    （LLM が書いたコードではない）で、ログ・結果・OS の一時フォルダへ書く必要が
+    あるため、このガードを外して起動する。ガード用フォルダは run_script の終了時に
+    消えるため、残しておくと評価中に挙動が変わる問題もある。評価対象エージェント
+    自身のツール実行には、評価プロセス内で改めて同じガードがかかる。
+    """
+    env = dict(os.environ)
+    parts = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and not Path(p).name.startswith("agent_fs_guard_")]
+    if parts:
+        env["PYTHONPATH"] = os.pathsep.join(parts)
+    else:
+        env.pop("PYTHONPATH", None)
+    return env
+
+
+def start_background(cmd: list[str], workspace: Path, extra_meta: dict | None = None) -> dict:
     """cmd をバックグラウンドで起動し、ポーリング用のジョブ情報を返す。
 
     呼び出し元プロセス（run_script 経由で起動された本スクリプト自体）が
     終了しても子プロセスが生き続けるよう、Windows では新しいプロセス
     グループとして起動する。
-
-    Args:
-        cmd: 実行するコマンド（例: [sys.executable, "-m", "evals.run_case", "..."]）。
-        cwd: 子プロセスの作業ディレクトリ（通常は project_root()）。
-        env: 子プロセスへ渡す環境変数。
-        workspace: workspace_dir() が返したディレクトリ。
 
     Returns:
         `{"job_id", "pid", "log_path", "status": "started"}`。
@@ -72,99 +319,44 @@ def start_background(cmd: list[str], cwd: Path, env: dict[str, str], workspace: 
     job_dir = workspace / "jobs" / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     log_path = job_dir / "output.log"
-    meta_path = job_dir / "meta.json"
-
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
     with open(log_path, "w", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
             cmd,
-            cwd=str(cwd),
-            env=env,
+            cwd=str(project_root()),
+            env=_eval_env(),
             stdout=log_file,
             stderr=subprocess.STDOUT,
             creationflags=creationflags,
         )
-
-    meta = {"job_id": job_id, "pid": proc.pid, "cmd": cmd, "log_path": str(log_path)}
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    meta = {"job_id": job_id, "pid": proc.pid, "cmd": cmd, "log_path": str(log_path), **(extra_meta or {})}
+    (job_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"job_id": job_id, "pid": proc.pid, "log_path": str(log_path), "status": "started"}
 
 
-def _is_process_alive(pid: int) -> bool:
+def is_process_alive(pid: int) -> bool:
     """Windows の tasklist で PID の生存を確認する（追加依存ライブラリ不要）。"""
-    result = subprocess.run(
-        ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-        capture_output=True,
-        text=True,
-    )
+    result = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True)
     return str(pid) in result.stdout
 
 
-def check_job(job_id: str, workspace: Path) -> dict:
-    """ジョブの状態を確認する。実行中なら running、完了していれば結果を返す。
-
-    完了判定は「対象 PID が tasklist に存在しない」ことで行う。完了後は
-    ログファイル（子プロセスの標準出力/標準エラーをそのまま連結したもの）の
-    最終行を JSON としてパースし、それを結果として返す（評価系スクリプトは
-    いずれも最後に1行の JSON を print する契約で統一している）。
-
-    Args:
-        job_id: start_background() が返した job_id。
-        workspace: workspace_dir() が返したディレクトリ。
-
-    Returns:
-        `{"job_id", "status": "running", "pid"}` または
-        `{"job_id", "status": "finished", "result": {...}}` または
-        `{"job_id", "status": "finished", "error", "log_tail"}`（最終行が
-        JSON として解釈できない場合）または `{"error": "..."}`（job_id 不明）。
-    """
-    job_dir = workspace / "jobs" / job_id
-    meta_path = job_dir / "meta.json"
+def load_job(workspace: Path, job_id: str) -> dict:
+    """ジョブの meta を返す。無ければ SkillCreatorError。"""
+    meta_path = workspace / "jobs" / job_id / "meta.json"
     if not meta_path.is_file():
-        return {"error": f"ジョブが見つかりません: {job_id}"}
-
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    log_path = Path(meta["log_path"])
-    log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
-
-    if _is_process_alive(meta["pid"]):
-        return {"job_id": job_id, "status": "running", "pid": meta["pid"]}
-
-    lines = [ln for ln in log_text.splitlines() if ln.strip()]
-    if not lines:
-        return {
-            "job_id": job_id,
-            "status": "finished",
-            "error": "プロセスは終了しましたが出力がありません",
-            "log_tail": log_text[-2000:],
-        }
-    try:
-        result = json.loads(lines[-1])
-    except json.JSONDecodeError:
-        return {
-            "job_id": job_id,
-            "status": "finished",
-            "error": "最終行がJSONとして解釈できません（スクリプトが異常終了した可能性）",
-            "log_tail": "\n".join(lines[-40:]),
-        }
-    return {"job_id": job_id, "status": "finished", "result": result}
+        raise SkillCreatorError(f"ジョブが見つかりません: {job_id}")
+    return json.loads(meta_path.read_text(encoding="utf-8"))
 
 
-def print_json(obj: dict) -> None:
-    """契約どおり1行のJSONを標準出力へ書く。"""
-    print(json.dumps(obj, ensure_ascii=False))
+def log_tail(job: dict, lines: int = 40) -> str:
+    path = Path(job["log_path"])
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    return "\n".join(text.splitlines()[-lines:])
 
 
-def load_locohane_config():
-    """プロジェクトルートの src.config.load_config() を呼んで Config を返す。
-
-    scripts/ 配下は通常 skills フォルダの中で完結するが、skill-creator は
-    Locohane 自体の設定・評価基盤を扱うメタスキルのため、プロジェクトの
-    src パッケージを直接 import する。
-    """
-    root = project_root()
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    from src.config import load_config  # noqa: PLC0415 (遅延import: sys.path調整後に読む必要がある)
-
-    return load_config()
+def latest_results_dir(results_root: Path) -> Path | None:
+    """evals/run_all.py --results-dir の直下にできた最新のタイムスタンプフォルダ。"""
+    if not results_root.is_dir():
+        return None
+    dirs = sorted(p for p in results_root.iterdir() if p.is_dir() and (p / "results.json").is_file())
+    return dirs[-1] if dirs else None

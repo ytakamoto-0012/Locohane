@@ -922,6 +922,15 @@ class Config:
     plans_dir: Path
     help_path: Path
 
+    # --- ユーザー別ドラフトスキル（[skill_creator]、src/skill_drafts.py） ---
+    # skill-creator が作るドラフトスキルの置き場。起動時のスキル走査対象
+    # （skills_dir/project_locohane_dirs）とは重ならないことを load_config() が保証する。
+    skill_draft_dir: Path
+    # スキル安定化トライアウト（同じケースを何回連続で通せば合格とするか）の既定回数。
+    skill_tryout_repeats: int
+    # 他ユーザーのドラフトの扱い（hidden/listed/readable/full、SKILL_DRAFT_VISIBILITY_MODES）。
+    skill_other_users_drafts: str
+
     # --- アップロードファイルの自動削除 ---
     upload_retention_days: int
     upload_cleanup_interval_hours: float
@@ -1828,6 +1837,69 @@ def _parse_project_locohane_dirs(value: str | None, base: Path) -> list[tuple[Pa
     return result
 
 
+# [skill_creator].other_users_drafts の取りうる値（他ユーザーのドラフトの扱い）。
+#   hidden  : 一覧に出さない・読めない・実行できない・書き込み/評価できない
+#   listed  : 一覧には出す（使用不可の注記付き）が、読み取り以降はできない
+#   readable: 一覧に出し、読み取りもできるが、実行・書き込み・評価はできない
+#   full    : 一覧・読み取り・実行・書き込み・評価のすべてができる
+SKILL_DRAFT_VISIBILITY_MODES = ("hidden", "listed", "readable", "full")
+
+
+def _parse_skill_draft_visibility(value: object) -> str:
+    """[skill_creator].other_users_drafts を検証して返す。
+
+    Raises:
+        ValueError: SKILL_DRAFT_VISIBILITY_MODES 以外の値の場合。
+    """
+    mode = str(value).strip().lower()
+    if mode not in SKILL_DRAFT_VISIBILITY_MODES:
+        raise ValueError(
+            f"[skill_creator].other_users_drafts は {'/'.join(SKILL_DRAFT_VISIBILITY_MODES)} のいずれかで指定してください: {value!r}"
+        )
+    return mode
+
+
+def _positive_int(value: object, key: str) -> int:
+    """1以上の整数として解釈して返す。
+
+    Raises:
+        ValueError: 整数として解釈できない、または1未満の場合。
+    """
+    try:
+        number = int(str(value).strip())
+    except ValueError as e:
+        raise ValueError(f"{key} は1以上の整数で指定してください: {value!r}") from e
+    if number < 1:
+        raise ValueError(f"{key} は1以上の整数で指定してください: {value!r}")
+    return number
+
+
+def _validate_skill_draft_dir(cfg: "Config") -> None:
+    """ドラフト置き場が起動時のスキル走査対象と重ならないことを確かめる。
+
+    ドラフトは作成者の会話にだけ見せる未検証のスキルであり、skills_dir や
+    project_locohane_dir 配下（全ユーザー共通で走査される）に置かれると、
+    再起動のたびに全ユーザーへ公開され、同名なら正式スキルを上書きしてしまう。
+    設定者の注意に頼らず、同一・包含関係のどちらも起動時に拒否する。
+
+    Raises:
+        ValueError: skill_draft_dir が skills_dir・agents_dir・
+            project_locohane_dirs のいずれかと同一、または包含関係にある場合。
+    """
+    draft = cfg.skill_draft_dir.resolve()
+    for label, other in (
+        ("[paths].skills_dir", cfg.skills_dir),
+        ("[paths].agents_dir", cfg.agents_dir),
+        *(("[paths].project_locohane_dir", d) for d in cfg.project_locohane_dirs),
+    ):
+        resolved = other.resolve()
+        if draft == resolved or draft.is_relative_to(resolved) or resolved.is_relative_to(draft):
+            raise ValueError(
+                f"[skill_creator].draft_dir（{draft}）は {label}（{resolved}）と重ならない場所にしてください"
+                "（ドラフトが全ユーザーのスキル一覧に混入するのを防ぐため）"
+            )
+
+
 def _parse_auth_users(value: str | None) -> dict[str, str]:
     """AUTH_USERS環境変数（Python風の [["user","pass"], ...] リテラル）を
     ユーザー名→パスワードの辞書へ変換する。
@@ -2276,6 +2348,7 @@ def load_config(
     elements_section = parser["elements"] if parser.has_section("elements") else {}
     images_section = parser["images"] if parser.has_section("images") else {}
     default_workdir_section = parser["default_workdir"] if parser.has_section("default_workdir") else {}
+    skill_creator_section = parser["skill_creator"] if parser.has_section("skill_creator") else {}
     path_memory = parser["path_memory"] if parser.has_section("path_memory") else {}
     log_section = parser["log"] if parser.has_section("log") else {}
     chat_log = parser["chat_log"] if parser.has_section("chat_log") else {}
@@ -2522,6 +2595,20 @@ def load_config(
             PROJECT_ROOT, _sub_common_data_dir(os.getenv("PLANS_DIR", paths.get("plans_dir", "${common_data_dir}/plans")), common_data_dir, resolved_instance_name)
         ),
         help_path=_resolve(PROJECT_ROOT, os.getenv("HELP_PATH", paths.get("help_path", "./system_prompt/help.md"))),
+        skill_draft_dir=_resolve(
+            PROJECT_ROOT,
+            _sub_common_data_dir(
+                os.getenv("SKILL_DRAFT_DIR", skill_creator_section.get("draft_dir", "${common_data_dir}/skill_drafts")),
+                common_data_dir,
+                resolved_instance_name,
+            ),
+        ),
+        skill_tryout_repeats=_positive_int(
+            os.getenv("SKILL_TRYOUT_REPEATS", skill_creator_section.get("tryout_repeats", 10)), "[skill_creator].tryout_repeats"
+        ),
+        skill_other_users_drafts=_parse_skill_draft_visibility(
+            os.getenv("SKILL_OTHER_USERS_DRAFTS", skill_creator_section.get("other_users_drafts", "hidden"))
+        ),
         upload_retention_days=int(os.getenv("UPLOAD_RETENTION_DAYS", uploads.get("retention_days", 7))),
         upload_cleanup_interval_hours=float(os.getenv("UPLOAD_CLEANUP_INTERVAL_HOURS", uploads.get("cleanup_interval_hours", 1))),
         chainlit_files_retention_days=int(os.getenv("CHAINLIT_FILES_RETENTION_DAYS", chainlit_files.get("retention_days", 7))),
@@ -3070,6 +3157,8 @@ def load_config(
             mcp_call_timeout_seconds=float(mcp_overrides.get("callTimeoutSeconds", cfg.mcp_call_timeout_seconds)),
         )
 
+    _validate_skill_draft_dir(cfg)
+
     # data 配下のディレクトリを確実に用意する（checkpoint_db は親ディレクトリを作る）。
     cfg.checkpoint_db.parent.mkdir(parents=True, exist_ok=True)
     cfg.thread_store_db.parent.mkdir(parents=True, exist_ok=True)
@@ -3079,6 +3168,7 @@ def load_config(
     cfg.path_memory_dir.mkdir(parents=True, exist_ok=True)
     cfg.default_workdir.mkdir(parents=True, exist_ok=True)
     cfg.plans_dir.mkdir(parents=True, exist_ok=True)
+    cfg.skill_draft_dir.mkdir(parents=True, exist_ok=True)
     memory.ensure_dirs(cfg.memory_dir)
 
     return cfg

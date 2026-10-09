@@ -232,11 +232,16 @@ def _evaluate_expect(expect: Expect, transcript: list[dict], final_answer: str) 
     return results
 
 
-async def _run(case: EvalCase) -> dict:
+async def _run(case: EvalCase, skill_overlays: list[Path] | None = None, exclude_skills: list[str] | None = None) -> dict:
     """対象ファイルを現在の内容のまま読み込み、1ケースを実行する。
 
     Args:
         case: 実行する eval ケース。
+        skill_overlays: 本番のスキル構成の上に最優先で重ねるスキルフォルダ
+            （SKILL.md を持つフォルダ）の一覧。ドラフトスキルの評価に使う
+            （--skill-overlay）。一時ディレクトリへコピーしてから重ねるため、
+            評価中にドラフトを編集しても結果に混ざらない。
+        exclude_skills: 走査結果から除くスキル名（--exclude-skill。baseline 用）。
 
     Returns:
         run_all.py 向けの結果 dict（1件分）。
@@ -269,11 +274,18 @@ async def _run(case: EvalCase) -> dict:
     # からそちらを作業ディレクトリにすることで、フィクスチャを常に読み取り
     # 専用のまま保つ。
     workdir_cm = tempfile.TemporaryDirectory(prefix="evals_workdir_") if case.work_dir else contextlib.nullcontext(None)
+    overlay_cm = tempfile.TemporaryDirectory(prefix="evals_skill_overlay_") if skill_overlays else contextlib.nullcontext(None)
     with (
         tempfile.TemporaryDirectory(prefix="evals_memory_") as tmp_memory_dir,
         tempfile.TemporaryDirectory(prefix="evals_path_memory_") as tmp_path_memory_dir,
         workdir_cm as tmp_workdir,
+        overlay_cm as tmp_overlay_root,
     ):
+        overlay_roots: list[Path] = []
+        if tmp_overlay_root:
+            for skill_dir in skill_overlays or []:
+                shutil.copytree(skill_dir, Path(tmp_overlay_root) / skill_dir.name)
+            overlay_roots = [Path(tmp_overlay_root)]
         os.environ["MEMORY_DIR"] = tmp_memory_dir
         os.environ["PATH_MEMORY_DIR"] = tmp_path_memory_dir
         # ケースが work_dir（プロジェクトルート相対パス）を指定していれば、
@@ -327,7 +339,11 @@ async def _run(case: EvalCase) -> dict:
                 "detail": (f"{main_url} に接続できませんでした: {unreachable}。" "llama.cpp server が起動しているか確認してください。"),
             }
 
-        skills = scan_skills([config.skills_dir, *config.locohane_skills_dirs])
+        # --skill-overlay は本番の構成（会社専用の project_locohane_dir を含む）を
+        # そのまま残し、その上に最優先で重ねる（scan_skills は後方優先）。
+        skills = scan_skills([config.skills_dir, *config.locohane_skills_dirs, *overlay_roots])
+        if exclude_skills:
+            skills = [sk for sk in skills if sk.name not in set(exclude_skills)]
         system_prompt = build_system_prompt(skills, config.system_prompt_path)
         # app.py の _setup() と同じ手順で agent_type_defs を構築し、
         # {{agent_types}}/{{memory}} プレースホルダーを置換する
@@ -369,7 +385,7 @@ async def _run(case: EvalCase) -> dict:
         # キーワード引数で渡す（init_tools は開発中でシグネチャが変わりうるため、
         # 位置引数だとズレて誤った型を渡してしまう事故が起きやすい）。
         init_tools(
-            skills_root=[*config.locohane_skills_dirs, config.skills_dir],
+            skills_root=[*overlay_roots, *config.locohane_skills_dirs, config.skills_dir],
             script_python=config.script_python,
             script_timeout=config.script_timeout,
             llm_config=config,
@@ -548,7 +564,23 @@ def main() -> int:
         "--instance",
         help="実行対象インスタンス名（instances/<name>/。省略時は環境変数 LOCOHANE_INSTANCE、それも無ければ default）",
     )
+    parser.add_argument(
+        "--skill-overlay",
+        action="append",
+        default=[],
+        type=Path,
+        help="本番のスキル構成の上に最優先で重ねるスキルフォルダ（SKILL.md を持つフォルダ）。複数指定可。ドラフトスキルの評価用",
+    )
+    parser.add_argument(
+        "--exclude-skill",
+        action="append",
+        default=[],
+        help="スキル一覧から除くスキル名。複数指定可（baseline 用）",
+    )
     args = parser.parse_args()
+    for skill_dir in args.skill_overlay:
+        if not (skill_dir / "SKILL.md").is_file():
+            parser.error(f"--skill-overlay には SKILL.md を持つフォルダを指定してください: {skill_dir}")
 
     instance_name = resolve_instance_name(args.instance)
     # _run() 内で MEMORY_DIR 等の隔離用環境変数・ケースの env: を設定するより
@@ -560,7 +592,7 @@ def main() -> int:
     install_headless_chainlit(case.auto_approve, case.scripted_text_answers)
 
     try:
-        result = asyncio.run(_run(case))
+        result = asyncio.run(_run(case, [d.resolve() for d in args.skill_overlay], args.exclude_skill))
     except Exception as e:  # noqa: BLE001 - モデルの幻覚呼び出し等も診断可能なJSONにする
         result = {
             "case_id": case.id,

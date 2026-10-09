@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import os
 
+from .. import skill_drafts
 from . import _state
 from ._path_memory_helpers import _resolve_path_memory_token
 from ._workdir import _foreign_tmp_dir_error, _resolve_workdir
@@ -35,9 +36,12 @@ def _resolve_file_tools_path(raw: str) -> tuple[Path | None, str | None]:
     tmp_error = _foreign_tmp_dir_error(p)
     if tmp_error:
         return None, tmp_error
+    draft_error = skill_drafts.access_error(p, "read", _state._LLM_CONFIG, skill_drafts.current_draft_user())
+    if draft_error:
+        return None, draft_error
     return p, None
 
-def _safe_path(relative: str) -> Path:
+def _safe_path(relative: str, op: skill_drafts.DraftOp = "read") -> Path:
     """skills ルート配下に限定した絶対パスを返す。境界外なら ValueError。
 
     ディレクトリトラバーサル対策の中核。relative に ".." やシンボリック
@@ -50,8 +54,15 @@ def _safe_path(relative: str) -> Path:
     どのルートにも実在しない場合は先頭ルート基準の候補を返す（呼び出し側の
     「見つかりません」エラーへ自然に流すため）。
 
+    最後尾のルートはユーザー別ドラフト置き場（[skill_creator].draft_dir）で、
+    `<ユーザー名>/<スキル名>/...` で参照される。そこへ解決された場合は、
+    会話のユーザーに op が許されているかを src/skill_drafts.py で判定する
+    （他ユーザーのドラフトは [skill_creator].other_users_drafts 次第で拒否）。
+
     Args:
         relative: skills ルートからの相対パス（例: "excel-vba-read/SKILL.md"）。
+        op: ドラフトへの操作の種類（read_skill/read_skill_file 等は "read"、
+            run_script 系のスクリプト解決は "exec"）。正式スキルには影響しない。
 
     Returns:
         skills ルート配下に解決された絶対パス（Path）。
@@ -59,7 +70,8 @@ def _safe_path(relative: str) -> Path:
     Raises:
         RuntimeError: init_tools() が未実行で _state._SKILLS_ROOTS が空の場合。
         ValueError: 解決後のパスがいずれかの skills ルート配下に収まらない
-            場合（ディレクトリトラバーサルの試行とみなす）。
+            場合（ディレクトリトラバーサルの試行とみなす）、または他ユーザーの
+            ドラフトへの op が許されていない場合。
     """
     if not _state._SKILLS_ROOTS:
         raise RuntimeError("init_tools() が未実行です")
@@ -71,6 +83,9 @@ def _safe_path(relative: str) -> Path:
             raise ValueError(f"skills ディレクトリ外へのアクセスは許可されません: {relative}")
         candidates.append(candidate)
         if candidate.exists():
+            draft_error = skill_drafts.access_error(candidate, op, _state._LLM_CONFIG, skill_drafts.current_draft_user())
+            if draft_error:
+                raise ValueError(draft_error.removeprefix("エラー: "))
             return candidate
     return candidates[0]
 
@@ -131,7 +146,7 @@ def _resolve_script_filename(skill_name: str, script_filename: str) -> Path:
     basename = os.path.basename(script_filename)
     if not basename:
         raise ValueError(f"スクリプトのファイル名を指定してください: {script_filename!r}")
-    scripts_root = _safe_path(f"{skill_name}/scripts")
+    scripts_root = _safe_path(f"{skill_name}/scripts", op="exec")
     if not scripts_root.is_dir():
         raise ValueError(f"スキル '{skill_name}' に scripts/ ディレクトリがありません")
     matches = [p for p in scripts_root.rglob(basename) if p.is_file()]
@@ -139,3 +154,22 @@ def _resolve_script_filename(skill_name: str, script_filename: str) -> Path:
         raise ValueError(f"スクリプトが見つかりません: {basename}（skill={skill_name}）")
     matches.sort(key=lambda p: (len(p.relative_to(scripts_root).parts), str(p)))
     return matches[0]
+
+
+def _is_guard_exempt_script(skill_name: object, script_filename: object) -> bool:
+    """計画承認と [main_agent_tool_guard] を無条件で免除する run_script 呼び出しか。
+
+    スクリプトの実体がユーザー別ドラフト置き場の中、または skills_dir 配下の
+    skill-creator 本体の中にあるものが対象（src/skill_drafts.py の
+    is_guard_exempt_script）。名前ではなく実体の場所で判定するため、
+    同名の正式スキルやドラフトの偽装では免除されない。他ユーザーの
+    ドラフトで実行が許されないものは解決自体が失敗するため False になる
+    （実行時にも _safe_path(op="exec") が同じ理由で拒否する）。
+    """
+    if not isinstance(skill_name, str) or not isinstance(script_filename, str):
+        return False
+    try:
+        script_path = _resolve_script_filename(skill_name, script_filename)
+    except (ValueError, RuntimeError):
+        return False
+    return skill_drafts.is_guard_exempt_script(script_path, _state._LLM_CONFIG)

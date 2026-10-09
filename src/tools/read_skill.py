@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 # references/ 一覧に載せる最大件数（超過分は件数だけ示す）。
 _REFERENCES_LIST_MAX = 50
 
+# apply_skill_name_enum() で制約した正式スキル名（session_read_skill() がドラフト名を足す土台）。
+_BASE_SKILL_NAMES: tuple[str, ...] = ()
+
 
 def _render_references_section(skill_name: str, skill_dir: Path) -> str:
     """references/ 配下のファイル一覧を `@N` 付きで組み立てる（中身は読まない）。
@@ -98,10 +101,32 @@ def apply_skill_name_enum(skill_names: Sequence[str]) -> None:
         skill_names: scan_skills() が返した有効なスキル名の並び。空の場合は
             何もしない（str のまま）。
     """
+    global _BASE_SKILL_NAMES
     names = tuple(dict.fromkeys(skill_names))
     if not names:
         return
-    read_skill.args_schema = create_model(
+    _BASE_SKILL_NAMES = names
+    read_skill.args_schema = _skill_name_schema(names)
+
+
+def _skill_name_schema(names: tuple[str, ...]):
+    """skill_name を names の選択肢（Literal）に制約した引数スキーマを作る。"""
+    return create_model(
         "read_skill",
         skill_name=(Literal[names], Field(description="読み込むスキルのフォルダ名（= SKILL.md の name）。")),
     )
+
+
+def session_read_skill(extra_names: Sequence[str]):
+    """正式スキル名に extra_names（ドラフト名）を足した選択肢を持つ read_skill の複製を返す。
+
+    ユーザー別ドラフト（src/skill_drafts.py）はセッションごとに見える範囲が違うため、
+    モジュール共通の read_skill（全セッション共有）の args_schema は書き換えず、
+    セッション用の複製だけに選択肢を足す（src/tools/session_tools.py から使う）。
+    apply_skill_name_enum() が未実行（正式スキル名の制約が無い）なら制約を足さず、
+    read_skill をそのまま返す。
+    """
+    if not _BASE_SKILL_NAMES or not extra_names:
+        return read_skill
+    names = tuple(dict.fromkeys((*_BASE_SKILL_NAMES, *extra_names)))
+    return read_skill.model_copy(update={"args_schema": _skill_name_schema(names)})

@@ -11,6 +11,7 @@ from ..images import image_followup_message
 from ..images import image_ref
 from ..images import is_image_file
 from ..images import to_data_url
+from .. import skill_drafts
 
 from . import _state
 from ._duplicate_guard import _record_and_check_duplicate
@@ -102,7 +103,9 @@ def analyze_image(relative_path: str, show_in_chat: bool = False) -> tuple[str, 
     if error:
         return f"エラー: {error}", None
     path = _resolve_analyze_image_path(resolved_path)
-    tmp_error = _foreign_tmp_dir_error(path)
+    tmp_error = _foreign_tmp_dir_error(path) or skill_drafts.access_error(
+        path, "read", _state._LLM_CONFIG, skill_drafts.current_draft_user()
+    )
     if tmp_error:
         return tmp_error, None
     if not path.is_file():

@@ -8,7 +8,9 @@ import logging
 import os
 import tempfile
 
+from .. import skill_drafts
 from . import _state
+from ._safe_path import _safe_path
 from ._python_fs_guard import _python_fs_guard_preamble
 from ._workdir import _exec_tmp_name, _resolve_exec_workdir, _tmp_dir_parents
 
@@ -54,6 +56,22 @@ def _subprocess_env() -> dict[str, str]:
     if _state._DEFAULT_WORKDIR is not None:
         env["AGENT_DEFAULT_WORKDIR"] = str(_state._DEFAULT_WORKDIR)
     cfg = _state._LLM_CONFIG
+    # ユーザー別ドラフトスキル（src/skill_drafts.py）。skill-creator のスクリプトが
+    # 自分のドラフト置き場を求めるのに使う。会話のユーザーが分からない文脈
+    # （evals 等）では渡さない（skill-creator 側はドラフト操作をエラーにする）。
+    draft_user = skill_drafts.current_draft_user()
+    if cfg is not None and draft_user is not None and getattr(cfg, "skill_draft_dir", None) is not None:
+        env["AGENT_SKILL_DRAFT_DIR"] = str(cfg.skill_draft_dir)
+        env["AGENT_USER"] = draft_user
+        env["AGENT_OTHER_USERS_DRAFTS"] = cfg.skill_other_users_drafts
+    else:
+        for key in ("AGENT_SKILL_DRAFT_DIR", "AGENT_USER", "AGENT_OTHER_USERS_DRAFTS"):
+            env.pop(key, None)
+    # 正式スキルの走査ルート（優先順、ドラフト置き場を除く）。skill-creator が
+    # Locohane 本体の Python 環境に依存せずに正式スキル名との重複を確かめるのに使う。
+    draft_root = getattr(cfg, "skill_draft_dir", None)
+    official_roots = [r for r in (_state._SKILLS_ROOTS or []) if draft_root is None or r != draft_root.resolve()]
+    env["AGENT_SKILL_ROOTS"] = os.pathsep.join(str(r) for r in official_roots)
     if cfg is not None:
         bin_dirs = [d for d in cfg.bin_path if d.is_dir()]
         if bin_dirs:
@@ -94,6 +112,30 @@ def _allowed_sandbox_dirs_for(skill_name: str, script_filename: str) -> list[Pat
             if entry.dir.is_dir():
                 result.append(entry.dir)
     return result
+
+
+def _skill_creator_draft_roots(skill_name: str) -> list[Path]:
+    """skill-creator 本体が書き込んでよいドラフト置き場のディレクトリを返す。
+
+    skills_dir 配下の skill-creator（実体の場所で判定。同名の .locohane 側
+    スキルは対象外）のときだけ、会話のユーザー自身のフォルダ
+    `<draft_dir>/<ユーザー名>/`（other_users_drafts=full なら draft_dir 全体）を
+    返す。それ以外のスキル・ユーザー不明の文脈では空リスト。
+    """
+    cfg = _state._LLM_CONFIG
+    draft_dir = getattr(cfg, "skill_draft_dir", None)
+    user = skill_drafts.current_draft_user()
+    if skill_name != skill_drafts.SKILL_CREATOR_NAME or draft_dir is None or user is None:
+        return []
+    try:
+        scripts_dir = _safe_path(f"{skill_name}/scripts", op="exec")
+    except (ValueError, RuntimeError):
+        return []
+    if not skill_drafts.is_builtin_skill_creator(scripts_dir, cfg):
+        return []
+    own_dir = draft_dir / user
+    own_dir.mkdir(parents=True, exist_ok=True)
+    return [draft_dir.resolve()] if cfg.skill_other_users_drafts == "full" else [own_dir.resolve()]
 
 
 def _run_script_guard_env(workdir: Path, skill_name: str, script_filename: str) -> tuple[dict[str, str], Path | None]:
@@ -150,6 +192,7 @@ def _run_script_guard_env(workdir: Path, skill_name: str, script_filename: str) 
     if _state._DEFAULT_WORKDIR is not None:
         allowed_roots.append(_resolve_exec_workdir())
     allowed_roots.extend(_allowed_sandbox_dirs_for(skill_name, script_filename))
+    allowed_roots.extend(_skill_creator_draft_roots(skill_name))
     display_roots = list(allowed_roots)
     if _state._PATH_MEMORY_DIR is not None:
         allowed_roots.append(_state._PATH_MEMORY_DIR)

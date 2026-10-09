@@ -1,115 +1,138 @@
 # skill-creator 補助資料: 各スクリプトの入出力形式
 
-`scripts/` 配下の各スクリプトが受け取る引数・返す JSON の形式をまとめる。
-共通契約: 正常終了時は標準出力の最終行に1行の JSON、異常系は終了コード
-非0＋標準エラーにメッセージ（`SKILLS_README.md` の規約どおり）。
+共通:
+- 正常時は終了コード0で標準出力に1行のJSON、異常時は終了コード1で標準エラーに `エラー: 理由`。
+- `--name` はドラフト名。自分のドラフトはスキル名だけ（例 `my-skill`）、他の人のドラフトは `ユーザー名/スキル名`。
+- 他の人のドラフトは、config.ini `[skill_creator].other_users_drafts` が許す範囲でしか扱えない（`full` のときだけ書き込み・評価できる）。
+- ドラフトの場所: `<ドラフト置き場>/<ユーザー名>/<スキル名>/`。評価の結果は `<ドラフト置き場>/<ユーザー名>/_workspace/<スキル名>/`。
 
-## 非同期実行（start / status）について
+## 非同期実行（start / status）
 
-実際にローカルの llama.cpp server へ問い合わせる処理（`run_isolated_eval.py`
-`run_trigger_eval.py` `propose_description.py`）は、`run_script` の同期実行
-タイムアウト（`config.ini` の `[scripts].timeout`）を超えうるため、
-`start` でバックグラウンド起動して `job_id` を受け取り、`status` で
-ポーリングする2段構成になっている。`status` は `{"status": "running", ...}`
-を返している間は数十秒待ってから再度呼び出すこと。
+`run_isolated_eval.py` `run_trigger_eval.py` `propose_description.py` は実際にローカルLLMを動かすため、
+`start` で `job_id` を受け取り、`status` で結果を受け取る。`status` が `running` の間は1分ほど待ってから再度呼ぶ。
 
 ---
 
 ## scaffold_skill.py
 
-新しいスキルの雛形（SKILL.md + references/ +（任意で）scripts/）を生成する。
-
 ```
-python scaffold_skill.py --name my-new-skill --description "..." [--with-script]
+python scaffold_skill.py --name my-skill --description "..." [--with-script]
 ```
 
-生成先は常に `.locohane/skills/<name>/`（プロジェクトルート直下の `skills/`
-には書き込まない）。
+自分のドラフト置き場に SKILL.md・references/・evals/（`--with-script` なら scripts/run.py も）を作る。
+正式スキルと同じ名前、自分の既存ドラフトと同じ名前はエラー。
 
-出力: `{"skill_dir", "skill_md_path", "created": [...], "note"}`
+出力: `{"draft", "skill_dir", "note"}`
+
+## fork_skill.py
+
+```
+python fork_skill.py --name <正式スキル名>
+```
+
+正式スキルを自分のドラフトへ複製する（改善案。正式スキルは変わらない）。`evals/cases/<名前>/` のケースも evals/ へ写す。
+
+出力: `{"draft", "skill_dir", "base_dir", "copied_cases", "note"}`
+
+## write_draft_file.py
+
+```
+python write_draft_file.py --name my-skill --path SKILL.md --content "全文"
+python write_draft_file.py --name my-skill --path scripts/run.py --content-file <ファイル>
+python write_draft_file.py --name my-skill --path SKILL.md --old "古い文" --new "新しい文"
+```
+
+`--content` / `--content-file` / `--old`+`--new` のどれか1つ。`--old` はファイル内で1か所だけ一致する必要がある。
+`--path` はスキルフォルダからの相対パス（`..`・絶対パス・`_draft_meta.json` は不可）。
+SKILL.md の frontmatter が不正になる書き込みは取り消される。
+
+出力: `{"draft", "path", "chars"}`
+
+## delete_draft.py
+
+```
+python delete_draft.py --name my-skill [--path references/old.md]
+```
+
+`--path` 無しならドラフトごと（評価結果も）削除。SKILL.md・`_draft_meta.json` は単体では消せない。
+
+出力: `{"deleted"}` または `{"draft", "deleted_file"}`
+
+## list_drafts.py
+
+```
+python list_drafts.py
+```
+
+出力: `{"user", "drafts": [{"draft", "own", "kind", "base_skill", "status", "description", "updated_at", "eval_cases", "last_tryout", "returned_reason"}]}`
+
+- `kind`: `new`（新規）/ `improve`（既存スキルの改善案）
+- `status`: `draft` / `promoted`（正式化済み）/ `returned`（差し戻し。理由は `returned_reason`）/ `rejected`
 
 ## validate_skill.py
 
-SKILL.md の frontmatter を `src/skills.py` の `_validate()` と同一ルールで検証する。
-
 ```
-python validate_skill.py --skill-dir "C:\...\skills\my-new-skill"
+python validate_skill.py --name my-skill
 ```
 
-出力: `{"valid", "error", "name", "description", "description_length", "dir_name", "has_scripts_dir", "script_files"}`
+出力: `{"draft", "valid", "error", "name", "description", "description_length", "script_files", "eval_cases"}`
 
 ## make_eval_case.py
 
-`evals/case_schema.py` 互換のテストケース（yaml、中身はJSON）を1件生成する。
-生成先は `evals/cases/<target>/<case-id>.yaml`。
-
 ```
-python make_eval_case.py --target my-new-skill --case-id 001_basic_usage \
-    --turns '["ユーザーの発話"]' \
-    --expect '{"tool_call_args_contains": {"read_skill": {"skill_name": "my-new-skill"}}}' \
-    [--judge "判定してほしい観点の自由記述"] \
+python make_eval_case.py --name my-skill --case-id 001_basic \
+    --turns "[\"発話\"]" \
+    [--expect "{...}"] [--judge "判定観点"] \
     [--work-dir "./evals/fixtures/xxx"] [--timeout-seconds 600] [--notes "..."]
 ```
 
-`--expect` と `--judge` はどちらか必須（両方でもよい）。`Expect` の主なキー:
-- `tool_called_any`: list[str] — いずれかのツールが呼ばれれば pass
-- `tool_not_called`: list[str] — 指定ツールが一度も呼ばれなければ pass
-- `tool_call_args_contains`: dict[str, dict] — 例 `{"read_skill": {"skill_name": "..."}}`。指定ツールの呼び出し引数のいずれかが部分一致すれば pass
-- `response_contains` / `response_not_contains`: list[str] — 最終応答文字列に対する部分一致判定
+`--expect` と `--judge` はどちらか必須（両方でもよい）。ケースはドラフトの `evals/<case-id>.yaml` に保存される。
+評価中のスキル名はユーザー名の付かないスキル名になる（expect にもスキル名だけを書く）。
 
-出力: `{"case_path", "target", "case_id"}`
+`--expect` の主なキー:
+- `tool_called_any`: list[str] — いずれかのツールが呼ばれれば合格
+- `tool_not_called`: list[str] — 指定ツールが一度も呼ばれなければ合格
+- `tool_call_args_contains`: dict[str, dict] — 例 `{"read_skill": {"skill_name": "my-skill"}}`
+- `response_contains` / `response_not_contains`: list[str] — 最終回答の文字列の部分一致
+
+出力: `{"draft", "case_path", "case_id"}`
 
 ## run_isolated_eval.py
 
-対象スキルの有無/新旧を切り替えたうえで `evals.run_case` を1件バックグラウンド実行する。
-
 ```
-python run_isolated_eval.py start --case <case.yaml> --skill-name my-new-skill \
-    [--skill-root skills|locohane] [--mode with_skill|without_skill|old_skill] \
-    [--replacement-dir <旧バージョン一式のパス>] [--workspace <path>] [--python-exe <path>]
-
-python run_isolated_eval.py status --job-id <job_id> --skill-name my-new-skill \
-    [--skill-root skills|locohane] [--workspace <path>]
+python run_isolated_eval.py start --name my-skill [--mode with_skill|without_skill] [--repeat N] [--case <ID> ...] [--instance <名前>]
+python run_isolated_eval.py status --name my-skill --job-id <job_id>
 ```
 
-`--skill-root` の既定値は `locohane`（`.locohane/skills/`、skill-creator が
-新規作成するスキルの置き場）。プロジェクトルート直下の `skills/` にある
-既存スキル（excel-edit等）を対象にする場合のみ `--skill-root skills` を
-明示する。
+- `with_skill`（既定）: 本番のスキル構成の上にドラフトを重ねて評価する（改善案は同名の正式スキルを上書きした状態）。
+- `without_skill`: ドラフト無し（新規ならスキル無し、改善案なら正式スキルのまま）。比較用。
+- `--repeat N`: 各ケースを N 回繰り返す（スキル安定化トライアウト）。全回合格で合格。
 
-- `with_skill`: 本番の skills_dir をそのまま使う。
-- `without_skill`: 対象スキルだけ除外した一時ディレクトリで実行する（baseline）。
-- `old_skill`: `--replacement-dir` の内容で対象スキルを差し替えて実行する（改善前後比較）。
+`start` の出力: `{"job_id", "pid", "log_path", "status": "started", "runs"}`
+`status` の出力（実行中）: `{"job_id", "status": "running", "started_runs", "total_runs"}`
+`status` の出力（完了）:
+```json
+{
+  "status": "finished", "mode": "with_skill", "repeat": 10,
+  "verdict": "pass | fail | needs_judge",
+  "cases": {"001_basic": {"pass": 10, "fail": 0, "judge": 0, "error": 0}},
+  "runs": [{"case_id", "repeat_index", "outcome", "failed_rules", "judge", "error", "final_answer"}],
+  "results_path": "...\\results.json"
+}
+```
 
-`start` の出力: `{"job_id", "pid", "log_path", "status": "started", "mode", "workspace"}`
-`status` の出力（実行中）: `{"job_id", "status": "running", "pid"}`
-`status` の出力（完了）: `{"job_id", "status": "finished", "result": {...evals.run_case の出力...}}`
-
-`result` の主なキー（`evals/run_case.py` 準拠）:
-- `case_id`, `target`, `notes`, `final_answer`
-- `transcript`: 会話全体のシリアライズ（各要素に `tool_calls` があれば `{"name","args"}` を含む）
-- `rule_results`, `rules_pass`（expect 未指定なら null）
-- `judge`: 判定指示文（合否はこのスキル＝呼び出し元のLLM自身がtranscriptを読んで判断する）
-- `token_usage_total`: `{"input_tokens","output_tokens","total_tokens"}`
-- `turn_timings`, `turn_cutoffs`（あれば）
-- `error`（`llm_unreachable` / `mid_turn_exception` / `runtime_exception` 等）
+- `needs_judge`: ルール上は不合格が無いが judge 付きのケースがある。`runs` の `judge` と `final_answer`（詳しくは `results_path` の `transcript`）を読んで判定する。
+- 完了結果はドラフトの `_draft_meta.json` の `tryouts` にも記録される。
 
 ## aggregate_results.py
 
-複数の `run_isolated_eval.py status` 出力（または `evals.run_case` の生JSON）を
-比較する Markdown レポートを生成する。
-
 ```
-python aggregate_results.py --input with_skill=result_a.json --input baseline=result_b.json \
-    --output "<workspace>/iteration-1/benchmark.md"
+python aggregate_results.py --name my-skill --input with_skill=<results.json> --input without_skill=<results.json>
 ```
 
-出力: `{"output_path", "cases"}`
+ケースごとの合格回数・平均トークンの比較表を作る。出力: `{"output_path", "cases", "markdown"}`
 
 ## run_trigger_eval.py
-
-description のトリガー精度を評価する。`eval-set` の各クエリを `--repeats`
-回実行し、`read_skill` が対象スキル名で呼ばれた比率を集計する。
 
 eval-set の形式:
 ```json
@@ -120,40 +143,20 @@ eval-set の形式:
 ```
 
 ```
-python run_trigger_eval.py start --eval-set trigger_eval.json --skill-name my-new-skill \
-    --workspace <path> [--repeats 3] [--python-exe <path>]
-
-python run_trigger_eval.py status --job-id <job_id> --workspace <path>
+python run_trigger_eval.py start --name my-skill --eval-set <JSONファイル> [--repeats 3]
+python run_trigger_eval.py status --name my-skill --job-id <job_id>
 ```
 
-`status` の出力（完了時）:
-```json
-{
-  "status": "finished",
-  "target": "trigger_my-new-skill_xxxxxxxx",
-  "accuracy": 0.85,
-  "per_query": [
-    {"query": "...", "should_trigger": true, "trigger_rate": 1.0, "matched": true}
-  ],
-  "results_path": "C:\\...\\evals\\results\\trigger_my-new-skill_xxxxxxxx\\20260101_120000\\results.json"
-}
-```
+`status` の出力（完了）: `{"status": "finished", "accuracy", "per_query": [{"query", "should_trigger", "trigger_rate", "matched"}], "results_path"}`
 
-`matched: false` の項目だけ抽出して `propose_description.py` の `--failed-queries` に渡す。
+`matched: false` の項目だけ抜き出して `propose_description.py` の `--failed-queries` に渡す。
 
 ## propose_description.py
 
-現在の description と `run_trigger_eval.py` の失敗例から改善案をLLMに提案させる。
-
 ```
-python propose_description.py start --skill-name my-new-skill \
-    --current-description "現在のdescription全文" \
-    --failed-queries failed.json --workspace <path> [--python-exe <path>]
-
-python propose_description.py status --job-id <job_id> --workspace <path>
+python propose_description.py start --name my-skill --failed-queries <JSONファイル>
+python propose_description.py status --name my-skill --job-id <job_id>
 ```
 
-`--failed-queries` は `run_trigger_eval.py` の `per_query` から `matched: false` を
-抽出したJSON配列をそのまま渡す。
-
-`status` の出力（完了時）: `{"job_id", "status": "finished", "result": {"text": "改善後のdescription案"}}`
+現在の description はドラフトの SKILL.md から読む。`status` の出力（完了）: `{"status": "finished", "proposed_description"}`。
+提案は自動では反映されない（`write_draft_file.py` で書く）。

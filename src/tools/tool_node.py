@@ -8,8 +8,10 @@ from langgraph.prebuilt import ToolNode
 import chainlit as cl
 import logging
 
+from .. import skill_drafts
 from ..tool_loop_guard import find_leaked_tool_markup, leaked_tool_markup_error
 from . import _state
+from ._safe_path import _is_guard_exempt_script
 from ._duplicate_guard import _record_and_check_duplicate
 from ._state import _IN_SUBAGENT, _tool_call_semaphore_wrap
 from .analyze_image import _with_image_followups
@@ -262,6 +264,12 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
     if _mcp_tool_always_allowed(name, guard_mode):
         return None
     args = call.get("args") or {}
+    if name in ("run_script", "run_script_background") and _is_guard_exempt_script(
+        args.get("skill_name"), args.get("script_filename")
+    ):
+        # ドラフトスキル・skill-creator 本体は allow_entries の登録に関係なく常に許可する
+        # （src/skill_drafts.py の is_guard_exempt_script 参照）。
+        return None
     signature: str | None = None
     guard_max_calls: int | None = None
     if name in entries_by_key:
@@ -300,6 +308,20 @@ def _guard_main_agent_tool_limit(input):  # noqa: A002
             )
         ]
     }
+
+
+def _session_has_guard_exempt_scripts(config) -> bool:
+    """メインエージェントが allow_entries 無しでも直接実行できるスクリプトがあるか。
+
+    skills_dir 配下の skill-creator 本体、または会話のユーザーに見えて実行できる
+    ドラフトが scripts/ を持つ場合 True（run_script/run_script_background を
+    bind しておかないと、ガードを免除しても呼び出す手段が無くなるため）。
+    """
+    skills_dir = getattr(config, "skills_dir", None)
+    if skills_dir is not None and (skills_dir / skill_drafts.SKILL_CREATOR_NAME / "scripts").is_dir():
+        return True
+    drafts = skill_drafts.scan_visible_drafts(config, skill_drafts.current_draft_user())
+    return any(d.executable and d.skill.has_scripts for d in drafts)
 
 
 def filter_main_agent_tools(tools: list[BaseTool], config) -> list[BaseTool]:
@@ -348,7 +370,7 @@ def filter_main_agent_tools(tools: list[BaseTool], config) -> list[BaseTool]:
     entries_by_key = dict(config.main_agent_tool_guard_allow_entries)
     run_script_allowed = any(
         isinstance(key, tuple) and key[1] != "" and max_calls != 0 for key, max_calls in entries_by_key.items()
-    )
+    ) or _session_has_guard_exempt_scripts(config)
     filtered = []
     for t in tools:
         if _mcp_tool_always_allowed(t.name, guard_mode):

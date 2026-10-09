@@ -317,6 +317,11 @@ def is_skill_directly_runnable(skill: Skill, config: "Config") -> bool:
     Returns:
         {{skills}}一覧上「直接扱える」とみなすなら True。
     """
+    # skills_dir 配下の skill-creator 本体は allow_entries の登録に関係なく常に直接扱える
+    # （src/skill_drafts.py の is_guard_exempt_script。ドラフトは別枠の一覧で示す）。
+    skills_dir = getattr(config, "skills_dir", None)
+    if skill.name == "skill-creator" and skills_dir is not None and skill.dir_path.resolve() == (skills_dir / skill.name).resolve():
+        return True
     allowed = {
         key[0]
         for key, max_calls in config.main_agent_tool_guard_allow_entries

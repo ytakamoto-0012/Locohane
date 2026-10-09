@@ -556,6 +556,12 @@ def init_tools(
     global _AGENT_TYPE_RUN_SCRIPT_ALLOWLIST
     _skills_root_list = [skills_root] if isinstance(skills_root, (str, Path)) else list(skills_root)
     _SKILLS_ROOTS = [Path(p).resolve() for p in _skills_root_list]
+    # ユーザー別ドラフト（[skill_creator].draft_dir）は最後尾＝最低優先のルートにする。
+    # ドラフトは `<ユーザー名>/<スキル名>` で参照されるため正式スキル名と衝突せず、
+    # 他ユーザー分へのアクセス可否は _safe_path() 側で判定する（src/skill_drafts.py）。
+    _draft_dir = getattr(llm_config, "skill_draft_dir", None)
+    if _draft_dir is not None and Path(_draft_dir).resolve() not in _SKILLS_ROOTS:
+        _SKILLS_ROOTS.append(Path(_draft_dir).resolve())
     _SCRIPT_PYTHON = script_python
     _SCRIPT_TIMEOUT = script_timeout
     _CODE_EXEC_ENABLED = code_exec_enabled

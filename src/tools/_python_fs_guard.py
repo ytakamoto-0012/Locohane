@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .. import path_memory
+from .. import skill_drafts
 
 from . import _state
 from ._workdir import _resolve_exec_workdir, _resolve_workdir
@@ -132,6 +133,7 @@ def _python_fs_guard_preamble(
     allowed_roots: Sequence[Path],
     tmp_dir_roots: Sequence[Path] = (),
     display_roots: Sequence[Path] | None = None,
+    deny_roots: Sequence[Path] | None = None,
 ) -> str:
     """execute_python_code / run_script が実行するコードの先頭（または
     サブプロセスの sitecustomize.py）に連結する、書き込みサンドボックス用の
@@ -193,6 +195,11 @@ def _python_fs_guard_preamble(
             成果物の置き場として案内すべきでないパスが混じることがあるため
             分離できるようにしている（_exec_guard_roots/
             _run_script_guard_env 参照）。重複は自動的に除去される。
+        deny_roots: 読み取り（`open()`・コピー元）も含めて一律ブロックする
+            ディレクトリの一覧。会話のユーザーが読めない他ユーザーのドラフト
+            スキル（src/skill_drafts.py の unreadable_dirs()）に使う。
+            省略時（None）はその場で unreadable_dirs() を求めるため、
+            呼び出し元が個別に渡す必要は無い。
 
     Returns:
         コード文字列の先頭に連結する、あるいは sitecustomize.py として
@@ -208,6 +215,9 @@ def _python_fs_guard_preamble(
     tmp_roots_repr = repr(tuple(str(p) for p in tmp_dir_roots))
     display_repr = repr(tuple(str(p) for p in (display_roots if display_roots is not None else allowed_roots)))
     lib_cache_repr = repr(tuple(str(p) for p in _library_cache_roots()))
+    if deny_roots is None:
+        deny_roots = skill_drafts.unreadable_dirs(_state._LLM_CONFIG, skill_drafts.current_draft_user())
+    deny_repr = repr(tuple(str(p) for p in deny_roots))
     return f'''\
 import builtins as _guard_builtins
 import io as _guard_io
@@ -218,6 +228,7 @@ _GUARD_ALLOWED = [_guard_os.path.realpath(_p) for _p in {allowed_repr}]
 _GUARD_LIB_CACHE = [_guard_os.path.realpath(_p) for _p in {lib_cache_repr}]
 _GUARD_DISPLAY = list(dict.fromkeys(_guard_os.path.realpath(_p) for _p in {display_repr}))
 _GUARD_TMP_ROOTS = [_guard_os.path.realpath(_p) for _p in {tmp_roots_repr}]
+_GUARD_DENY_ROOTS = [_guard_os.path.realpath(_p) for _p in {deny_repr}]
 _GUARD_OWN_TMP_NAME = "_tmp_" + (_guard_os.environ.get("AGENT_EXEC_TMP_NAME") or _guard_os.environ.get("AGENT_THREAD_ID", "_no_session"))
 
 
@@ -226,6 +237,9 @@ def _guard_check_foreign_tmp(_path):
         _target = _guard_os.path.realpath(_guard_os.fspath(_path))
     except TypeError:
         return
+    for _root in _GUARD_DENY_ROOTS:
+        if _target == _root or _target.startswith(_root + _guard_os.sep):
+            raise PermissionError(f"[ドラフトスキルガード] 他ユーザーのドラフトスキルへはアクセスできません: {{_path}}")
     for _root in _GUARD_TMP_ROOTS:
         if _target == _root:
             return

@@ -1,14 +1,12 @@
-"""新しいスキルの雛形（SKILL.md + scripts/ + references/）を生成する。
+"""新しいドラフトスキルの雛形（SKILL.md + references/ + evals/ +（任意で）scripts/）を作る。
 
 skill-creator スキルの実行スクリプト（progressive disclosure 第3段階）。
-run_script から次の形式で呼ばれる想定:
 
-    python scaffold_skill.py --name my-new-skill --description "..." \\
-        [--with-script]
+    python scaffold_skill.py --name my-new-skill --description "..." [--with-script]
 
-新規スキルは常に `.locohane/skills/<name>/` に生成する（プロジェクト
-ルート直下の `skills/` はビルトイン相当のスキルの置き場のため、
-skill-creator が生成するスキルはそちらには書き込まない）。
+作成先は会話のユーザー自身のドラフト置き場 `<draft_dir>/<ユーザー名>/<name>/`。
+正式スキル（skills/ や project_locohane_dir 配下）には書き込まない。正式スキルと
+同じ名前は拒否する（既存スキルを直したいときは fork_skill.py で改善案を作る）。
 
 自己完結（標準ライブラリのみ）。依存なし。
 """
@@ -16,67 +14,60 @@ skill-creator が生成するスキルはそちらには書き込まない）。
 from __future__ import annotations
 
 import argparse
-import json
-import re
-import sys
-from pathlib import Path
+import os
 
-from _common import print_json, project_root
-
-_NAME_RE = re.compile(r"^[a-z0-9]+([_-][a-z0-9]+)*$")
-_NAME_MAX = 64
-_DESC_MAX = 1024
+from _common import (
+    DRAFT_EVALS_DIRNAME,
+    SkillCreatorError,
+    draft_context,
+    find_official_skill,
+    now_iso,
+    print_json,
+    resolve_draft,
+    run_main,
+    validate_name_description,
+    write_meta,
+)
 
 SKILL_MD_TEMPLATE = """---
 name: {name}
 description: {description}
-license: MIT
-metadata:
-  author: ytakamoto
-  version: "1.0"
 ---
 
 # {name}
 
-（ここにスキルの概要を1〜2文で書く）
+（このスキルが何をするかを1〜2文で書く）
 
 ## 手順
 
 1. （最初にやること）
-2. `run_script` ツールを次の形式で呼び出す:
-   ```json
-   {{
-       "skill_name": "{name}",
-       "script_filename": "xxx.py",
-       "script_args": ["..."]
-   }}
+2. 次のコマンドを実行する:
    ```
-3. スクリプトが返す JSON のキーをどう解釈してユーザーに報告するかを書く。
+   python run.py --input <入力ファイル>
+   ```
+3. 出力JSONのキーの意味と、ユーザーへの報告のしかたを書く。
 
-## 出力例
+## 注意
 
-```json
-{{"...": "..."}}
-```
-
-## エッジケース
-
-- （入力が不正な場合の挙動、境界値など）
+- （入力が不正な場合の扱い、やってはいけないこと）
 """
 
-SAMPLE_SCRIPT_TEMPLATE = '''"""{name} スキルの実行スクリプト（progressive disclosure 第3段階）。
+SAMPLE_SCRIPT_TEMPLATE = '''"""{name} スキルの実行スクリプト。
 
-run_script ツールから呼ばれる。標準ライブラリのみで自己完結させること
-（依存が必要な場合は SKILL.md にインストール手順を明記する）。
+標準ライブラリのみで自己完結させる（依存が必要なら SKILL.md に明記する）。
+正常時は終了コード0で標準出力に1行のJSON、異常時は終了コード1で標準エラーに理由を出す。
 """
 
+import argparse
 import json
 import sys
 
 
 def main() -> int:
-    result = {{"ok": True}}
-    print(json.dumps(result, ensure_ascii=False))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True)
+    args = parser.parse_args()
+    print(json.dumps({{"ok": True, "input": args.input}}, ensure_ascii=False))
     return 0
 
 
@@ -85,76 +76,54 @@ if __name__ == "__main__":
 '''
 
 
-def _validate_name_description(name: str, description: str) -> str | None:
-    """src/skills.py の _validate() と同一ルールで検証する。理由文字列 or None。"""
-    if not name:
-        return "name が空です"
-    if len(name) > _NAME_MAX:
-        return f"name が {_NAME_MAX} 文字を超えている"
-    if "--" in name or "__" in name or "-_" in name or "_-" in name:
-        return "name に区切り文字 (- や _) の連続が含まれる"
-    if not _NAME_RE.match(name):
-        return "name は小文字英数字・ハイフン・アンダースコアのみ・先頭末尾は区切り文字不可"
-    if not description.strip():
-        return "description が空です"
-    if len(description) > _DESC_MAX:
-        return f"description が {_DESC_MAX} 文字を超えている"
-    return None
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--name", required=True)
-    parser.add_argument("--description", required=True)
-    parser.add_argument("--with-script", action="store_true")
+    parser.add_argument("--name", required=True, help="スキル名（小文字英数字とハイフン）")
+    parser.add_argument("--description", required=True, help="何をするか・どんな発話で使うか")
+    parser.add_argument("--with-script", action="store_true", help="scripts/run.py の見本も作る")
     args = parser.parse_args()
 
-    error = _validate_name_description(args.name, args.description)
+    error = validate_name_description(args.name, args.description)
     if error:
-        print(f"エラー: {error}", file=sys.stderr)
-        return 1
+        raise SkillCreatorError(error)
+    if find_official_skill(args.name) is not None:
+        raise SkillCreatorError(
+            f"正式スキル '{args.name}' と同じ名前です。別の名前にするか、既存スキルを直すなら fork_skill.py を使ってください。"
+        )
+    ctx = draft_context()
+    ref = resolve_draft(ctx, args.name, "write", must_exist=False)
+    if ref.dir.exists():
+        raise SkillCreatorError(f"同じ名前のドラフトが既にあります: {ref.full_name}")
 
-    root = project_root()
-    skills_root = root / ".locohane" / "skills"
-    skill_dir = skills_root / args.name
-
-    if skill_dir.exists():
-        print(f"エラー: 既に存在します: {skill_dir}", file=sys.stderr)
-        return 1
-
-    created: list[str] = []
-    skill_dir.mkdir(parents=True)
-    created.append(str(skill_dir))
-
-    skill_md_path = skill_dir / "SKILL.md"
-    skill_md_path.write_text(
-        SKILL_MD_TEMPLATE.format(name=args.name, description=args.description),
-        encoding="utf-8",
-    )
-    created.append(str(skill_md_path))
-
-    (skill_dir / "references").mkdir()
-    created.append(str(skill_dir / "references"))
-
+    ref.dir.mkdir(parents=True)
+    (ref.dir / "SKILL.md").write_text(SKILL_MD_TEMPLATE.format(name=args.name, description=args.description), encoding="utf-8")
+    (ref.dir / "references").mkdir()
+    (ref.dir / DRAFT_EVALS_DIRNAME).mkdir()
     if args.with_script:
-        scripts_dir = skill_dir / "scripts"
-        scripts_dir.mkdir()
-        created.append(str(scripts_dir))
-        sample_path = scripts_dir / "run.py"
-        sample_path.write_text(SAMPLE_SCRIPT_TEMPLATE.format(name=args.name), encoding="utf-8")
-        created.append(str(sample_path))
-
+        (ref.dir / "scripts").mkdir()
+        (ref.dir / "scripts" / "run.py").write_text(SAMPLE_SCRIPT_TEMPLATE.format(name=args.name), encoding="utf-8")
+    write_meta(
+        ref,
+        {
+            "kind": "new",
+            "author": ctx.user,
+            "last_editor": ctx.user,
+            "thread_id": os.environ.get("AGENT_THREAD_ID"),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "status": "draft",
+            "tryouts": [],
+        },
+    )
     print_json(
         {
-            "skill_dir": str(skill_dir),
-            "skill_md_path": str(skill_md_path),
-            "created": created,
-            "note": "アプリはホットリロードしないため、動作確認にはLocohaneアプリの再起動が必要です。",
+            "draft": ref.full_name,
+            "skill_dir": str(ref.dir),
+            "note": "次のメッセージから、自分の会話でこのスキルが使えます。本文は write_draft_file.py で書き直してください。",
         }
     )
     return 0
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    sys.exit(main())
+    run_main(main)

@@ -1,19 +1,18 @@
-"""現在の description とトリガー評価の失敗例から改善案をLLMに提案させる。
+"""ドラフトスキルの現在の description とトリガー評価の失敗例から、改善案をLLMに提案させる。
 
 skill-creator スキルの実行スクリプト（progressive disclosure 第3段階）。
-run_trigger_eval.py の集計結果（per_query の matched: false の項目）を
-そのまま渡すことを想定している。単発の chat completion 呼び出しだが、
-ローカルLLMの応答生成に時間がかかる場合に備え、他の評価系スクリプトと
-同様 start/status の非同期パターンに統一している。
+
+    python propose_description.py start --name my-skill --failed-queries <failed.json>
+    python propose_description.py status --name my-skill --job-id <job_id>
+
+現在の description はドラフトの SKILL.md から読む。--failed-queries には
+run_trigger_eval.py status の per_query から matched: false の項目を抜き出した
+JSON配列のファイルを渡す。単発の chat completion 呼び出しだが、ローカルLLMの
+応答生成に時間がかかる場合に備え、他の評価系スクリプトと同様 start/status の
+非同期パターンにしている。提案は自動では反映しない（write_draft_file.py で書く）。
 
 実際のLLM呼び出しは `_llm_helper.py`（Locohane本体のPython実行環境が
 必要）をサブプロセスとして起動して行う。
-
-使い方:
-    python propose_description.py start --skill-name my-new-skill \\
-        --current-description "..." --failed-queries failed.json \\
-        --workspace <path> [--python-exe <path>]
-    python propose_description.py status --job-id <job_id> --workspace <path>
 
 自己完結（標準ライブラリのみ）。依存なし。
 """
@@ -22,11 +21,23 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import tempfile
 from pathlib import Path
 
-from _common import DEFAULT_MAIN_PYTHON, check_job, print_json, project_root, start_background
+from _common import (
+    DEFAULT_MAIN_PYTHON,
+    SkillCreatorError,
+    draft_context,
+    is_process_alive,
+    load_job,
+    log_tail,
+    parse_frontmatter,
+    print_json,
+    resolve_draft,
+    run_main,
+    start_background,
+    workspace_dir,
+)
 
 _SYSTEM_PROMPT = (
     "あなたはローカルLLM向けAgent SkillsシステムのSKILL.mdのdescriptionを改善する"
@@ -49,8 +60,7 @@ def _build_user_prompt(skill_name: str, current_description: str, failed_queries
     ]
     for item in failed_queries:
         expectation = "使われるべき" if item.get("should_trigger") else "使われるべきでない"
-        actual_rate = item.get("trigger_rate")
-        lines.append(f"- 発話例: {item.get('query')!r} / 期待: {expectation} / 実際のトリガー率: {actual_rate}")
+        lines.append(f"- 発話例: {item.get('query')!r} / 期待: {expectation} / 実際のトリガー率: {item.get('trigger_rate')}")
     lines.append("")
     lines.append("これらの失敗例を踏まえ、改善したdescriptionを1つ提案してください。")
     return "\n".join(lines)
@@ -60,32 +70,45 @@ def _cmd_start(args: argparse.Namespace) -> int:
     try:
         failed_queries = json.loads(Path(args.failed_queries).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
-        print(f"エラー: --failed-queries を読み込めません: {e}", file=sys.stderr)
-        return 1
+        raise SkillCreatorError(f"--failed-queries を読み込めません: {e}") from e
+    ctx = draft_context()
+    ref = resolve_draft(ctx, args.name, "write")
+    fm = parse_frontmatter((ref.dir / "SKILL.md").read_text(encoding="utf-8", errors="replace")) or {}
+    user_prompt = _build_user_prompt(ref.name, fm.get("description", ""), failed_queries)
 
-    user_prompt = _build_user_prompt(args.skill_name, args.current_description, failed_queries)
-
-    workspace = Path(args.workspace)
-    workspace.mkdir(parents=True, exist_ok=True)
-    (workspace / "jobs").mkdir(exist_ok=True)
-
-    fd, input_path_str = tempfile.mkstemp(suffix=".json", dir=str(workspace))
-    input_path = Path(input_path_str)
+    ws = workspace_dir(ctx, ref)
+    fd, input_path = tempfile.mkstemp(suffix=".json", dir=str(ws))
     with open(fd, "w", encoding="utf-8") as f:
         json.dump({"system": _SYSTEM_PROMPT, "user": user_prompt}, f, ensure_ascii=False)
-
-    root = project_root()
     helper_path = Path(__file__).resolve().parent / "_llm_helper.py"
-    cmd = [args.python_exe, str(helper_path), str(input_path)]
-    result = start_background(cmd, cwd=root, env=__import__("os").environ.copy(), workspace=workspace)
-    print_json(result)
+    print_json(start_background([args.python_exe, str(helper_path), input_path], ws))
     return 0
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    result = check_job(args.job_id, Path(args.workspace))
-    print_json(result)
-    return 0 if "error" not in result else 1
+    ctx = draft_context()
+    ref = resolve_draft(ctx, args.name, "write")
+    job = load_job(workspace_dir(ctx, ref), args.job_id)
+    if is_process_alive(job["pid"]):
+        print_json({"job_id": args.job_id, "status": "running", "pid": job["pid"]})
+        return 0
+    lines = [ln for ln in log_tail(job).splitlines() if ln.strip()]
+    try:
+        result = json.loads(lines[-1]) if lines else {}
+    except json.JSONDecodeError:
+        result = {}
+    if "text" not in result:
+        print_json(
+            {
+                "job_id": args.job_id,
+                "status": "finished",
+                "error": result.get("error", "提案を取得できませんでした"),
+                "log_tail": "\n".join(lines[-20:]),
+            }
+        )
+        return 1
+    print_json({"job_id": args.job_id, "status": "finished", "proposed_description": result["text"].strip()})
+    return 0
 
 
 def main() -> int:
@@ -93,22 +116,17 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_start = sub.add_parser("start")
-    p_start.add_argument("--skill-name", required=True)
-    p_start.add_argument("--current-description", required=True)
-    p_start.add_argument("--failed-queries", required=True, help="run_trigger_eval.py status の per_query から抽出したJSON配列")
-    p_start.add_argument("--workspace", required=True)
+    p_start.add_argument("--name", required=True, help="ドラフト名（自分のドラフトはスキル名だけでよい）")
+    p_start.add_argument("--failed-queries", required=True, help="per_query から matched:false を抜き出したJSON配列のファイル")
     p_start.add_argument("--python-exe", default=DEFAULT_MAIN_PYTHON)
 
     p_status = sub.add_parser("status")
+    p_status.add_argument("--name", required=True)
     p_status.add_argument("--job-id", required=True)
-    p_status.add_argument("--workspace", required=True)
 
     args = parser.parse_args()
-    if args.command == "start":
-        return _cmd_start(args)
-    return _cmd_status(args)
+    return _cmd_start(args) if args.command == "start" else _cmd_status(args)
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    sys.exit(main())
+    run_main(main)

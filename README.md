@@ -19,12 +19,13 @@
 
 想定する用途は、設計業務のようにミスが許されない専門業務である。そのため、性能の伸びよりも
 結果の再現性（ばらつきの小ささ）を優先する。スキル・プロンプトの育成も、エージェントが自分の
-スキルを自動で書き換える「自己進化」型は採らない。製造の量産立ち上げで行う連続量産トライ
-（同じ工程を何十〜百回と繰り返して安定性を確かめる）と同じ考え方で、変更のたびに実際の
-ローカルLLMで評価を繰り返し回し、安定して通ることを確かめてから取り込む
+スキルを自動で書き換える「自己進化」型は採らない。製造の量産立ち上げで同じ工程を何十〜百回と
+繰り返して安定性を確かめるのと同じ考え方で、変更のたびに実際のローカルLLMで同じ評価を繰り返し
+回し（**スキル安定化トライアウト**）、全回通ることを確かめてから取り込む
 （「プロンプト資産の自動チューニングループ（evals/）」参照）。エージェント自身が行うのは
-永続メモリーへの記録（課題と対策）までで、それを手順へ反映するかどうかは、外側の評価を
-通して判断する。
+永続メモリーへの記録（課題と対策）と、作成者本人だけが使えるドラフトスキルの作成までで、
+それを正式な手順へ反映するかどうかは、外側の評価とスキル開発者の承認を通して判断する
+（「ドラフトスキル（ユーザー別）と昇格」参照）。
 
 - **パスメモリー機能**（`src/path_memory.py`、`system_prompt.md` の
   Tool Usage Guidelines）: `Glob`/`Grep`/`Read` の結果に短い参照番号 `@N`
@@ -336,6 +337,7 @@ Locohane/
 │       ├── create-eval-case/      # evals/cases/ へのevalケース新規作成
 │       ├── consolidate-memory/    # 全インスタンスの永続メモリーの重複統合（日次）
 │       ├── apply-memory-to-skills/ # 指定インスタンスのメモリーをSKILL.mdへ反映しtune-prompt実行
+│       ├── promote-skill/         # ドラフトスキルをスキル安定化トライアウトに通して正式スキルへ昇格
 │       └── monitor-app-log/       # app_*.log を定期監視し issue/ へ自動起票
 ├── .qwen/                  # Qwen Code用の `.claude/` 相当ディレクトリ（settings.json・skills/等）
 ├── .locohane/                # project_locohane_dir（既定）。配下を起動時に自動検知
@@ -433,7 +435,7 @@ Locohane/
 │   └── verifier.md          # 成果物検証用エージェント種別
 ├── skills/
 │   ├── SKILLS_README.md    # スキル開発者向けガイド
-│   ├── skill-creator/       # 新しいスキルの作成・既存スキルの改善・eval検証を行うメタスキル
+│   ├── skill-creator/       # ユーザー別ドラフトスキルの作成・改善案の作成・eval検証を行うメタスキル
 │   ├── docx-read/           # docx読込専用（段落・表・文書プロパティ・Track Changes有無）
 │   ├── docx-create/         # docx新規生成（見出し/段落/表/画像/ページ設定等）
 │   ├── docx-edit/           # 既存docxの編集（検索置換・Track Changes・段落追加削除）
@@ -502,6 +504,9 @@ Locohane/
   `system_prompt/subagent_common.md` の「SKILL.md呼び出し例の変換ルール」節）が
   ツール呼び出し時に行う。
 - 仕様違反の SKILL.md は **スキップし警告ログ** を出す（全体は落とさない）。
+- **ドラフトスキル（Locohane 独自の拡張）**: skill-creator が作るドラフトも同じ SKILL.md 形式だが、
+  起動時の走査対象ではなく、作成者本人の会話でだけ `ユーザー名/スキル名` として一覧に出る
+  （「ドラフトスキル（ユーザー別）と昇格」参照）。昇格後のスキルは通常のスキルと同じ扱いになる。
 
 ### 範囲外（実装していない）
 
@@ -526,6 +531,7 @@ Locohane/
 | `data/logs/app.log` | アプリの動作ログ | いつでも | ファイルを削除 |
 | `data/memory/` | 永続メモリー（`user`/`feedback`/`project`/`reference` サブフォルダ＋`MEMORY.md`索引） | 蓄積した記憶が不要になったとき | フォルダ内を削除（`MEMORY.md`は次回保存時に再生成される） |
 | `data/plans/` | `create_plan` が `detail_markdown` 引数を渡した場合の詳細計画Markdown（`[paths] plans_dir`） | 古い計画が不要になったとき | フォルダ内を削除 |
+| `data/skill_drafts/<ユーザー名>/` | skill-creator が作ったユーザー別ドラフトスキル（`<スキル名>/`）と、その評価結果（`_workspace/`）。`[skill_creator] draft_dir`。昇格済み・不採用のドラフトも記録として残る（一覧には出ない） | 不要なドラフトがあるとき | ドラフトのフォルダを削除（作成者は skill-creator の `delete_draft.py` でも消せる）。自動削除はされない |
 | `data/temp/_tmp_<作成時刻>_<thread_id>/` | `execute_python_code`/`run_script` の中間生成物・`write_scratch_note`/`write_thread_note` の書き出し先。自セッション専用（`[default_workdir]` 参照）。フォルダ名先頭の作成時刻（ミリ秒まで）はファイラー上で作成順に並べるためのもの | セッション終了後、不要になったとき | フォルダ内を削除（`[default_workdir] retention_days`/`cleanup_interval_hours` により自動削除もされる） |
 | `data/elements/<thread_id>/` | 添付ファイル（`provide_download`/`analyze_image`の`show_in_chat=True`等）・回答本文への画像埋め込みの永続化先。スレッド再開・プロセス再起動後も表示できるようここへ実体をコピー保存する（`[elements]`参照、`src/thread_store.py`） | 添付ファイルが不要になったとき | フォルダ内を削除 |
 | `.files/` | Chainlit自身のセッションファイル配信ディレクトリ（送信直後のライブ表示にのみ使う一時配信。プロジェクト直下、`data/`配下ではない） | いつでも | フォルダ内を削除 |
@@ -760,7 +766,7 @@ app.bat
 
 | スキル | 配置場所 | 種別 | 内容 |
 |--------|----------|------|------|
-| `skill-creator` | `skills/` | スクリプト実行を伴う | 新しいスキルの作成・既存スキルの改善・description のトリガー精度最適化・evalハーネスによる検証を行うメタスキル。 |
+| `skill-creator` | `skills/` | スクリプト実行を伴う | 自分専用のドラフトスキルの作成・既存スキルの改善案の作成・本文の書き込み・evalハーネスによる繰り返し評価（スキル安定化トライアウト）・description のトリガー精度最適化を行うメタスキル。正式スキルは書き換えない（下記「ドラフトスキル（ユーザー別）と昇格」）。 |
 | `pdf-tools` | `skills/` | スクリプト実行を伴う | PDFのテキスト抽出・ページ画像化（レイアウト/図表/スキャン内容の視覚把握）・PDF生成（日本語対応）。 |
 | `docx-read` | `skills/` | スクリプト実行を伴う | docxの読込専用（段落・表・文書プロパティ・Track Changes有無・画像有無の取得）。 |
 | `docx-create` | `skills/` | スクリプト実行を伴う | docxの新規生成（見出し/段落/箇条書き/表/画像/ページ設定/ヘッダーフッター等）。 |
@@ -796,6 +802,40 @@ LLM側の共通変換ルール（`system_prompt/system_prompt.md`・`system_prom
 通知されるため、SKILL.md 側でポーリング手順を指示する必要は無い）。安全上限を超える
 ごく長時間のスクリプトに限り `job_id` を含む案内が返るので、その場合のみ
 `check_script_job`/`stop_script_job` の使い方をSKILL.md に明記すればよい。
+
+### ドラフトスキル（ユーザー別）と昇格
+
+利用者（スキル開発の専門家とは限らない）がチャットから skill-creator で作るスキルは、
+正式スキルではなく**ドラフト**として `[skill_creator] draft_dir`（既定 `data/<インスタンス名>/skill_drafts/`）の
+`<ユーザー名>/<スキル名>/` に置かれる。設計の要点:
+
+- **本番への混入を構造的に防ぐ**: `draft_dir` は起動時のスキル走査対象（`skills_dir`・`agents_dir`・
+  `project_locohane_dir`）と同一・包含関係にすると起動時にエラーになる（`src/config.py` の `_validate_skill_draft_dir`）。
+  skill-creator が書き込めるのは、`skills/` 配下の skill-creator 本体の実行に限り、自分のドラフトフォルダだけ
+  （`src/tools/_subprocess_env.py` の `_skill_creator_draft_roots`）。正式スキルを直したいときは
+  `fork_skill.py` で改善案のドラフトを作り、元のハッシュを記録する。
+- **作成者本人の会話でだけ使える**: ドラフトはセッションごとに、スキル名 `ユーザー名/スキル名` として
+  システムプロンプトのスキル一覧と `read_skill` の選択肢に足される（`app.py` の `_apply_session_draft_skills`、
+  `src/tools/session_tools.py`）。skill-creator でドラフトを作成・削除した次のメッセージから反映される。
+  ユーザーの判定はログインユーザー名（会話ログと同じ `resolve_log_username()`）で行うため、認証を無効にしている
+  場合は全員が同じ `anonymous` のドラフトを共有する点に注意。
+- **他ユーザーのドラフトの扱いは4段階**（`[skill_creator] other_users_drafts`）: `hidden`（既定。一覧に出ず、
+  Read/Glob/Grep/execute_python_code 等からも読めない）／`listed`（一覧にだけ出る）／`readable`（読み取りまで）／
+  `full`（実行・書き込み・評価まで）。判定は `src/skill_drafts.py` に集約し、`_safe_path`・`Read` 系のパス解決・
+  Grep の再帰検索・Python 実行の書き込みガード（読み取りも禁止するルート）の各所から呼ぶ。
+- **ドラフトは承認なしで直接使える**: ドラフトのスクリプトと skill-creator 本体のスクリプトは、
+  `[plan] plan_approval_exempt_scripts`・`[main_agent_tool_guard]` の設定に関係なく、計画承認なし・
+  メインエージェントからの直接実行ができる（作成者は config.ini を編集できないため）。名前ではなく
+  スクリプトの実体の場所で判定するため、同名スキルの偽装では免除されない。書き込み先は通常どおり作業ディレクトリに限られる。
+- **評価は本番の構成の上にドラフトを重ねて行う**: skill-creator の `run_isolated_eval.py` は
+  `evals/run_all.py --cases-dir <ドラフト>/evals --skill-overlay <ドラフト>` を実行する。会社専用の
+  `project_locohane_dir` を含む本番のスキル構成を残したまま、ドラフトだけを最優先で重ねる。
+  `--repeat N` でスキル安定化トライアウトになる。
+- **正式化はスキル開発者が Claude Code で行う**: `.claude/skills/promote-skill` が、全インスタンスのドラフトから
+  1件選び、事前確認（同名の正式スキル・改善案の元スキルが変わっていないか・ケースの有無）→ スキル安定化
+  トライアウト（`[skill_creator] tryout_repeats` 回、既定10回。Claude Code 自身が実行し直し、judge も判定）→
+  承認 → 昇格（ケースは `evals/cases/<スキル名>/` へ移り、以後 tune-prompt の対象）を行う。不合格なら理由を付けて
+  作成者へ差し戻す。記録は `evals/promotion_log.md`。昇格したスキルが全ユーザーに出るのは再起動後。
 
 ### 新しいスキルの追加方法
 
@@ -949,6 +989,13 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
   `evals/results/<target>/<timestamp>/`（`.gitignore` 対象、再生成可能なデータ）へ出力。
 - `--instance <インスタンス名>` を付けると、設定ダッシュボードのインスタンス
   （`config_overrides.json` とインスタンス別 `.env`）の設定で評価する（省略時は `default`）。
+- **スキル安定化トライアウト**: `--repeat N` を付けると各ケースを N 回ずつ直列に実行し、
+  サマリ末尾と `tryout.json` にケースごとの合格回数と判定（全ケース N/N で合格。judge 付きのケースは
+  全回の judge を読んで判断する）を出す。1回の合格が偶然でないかを確かめるためのもので、
+  ドラフトスキルの昇格（promote-skill）では必須。
+- `--cases-dir <フォルダ>` で `evals/cases/<target>/` 以外のケース（ドラフトの `evals/` 等）を、
+  `--skill-overlay <スキルフォルダ>` で本番のスキル構成の上にスキルを最優先で重ねて、
+  `--results-dir` で結果の出力先を変えて実行できる。
 - `evals/run_case.py` は Chainlit の UI 呼び出しを `evals/headless_chainlit.py` で
   スタブに差し替え、`src/graph.py` のグラフを直接 `ainvoke` する（Chainlit サーバー起動不要）。
 - チューニング時は編集前スナップショットを `evals/history/<target>/` に退避し、
@@ -1067,6 +1114,9 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 | `[default_workdir]` | `dir` | エージェントの既定の作業ディレクトリのベース。実際の書き込み・`run_script`のcwdはこの配下の自セッション専用サブディレクトリ`_tmp_<name>`に限定される（`dir`直下への書き込みは許可されない） | `DEFAULT_WORKDIR` |
 | `[default_workdir]` | `allow_sandbox_dir` | セッション分離の外側で常時書き込みを許可する追加ディレクトリのリスト（`[{"dir": "パス", "allow_entries": [["スキル名","スクリプトファイル名"], ...]}, ...]`形式）。各要素の`allow_entries`を空リストにすると、対象を問わずそのディレクトリへ無制限に書き込み可能になる。登録したディレクトリはスレッドを問わず常時書き込み可能になる点に注意（既定は空リストで無効） | `ALLOW_SANDBOX_DIR` |
 | `[default_workdir]` | `retention_days` | 上記 `dir` 配下のファイル保持日数（0以下で自動削除無効） | `DEFAULT_WORKDIR_RETENTION_DAYS` |
+| `[skill_creator]` | `draft_dir` | ユーザー別ドラフトスキルの置き場（既定 `${common_data_dir}/skill_drafts`）。スキル走査対象と重なると起動時エラー | `SKILL_DRAFT_DIR` |
+| `[skill_creator]` | `tryout_repeats` | スキル安定化トライアウトの既定回数（昇格時に各ケースをこの回数だけ繰り返し、全回合格で合格。既定10） | `SKILL_TRYOUT_REPEATS` |
+| `[skill_creator]` | `other_users_drafts` | 他ユーザーのドラフトの扱い。`hidden`（既定）／`listed`／`readable`／`full`（「ドラフトスキル（ユーザー別）と昇格」参照） | `SKILL_OTHER_USERS_DRAFTS` |
 | `[default_workdir]` | `cleanup_interval_hours` | default_workdir 自動削除チェック間隔（時間） | `DEFAULT_WORKDIR_CLEANUP_INTERVAL_HOURS` |
 | `[log]` | `dir` | ログ出力先 | `LOG_DIR` |
 | `[log]` | `level` | ログの詳細度。`info`（現行仕様、ツール呼び出しの概要のみ）／`debug`（ツール呼び出しの全引数・全結果・LLM応答本文・thinkingまで記録）／`none`（ログを一切生成しない） | `LOG_LEVEL` |

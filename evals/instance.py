@@ -77,6 +77,8 @@ def main() -> int:
     print(f"sub_url: {[e.base_url for e in config.sub_endpoints]}")
     print(f"log_dir: {config.log_dir}")
     print(f"default_workdir: {config.default_workdir}")
+    print(f"skill_draft_dir: {config.skill_draft_dir}")
+    print(f"skill_tryout_repeats: {config.skill_tryout_repeats}")
     return 0
 
 

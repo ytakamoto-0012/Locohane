@@ -14,6 +14,8 @@ from ._duplicate_guard import _check_file_tools_duplicate
 from ._file_tools_common import looks_binary, read_text_with_fallback, suggest_similar_dir
 from ._path_memory_helpers import _register_path_memory, suggest_from_path_memory
 from ._safe_path import _resolve_file_tools_path
+from .. import skill_drafts
+from . import _state
 from ._workdir import _foreign_tmp_dir_names
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,7 @@ def grep_search(
     context: int = 0,
     head_limit: int = 50,
     exclude_names: frozenset[str] = frozenset(),
+    exclude_paths: frozenset[Path] = frozenset(),
 ) -> dict:
     """指定ファイル/ディレクトリ配下のテキストから正規表現で検索する。
 
@@ -74,6 +77,9 @@ def grep_search(
         exclude_names: 走査対象から除外するディレクトリ名の集合
             （basenameで一致するディレクトリは配下ごと走査しない。空なら
             従来通り無条件で全て対象）。
+        exclude_paths: 走査対象から除外するディレクトリの絶対パス（解決済み）の
+            集合（他ユーザーのドラフトスキルのように、名前ではなく場所で除外
+            したいもの。配下ごと走査しない）。
 
     Returns:
         output_mode に応じた形状の辞書（マッチ0件は
@@ -100,6 +106,8 @@ def grep_search(
         for root, dirs, files in os.walk(base):
             if exclude_names:
                 dirs[:] = [d for d in dirs if d not in exclude_names]
+            if exclude_paths:
+                dirs[:] = [d for d in dirs if (Path(root) / d).resolve() not in exclude_paths]
             for name in files:
                 if glob and not fnmatch.fnmatch(name, glob):
                     continue
@@ -213,6 +221,7 @@ def grep_tool(
             context=context,
             head_limit=head_limit,
             exclude_names=_foreign_tmp_dir_names(),
+            exclude_paths=frozenset(skill_drafts.unreadable_dirs(_state._LLM_CONFIG, skill_drafts.current_draft_user())),
         )
     except ValueError as e:
         hint = suggest_from_path_memory(str(base)) if not base.exists() else ""

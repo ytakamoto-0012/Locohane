@@ -1,32 +1,26 @@
-"""対象スキルの有無を切り替えたうえで evals.run_case を1件バックグラウンド実行する。
+"""ドラフトスキルの eval ケースを、実際のローカルLLMで（繰り返し）実行する。
 
 skill-creator スキルの実行スクリプト（progressive disclosure 第3段階）。
-実際にローカルのllama.cpp serverへ問い合わせて ReAct ループ全体を回すため
-数十秒〜数百秒かかりうる。run_script の同期実行タイムアウト（config.ini の
-[scripts].timeout）内に収まる保証がないため、本スクリプトは起動して
-即座に job_id を返す（start）／後から状態を確認する（status）の
-2サブコマンドに分かれている。
 
-使い方:
-    python run_isolated_eval.py start --case <case.yaml> --skill-name <name> \\
-        [--skill-root skills|locohane] [--mode with_skill|without_skill|old_skill] \\
-        [--replacement-dir <path>] [--python-exe <path>]
-    python run_isolated_eval.py status --job-id <job_id> --skill-name <name> \\
-        [--skill-root skills|locohane]
+    # ドラフトありで全ケースを1回ずつ
+    python run_isolated_eval.py start --name my-skill
+    # スキル安定化トライアウト（各ケースを10回ずつ、全回合格で合格）
+    python run_isolated_eval.py start --name my-skill --repeat 10
+    # 比較用: ドラフト無し（新規スキルならスキル無し、改善案なら正式スキルのまま）
+    python run_isolated_eval.py start --name my-skill --mode without_skill --case 001_basic
+    # 結果の確認（running の間は1分ほど待ってから再度呼ぶ）
+    python run_isolated_eval.py status --name my-skill --job-id <job_id>
 
---skill-root の既定値は locohane（`.locohane/skills/`）。skill-creator が
-新規作成するスキルは常にそちらへ置く運用のため。プロジェクトルート直下の
-`skills/`（excel-edit 等の既存スキルの置き場）を評価対象にしたい場合の
-み `--skill-root skills` を明示する。
+評価は evals/run_all.py を `--cases-dir <ドラフト>/evals` でバックグラウンド実行する。
+with_skill ではドラフトを `--skill-overlay` で本番のスキル構成（会社専用の
+project_locohane_dir を含む）の上に重ねるため、評価中のスキル名はスキル名そのもの
+（例: my-skill）になる。改善案ドラフトは同名の正式スキルを上書きした状態で評価される。
 
-with_skill:    本番の skills_dir / locohane_skills_dirs をそのまま使う。
-without_skill: 対象スキルの有無以外は本番と同じ状態にした一時ディレクトリを
-               作り、対象スキルのフォルダだけ除外して評価する（baseline）。
-old_skill:     --replacement-dir に指定した旧バージョンのスキル一式で
-               対象スキルフォルダを差し替えて評価する（改善前後の比較用）。
+結果（status）は _draft_meta.json の tryouts にも記録される。昇格（promote-skill）では
+スキル開発者が同じ評価を実行し直すため、ここでの記録は参考扱い。
 
-いずれのモードでも他の既存スキル（excel-edit等）は変更しないため、
-「対象スキルの有無・新旧」だけを分離した公平な比較ができる。
+ローカルの llama.cpp server は1つなので、評価は1件ずつ（前のジョブが finished に
+なってから次を start する）。
 
 自己完結（標準ライブラリのみ）。依存なし。
 """
@@ -34,107 +28,164 @@ old_skill:     --replacement-dir に指定した旧バージョンのスキル�
 from __future__ import annotations
 
 import argparse
-import os
-import shutil
-import sys
-import tempfile
+import json
 from pathlib import Path
 
 from _common import (
     DEFAULT_MAIN_PYTHON,
-    check_job,
+    DRAFT_EVALS_DIRNAME,
+    SkillCreatorError,
+    draft_context,
+    is_process_alive,
+    load_job,
+    log_tail,
+    now_iso,
     print_json,
     project_root,
+    read_meta,
+    resolve_draft,
+    run_main,
     start_background,
     workspace_dir,
+    write_meta,
 )
 
-_ENV_VAR_BY_ROOT = {"skills": "SKILLS_DIR", "locohane": "PROJECT_LOCOHANE_DIR"}
+# status で返す最終回答の最大文字数（judge 判定の材料。全文は results_path を読む）。
+_FINAL_ANSWER_PREVIEW_CHARS = 600
 
 
-def _skill_root_dir(root_key: str) -> Path:
-    root = project_root()
-    return root / "skills" if root_key == "skills" else root / ".locohane" / "skills"
-
-
-def _build_isolated_env(skill_root: str, skill_name: str, mode: str, replacement_dir: str | None, workspace: Path) -> dict[str, str]:
-    """mode に応じて一時 skills_dir を用意し、環境変数にセットして返す。
-
-    一時ディレクトリは `workspace` 配下に作る（run_script の書き込み
-    サンドボックスガードは workdir/default_workdir 配下以外への書き込みを
-    ブロックするため、OS既定の一時フォルダ直下には作れない。
-    propose_description.py が `tempfile.mkstemp(dir=str(workspace))` で
-    同じ制約を回避しているのと同じ方式）。
-    """
-    env = dict(os.environ)
-    if mode == "with_skill":
-        return env
-
-    root_dir = _skill_root_dir(skill_root)
-    workspace.mkdir(parents=True, exist_ok=True)
-    tmp_root = Path(tempfile.mkdtemp(prefix="skill-creator-eval-", dir=str(workspace)))
-    # locohane の場合、環境変数は PROJECT_LOCOHANE_DIR（「.locohane」相当の
-    # ディレクトリそのもの）を指すため、スキル本体は tmp_root/skills/ 配下へ
-    # コピーする（skills の場合は tmp_root 自体が SKILLS_DIR 相当のため直下へ）。
-    copy_dest_root = tmp_root / "skills" if skill_root == "locohane" else tmp_root
-    copy_dest_root.mkdir(parents=True, exist_ok=True)
-    if root_dir.is_dir():
-        for child in root_dir.iterdir():
-            dest = copy_dest_root / child.name
-            if child.is_dir():
-                shutil.copytree(child, dest)
-            else:
-                shutil.copy2(child, dest)
-
-    target_in_tmp = copy_dest_root / skill_name
-    if mode == "without_skill":
-        if target_in_tmp.exists():
-            shutil.rmtree(target_in_tmp)
-    elif mode == "old_skill":
-        if not replacement_dir:
-            raise ValueError("--mode old_skill には --replacement-dir が必須です")
-        if target_in_tmp.exists():
-            shutil.rmtree(target_in_tmp)
-        shutil.copytree(Path(replacement_dir), target_in_tmp)
-    else:
-        raise ValueError(f"未知のmode: {mode}")
-
-    env[_ENV_VAR_BY_ROOT[skill_root]] = str(tmp_root)
-    return env
+def _classify(result: dict) -> str:
+    """evals/run_all.py の _classify() と同じ分類。"""
+    if result.get("error"):
+        return "error"
+    if result.get("rules_pass") is False:
+        return "fail"
+    if result.get("judge"):
+        return "judge"
+    return "pass"
 
 
 def _cmd_start(args: argparse.Namespace) -> int:
-    case_path = Path(args.case)
-    if not case_path.is_file():
-        print(f"エラー: ケースファイルが見つかりません: {case_path}", file=sys.stderr)
-        return 1
+    ctx = draft_context()
+    ref = resolve_draft(ctx, args.name, "write")
+    cases_dir = ref.dir / DRAFT_EVALS_DIRNAME
+    available = sorted(p.stem for p in cases_dir.glob("*.yaml"))
+    if not available:
+        raise SkillCreatorError(f"ケースがありません。make_eval_case.py で {ref.full_name} のケースを作ってください。")
+    missing = [c for c in args.case if c not in available]
+    if missing:
+        raise SkillCreatorError(f"ケースが見つかりません: {missing}（ある: {available}）")
+    if args.repeat < 1:
+        raise SkillCreatorError("--repeat は1以上にしてください。")
 
-    skill_dir = _skill_root_dir(args.skill_root) / args.skill_name
-    if args.mode == "without_skill" and not skill_dir.is_dir():
-        print(f"エラー: 対象スキルディレクトリが見つかりません: {skill_dir}", file=sys.stderr)
-        return 1
-
-    workspace = Path(args.workspace) if args.workspace else workspace_dir(skill_dir)
-    try:
-        env = _build_isolated_env(args.skill_root, args.skill_name, args.mode, args.replacement_dir, workspace)
-    except ValueError as e:
-        print(f"エラー: {e}", file=sys.stderr)
-        return 1
-
-    cmd = [args.python_exe, "-m", "evals.run_case", str(case_path.resolve())]
-    result = start_background(cmd, cwd=project_root(), env=env, workspace=workspace)
-    result["mode"] = args.mode
-    result["workspace"] = str(workspace)
-    print_json(result)
+    ws = workspace_dir(ctx, ref)
+    results_root = ws / "results" / args.mode
+    existing = sorted(p.name for p in results_root.iterdir()) if results_root.is_dir() else []
+    cmd = [
+        args.python_exe,
+        str(project_root() / "evals" / "run_all.py"),
+        *args.case,
+        "--cases-dir",
+        str(cases_dir),
+        "--results-dir",
+        str(results_root),
+        "--repeat",
+        str(args.repeat),
+    ]
+    if args.mode == "with_skill":
+        cmd += ["--skill-overlay", str(ref.dir)]
+    if args.instance:
+        cmd += ["--instance", args.instance]
+    job = start_background(
+        cmd,
+        ws,
+        {
+            "draft": ref.full_name,
+            "mode": args.mode,
+            "repeat": args.repeat,
+            "cases": args.case or available,
+            "results_root": str(results_root),
+            "existing_results": existing,
+            "started_at": now_iso(),
+        },
+    )
+    job["runs"] = len(args.case or available) * args.repeat
+    print_json(job)
     return 0
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    skill_dir = _skill_root_dir(args.skill_root) / args.skill_name
-    workspace = Path(args.workspace) if args.workspace else workspace_dir(skill_dir)
-    result = check_job(args.job_id, workspace)
-    print_json(result)
-    return 0 if "error" not in result else 1
+    ctx = draft_context()
+    ref = resolve_draft(ctx, args.name, "write")
+    ws = workspace_dir(ctx, ref)
+    job = load_job(ws, args.job_id)
+    if is_process_alive(job["pid"]):
+        done = log_tail(job, 10_000).count("実行中:")
+        print_json({"job_id": args.job_id, "status": "running", "started_runs": done, "total_runs": len(job["cases"]) * job["repeat"]})
+        return 0
+
+    results_root = Path(job["results_root"])
+    new_dirs = sorted(
+        p for p in (results_root.iterdir() if results_root.is_dir() else []) if p.is_dir() and p.name not in job["existing_results"]
+    )
+    if not new_dirs or not (new_dirs[-1] / "results.json").is_file():
+        print_json({"job_id": args.job_id, "status": "finished", "error": "結果が生成されていません", "log_tail": log_tail(job)})
+        return 1
+    out_dir = new_dirs[-1]
+    results = json.loads((out_dir / "results.json").read_text(encoding="utf-8"))
+
+    cases: dict[str, dict[str, int]] = {}
+    runs = []
+    for r in results:
+        outcome = _classify(r)
+        cases.setdefault(r.get("case_id", "?"), {"pass": 0, "fail": 0, "judge": 0, "error": 0})[outcome] += 1
+        runs.append(
+            {
+                "case_id": r.get("case_id"),
+                "repeat_index": r.get("repeat_index", 1),
+                "outcome": outcome,
+                "failed_rules": [k for k, v in (r.get("rule_results") or {}).items() if not v.get("pass")],
+                "judge": r.get("judge"),
+                "error": r.get("error"),
+                "final_answer": (r.get("final_answer") or "")[:_FINAL_ANSWER_PREVIEW_CHARS],
+            }
+        )
+    if any(c["fail"] or c["error"] for c in cases.values()):
+        verdict = "fail"
+    elif any(c["judge"] for c in cases.values()):
+        verdict = "needs_judge"
+    else:
+        verdict = "pass"
+
+    meta = read_meta(ref)
+    tryouts = meta.setdefault("tryouts", [])
+    if not any(t.get("job_id") == args.job_id for t in tryouts):
+        tryouts.append(
+            {
+                "job_id": args.job_id,
+                "at": now_iso(),
+                "by": ctx.user,
+                "mode": job["mode"],
+                "repeat": job["repeat"],
+                "verdict": verdict,
+                "cases": cases,
+                "results_dir": str(out_dir),
+            }
+        )
+        write_meta(ref, meta)
+    print_json(
+        {
+            "job_id": args.job_id,
+            "status": "finished",
+            "mode": job["mode"],
+            "repeat": job["repeat"],
+            "verdict": verdict,
+            "cases": cases,
+            "runs": runs,
+            "results_path": str(out_dir / "results.json"),
+        }
+    )
+    return 0
 
 
 def main() -> int:
@@ -142,26 +193,20 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_start = sub.add_parser("start")
-    p_start.add_argument("--case", required=True, help="evals case yaml の絶対パス")
-    p_start.add_argument("--skill-name", required=True)
-    p_start.add_argument("--skill-root", choices=["skills", "locohane"], default="locohane")
-    p_start.add_argument("--mode", choices=["with_skill", "without_skill", "old_skill"], default="with_skill")
-    p_start.add_argument("--replacement-dir", default=None, help="mode=old_skill のときの旧バージョン一式のパス")
-    p_start.add_argument("--workspace", default=None)
+    p_start.add_argument("--name", required=True, help="ドラフト名（自分のドラフトはスキル名だけでよい）")
+    p_start.add_argument("--mode", choices=["with_skill", "without_skill"], default="with_skill")
+    p_start.add_argument("--repeat", type=int, default=1, help="各ケースの繰り返し回数（スキル安定化トライアウト）")
+    p_start.add_argument("--case", action="append", default=[], help="実行するケースID（複数可。省略時は全ケース）")
+    p_start.add_argument("--instance", default=None, help="評価に使うインスタンス（省略時は今のインスタンス）")
     p_start.add_argument("--python-exe", default=DEFAULT_MAIN_PYTHON)
 
     p_status = sub.add_parser("status")
+    p_status.add_argument("--name", required=True)
     p_status.add_argument("--job-id", required=True)
-    p_status.add_argument("--skill-name", required=True)
-    p_status.add_argument("--skill-root", choices=["skills", "locohane"], default="locohane")
-    p_status.add_argument("--workspace", default=None)
 
     args = parser.parse_args()
-    if args.command == "start":
-        return _cmd_start(args)
-    return _cmd_status(args)
+    return _cmd_start(args) if args.command == "start" else _cmd_status(args)
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    sys.exit(main())
+    run_main(main)

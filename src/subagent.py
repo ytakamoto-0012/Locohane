@@ -595,6 +595,11 @@ async def run_subagent(
     Returns:
         サブエージェントの最終回答テキスト。
     """
+    # このセッションのユーザーのドラフトスキル名を read_skill の選択肢へ足す
+    # （src/tools/session_tools.py。メインエージェントと同じ範囲だけが見える）。
+    from .tools.session_tools import apply_session_tool_overrides  # noqa: PLC0415 (src.tools が本モジュールを import するため循環を避ける)
+
+    tools = apply_session_tool_overrides(tools)
     model = enable_thinking_control(await build_model(config, role="sub"), config, "sub").bind_tools(tools)
     tools_by_name = {t.name: t for t in tools}
     messages: list = [SystemMessage(content=system_prompt), HumanMessage(content=task)]

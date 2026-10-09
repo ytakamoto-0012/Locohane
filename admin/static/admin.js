@@ -704,6 +704,9 @@ const CONFIG_PRESETS = [
       "subagent.agent_type_run_script_allowlist",
       "main_agent_tool_guard.allow_entries",
       "plan.plan_approval_exempt_scripts",
+      "skill_creator.draft_dir",
+      "skill_creator.tryout_repeats",
+      "skill_creator.other_users_drafts",
     ],
   },
 ];

@@ -1,211 +1,154 @@
 ---
 name: skill-creator
-description: Locohaneの .locohane/skills/ 配下に新しいスキルを作成する、既存スキルを編集・改善する、evalsハーネスで実際にローカルLLMを動かしてスキルの効果を検証する、SKILL.mdのdescriptionのトリガー精度を最適化するためのメタスキル。「新しいスキルを作りたい」「スキルを作って」「このスキルを直して」「スキルがちゃんと動くか試したい」「read_skillされやすいようにdescriptionを直したい」「スキルのトリガー精度を上げたい」など、スキル自体の作成・改善・検証に関する依頼があれば、たとえユーザーが「skill-creator」という名前を出さなくても必ず使うこと。
+description: 自分専用のドラフトスキル（未検証のスキル）を作る・既存スキルの改善案を作る・本文やスクリプトを書き直す・実際のローカルLLMで繰り返し評価する（スキル安定化トライアウト）・descriptionのトリガー精度を上げる、ためのメタスキル。「新しいスキルを作りたい」「スキルを作って」「このスキルを直したい」「スキルがちゃんと動くか試したい」「スキルのトリガー精度を上げたい」「自分のドラフトを見せて」など、スキル自体の作成・改善・検証の依頼があれば、ユーザーが「skill-creator」と言わなくても必ず使う。
 license: MIT
 metadata:
   author: ytakamoto
-  version: "1.0"
+  version: "2.0"
 ---
 
 # skill-creator
 
-新しいスキルを作り、実際にローカルLLM（自分自身と同じ llama.cpp server）を
-動かしてテストし、フィードバックを踏まえて改善する——このサイクルを回す
-ためのスキル。既存スキルの改善や、description のトリガー精度最適化にも使う。
+ドラフトスキルを作り、ローカルLLMで評価して直す、を繰り返すためのスキル。
 
-## 全体の流れ
+## 必ず守ること
 
-1. 意図を把握する（何をするスキルか、いつトリガーすべきか）
-2. `scaffold_skill.py` で雛形を作る、または既存スキルを編集する
-3. `validate_skill.py` で frontmatter を検証する
-4. `make_eval_case.py` でテストケースを作る
-5. `run_isolated_eval.py` で with_skill / baseline を実機テストする（直列）
-6. ルールベースは自動判定、judge指定分は自分がtranscriptを読んで判定する
-7. フィードバックを踏まえて SKILL.md / scripts を修正し、4〜6を繰り返す
-8. （任意）`run_trigger_eval.py` + `propose_description.py` で description のトリガー精度を最適化する
+- 作るのは**ドラフト**だけ。正式スキル（skills/ 等）は書き換えない。既存スキルを直したいときは `fork_skill.py` で改善案のドラフトを作る。
+- ドラフトは作った人の会話でだけ、スキル名 `ユーザー名/スキル名` として一覧に出る（作成・削除の次のメッセージから）。他の人には見えない。
+- 正式スキルにするのはスキル開発者の仕事。完了したら「正式化はスキル開発者に依頼してください」と伝える。
+- 評価（`run_isolated_eval.py` `run_trigger_eval.py`）は1件ずつ。`status` が `finished` になるまで次を `start` しない。`running` の間は1分ほど待ってから `status` を呼ぶ。
+- このスキルのスクリプトは計画承認なしで自分で直接実行できる。
 
-ユーザーが「evalは要らない、雛形だけ作って」と言えばステップ4以降は
-スキップしてよい。逆に「ちゃんと動くか確かめたい」という要望なら
-必ずステップ5まで進める。
+## 流れ
 
-## Locohane固有の制約（必ず守ること）
+1. 何をするスキルか・どんな発話で使うか・出力の形を確かめる。
+2. ドラフトを作る（新規は `scaffold_skill.py`、既存スキルの改善は `fork_skill.py`）。
+3. `write_draft_file.py` で SKILL.md・scripts/・references/ を書く。
+4. `validate_skill.py` で確認する。
+5. `make_eval_case.py` で評価ケースを2〜3件作る。
+6. `run_isolated_eval.py` で評価し、結果を見て 3 に戻る。
+7. 安定したら `--repeat 10` で評価する（スキル安定化トライアウト）。
+8. 結果をユーザーに報告する。
 
-- **ローカルのllama.cpp serverは1インスタンスのみ**。評価用のテスト実行は
-  常に直列（1件ずつ）で行う。複数の `run_isolated_eval.py start` や
-  `run_trigger_eval.py start` を同時に走らせて多重リクエストを送らないこと。
-  1件startしたら、statusで`finished`になるまで待ってから次を始める。
-- `run_script` は **1本のテキスト（stdout/stderrと終了コード）** しかLLMに
-  渡さない。スクリプトはすべて正常系は終了コード0＋stdoutに1行JSON、
-  異常系は非0＋stderrという規約に統一している。
-- 実際にLLMを動かす評価系スクリプト（`run_isolated_eval.py`
-  `run_trigger_eval.py` `propose_description.py`）は `run_script` の同期
-  タイムアウトを超えうるため、**start でジョブを開始し、status でポーリング
-  する**非同期パターンになっている。詳細は `references/schemas.md` 参照。
-  status が `running` を返している間は、一度に数十秒〜1分程度待ってから
-  再度呼び出すこと（間隔を空けずに連打しない）。
-- 新しいスキルを追加・変更しても **Locohaneアプリはホットリロードしない**。
-  本番での動作確認にはアプリの再起動が必要になる旨をユーザーに伝えること
-  （evalによる実機テスト自体はアプリ再起動なしで行える）。
-- **新規スキルは必ず `.locohane/skills/<name>/` に作成する。** プロジェクト
-  ルート直下の `skills/`（本スキルや excel-edit 等の置き場）には書き込ま
-  ない。`scaffold_skill.py` は常に `.locohane/skills/` へ生成する。既存の
-  `skills/` 側スキルを評価・改善する場合のみ、`run_isolated_eval.py` の
-  `--skill-root skills` で対象を切り替える。
+## 1. ドラフトを作る
 
-## ステップ1: 意図を把握する
-
-ユーザーに（会話に既に手がかりがあれば推測してから確認する）:
-
-1. このスキルは何をするためのものか
-2. どんなユーザー発話・状況でトリガーされるべきか
-3. 期待する出力の形式は何か
-4. 実機テスト（eval）は必要か。ファイル変換・データ抽出・固定手順のような
-   「客観的に正解が決まる」スキルは eval が有効。文章のトーンやデザインの
-   ような主観的な出力は、ルールベースでは測れないため `judge` 判定か
-   ユーザー自身の目視確認に頼ることになる、と伝える。
-
-## ステップ2: SKILL.mdを書く
-
-```json
-{"skill_name": "skill-creator", "script_filename": "scaffold_skill.py",
- "script_args": ["--name", "my-new-skill", "--description", "...",
-                  "--with-script"]}
+新規（スクリプトも使うなら `--with-script` を付ける）:
+```
+python scaffold_skill.py --name my-skill --description "何をするか。どんな発話で使うか。" --with-script
 ```
 
-`--with-script` を付けると `scripts/run.py` のサンプルも生成される。
-スクリプト不要（知識のみ）のスキルなら付けない（`skills/excel-knowledge`
-のような形）。
-
-雛形ができたら、以下を踏まえて SKILL.md 本文を書き直す:
-
-- **description が唯一のトリガー手がかり**。「何をするか」だけでなく
-  「どんな発話のときに使うべきか」を具体的に書く。Locohaneはトリガー判断を
-  LLM自身の推論に委ねており、`allowed-tools` のような自動承認機構はない
-  ため、description の質が最終的なUXを決める。
-- SKILL.md本文は500行を目安に収める。長くなりそうなら `references/` に
-  分割し、本文からポインタを張る。
-- `scripts/` を持つ場合、本文に**呼び出しコマンド例・出力キーの意味・
-  エッジケース**を明記する。呼び出し例は`run_script`のJSON引数形式
-  （`{"skill_name":..., "script_filename":..., "script_args":[...]}`）を
-  直接書かず、他のAgent Skills環境と共通の`python <script>.py <args...>`
-  形式で書く（実際の`run_script`変換はLLM側の共通指示が行う。詳細・実例は
-  `skills/SKILLS_README.md` 4-0節、`skills/excel-read/SKILL.md`等の既存
-  スキルを参考にする）。スクリプトの出力は構造化JSON（1行、`print(json.dumps(result,
-  ensure_ascii=False))`）を推奨。ファイルを生成するスキルなら
-  `output_path`（絶対パス文字列）キーを必ず含める。
-- name/description の検証ルールに違反すると起動時に**黙ってスキップ**
-  される（例外にはならない）。`validate_skill.py` で必ず事前確認する。
-
-```json
-{"skill_name": "skill-creator", "script_filename": "validate_skill.py",
- "script_args": ["--skill-dir", "C:\\...\\skills\\my-new-skill"]}
+既存スキルの改善案（正式スキルはそのまま残る。正式スキルの評価ケースも写される）:
+```
+python fork_skill.py --name excel-read
 ```
 
-`valid: false` なら `error` に理由が入るので直して再検証する。
-
-## ステップ3: テストケースを作る
-
-現実的なテストプロンプトを2〜3個、ユーザーと一緒に決める。判定方法は
-2種類:
-
-- **ルールベース (`expect`)**: 特定ツールが呼ばれたか、応答に特定文字列が
-  含まれるか、といった客観的に機械判定できる項目。
-- **judge**: 自由記述の判定指示。実行結果の `judge` フィールドと
-  `transcript` を読んで、**自分（このスキルを使っているLLM自身）が
-  合否を判断する**。これは `.claude/skills/tune-prompt` と同じ考え方で、
-  Locohaneには人間の代わりに自動採点するグレーダー機構は無い。
-
-```json
-{"skill_name": "skill-creator", "script_filename": "make_eval_case.py",
- "script_args": ["--target", "my-new-skill", "--case-id", "001_basic_usage",
-                  "--turns", "[\"ユーザーが実際に打ちそうな発話\"]",
-                  "--expect", "{\"tool_call_args_contains\": {\"read_skill\": {\"skill_name\": \"my-new-skill\"}}}"]}
+自分のドラフトの一覧:
+```
+python list_drafts.py
 ```
 
-生成先は `evals/cases/<target>/<case-id>.yaml`。既存の `python evals/run_all.py
-<target>` でも直接実行できる標準フォーマットなので、独自の仕組みは使わない。
+## 2. 中身を書く
 
-## ステップ4: 実機テスト（with_skill / baseline）
+`--name` は自分のドラフトならスキル名だけでよい。
 
-新規スキルなら baseline は「スキルなし」、既存スキルの改善なら baseline は
-「編集前のスキル」にする（改善前に `skill_dir` を丸ごと別フォルダへ
-コピーしておき `--replacement-dir` に渡す）。
+ファイル全体を書く:
+```
+python write_draft_file.py --name my-skill --path SKILL.md --content "---
+name: my-skill
+description: ...
+---
 
-```json
-{"skill_name": "skill-creator", "script_filename": "run_isolated_eval.py",
- "script_args": ["start", "--case", "C:\\...\\evals\\cases\\my-new-skill\\001_basic_usage.yaml",
-                  "--skill-name", "my-new-skill", "--mode", "with_skill",
-                  "--workspace", "C:\\...\\skills\\my-new-skill-workspace"]}
+# my-skill
+..."
 ```
 
-`job_id` が返るので、少し待ってから status で確認する:
-
-```json
-{"skill_name": "skill-creator", "script_filename": "run_isolated_eval.py",
- "script_args": ["status", "--job-id", "<job_id>", "--skill-name", "my-new-skill",
-                  "--workspace", "C:\\...\\skills\\my-new-skill-workspace"]}
+一部だけ置き換える（`--old` はファイル内で1か所だけ一致させる）:
+```
+python write_draft_file.py --name my-skill --path SKILL.md --old "古い文" --new "新しい文"
 ```
 
-`status: running` の間はしばらく待って再確認する。`finished` になったら、
-同じケースを `--mode without_skill`（新規スキルの場合）または
-`--mode old_skill --replacement-dir <退避先>`（既存スキル改善の場合）で
-**逐次**（同時にstartしない）実行し、比較材料を揃える。
-
-## ステップ5: 判定と比較
-
-`result.rules_pass` があればそれに従う。`result.judge` に指示文があれば、
-`result.transcript` を実際に読んで自分で合否を判断する。判断根拠は
-ユーザーへの報告に含めること。
-
-複数件たまったら比較レポートを作る:
-
-```json
-{"skill_name": "skill-creator", "script_filename": "aggregate_results.py",
- "script_args": ["--input", "with_skill=<with_skillのstatus出力を保存したjson>",
-                  "--input", "baseline=<baselineのstatus出力を保存したjson>",
-                  "--output", "C:\\...\\skills\\my-new-skill-workspace\\iteration-1\\benchmark.md"]}
+スクリプトを書く（長い内容は作業フォルダのファイルから写す）:
+```
+python write_draft_file.py --name my-skill --path scripts/run.py --content-file <作業フォルダのファイル>
 ```
 
-`status` コマンドの出力（JSONテキスト）は、Write ツール等で一旦ファイルに
-保存してから `--input` に渡す。
+ファイルやドラフトを消す:
+```
+python delete_draft.py --name my-skill --path references/old.md
+python delete_draft.py --name my-skill
+```
 
-## ステップ6: 改善のしかた
+書き方:
+- description が唯一のトリガー手がかり。「何をするか」と「どんな発話で使うか」を具体的に書く。
+- SKILL.md 本文は500行以内。長くなるなら references/ に分ける。
+- スクリプトの呼び出し例は `python <script>.py <args...>` の形で書き、出力キーの意味も書く。
+- スクリプトは正常時に終了コード0で1行のJSON、異常時は終了コード1で標準エラーに理由を出す。
 
-- ユーザーのフィードバックを**一般化**する。目の前の2〜3例だけに効く
-  対症療法的な `MUST` を並べるより、なぜそれが必要かを説明する文に
-  書き直す方が、未知の入力にも効く。
-- SKILL.mdは無駄を削る。読んでいて手順が冗長・過剰に厳格だと感じたら
-  削ってよい。
-- 複数のテストケースで同じような補助スクリプトが必要になっているなら、
-  それを `scripts/` に1つ書いて共通化する。
-- 修正後は同じテストケースで再実行し、`iteration-2/` のように分けて
-  比較する。ユーザーが満足するか、フィードバックが出尽くすまで繰り返す。
+確認:
+```
+python validate_skill.py --name my-skill
+```
 
-## ステップ7（任意）: description のトリガー精度最適化
+## 3. 評価ケースを作る
 
-「このスキル、狙った発話でちゃんと使われているか不安」「もっと的確に
-トリガーされてほしい」といった要望があれば行う。
+```
+python make_eval_case.py --name my-skill --case-id 001_basic --turns "[\"ユーザーが実際に打ちそうな発話\"]" --expect "{\"tool_call_args_contains\": {\"read_skill\": {\"skill_name\": \"my-skill\"}}}"
+```
 
-1. should_trigger true/false 合わせて10〜20件程度、現実的な発話例を
-   ユーザーと一緒に用意する（`references/schemas.md` の eval-set 形式）。
-   should_trigger=false の例は「キーワードは似ているが本来は別の対応が
-   要る」ような紛らわしいものを混ぜること。明らかに無関係な例ばかりでは
-   何も測れない。
-2. `run_trigger_eval.py start` → `status` をポーリングし、`accuracy` と
-   `per_query` を確認する。
-3. `matched: false` の項目を抽出し `propose_description.py start` で
-   改善案を生成、`status` で結果を受け取る。
-4. 改善案を SKILL.md の description に反映し、`validate_skill.py` で
-   1024文字以内であることを再確認したうえで、もう一度
-   `run_trigger_eval.py` を回して改善したか確認する。
-5. 改善が頭打ちになったら、その時点の accuracy と描写内容をユーザーに
-   報告して終える。
+judge（自由記述の判定観点）も付ける:
+```
+python make_eval_case.py --name my-skill --case-id 002_output --turns "[\"発話\"]" --expect "{\"tool_called_any\": [\"run_script\"]}" --judge "出力に〇〇が含まれ、捏造が無いか"
+```
+
+- 評価中のスキル名は `my-skill`（ユーザー名なし）。expect にもスキル名だけを書く。
+- `--expect` の主なキーは `references/schemas.md` を参照。
+- 結果が客観的に決まらない（文章のトーン等）なら judge を使う。
+
+## 4. 評価する
+
+全ケースを1回ずつ:
+```
+python run_isolated_eval.py start --name my-skill
+```
+
+比較用にドラフト無しで（新規ならスキル無し、改善案なら正式スキルのまま）:
+```
+python run_isolated_eval.py start --name my-skill --mode without_skill
+```
+
+一部のケースだけ、3回ずつ:
+```
+python run_isolated_eval.py start --name my-skill --case 001_basic --case 002_output --repeat 3
+```
+
+スキル安定化トライアウト（各ケース10回。全回合格で合格）:
+```
+python run_isolated_eval.py start --name my-skill --repeat 10
+```
+
+結果:
+```
+python run_isolated_eval.py status --name my-skill --job-id <job_id>
+```
+
+- `verdict` が `pass` なら全回合格、`fail` なら不合格あり、`needs_judge` なら `runs` の `judge` と `final_answer` を読んで自分で判定する。判定の根拠は報告に書く。
+- with_skill と without_skill の比較表: `python aggregate_results.py --name my-skill --input with_skill=<results_path> --input without_skill=<results_path>`
+
+## 5. 直し方
+
+- フィードバックは一般化して書く。目の前の例だけに効く「必ず〜」を並べない。
+- 冗長な手順は削る。
+- 同じ処理を何度も書くなら scripts/ に1つまとめる。
+- 直したら同じケースで評価し直す。
+
+## 6.（任意）トリガー精度を上げる
+
+1. 使うべき発話と、紛らわしいが使うべきでない発話を合わせて10〜20件、JSONファイルにする（形式は `references/schemas.md`）。
+2. `python run_trigger_eval.py start --name my-skill --eval-set <JSONファイル> --repeats 3` → `status` で `accuracy` と `per_query` を見る。
+3. `matched: false` の項目をJSONファイルにして `python propose_description.py start --name my-skill --failed-queries <JSONファイル>` → `status` で改善案を受け取る。
+4. 改善案を `write_draft_file.py` で description に反映し、もう一度 2 を回す。
 
 ## 参考資料
 
-- `references/schemas.md`: 各スクリプトの引数・出力JSONの詳細スキーマ。
-- `skills/SKILLS_README.md`: SKILL.mdのフォーマット仕様・run_scriptの
-  値渡し規約（このスキル自体もこの仕様に従っている）。
-- `skills/excel-vba-read/SKILL.md`（スクリプトを持つシンプルな例） /
-  `skills/excel-knowledge/SKILL.md`（知識のみでスクリプトを持たない例）:
-  シンプルなスキルの実例。
+- `references/schemas.md`: 各スクリプトの引数と出力JSON。
+- `skills/SKILLS_README.md`: SKILL.md の書式と scripts/ の規約。

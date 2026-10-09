@@ -7,6 +7,8 @@ from pathlib import Path
 import json
 import logging
 
+from .. import skill_drafts
+from . import _state
 from ._workdir import _foreign_tmp_dir_error, _resolve_workdir
 
 logger = logging.getLogger(__name__)
@@ -40,7 +42,9 @@ def provide_download(file_paths: list[str]) -> str:
         if not path.is_absolute():
             path = _resolve_workdir() / path
         path = path.resolve()
-        tmp_error = _foreign_tmp_dir_error(path)
+        tmp_error = _foreign_tmp_dir_error(path) or skill_drafts.access_error(
+            path, "read", _state._LLM_CONFIG, skill_drafts.current_draft_user()
+        )
         if tmp_error:
             return tmp_error
         if not path.is_file():

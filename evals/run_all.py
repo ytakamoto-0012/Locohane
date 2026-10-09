@@ -53,11 +53,13 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
 
 
-def _iter_case_paths(target: str, case_ids: list[str] | None = None) -> list[Path]:
-    """evals/cases/<target>/*.yaml を昇順に列挙する。
+def _iter_case_paths(target: str, case_ids: list[str] | None = None, cases_dir: Path | None = None) -> list[Path]:
+    """evals/cases/<target>/*.yaml（cases_dir 指定時はその直下の *.yaml）を昇順に列挙する。
 
     Args:
         target: チューニング対象カテゴリ名（例: "system_prompt"）。
+        cases_dir: evals/cases/<target>/ の代わりに使うケースフォルダ
+            （ドラフトスキルの <ドラフト>/evals/ 等、--cases-dir）。
         case_ids: 指定された場合、これらのケースID（拡張子抜きファイル名）
             のみに絞り込む。None または空リストなら全件。
 
@@ -68,7 +70,7 @@ def _iter_case_paths(target: str, case_ids: list[str] | None = None) -> list[Pat
         SystemExit: 対象ディレクトリが存在しない場合、または指定した
             case_ids に対応する yaml が見つからない場合。
     """
-    cases_dir = PROJECT_ROOT / "evals" / "cases" / target
+    cases_dir = cases_dir or PROJECT_ROOT / "evals" / "cases" / target
     if not cases_dir.is_dir():
         raise SystemExit(f"ケースディレクトリが見つかりません: {cases_dir}")
     all_paths = sorted(cases_dir.glob("*.yaml"))
@@ -84,12 +86,13 @@ def _iter_case_paths(target: str, case_ids: list[str] | None = None) -> list[Pat
     return [by_stem[cid] for cid in case_ids]
 
 
-def _run_one(case_path: Path, instance_name: str) -> dict:
+def _run_one(case_path: Path, instance_name: str, extra_args: list[str] | None = None) -> dict:
     """1ケースを run_case.py のサブプロセスとして実行し、結果 dict を返す。
 
     Args:
         case_path: 実行する eval ケースの yaml パス。
         instance_name: 実行対象インスタンス名（run_case.py の --instance へ渡す）。
+        extra_args: run_case.py へそのまま渡す追加引数（--skill-overlay 等）。
 
     Returns:
         run_case.py が出力した結果 JSON をパースした dict。標準出力が空、
@@ -104,7 +107,7 @@ def _run_one(case_path: Path, instance_name: str) -> dict:
     case = load_case(case_path)
     timeout = case.timeout_seconds or CASE_TIMEOUT_SECONDS
     proc = subprocess.run(
-        [sys.executable, "-m", "evals.run_case", str(case_path), "--instance", instance_name],
+        [sys.executable, "-m", "evals.run_case", str(case_path), "--instance", instance_name, *(extra_args or [])],
         cwd=str(PROJECT_ROOT),
         capture_output=True,
         text=True,
@@ -131,6 +134,52 @@ def _run_one(case_path: Path, instance_name: str) -> dict:
             "error": "invalid_json",
             "detail": f"結果のJSON解析に失敗しました: {e}",
         }
+
+
+def _classify(result: dict) -> str:
+    """1件の結果を "error" / "fail" / "judge"（要judge判定） / "pass" に分類する。"""
+    if result.get("error"):
+        return "error"
+    if result.get("rules_pass") is False:
+        return "fail"
+    if result.get("judge"):
+        return "judge"
+    return "pass"
+
+
+def _tryout_report(results: list[dict], repeat: int) -> dict:
+    """スキル安定化トライアウト（--repeat）の集計を返す。
+
+    同じケースを repeat 回繰り返した結果を、ケースごとに分類別の件数へまとめる。
+    判定（verdict）は、全ケースが repeat 回すべて pass なら "pass"、1回でも
+    fail/error があれば "fail"、それ以外（fail/error は無いが judge 判定待ちが
+    ある）は "needs_judge"（全回の judge を読んで合格と判断できた場合のみ合格）。
+
+    Returns:
+        {"repeat", "cases": {case_id: {"pass", "fail", "judge", "error"}}, "verdict"}。
+    """
+    cases: dict[str, dict[str, int]] = {}
+    for r in results:
+        counts = cases.setdefault(r.get("case_id", "?"), {"pass": 0, "fail": 0, "judge": 0, "error": 0})
+        counts[_classify(r)] += 1
+    if any(c["fail"] or c["error"] for c in cases.values()):
+        verdict = "fail"
+    elif any(c["judge"] for c in cases.values()):
+        verdict = "needs_judge"
+    else:
+        verdict = "pass"
+    return {"repeat": repeat, "cases": cases, "verdict": verdict}
+
+
+def _render_tryout(report: dict) -> str:
+    """_tryout_report() の結果を Markdown にする。"""
+    n = report["repeat"]
+    labels = {"pass": "合格", "fail": "不合格", "needs_judge": "judge 判定待ち（全回の judge を読んで判断する）"}
+    lines = ["## スキル安定化トライアウト", "", f"各ケース {n} 回実行。判定: **{labels[report['verdict']]}**", ""]
+    for cid, c in report["cases"].items():
+        lines.append(f"- {cid}: pass {c['pass']}/{n}, fail {c['fail']}, judge待ち {c['judge']}, error {c['error']}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _render_summary(target: str, instance_name: str, results: list[dict]) -> str:
@@ -213,46 +262,84 @@ def _render_summary(target: str, instance_name: str, results: list[dict]) -> str
 def main() -> int:
     """CLI エントリポイント。"""
     parser = argparse.ArgumentParser(prog="python evals/run_all.py")
-    parser.add_argument("target")
+    parser.add_argument("target", nargs="?", help="evals/cases/ 配下のケース群名（--cases-dir 指定時は省略可）")
     parser.add_argument("case_ids", nargs="*")
     parser.add_argument(
         "--instance",
         help="実行対象インスタンス名（instances/<name>/。省略時は環境変数 LOCOHANE_INSTANCE、それも無ければ default）",
     )
+    parser.add_argument("--cases-dir", type=Path, help="evals/cases/<target>/ の代わりに使うケースフォルダ（ドラフトスキルの evals/ 等）")
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="スキル安定化トライアウト: 各ケースを指定回数だけ直列に繰り返し、ケースごとの合格回数を集計する（既定1）",
+    )
+    parser.add_argument("--results-dir", type=Path, help="結果の出力先ルート（既定 evals/results/<target>/）")
+    parser.add_argument("--skill-overlay", action="append", default=[], help="run_case.py の --skill-overlay へ渡す（複数可）")
+    parser.add_argument("--exclude-skill", action="append", default=[], help="run_case.py の --exclude-skill へ渡す（複数可）")
     args = parser.parse_args()
-    target = args.target
+    if not args.target and not args.cases_dir:
+        parser.error("target か --cases-dir のどちらかを指定してください")
+    if args.repeat < 1:
+        parser.error("--repeat は1以上の整数で指定してください")
+    cases_dir = args.cases_dir.resolve() if args.cases_dir else None
+    case_ids = args.case_ids
+    if cases_dir:
+        # --cases-dir 指定時は target が不要なため、位置引数はすべてケースIDとして扱う
+        # （「run_all.py --cases-dir X 001_basic」で 001_basic が target に入るのを防ぐ）。
+        case_ids = [args.target, *args.case_ids] if args.target else args.case_ids
+        target = cases_dir.name
+    else:
+        target = args.target
     # 全ケースを走らせる前に一度だけ解決・検証する（存在しないインスタンス名で
     # 全ケースが同じエラーになるのを避ける）。
     instance_name = resolve_instance_name(args.instance)
 
-    case_paths = _iter_case_paths(target, args.case_ids)
+    case_paths = _iter_case_paths(target, case_ids, cases_dir)
     if not case_paths:
-        print(f"対象ケースが1件もありません: evals/cases/{target}/", file=sys.stderr)
+        print(f"対象ケースが1件もありません: {cases_dir or PROJECT_ROOT / 'evals' / 'cases' / target}", file=sys.stderr)
         return 1
+
+    extra_args: list[str] = []
+    for d in args.skill_overlay:
+        extra_args += ["--skill-overlay", str(Path(d).resolve())]
+    for name in args.exclude_skill:
+        extra_args += ["--exclude-skill", name]
 
     print(f"対象インスタンス: {instance_name}", file=sys.stderr)
     results = []
-    for path in case_paths:
-        print(f"実行中: {path.name}", file=sys.stderr)
-        try:
-            results.append(_run_one(path, instance_name))
-        except subprocess.TimeoutExpired as e:
-            results.append(
-                {
+    # 同じケースを続けて回すより、ケースを一巡してから次の回へ進む方が、
+    # 途中で打ち切っても全ケースの回数が揃う（各結果には repeat_index を付ける）。
+    for repeat_index in range(1, args.repeat + 1):
+        for path in case_paths:
+            label = f"（{repeat_index}/{args.repeat}回目）" if args.repeat > 1 else ""
+            print(f"実行中: {path.name}{label}", file=sys.stderr)
+            try:
+                result = _run_one(path, instance_name, extra_args)
+            except subprocess.TimeoutExpired as e:
+                result = {
                     "case_id": path.stem,
                     "instance": instance_name,
                     "error": "timeout",
                     "detail": f"{e.timeout:.0f}秒でタイムアウトしました。",
                 }
-            )
+            if args.repeat > 1:
+                result["repeat_index"] = repeat_index
+            results.append(result)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = PROJECT_ROOT / "evals" / "results" / target / timestamp
+    results_root = args.results_dir.resolve() if args.results_dir else PROJECT_ROOT / "evals" / "results" / target
+    out_dir = results_root / timestamp
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "results.json").write_text(
         json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     summary = _render_summary(target, instance_name, results)
+    if args.repeat > 1:
+        report = _tryout_report(results, args.repeat)
+        (out_dir / "tryout.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        summary = f"{summary}\n{_render_tryout(report)}"
     (out_dir / "summary.md").write_text(summary, encoding="utf-8")
 
     print(summary)

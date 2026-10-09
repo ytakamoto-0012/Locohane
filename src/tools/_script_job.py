@@ -13,11 +13,12 @@ from pathlib import Path
 
 import chainlit as cl
 
+from .. import skill_drafts
 from . import _state
 from ._duplicate_guard import _track_failure_streak
 from ._path_memory_helpers import _resolve_path_memory_token
 from ._python_fs_guard import _register_exec_output_files
-from ._safe_path import _resolve_script_filename
+from ._safe_path import _is_guard_exempt_script, _resolve_script_filename
 from ._state import _SUBAGENT_AGENT_TYPE
 from ._subprocess_env import _run_script_guard_env
 from ._workdir import _resolve_workdir
@@ -116,7 +117,16 @@ def _prepare_script_execution(skill_name: str, script_filename: str, script_args
     # 全セッション共通で成果物が積まれるのを防ぐ）。
     workdir = _resolve_workdir(need_write=True)
 
-    is_plan_exempt = (skill_name, script_filename) in _state._PLAN_APPROVAL_EXEMPT_SCRIPTS
+    # ドラフトスキル・skill-creator 本体のスクリプトは plan_approval_exempt_scripts の
+    # 登録に関係なく常に免除する（作成者はスキル開発の専門家とは限らず、
+    # config.ini を自分で編集できないため。書き込み先はガードで制限される）。
+    is_plan_exempt = (skill_name, script_filename) in _state._PLAN_APPROVAL_EXEMPT_SCRIPTS or _is_guard_exempt_script(
+        skill_name, script_filename
+    )
+    # skill-creator はドラフトの作成・削除・description 変更を行いうるため、次の
+    # メッセージでスキル一覧と read_skill の選択肢を組み直させる（app.py の on_message）。
+    if skill_name == skill_drafts.SKILL_CREATOR_NAME and _is_guard_exempt_script(skill_name, script_filename):
+        cl.user_session.set("drafts_dirty", True)
     if not is_plan_exempt and not cl.user_session.get("plan_approved"):
         logger.info("run_script: 計画未承認のためブロック skill=%s script=%s", skill_name, script_filename)
         return (

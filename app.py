@@ -116,6 +116,7 @@ from src.graph import EMPTY_RESPONSE_NUDGE, build_graph, is_empty_final_message
 from src.images import IMAGE_REFS_KEY, image_ref, is_image_file, load_image_bytes, to_data_url
 from src import instance_lock
 from src import runtime_status
+from src import skill_drafts
 from src.llm import (
     LLM_CONNECTION_ERRORS,
     ThinkingLoopDetected,
@@ -1838,6 +1839,9 @@ async def _setup() -> None:
                 "[thinking_control].after_tools に存在しないツール名があります（MCPツールは接続状況により誤検知の場合あり）: %s",
                 ", ".join(unknown),
             )
+    # ユーザー別ドラフトスキル（src/skill_drafts.py）はセッションごとに見える範囲が
+    # 違うため、ここでは目印だけを一覧の末尾に残し、_rebuild_graph() で差し替える。
+    main_skills_block = f"{main_skills_block}{skill_drafts.DRAFT_SKILLS_MARKER}"
     system_prompt = build_system_prompt_from_block(main_skills_block, _config.system_prompt_path).replace(
         "{{main_agent_blocked_tools_hint}}", blocked_tools_hint
     )
@@ -2102,9 +2106,29 @@ async def _rebuild_graph(thread_id: str, *, wait_when_busy: bool = True):
     # がタブをまたいで混線しないようにする（set_current_session docstring参照。
     # 2026-08-26 監査で発見した既存の軽微なエッジケースの修正）。
     set_current_session(thread_id, tab_id=cl.context.session.id)
-    graph = await build_graph(_config, _system_prompt, _checkpointer, wait_when_busy=wait_when_busy)
+    system_prompt = _apply_session_draft_skills()
+    graph = await build_graph(_config, system_prompt, _checkpointer, wait_when_busy=wait_when_busy)
     cl.user_session.set("graph", graph)
     return graph
+
+
+def _apply_session_draft_skills() -> str:
+    """このセッションのユーザーに見えるドラフトスキルを反映したシステムプロンプトを返す。
+
+    ドラフト（src/skill_drafts.py）は作成者本人の会話にだけ見せるため、起動時に
+    1回だけ組み立てる _system_prompt には目印（DRAFT_SKILLS_MARKER）だけを残し、
+    グラフを組み立てるたびにここで一覧へ差し替える。あわせて、read_skill の
+    選択肢へ足すドラフト名（読み取りできるものだけ）を cl.user_session の
+    "visible_draft_names" に入れる（src/tools/session_tools.py 参照）。
+    skill-creator がドラフトを作成・削除した後に立てる "drafts_dirty" はここで下ろす。
+    """
+    user = cl.user_session.get("user")
+    draft_user = resolve_log_username(user.identifier if user else None)
+    cl.user_session.set(skill_drafts.SESSION_USER_KEY, draft_user)
+    drafts = skill_drafts.scan_visible_drafts(_config, draft_user)
+    cl.user_session.set("visible_draft_names", [d.skill.name for d in drafts if d.readable])
+    cl.user_session.set("drafts_dirty", False)
+    return _system_prompt.replace(skill_drafts.DRAFT_SKILLS_MARKER, skill_drafts.render_draft_skills_block(drafts))
 
 
 @cl.on_stop
@@ -3797,6 +3821,11 @@ async def _on_message_impl(message: cl.Message) -> None:
     # tab_id=cl.context.session.id: 同じ thread_id を複数タブで同時に開いた
     # 場合の _LAST_SELECTED_INDEX 混線防止（_rebuild_graph 内の同種コメント参照）。
     set_current_session(thread_id, tab_id=cl.context.session.id)
+    # skill-creator でドラフトを作成・削除・description 変更した後は、スキル一覧と
+    # read_skill の選択肢を更新するためグラフを組み直す（本文の変更は読み込み時に
+    # 反映されるため不要。src/tools/_script_job.py が "drafts_dirty" を立てる）。
+    if cl.user_session.get("drafts_dirty"):
+        await _rebuild_graph(thread_id, wait_when_busy=False)
     graph = cl.user_session.get("graph")
     config = {
         "configurable": {"thread_id": thread_id},

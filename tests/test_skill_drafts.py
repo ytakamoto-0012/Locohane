@@ -1,0 +1,279 @@
+"""ユーザー別ドラフトスキル（src/skill_drafts.py と src/tools への組み込み）の回帰テスト。
+
+ドラフトは作成者本人の会話でだけ使え、他ユーザーへの見え方は
+[skill_creator].other_users_drafts（hidden/listed/readable/full）で切り替わる。
+ドラフトのスクリプトと skills_dir 配下の skill-creator 本体は、計画承認と
+[main_agent_tool_guard] を無条件で免除される。
+"""
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from src import skill_drafts, tools
+from src.config import _validate_skill_draft_dir
+from src.tools._safe_path import _is_guard_exempt_script, _resolve_file_tools_path, _safe_path
+from src.tools.read_skill import session_read_skill
+
+_SKILL_MD = "---\nname: {name}\ndescription: {name} のテスト用スキル。\n---\n\n# {name}\n"
+
+
+class _FakeUserSession:
+    def __init__(self, data):
+        self._data = dict(data)
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def set(self, key, value):
+        self._data[key] = value
+
+
+def _make_skill(root: Path, name: str, with_script: bool = True) -> Path:
+    skill_dir = root / name
+    (skill_dir / "scripts").mkdir(parents=True) if with_script else skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(_SKILL_MD.format(name=name), encoding="utf-8")
+    if with_script:
+        (skill_dir / "scripts" / "run.py").write_text("print('ok')\n", encoding="utf-8")
+    return skill_dir
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    """skills/・.locohane/skills/・ドラフト置き場を持つ最小構成を tools の状態へ入れる。"""
+    skills_dir = tmp_path / "skills"
+    locohane_skills = tmp_path / ".locohane" / "skills"
+    draft_dir = tmp_path / "data" / "skill_drafts"
+    _make_skill(skills_dir, "official")
+    _make_skill(skills_dir, "skill-creator")
+    _make_skill(locohane_skills, "team-skill")
+    _make_skill(draft_dir / "tanaka", "my-tool")
+    _make_skill(draft_dir / "suzuki", "their-tool")
+    (draft_dir / "tanaka" / "_workspace").mkdir()
+    config = SimpleNamespace(
+        skills_dir=skills_dir,
+        agents_dir=tmp_path / "agents",
+        project_locohane_dirs=[tmp_path / ".locohane"],
+        skill_draft_dir=draft_dir,
+        skill_other_users_drafts="hidden",
+        main_agent_tool_guard_mode="all",
+        main_agent_tool_guard_allow_entries=frozenset(),
+        bin_path=[],
+    )
+    monkeypatch.setattr(tools._state, "_LLM_CONFIG", config)
+    monkeypatch.setattr(tools._state, "_SKILLS_ROOTS", [locohane_skills.resolve(), skills_dir.resolve(), draft_dir.resolve()])
+    monkeypatch.setattr(tools._state, "_PATH_MEMORY_DIR", None)
+    default_workdir = tmp_path / "workdir"
+    default_workdir.mkdir()
+    monkeypatch.setattr(tools._state, "_DEFAULT_WORKDIR", default_workdir)
+    session = _FakeUserSession({"thread_id": "t1", skill_drafts.SESSION_USER_KEY: "tanaka"})
+    monkeypatch.setattr(tools.cl, "user_session", session)
+    return SimpleNamespace(config=config, draft_dir=draft_dir, skills_dir=skills_dir, locohane_skills=locohane_skills, session=session)
+
+
+# --- 設定 -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("relation", ["same", "inside", "contains"])
+def test_draft_dir_overlapping_scan_roots_is_rejected(tmp_path, relation):
+    skills_dir = tmp_path / "skills"
+    draft = {"same": skills_dir, "inside": skills_dir / "drafts", "contains": tmp_path}[relation]
+    cfg = SimpleNamespace(skill_draft_dir=draft, skills_dir=skills_dir, agents_dir=tmp_path / "x" / "agents", project_locohane_dirs=[])
+    with pytest.raises(ValueError, match="draft_dir"):
+        _validate_skill_draft_dir(cfg)
+
+
+def test_draft_dir_outside_scan_roots_is_accepted(tmp_path):
+    cfg = SimpleNamespace(
+        skill_draft_dir=tmp_path / "data" / "skill_drafts",
+        skills_dir=tmp_path / "skills",
+        agents_dir=tmp_path / "agents",
+        project_locohane_dirs=[tmp_path / ".locohane"],
+    )
+    _validate_skill_draft_dir(cfg)
+
+
+# --- 権限表 -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("hidden", set()),
+        ("listed", {"list"}),
+        ("readable", {"list", "read"}),
+        ("full", {"list", "read", "exec", "write"}),
+    ],
+)
+def test_other_user_permissions_follow_mode(mode, expected):
+    for op in ("list", "read", "exec", "write"):
+        assert skill_drafts.is_allowed("suzuki", "tanaka", mode, op) is (op in expected)
+        assert skill_drafts.is_allowed("tanaka", "tanaka", mode, op) is True
+
+
+def test_unknown_user_is_never_owner():
+    assert skill_drafts.is_allowed("tanaka", None, "hidden", "read") is False
+
+
+# --- 一覧 -------------------------------------------------------------------
+
+
+def test_hidden_mode_lists_only_own_drafts(env):
+    drafts = skill_drafts.scan_visible_drafts(env.config, "tanaka")
+    assert [d.skill.name for d in drafts] == ["tanaka/my-tool"]
+    assert drafts[0].own and drafts[0].readable and drafts[0].executable
+
+
+@pytest.mark.parametrize(("mode", "readable", "executable"), [("listed", False, False), ("readable", True, False), ("full", True, True)])
+def test_other_drafts_listed_by_mode(env, mode, readable, executable):
+    env.config.skill_other_users_drafts = mode
+    drafts = {d.skill.name: d for d in skill_drafts.scan_visible_drafts(env.config, "tanaka")}
+    assert set(drafts) == {"tanaka/my-tool", "suzuki/their-tool"}
+    other = drafts["suzuki/their-tool"]
+    assert (other.readable, other.executable) == (readable, executable)
+
+
+def test_no_session_user_sees_no_drafts(env):
+    assert skill_drafts.scan_visible_drafts(env.config, None) == []
+
+
+def test_render_block_marks_owner_and_usability(env):
+    env.config.skill_other_users_drafts = "listed"
+    block = skill_drafts.render_draft_skills_block(skill_drafts.scan_visible_drafts(env.config, "tanaka"))
+    assert "tanaka/my-tool" in block and "自分のドラフト" in block
+    assert "suzuki/their-tool" in block and "使用不可" in block
+
+
+# --- パス解決 ---------------------------------------------------------------
+
+
+def test_safe_path_resolves_own_draft(env):
+    path = _safe_path("tanaka/my-tool/SKILL.md")
+    assert path == (env.draft_dir / "tanaka" / "my-tool" / "SKILL.md").resolve()
+
+
+def test_safe_path_rejects_other_users_draft_when_hidden(env):
+    with pytest.raises(ValueError, match="suzuki"):
+        _safe_path("suzuki/their-tool/SKILL.md")
+
+
+def test_safe_path_read_vs_exec_in_readable_mode(env):
+    env.config.skill_other_users_drafts = "readable"
+    assert _safe_path("suzuki/their-tool/SKILL.md").is_file()
+    with pytest.raises(ValueError, match="実行"):
+        _safe_path("suzuki/their-tool/scripts", op="exec")
+
+
+def test_official_skills_take_priority_over_drafts(env):
+    assert _safe_path("official/SKILL.md") == (env.skills_dir / "official" / "SKILL.md").resolve()
+
+
+def test_read_tool_cannot_open_other_users_draft(env):
+    path, error = _resolve_file_tools_path(str(env.draft_dir / "suzuki" / "their-tool" / "SKILL.md"))
+    assert path is None and "suzuki" in error
+    own, own_error = _resolve_file_tools_path(str(env.draft_dir / "tanaka" / "my-tool" / "SKILL.md"))
+    assert own is not None and own_error is None
+
+
+def test_draft_root_listing_is_hidden_unless_readable(env):
+    _, error = _resolve_file_tools_path(str(env.draft_dir))
+    assert error is not None
+    env.config.skill_other_users_drafts = "readable"
+    assert _resolve_file_tools_path(str(env.draft_dir))[1] is None
+
+
+# --- 承認・ガードの免除 ------------------------------------------------------
+
+
+def test_guard_exempt_for_own_draft_and_builtin_skill_creator(env):
+    assert _is_guard_exempt_script("tanaka/my-tool", "run.py") is True
+    assert _is_guard_exempt_script("skill-creator", "run.py") is True
+
+
+def test_guard_not_exempt_for_official_or_unrunnable_drafts(env):
+    assert _is_guard_exempt_script("official", "run.py") is False
+    assert _is_guard_exempt_script("suzuki/their-tool", "run.py") is False
+    env.config.skill_other_users_drafts = "full"
+    assert _is_guard_exempt_script("suzuki/their-tool", "run.py") is True
+
+
+def test_same_named_skill_creator_outside_skills_dir_is_not_exempt(env, monkeypatch):
+    shutil.rmtree(env.skills_dir / "skill-creator")
+    _make_skill(env.locohane_skills, "skill-creator")
+    assert _is_guard_exempt_script("skill-creator", "run.py") is False
+
+
+def test_main_agent_guard_lets_draft_scripts_through(env):
+    from src.tools.tool_node import _guard_main_agent_tool_limit
+
+    def call(skill):
+        tool_call = {"name": "run_script", "args": {"skill_name": skill, "script_filename": "run.py"}, "id": "c1", "type": "tool_call"}
+        return {"__type": "tool_call_with_context", "tool_call": tool_call, "state": {}}
+
+    assert _guard_main_agent_tool_limit(call("tanaka/my-tool")) is None
+    blocked = _guard_main_agent_tool_limit(call("official"))
+    assert blocked is not None and "許可されていません" in blocked["messages"][0].content
+
+
+# --- skill-creator の書き込み許可と読み取り禁止ガード -------------------------
+
+
+def test_skill_creator_may_write_only_own_draft_folder(env):
+    from src.tools._subprocess_env import _skill_creator_draft_roots
+
+    assert _skill_creator_draft_roots("skill-creator") == [(env.draft_dir / "tanaka").resolve()]
+    assert _skill_creator_draft_roots("official") == []
+    env.config.skill_other_users_drafts = "full"
+    assert _skill_creator_draft_roots("skill-creator") == [env.draft_dir.resolve()]
+
+
+def test_subprocess_cannot_read_other_users_draft(env, tmp_path):
+    from src.tools._subprocess_env import _run_script_guard_env
+
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    guard_env, guard_dir = _run_script_guard_env(workdir, "official", "run.py")
+    script = workdir / "peek.py"
+    other = env.draft_dir / "suzuki" / "their-tool" / "SKILL.md"
+    own = env.draft_dir / "tanaka" / "my-tool" / "SKILL.md"
+    script.write_text(
+        f"try:\n    open(r'{other}', encoding='utf-8').read()\n    print('OTHER_READ')\nexcept PermissionError:\n    print('OTHER_BLOCKED')\n"
+        f"open(r'{own}', encoding='utf-8').read()\nprint('OWN_READ')\n",
+        encoding="utf-8",
+    )
+    try:
+        result = subprocess.run([sys.executable, str(script)], cwd=str(workdir), capture_output=True, text=True, env=guard_env)
+    finally:
+        if guard_dir is not None:
+            shutil.rmtree(guard_dir, ignore_errors=True)
+    assert "OTHER_BLOCKED" in result.stdout and "OWN_READ" in result.stdout, result.stderr
+
+
+def test_subprocess_env_carries_draft_context(env):
+    from src.tools._subprocess_env import _subprocess_env
+
+    sub_env = _subprocess_env()
+    assert sub_env["AGENT_USER"] == "tanaka"
+    assert Path(sub_env["AGENT_SKILL_DRAFT_DIR"]) == env.draft_dir
+    roots = sub_env["AGENT_SKILL_ROOTS"].split(os.pathsep)
+    assert str(env.draft_dir.resolve()) not in roots and str(env.skills_dir.resolve()) in roots
+
+
+# --- セッション用 read_skill -------------------------------------------------
+
+
+def test_session_read_skill_adds_draft_names_without_touching_shared_tool(monkeypatch):
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+
+    read_skill_module = sys.modules["src.tools.read_skill"]
+
+    monkeypatch.setattr(read_skill_module, "_BASE_SKILL_NAMES", ("official",))
+    copy = session_read_skill(["tanaka/my-tool"])
+    enum = convert_to_openai_tool(copy)["function"]["parameters"]["properties"]["skill_name"]["enum"]
+    assert enum == ["official", "tanaka/my-tool"]
+    assert session_read_skill([]) is read_skill_module.read_skill

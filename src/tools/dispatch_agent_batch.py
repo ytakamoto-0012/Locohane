@@ -14,6 +14,7 @@ import logging
 import time
 import uuid
 
+from .. import skill_drafts
 from . import _dispatch_agent_job
 from . import _state
 from ._dispatch_agent_job import _SUBAGENT_MESSAGE_AUTHOR, _DispatchAgentJob, _finalize_dispatch_agent_job_result
@@ -123,6 +124,8 @@ def _list_target_files(base: Path, pattern: str) -> list[Path]:
     出るものを含む）は除く。
     """
     exclude_names = _foreign_tmp_dir_names()
+    # 他ユーザーのドラフトスキル（読み取り不可のもの）は場所で除外する（src/skill_drafts.py）。
+    exclude_dirs = skill_drafts.unreadable_dirs(_state._LLM_CONFIG, skill_drafts.current_draft_user())
     resolved_base = base.resolve()
     seen: set[Path] = set()
     files: list[Path] = []
@@ -137,6 +140,8 @@ def _list_target_files(base: Path, pattern: str) -> list[Path]:
                 continue
             resolved = p.resolve()
             if not resolved.is_relative_to(resolved_base):
+                continue
+            if any(resolved.is_relative_to(d) for d in exclude_dirs):
                 continue
             if resolved not in seen:
                 seen.add(resolved)
