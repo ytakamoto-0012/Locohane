@@ -672,6 +672,7 @@ async function renderConfigEditor(container) {
   dirtyEdits = {};
   resetKeys = new Set();
   await loadConfigKeys();
+  buildPresetList();
   buildSectionList();
   renderKeyList();
   updateFooter();
@@ -689,6 +690,52 @@ async function loadConfigKeys() {
 }
 
 let activeSection = null;
+
+// よく変更するキーをまとめて表示するプリセット（表示順もこの並び）
+const CONFIG_PRESETS = [
+  {
+    name: "並列数",
+    keys: ["llm.max_concurrent_requests", "graph.max_parallel", "subagent.max_parallel"],
+  },
+  {
+    name: "スキル関係",
+    keys: [
+      "paths.project_locohane_dir",
+      "subagent.agent_type_run_script_allowlist",
+      "main_agent_tool_guard.allow_entries",
+      "plan.plan_approval_exempt_scripts",
+    ],
+  },
+];
+let activePreset = null;
+
+function buildPresetList() {
+  const box = $("#preset-list");
+  box.innerHTML = "";
+  activePreset = null;
+  for (const preset of CONFIG_PRESETS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = preset.name;
+    btn.addEventListener("click", () => {
+      activePreset = activePreset === preset ? null : preset;
+      $$("button", box).forEach((b) => b.classList.toggle("active", b === btn && activePreset !== null));
+      if (activePreset) selectSection("");
+      renderKeyList();
+    });
+    box.appendChild(btn);
+  }
+}
+
+function clearPreset() {
+  activePreset = null;
+  $$("#preset-list button").forEach((b) => b.classList.remove("active"));
+}
+
+function selectSection(sec) {
+  activeSection = sec;
+  $$("#section-list li").forEach((li) => li.classList.toggle("active", li.dataset.section === sec));
+}
 
 function buildSectionList() {
   const sections = [];
@@ -716,9 +763,8 @@ function buildSectionList() {
   activeSection = "";
   $$("li", list).forEach((li) => {
     li.addEventListener("click", () => {
-      activeSection = li.dataset.section;
-      $$("li", list).forEach((x) => x.classList.remove("active"));
-      li.classList.add("active");
+      clearPreset();
+      selectSection(li.dataset.section);
       renderKeyList();
     });
   });
@@ -746,7 +792,10 @@ function renderKeyList() {
   const listEl = $("#config-keys");
   listEl.innerHTML = "";
   let shown = 0;
-  for (const k of configKeys) {
+  const keys = activePreset
+    ? activePreset.keys.map((id) => configKeys.find((k) => keyId(k) === id)).filter(Boolean)
+    : configKeys;
+  for (const k of keys) {
     if (activeSection && k.section !== activeSection) continue;
     if (query && !(`${k.section}.${k.key}`.toLowerCase().includes(query) || k.description.toLowerCase().includes(query))) continue;
     if (changedOnly && !isDirty(k) && k.override === null) continue;

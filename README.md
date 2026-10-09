@@ -1279,6 +1279,13 @@ Claude Code から `/tune-prompt system_prompt` のように実行する。
 
 ![Dashboad](admin/Dashboad_01.png)
 
+`config.ini` タブの左サイドバーには、よく変更するキーだけを絞り込んで
+表示するプリセットボタンがある（もう一度押すと解除）。対象キーは
+`admin/static/admin.js` の `CONFIG_PRESETS` で定義している。
+
+- **並列数**: `[llm] max_concurrent_requests`・`[graph] max_parallel`・`[subagent] max_parallel`
+- **スキル関係**: `[paths] project_locohane_dir`・`[subagent] agent_type_run_script_allowlist`・`[main_agent_tool_guard] allow_entries`・`[plan] plan_approval_exempt_scripts`
+
 ### 起動方法
 
 ```cmd
