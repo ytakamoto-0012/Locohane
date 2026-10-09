@@ -130,7 +130,8 @@ def _sum_usage(transcript: list[dict]) -> dict:
 # 低パラメータモデルで安定して処理を継続できる、1リクエストあたりのトークン数の上限。
 # 累計ではなくリクエスト単位で見る必要がある（累計が何百万になっても、1回ずつが
 # 小さければ処理は続けられる。逆に累計が小さくても1回がこの値を超えると詰まる）。
-_PER_CALL_TOKEN_CEILING = 64000
+# 当初は64000だったが、委譲・切り詰め等の改善で128000まで安定するようになった。
+_PER_CALL_TOKEN_CEILING = 128000
 
 
 def _max_usage_per_call(transcript: list[dict]) -> dict:
