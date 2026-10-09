@@ -4,7 +4,7 @@
 instances/<name>/ 配下に instance.json（起動情報）・config_overrides.json
 （admin/overrides.py が書く設定差分）・.env（admin/env_files.py が書く
 ログイン情報）・backups/ を持つ。データ本体は config.ini 既定の
-common_data_dir = ./data/${instance} により data/<name>/ に置かれる（README.md「ディレクトリ構成」参照）。
+common_data_dir = ./data/${instance} により data/<name>/ に置かれる（README_DETAIL.md「ディレクトリ構成」参照）。
 """
 
 from __future__ import annotations

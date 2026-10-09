@@ -7,7 +7,7 @@
 
 このモジュール自体はパスワードをログ出力しない。呼び出し元（admin/server.py）
 側でも、このモジュールが返す値をAPIレスポンスへそのまま載せないこと
-（パスワードは書き込み専用として扱う。README.md「.envとユーザー管理」参照）。
+（パスワードは書き込み専用として扱う。README_DETAIL.md「.envとユーザー管理」参照）。
 """
 
 from __future__ import annotations

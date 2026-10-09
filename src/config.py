@@ -34,7 +34,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.ini"
 # CONFIG_OVERRIDES_PATH（管理ツールが子プロセス起動時に設定する）→ この既定値
 # の順で使う。app.bat で直接起動した場合もこの既定値が使われるため、
 # instances/default/ に対する管理ツールでの変更が app.bat 起動時にも反映される
-# （README.md「設定ダッシュボード」参照）。
+# （README_DETAIL.md「設定ダッシュボード」参照）。
 DEFAULT_INSTANCE_NAME = "default"
 # インスタンス別ディレクトリのルート（[admin].instances_dir）の既定値。
 DEFAULT_INSTANCES_DIR = "./instances"

@@ -1,13 +1,13 @@
 ---
 name: setup-locohane
-description: Locohane を新しい環境（または clone 直後）で動かせる状態にセットアップする。README.md「セットアップと起動」節の手順（python_env.bat の Python 環境指定・requirements.txt の依存インストール・.env 作成・推論サーバー接続先の設定・CLAUDE.md の実行環境パス更新）をユーザーに確認しながら順に実施し、最後に設定の読込検証と起動方法の案内まで行う。「Locohaneをセットアップして」「環境構築して」「初期設定して」「/setup-locohane」等で使う。
+description: Locohane を新しい環境（または clone 直後）で動かせる状態にセットアップする。README_DETAIL.md「セットアップと起動」節の手順（python_env.bat の Python 環境指定・requirements.txt の依存インストール・.env 作成・推論サーバー接続先の設定・CLAUDE.md の実行環境パス更新）をユーザーに確認しながら順に実施し、最後に設定の読込検証と起動方法の案内まで行う。「Locohaneをセットアップして」「環境構築して」「初期設定して」「/setup-locohane」等で使う。
 ---
 
 # setup-locohane: Locohane の初期セットアップ
 
-README.md「セットアップと起動」節（手順1〜4）を、現在の環境に合わせて実施する。
+README_DETAIL.md「セットアップと起動」節（手順1〜4）を、現在の環境に合わせて実施する。
 各手順は「現状確認 → 必要なら変更 → 確認」の順で進め、既に正しく設定済みの
-手順は変更せずスキップする。手順の詳細が必要になったら README.md の該当見出し
+手順は変更せずスキップする。手順の詳細が必要になったら README_DETAIL.md の該当見出し
 だけを読む（全体は読まない）。
 
 ## 守ること
@@ -81,7 +81,7 @@ README.md「セットアップと起動」節（手順1〜4）を、現在の環
 
 実施した変更（書き換えたファイルと項目）・スキップした手順・未解決事項を
 短く報告し、起動方法を案内する。推論サーバーは Locohane より先に起動しておく
-必要がある旨も添える（起動例は README.md「2. 推論サーバー（llama.cpp / vLLM）の起動例」）。
+必要がある旨も添える（起動例は README_DETAIL.md「2. 推論サーバー（llama.cpp / vLLM）の起動例」）。
 
 - 管理ツール運用: `admin.bat` を起動 → `http://127.0.0.1:8001` に `ADMIN_USERS`
   でログイン。`default` インスタンス（既定 `http://127.0.0.1:8000`）が自動起動する。

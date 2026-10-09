@@ -59,7 +59,7 @@ os.environ.setdefault("LANGSMITH_TRACING", "false")
 # 環境変数 LOCOHANE_INSTANCE_ENV は管理ツールが子プロセス起動時に設定する
 # （admin/supervisor.py 参照）。未設定（app.bat で直接起動した場合を含む）なら
 # instances/<LOCOHANE_INSTANCE、既定 default>/.env を使うため、app.bat 起動でも管理ツール
-# 経由の起動と同じ挙動になる（README.md「.envとユーザー管理」参照）。
+# 経由の起動と同じ挙動になる（README_DETAIL.md「.envとユーザー管理」参照）。
 # 必ず `import chainlit as cl`（直後、chainlitが自身のモジュール読み込み時に
 # プロジェクト直下の .env を override=False で読む）より前に、override=True で
 # 読むこと。これにより「インスタンスの.env > OS環境変数 > プロジェクト直下.env」
