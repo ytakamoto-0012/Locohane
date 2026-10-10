@@ -96,6 +96,8 @@ label.checkbox input { width: auto; }
 
 /* Instance cards */
 .instance-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.lab-instance-section { margin-top: 24px; }
+.lab-instance-section h3 { margin: 0 0 10px; font-size: 15px; color: var(--text-dim); }
 .instance-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
 .card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .state-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }

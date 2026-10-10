@@ -49,6 +49,10 @@
       <button id="add-instance-btn">＋ インスタンス追加</button>
     </div>
     <div id="instance-cards" class="instance-cards"></div>
+    <div id="lab-instance-section" class="lab-instance-section hidden">
+      <h3>スキル調整ワーカー</h3>
+      <div id="lab-instance-cards" class="instance-cards"></div>
+    </div>
   </div>
 </template>
 
@@ -120,12 +124,12 @@
       <form id="edit-instance-form">
         <p class="hint">インスタンス名: <strong class="edit-instance-name"></strong>（変更不可。ディレクトリ名・API識別子として使われるため）</p>
         <label>表示名<input type="text" name="display_name" /></label>
-        <label>ホスト<input type="text" name="app_host" /></label>
-        <label>ポート<input type="number" name="app_port" min="1024" max="65535" required /></label>
+        <label class="app-only">ホスト<input type="text" name="app_host" /></label>
+        <label class="app-only">ポート<input type="number" name="app_port" min="1024" max="65535" required /></label>
         <label class="checkbox"><input type="checkbox" name="autostart" /> 管理ツール起動時に自動起動する</label>
-        <label class="checkbox"><input type="checkbox" name="headless" /> ヘッドレス（起動時にブラウザを自動で開かない）</label>
-        <label class="checkbox"><input type="checkbox" name="watch" /> 自動リロード（-w、ファイル変更で再読込。本番運用では非推奨）</label>
-        <p class="hint">稼働中の場合、ホスト・ポートの変更は再起動後に反映されます。</p>
+        <label class="checkbox app-only"><input type="checkbox" name="headless" /> ヘッドレス（起動時にブラウザを自動で開かない）</label>
+        <label class="checkbox app-only"><input type="checkbox" name="watch" /> 自動リロード（-w、ファイル変更で再読込。本番運用では非推奨）</label>
+        <p class="hint app-only">稼働中の場合、ホスト・ポートの変更は再起動後に反映されます。</p>
         <div class="error" id="edit-instance-error"></div>
         <div class="modal-actions">
           <button type="button" class="btn-cancel">キャンセル</button>

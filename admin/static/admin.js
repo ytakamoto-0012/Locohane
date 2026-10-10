@@ -178,7 +178,11 @@ async function refreshInstanceCards() {
   instanceCache = data.instances;
   const container = $("#instance-cards");
   if (!container) return;
+  // 通常のインスタンスは上段、スキル調整ワーカーは下段に分けて並べる。
+  const labContainer = $("#lab-instance-cards");
   container.innerHTML = "";
+  labContainer.innerHTML = "";
+  $("#lab-instance-section").classList.toggle("hidden", !instanceCache.some((i) => i.kind === "skill_lab"));
   for (const inst of instanceCache) {
     const card = clone("tpl-instance-card").firstElementChild;
     card.querySelector(".state-dot").classList.add(inst.state);
@@ -225,7 +229,7 @@ async function refreshInstanceCards() {
     card.querySelector(".btn-monitor").addEventListener("click", () => renderInstanceDetail(inst.name, "monitor"));
     card.dataset.instance = inst.name;
 
-    container.appendChild(card);
+    (isLab ? labContainer : container).appendChild(card);
   }
   refreshCardActivity();
 }
@@ -551,6 +555,10 @@ function openEditInstanceModal(inst) {
   form.elements.autostart.checked = inst.autostart;
   form.elements.headless.checked = inst.headless;
   form.elements.watch.checked = inst.watch;
+  // スキル調整ワーカーはチャット画面・ポートを持たないため、本体用の項目を隠して送らない（API は null なら現状維持）。
+  const isLab = inst.kind === "skill_lab";
+  $$(".app-only", modal).forEach((node) => node.classList.toggle("hidden", isLab));
+  form.elements.app_port.required = !isLab;
 
   modal.querySelector(".btn-cancel").addEventListener("click", () => modal.remove());
   form.addEventListener("submit", async (ev) => {
@@ -558,14 +566,14 @@ function openEditInstanceModal(inst) {
     const data = new FormData(ev.target);
     const body = {
       display_name: data.get("display_name") || null,
-      app_host: data.get("app_host") || null,
-      app_port: data.get("app_port") ? Number(data.get("app_port")) : null,
+      app_host: isLab ? null : data.get("app_host") || null,
+      app_port: !isLab && data.get("app_port") ? Number(data.get("app_port")) : null,
       autostart: data.get("autostart") === "on",
-      headless: data.get("headless") === "on",
-      watch: data.get("watch") === "on",
+      headless: isLab ? null : data.get("headless") === "on",
+      watch: isLab ? null : data.get("watch") === "on",
     };
     try {
-      const portOrHostChanged = body.app_host !== inst.app_host || body.app_port !== inst.app_port;
+      const portOrHostChanged = !isLab && body.app_host !== inst.app_host || body.app_port !== inst.app_port;
       await api(`/api/instances/${encodeURIComponent(inst.name)}`, { method: "PUT", body });
       modal.remove();
       await refreshInstanceCards();
