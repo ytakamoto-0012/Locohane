@@ -61,6 +61,71 @@ def apply_instance(name: str) -> None:
     load_dotenv(instance_dir / ".env", override=True)
 
 
+# スキル調整ワーカーから差し込む LLM 接続先の設定（セクション, キー, 環境変数）。
+# モデルは本番と同じで、接続先だけを研究室専用にするため、[llm] のうちこれだけを移す。
+_LLM_ENDPOINT_KEYS = (
+    ("llm", "main_url", "LLM_MAIN_URL"),
+    ("llm", "sub_url", "LLM_SUB_URL"),
+    ("llm", "main_routing_strategy", "LLM_MAIN_ROUTING_STRATEGY"),
+    ("llm", "sub_routing_strategy", "LLM_SUB_ROUTING_STRATEGY"),
+)
+
+
+def _ini_value(section: str, key: str) -> str | None:
+    import configparser
+
+    from src.config import DEFAULT_CONFIG_PATH
+
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(DEFAULT_CONFIG_PATH, encoding="utf-8")
+    return parser.get(section, key, fallback=None)
+
+
+def raw_setting(name: str, section: str, key: str, env_name: str, *, process_env: bool = False) -> str | None:
+    """インスタンスの設定値を、load_config() に渡る前の生の文字列で返す。
+
+    優先度は load_config() と同じ: 環境変数 > config_overrides.json > config.ini。
+    環境変数は、process_env=True なら今のプロセスの os.environ（apply_instance(name) 済みの
+    評価プロセス用）、False ならそのインスタンスの .env ファイルだけを見る（別インスタンスの
+    値を読むとき用。今のプロセスの環境変数を混ぜない）。
+    """
+    import json
+
+    from dotenv import dotenv_values
+
+    instance_dir = resolve_instances_root() / name
+    if process_env:
+        if env_name in os.environ:
+            return os.environ[env_name]
+    else:
+        env_file = instance_dir / ".env"
+        env_values = dotenv_values(env_file) if env_file.is_file() else {}
+        if env_values.get(env_name) is not None:
+            return env_values[env_name]
+    overrides_file = instance_dir / "config_overrides.json"
+    if overrides_file.is_file():
+        data = json.loads(overrides_file.read_text(encoding="utf-8") or "{}")
+        if key in (data.get(section) or {}):
+            return data[section][key]
+    return _ini_value(section, key)
+
+
+def llm_env_from_instance(name: str) -> dict[str, str]:
+    """インスタンス name（スキル研究室）の LLM 接続先を、対応する環境変数の辞書で返す。
+
+    評価対象インスタンスを apply_instance() した後にこれを os.environ へ入れると、
+    構成（スキル・ガード・タイムアウト等）は評価対象のまま、接続先だけが研究室の
+    ものになる（環境変数は config_overrides.json より優先される）。
+    """
+    resolve_instance_name(name)
+    env: dict[str, str] = {}
+    for section, key, env_name in _LLM_ENDPOINT_KEYS:
+        value = raw_setting(name, section, key, env_name)
+        if value is not None:
+            env[env_name] = value
+    return env
+
+
 def main() -> int:
     """指定インスタンスを適用した実効設定（LLM接続先・ログ出力先等）を表示する。"""
     if sys.platform == "win32":

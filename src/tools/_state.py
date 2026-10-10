@@ -227,7 +227,7 @@ class ResolvedAgentType:
 
 # init_tools() で注入されるモジュール設定（起動時に一度だけ設定）。
 # 複数ディレクトリ対応（scan_skills()/scan_agent_types() と同じマージ設計。
-# 例: [*locohane_skills_dirs, skills_dir]。前方のディレクトリが優先される）。
+# 例: [*reversed(locohane_skills_dirs), skills_dir]。前方のディレクトリが優先される）。
 _SKILLS_ROOTS: list[Path] | None = None
 _SCRIPT_PYTHON: str = "python"
 _SCRIPT_TIMEOUT: int = 60
@@ -347,7 +347,7 @@ def init_tools(
     Args:
         skills_root: skills ディレクトリのルートパス、またはその並び。
             複数渡した場合は渡した順に探索され、前方のディレクトリが優先
-            される（例: [*locohane_skills_dirs, skills_dir]）。各要素は
+            される（例: [*reversed(locohane_skills_dirs), skills_dir]）。各要素は
             resolve() により絶対パスへ正規化した上でモジュール変数に保持する。
         script_python: run_script が .py スクリプトを起動する際に使う
             Python 実行ファイル（例: "python", "C:\\path\\to\\python.exe"）。

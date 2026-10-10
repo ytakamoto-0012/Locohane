@@ -140,6 +140,7 @@ function navigate(view) {
   if (view === "instances") return renderInstances();
   if (view === "settings") return renderSettings();
   if (view === "audit") return renderAudit();
+  if (view === "skill-lab") return renderSkillLab();
   if (view === "api-docs") return renderApiDocs();
 }
 
@@ -183,10 +184,15 @@ async function refreshInstanceCards() {
     card.querySelector(".state-dot").classList.add(inst.state);
     card.querySelector(".display-name").textContent = inst.display_name;
     card.querySelector(".badge-default").classList.toggle("hidden", !inst.is_default);
-    card.querySelector(".addr").textContent = `${inst.app_host}:${inst.app_port}`;
+    const isLab = inst.kind === "skill_lab";
+    card.classList.toggle("lab-card", isLab);
+    card.querySelector(".badge-lab").classList.toggle("hidden", !isLab);
+    card.querySelector(".addr").textContent = isLab ? "スキル研究室の実行役（チャット画面なし）" : `${inst.app_host}:${inst.app_port}`;
     card.querySelector(".state-label").textContent = STATE_LABELS[inst.state] || inst.state;
     const link = card.querySelector(".open-link");
     link.href = inst.url;
+    link.classList.toggle("hidden", isLab);
+    card.querySelector(".btn-monitor").classList.toggle("hidden", isLab);
 
     const btnStart = card.querySelector(".btn-start");
     const btnStop = card.querySelector(".btn-stop");
@@ -213,6 +219,9 @@ async function refreshInstanceCards() {
     btnDelete.addEventListener("click", () => openDeleteInstanceModal(inst));
     btnEdit.addEventListener("click", () => openEditInstanceModal(inst));
     card.querySelector(".btn-config").addEventListener("click", () => renderInstanceDetail(inst.name));
+    const btnLab = card.querySelector(".btn-lab");
+    btnLab.classList.toggle("hidden", isLab);
+    btnLab.addEventListener("click", () => renderInstanceDetail(inst.name, "skill-lab"));
     card.querySelector(".btn-monitor").addEventListener("click", () => renderInstanceDetail(inst.name, "monitor"));
     card.dataset.instance = inst.name;
 
@@ -231,7 +240,8 @@ async function refreshCardActivity() {
   }
   for (const item of data.instances) {
     const card = $(`.instance-card[data-instance="${CSS.escape(item.name)}"]`);
-    if (!card) continue;
+    // スキル調整ワーカーにはチャットの統計が無いため、ワーカーの処理状況を別に出す（refreshWorkerCards）。
+    if (!card || card.classList.contains("lab-card")) continue;
     const box = card.querySelector(".card-activity");
     const lc = item.log_counts_24h || {};
     const live = (v) => (item.available ? String(v) : "-");
@@ -243,6 +253,31 @@ async function refreshCardActivity() {
     ];
     box.replaceChildren(...tiles);
     renderCardContextChart(card.querySelector(".card-context"), item);
+  }
+  refreshWorkerCards();
+}
+
+// スキル調整ワーカー（スキル研究室の実行役）のカードに、処理中のテーマ・待ち件数・LLM 接続先を出す。
+async function refreshWorkerCards() {
+  if (!$(".instance-card.lab-card")) return;
+  let data;
+  try {
+    data = await api("/api/skill-lab/overview");
+  } catch (e) {
+    return;
+  }
+  for (const lab of data.labs) {
+    const card = $(`.instance-card[data-instance="${CSS.escape(lab.name)}"]`);
+    if (!card) continue;
+    const running = lab.running || [];
+    const tiles = [
+      cardStat("処理中のテーマ", String(running.length), running.map((r) => `${r.instance}: ${r.title}`).join(", ") || null),
+      cardStat("開始待ちのテーマ", String(lab.queued || 0)),
+      cardStat("待ちの依頼", String(lab.tasks || 0), "1回試行・AI による下書き"),
+      cardStat("LLM 接続先", lab.endpoint ? lab.endpoint.replace(/^https?:\/\//, "") : "-", lab.endpoint_error || lab.endpoint || null),
+    ];
+    card.querySelector(".card-activity").replaceChildren(...tiles);
+    card.querySelector(".card-context").replaceChildren();
   }
 }
 
@@ -470,6 +505,15 @@ function openCreateInstanceModal() {
     opt.textContent = inst.display_name;
     select.appendChild(opt);
   }
+  // スキル調整ワーカーはチャット画面・ポートを持たないため、本体用の項目を隠す。
+  const kindSelect = modal.querySelector("select[name=kind]");
+  const syncKind = () => {
+    const isLab = kindSelect.value === "skill_lab";
+    $$(".app-only", modal).forEach((node) => node.classList.toggle("hidden", isLab));
+    $$(".lab-only", modal).forEach((node) => node.classList.toggle("hidden", !isLab));
+  };
+  kindSelect.addEventListener("change", syncKind);
+  syncKind();
   modal.querySelector(".btn-cancel").addEventListener("click", () => modal.remove());
   modal.querySelector("form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -483,6 +527,8 @@ function openCreateInstanceModal() {
       headless: form.get("headless") === "on",
       watch: form.get("watch") === "on",
       copy_from: form.get("copy_from") || null,
+      kind: form.get("kind") || "app",
+      copy_extensions: form.get("copy_extensions") === "on",
     };
     try {
       await api("/api/instances", { method: "POST", body });
@@ -533,9 +579,11 @@ function openEditInstanceModal(inst) {
 }
 
 async function openDeleteInstanceModal(inst) {
-  let entries;
+  let entries, extensions;
   try {
-    entries = (await api(`/api/instances/${encodeURIComponent(inst.name)}/data-paths`)).entries;
+    const data = await api(`/api/instances/${encodeURIComponent(inst.name)}/data-paths`);
+    entries = data.entries;
+    extensions = data.extensions || {};
   } catch (e) {
     alert("データの保存先を取得できませんでした: " + e.message);
     return;
@@ -543,6 +591,17 @@ async function openDeleteInstanceModal(inst) {
   const modal = clone("tpl-delete-instance").firstElementChild;
   document.body.appendChild(modal);
   modal.querySelector(".delete-instance-name").textContent = inst.name;
+  // インスタンス専用のスキル・サブエージェント（スキル研究室で昇格したもの）が一緒に消える場合は警告する。
+  const extNames = [...(extensions.skills || []).map((n) => `スキル ${n}`), ...(extensions.agents || []).map((n) => `サブエージェント ${n}`)];
+  if (extensions.deleted_with_instance && extNames.length) {
+    modal.querySelector(".extensions-warning").replaceChildren(
+      el("strong", { text: `このインスタンス専用のスキル・サブエージェント ${extNames.length} 件も一緒に削除されます: ` }),
+      extNames.join("、"),
+      el("br"),
+      el("code", { text: extensions.dir }),
+    );
+    modal.querySelector(".extensions-warning").classList.remove("hidden");
+  }
   const list = modal.querySelector(".data-path-list");
   for (const entry of entries) {
     const row = document.createElement("label");
@@ -638,6 +697,13 @@ async function renderInstanceDetail(name, initialView) {
   $$(".subtab-btn").forEach((btn) => {
     btn.addEventListener("click", () => selectInstanceSubview(btn.dataset.subview));
   });
+  // スキル調整ワーカーはチャットを持たないため、会話・ユーザー・表示設定・研究テーマの画面を出さない。
+  const meta = instanceCache.find((i) => i.name === name);
+  const isLab = meta && meta.kind === "skill_lab";
+  $$(".subtab-btn").forEach((btn) => {
+    const hide = isLab ? ["monitor", "threads", "users", "display", "skill-lab"].includes(btn.dataset.subview) : false;
+    btn.classList.toggle("hidden", hide);
+  });
   await selectInstanceSubview(initialView || "config");
 }
 
@@ -658,6 +724,7 @@ function renderInstanceSubview(view, opts) {
   if (view === "env") return renderEnvVars(container);
   if (view === "display") return renderSettingsPanel(container, currentInstanceName);
   if (view === "backups") return renderBackups(container);
+  if (view === "skill-lab") return renderSkillLabPanel(container, currentInstanceName);
 }
 
 /* --- config.ini 編集 --- */
@@ -701,12 +768,26 @@ const CONFIG_PRESETS = [
     name: "スキル関係",
     keys: [
       "paths.project_locohane_dir",
+      "paths.instance_locohane_dir",
       "subagent.agent_type_run_script_allowlist",
       "main_agent_tool_guard.allow_entries",
       "plan.plan_approval_exempt_scripts",
       "skill_creator.draft_dir",
       "skill_creator.tryout_repeats",
       "skill_creator.other_users_drafts",
+      "skill_creator.archive_dir",
+    ],
+  },
+  {
+    name: "スキル研究室",
+    keys: [
+      "llm.main_url",
+      "llm.sub_url",
+      "skill_lab.max_iterations",
+      "skill_lab.max_hours",
+      "skill_lab.poll_interval_seconds",
+      "skill_lab.fixer_max_file_chars",
+      "skill_lab.transcript_excerpt_chars",
     ],
   },
 ];

@@ -118,6 +118,26 @@ python evals/run_all.py --cases-dir <ドラフト>/evals --skill-overlay <ドラ
 
 skill-creator（`run_isolated_eval.py`）と promote-skill はこの形で呼んでいる。
 
+### スキル研究室の評価（`--agent-overlay` / `--config-patch` / `--llm-from-instance`）
+
+管理ツールのスキル研究室（`admin/skill_lab/evaluation.py`）は、研究テーマの全資産を重ねて評価する:
+
+```
+python evals/run_all.py --cases-dir <テーマ>/cases --instance <対象インスタンス> --repeat N --results-dir <出力先> \
+  --skill-overlay <テーマ>/assets/skills/<スキル> ... --agent-overlay <テーマ>/assets/agents/<名前>.md ... \
+  --config-patch <テーマ>/config_patch.json --llm-from-instance <スキル調整ワーカー>
+```
+
+- `--agent-overlay`（複数可）: サブエージェント定義（`agents/*.md` 形式のファイル）を、本番のエージェント種別
+  （`agents_dir`・`project_locohane_dir`・`instance_locohane_dir` の `agents/`）の上に最優先で重ねる。
+- `--config-patch`: `[subagent] agent_type_run_script_allowlist` 等のリスト型の設定へ、今の実効値に項目を足して評価する
+  （`evals/config_patch.py`。昇格時に `config_overrides.json` へ書くのと同じ値になる）。
+- `--llm-from-instance`: 構成は `--instance` のまま、LLM の接続先（`[llm] main_url`/`sub_url`/`*_routing_strategy`）だけを
+  指定インスタンス（研究室）のものにする（環境変数 `LLM_MAIN_URL` 等で差し込む）。
+- ケースの `work_dir` は、ケースのファイルからの相対パス（`fixtures/<フォルダ>`）でも書ける。その場合 `fixtures/` は
+  ケースと一緒に開始時に固定され、`cases_sha256` にも含まれる。
+- `tryout.json` には `agent_overlays`（ハッシュ）・`config_patch`（ハッシュ）・`llm_from_instance` も残る。
+
 ## ケースの書き方（`evals/cases/<target>/*.yaml`）
 
 ```yaml

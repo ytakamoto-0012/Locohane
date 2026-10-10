@@ -28,6 +28,7 @@
       <div class="brand">Locohane 設定ダッシュボード</div>
       <nav class="tabs">
         <button data-view="instances" class="tab-btn active">インスタンス</button>
+        <button data-view="skill-lab" class="tab-btn">スキル研究室</button>
         <button data-view="settings" class="tab-btn">表示設定</button>
         <button data-view="audit" class="tab-btn">変更履歴</button>
         <button data-view="api-docs" class="tab-btn">APIリファレンス</button>
@@ -57,6 +58,7 @@
       <span class="state-dot"></span>
       <span class="display-name"></span>
       <span class="badge-default">既定</span>
+      <span class="badge-lab hidden">スキル調整ワーカー</span>
     </div>
     <div class="card-meta">
       <span class="addr"></span>
@@ -71,6 +73,7 @@
       <button class="btn-restart">再起動</button>
       <button class="btn-edit">編集</button>
       <button class="btn-monitor">モニター</button>
+      <button class="btn-lab">研究テーマ</button>
       <button class="btn-config">設定</button>
       <button class="btn-delete">削除</button>
     </div>
@@ -82,16 +85,24 @@
     <div class="modal">
       <h3>インスタンスを追加</h3>
       <form id="create-instance-form">
+        <label>種類
+          <select name="kind">
+            <option value="app">Locohane 本体（チャット）</option>
+            <option value="skill_lab">スキル調整ワーカー（スキル研究室の実行役）</option>
+          </select>
+        </label>
+        <p class="hint lab-only hidden">スキル調整ワーカーは、上部の「スキル研究室」タブで頼んだ評価・AI 修正・下書きを裏で処理する実行役です（研究テーマは持たず、チャット画面・ポートもありません）。作成後、config.ini の [llm] main_url / sub_url にワーカー専用の接続先（本番と同じモデル）を設定してから起動してください。</p>
         <label>インスタンス名（半角英数字・_・- のみ）<input type="text" name="name" required pattern="[A-Za-z0-9_-]{1,32}" /></label>
         <label>表示名<input type="text" name="display_name" /></label>
-        <label>ホスト<input type="text" name="app_host" value="127.0.0.1" /></label>
-        <label>ポート（空欄で自動提案）<input type="number" name="app_port" min="1024" max="65535" /></label>
+        <label class="app-only">ホスト<input type="text" name="app_host" value="127.0.0.1" /></label>
+        <label class="app-only">ポート（空欄で自動提案）<input type="number" name="app_port" min="1024" max="65535" /></label>
         <label class="checkbox"><input type="checkbox" name="autostart" /> 管理ツール起動時に自動起動する</label>
-        <label class="checkbox"><input type="checkbox" name="headless" checked /> ヘッドレス（起動時にブラウザを自動で開かない）</label>
-        <label class="checkbox"><input type="checkbox" name="watch" /> 自動リロード（-w、ファイル変更で再読込。本番運用では非推奨）</label>
+        <label class="checkbox app-only"><input type="checkbox" name="headless" checked /> ヘッドレス（起動時にブラウザを自動で開かない）</label>
+        <label class="checkbox app-only"><input type="checkbox" name="watch" /> 自動リロード（-w、ファイル変更で再読込。本番運用では非推奨）</label>
         <label>複製元（任意）
           <select name="copy_from"><option value="">（複製しない）</option></select>
         </label>
+        <label class="checkbox app-only"><input type="checkbox" name="copy_extensions" /> 複製元のインスタンス専用のスキル・サブエージェント（スキル研究室で昇格したもの）も複製する</label>
         <div class="error" id="create-instance-error"></div>
         <div class="modal-actions">
           <button type="button" class="btn-cancel">キャンセル</button>
@@ -132,6 +143,7 @@
       <form id="delete-instance-form">
         <p class="hint">インスタンス <strong class="delete-instance-name"></strong> の設定（instances/ 配下）を削除します。<br />
           あわせて削除する永続データを選択してください（チェックしなかったデータは残ります）。</p>
+        <p class="extensions-warning warn-box hidden"></p>
         <div class="data-path-list"></div>
         <label>確認のため、インスタンス名を入力してください<input type="text" name="confirm_name" required autocomplete="off" /></label>
         <div class="error" id="delete-instance-error"></div>
@@ -159,6 +171,7 @@
       <button data-subview="env" class="subtab-btn">環境変数</button>
       <button data-subview="display" class="subtab-btn">表示設定</button>
       <button data-subview="backups" class="subtab-btn">バックアップ</button>
+      <button data-subview="skill-lab" class="subtab-btn">スキル研究室</button>
     </nav>
     <div id="instance-subview"></div>
   </div>
@@ -316,5 +329,6 @@
 </template>
 
 <script src="/admin.js"></script>
+<script src="/skill_lab.js"></script>
 </body>
 </html>

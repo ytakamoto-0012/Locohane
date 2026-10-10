@@ -300,11 +300,16 @@ def tree_sha256(skill_dir: Path) -> str:
 
 
 def cases_sha256(cases_dir: Path) -> str:
-    """ケースフォルダ直下の *.yaml のハッシュ（evals/skill_tree.py の cases_sha256 と同じ規則）。"""
+    """ケースフォルダ直下の *.yaml と fixtures/ 配下のハッシュ（evals/skill_tree.py の cases_sha256 と同じ規則）。"""
     digest = hashlib.sha256()
     for path in sorted(cases_dir.glob("*.yaml")):
         digest.update(path.name.encode("utf-8") + b"\0")
         digest.update(path.read_bytes() + b"\0")
+    fixtures = cases_dir / "fixtures"
+    if fixtures.is_dir():
+        for path in sorted(p for p in fixtures.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
+            digest.update(path.relative_to(cases_dir).as_posix().encode("utf-8") + b"\0")
+            digest.update(path.read_bytes() + b"\0")
     return digest.hexdigest()
 
 

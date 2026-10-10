@@ -124,12 +124,14 @@ $C $BASE/api/instances
 
 各要素の主なフィールド: `name`, `display_name`, `app_host`, `app_port`,
 `autostart`, `headless`, `watch`, `state`（`running`/`stopped`/`external`/`crashed`）,
-`pid`, `url`, `is_default`。
+`pid`, `url`, `is_default`, `kind`（`app`＝Locohane 本体／`skill_lab`＝スキル研究室）。
 
 ### 作成
 
 `name` 以外は省略可。`app_port` 省略時は空きポートを自動で選ぶ。
 `copy_from` に既存インスタンス名を指定すると設定を複製する。
+`kind` に `skill_lab` を指定するとスキル研究室（チャット画面・ポートを持たないワーカー）を作る（既定 `app`）。
+`copy_extensions: true` なら、複製元のインスタンス専用の拡張ディレクトリ（研究室で昇格したスキル・サブエージェント）も複製する。
 
 bash:
 
@@ -442,6 +444,68 @@ $C "$BASE/api/instances/default/monitor/endpoints"
 ```bat
 %C% "%BASE%/api/instances/default/monitor/runtime"
 %C% "%BASE%/api/instances/default/monitor/threads/<thread_id>/tokens"
+```
+
+## スキル研究室
+
+研究テーマの操作は、すべて対象インスタンスの下（`/api/instances/<name>/skill-lab/...`）にある。
+他のインスタンスのテーマ ID を指定しても 404 になる。`<name>` にスキル調整ワーカーは指定できない。
+
+一覧・取り込み候補:
+
+```bash
+$C $BASE/api/skill-lab/overview                       # インスタンスごとの件数と研究室の稼働状況
+$C $BASE/api/instances/default/skill-lab/sources       # ドラフト・正式スキル・正式エージェント・tools に書けるツール名
+$C $BASE/api/instances/default/skill-lab/themes
+```
+
+テーマの作成・詳細（`lab` は担当のスキル調整ワーカー。ワーカーが1つなら省略可）:
+
+```bash
+$C -X POST $BASE/api/instances/default/skill-lab/themes -H "$H" -H "$J" -d '{"title": "見積書チェック", "lab": "lab1"}'
+$C $BASE/api/instances/default/skill-lab/themes/<テーマID>
+```
+
+資産の追加（`mode`: `draft`＝ドラフトの取り込み（`origin` にドラフトのフォルダ）／`official`＝正式資産の複製／
+`new`＝`content` で新規／`ai`＝`request` を AI に下書きさせる）と削除:
+
+```bash
+$C -X POST $BASE/api/instances/default/skill-lab/themes/<テーマID>/assets -H "$H" -H "$J" \
+  -d '{"mode": "ai", "asset_type": "agents", "name": "estimate-checker", "request": "見積書の金額と明細の整合を確かめる"}'
+$C -X DELETE $BASE/api/instances/default/skill-lab/themes/<テーマID>/assets/agents/estimate-checker -H "$H"
+```
+
+ファイル（`spec.md`・`config_patch.json`・`assets/...`・`cases/...`）の読み書きと、ケース（フォーム用の構造）・入力ファイル:
+
+```bash
+$C "$BASE/api/instances/default/skill-lab/themes/<テーマID>/files?path=spec.md"
+$C -X PUT $BASE/api/instances/default/skill-lab/themes/<テーマID>/files -H "$H" -H "$J" -d '{"path": "spec.md", "content": "# ..."}'
+$C -X PUT $BASE/api/instances/default/skill-lab/themes/<テーマID>/cases/001_basic -H "$H" -H "$J" \
+  -d '{"data": {"turns": ["見積書を確認して"], "expect": {"tool_call_args_contains": {"dispatch_agent": {"agent_type": "estimate-checker"}}}}}'
+$C -X POST $BASE/api/instances/default/skill-lab/themes/<テーマID>/fixtures -H "$H" -H "$J" \
+  -d '{"folder": "sample1", "filename": "見積書.xlsx", "content_base64": "<base64>"}'
+```
+
+AI への依頼（`type`: `trial`＝1回試行（`params.case_id`）／`draft_spec`／`draft_cases`（`params.count`）／`draft_asset`）と、
+ループの開始（`mode`: `loop`＝スキル調整ループ／`tryout`＝トライアウトだけ）・停止・取りやめ:
+
+```bash
+$C -X POST $BASE/api/instances/default/skill-lab/themes/<テーマID>/tasks -H "$H" -H "$J" -d '{"type": "trial", "params": {"case_id": "001_basic"}}'
+$C -X POST $BASE/api/instances/default/skill-lab/themes/<テーマID>/start -H "$H" -H "$J" -d '{"mode": "loop"}'
+$C -X POST $BASE/api/instances/default/skill-lab/themes/<テーマID>/stop -H "$H"
+$C -X POST $BASE/api/instances/default/skill-lab/themes/<テーマID>/cancel -H "$H"
+```
+
+結果・差分・昇格・差し戻し:
+
+```bash
+$C $BASE/api/instances/default/skill-lab/themes/<テーマID>/iterations/3
+$C $BASE/api/instances/default/skill-lab/themes/<テーマID>/diff
+$C "$BASE/api/instances/default/skill-lab/themes/<テーマID>/promote-check?distribute_to=sales"
+$C -X POST $BASE/api/instances/default/skill-lab/themes/<テーマID>/promote -H "$H" -H "$J" \
+  -d '{"distribute_to": [], "discard_source_changes": false, "note": "judge を確認済み"}'
+$C -X POST $BASE/api/instances/default/skill-lab/themes/<テーマID>/return -H "$H" -H "$J" \
+  -d '{"reason": "金額の丸め方が仕様と違う", "apply_fixes": true, "reject": false}'
 ```
 
 ## 変更履歴

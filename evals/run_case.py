@@ -54,7 +54,7 @@ if sys.platform == "win32":
 from evals.case_schema import EvalCase, Expect, load_case  # noqa: E402
 from evals.headless_chainlit import install as install_headless_chainlit  # noqa: E402
 from evals.headless_chainlit import patch_ask_relay  # noqa: E402
-from evals.instance import apply_instance, resolve_instance_name  # noqa: E402
+from evals.instance import apply_instance, llm_env_from_instance, resolve_instance_name  # noqa: E402
 from evals.timing_callbacks import LatencyCallbackHandler  # noqa: E402
 
 
@@ -250,7 +250,46 @@ def _with_overlay_guard_exemptions(config, overlay_root: Path):
     return dataclasses.replace(config, plan_approval_exempt_scripts=plan_exempt, main_agent_tool_guard_allow_entries=allow_entries)
 
 
-async def _run(case: EvalCase, skill_overlays: list[Path] | None = None, exclude_skills: list[str] | None = None) -> dict:
+def _resolve_work_dir(case: EvalCase) -> Path:
+    """ケースの work_dir を解決する。
+
+    ケースのファイルからの相対パス（スキル研究室のケースが持つ fixtures/... 等）に
+    その名前のフォルダがあればそれを、無ければ従来どおりプロジェクトルート相対で解決する。
+    """
+    raw = Path(case.work_dir)
+    if raw.is_absolute():
+        return raw.resolve()
+    beside_case = (case.source_path.parent / raw).resolve()
+    if beside_case.is_dir():
+        return beside_case
+    return (_PROJECT_ROOT / raw).resolve()
+
+
+def _apply_config_patch(patch_path: Path) -> None:
+    """--config-patch の項目を、今の実効値に足した値として環境変数へ入れる（load_config() より前に呼ぶ）。
+
+    昇格時（admin/skill_lab/promotion.py）に config_overrides.json へ書くのと同じ値を作る
+    （evals/config_patch.py）。apply_instance() 済みのプロセスで、今の実効値
+    （環境変数 > config_overrides.json > config.ini）を読む。
+    """
+    from evals.config_patch import PATCHABLE_KEYS, load_patch, merged_value
+    from evals.instance import raw_setting
+
+    instance_name = os.environ.get("LOCOHANE_INSTANCE", "default")
+    for (section, key), items in load_patch(patch_path).items():
+        env_name = PATCHABLE_KEYS[(section, key)]
+        current = raw_setting(instance_name, section, key, env_name, process_env=True) or ""
+        new_value, _ = merged_value(section, key, current, items)
+        if new_value is not None:
+            os.environ[env_name] = new_value
+
+
+async def _run(
+    case: EvalCase,
+    skill_overlays: list[Path] | None = None,
+    exclude_skills: list[str] | None = None,
+    agent_overlays: list[Path] | None = None,
+) -> dict:
     """対象ファイルを現在の内容のまま読み込み、1ケースを実行する。
 
     Args:
@@ -262,6 +301,9 @@ async def _run(case: EvalCase, skill_overlays: list[Path] | None = None, exclude
             行う）。重ねたスキルのスクリプトは、昇格時に登録されるのと同じく
             計画承認・[main_agent_tool_guard] を免除した設定で評価する。
         exclude_skills: 走査結果から除くスキル名（--exclude-skill。baseline 用）。
+        agent_overlays: 本番のエージェント種別の上に最優先で重ねるエージェント定義
+            （agents/*.md 形式のファイル）の一覧（--agent-overlay。スキル研究室で
+            開発中のサブエージェントの評価に使う）。同名なら重ねた側が優先される。
 
     Returns:
         run_all.py 向けの結果 dict（1件分）。
@@ -295,17 +337,24 @@ async def _run(case: EvalCase, skill_overlays: list[Path] | None = None, exclude
     # 専用のまま保つ。
     workdir_cm = tempfile.TemporaryDirectory(prefix="evals_workdir_") if case.work_dir else contextlib.nullcontext(None)
     overlay_cm = tempfile.TemporaryDirectory(prefix="evals_skill_overlay_") if skill_overlays else contextlib.nullcontext(None)
+    agent_overlay_cm = tempfile.TemporaryDirectory(prefix="evals_agent_overlay_") if agent_overlays else contextlib.nullcontext(None)
     with (
         tempfile.TemporaryDirectory(prefix="evals_memory_") as tmp_memory_dir,
         tempfile.TemporaryDirectory(prefix="evals_path_memory_") as tmp_path_memory_dir,
         workdir_cm as tmp_workdir,
         overlay_cm as tmp_overlay_root,
+        agent_overlay_cm as tmp_agent_overlay_root,
     ):
         overlay_roots: list[Path] = []
         if tmp_overlay_root:
             for skill_dir in skill_overlays or []:
                 shutil.copytree(skill_dir, Path(tmp_overlay_root) / skill_dir.name)
             overlay_roots = [Path(tmp_overlay_root)]
+        agent_overlay_roots: list[Path] = []
+        if tmp_agent_overlay_root:
+            for agent_file in agent_overlays or []:
+                shutil.copy2(agent_file, Path(tmp_agent_overlay_root) / agent_file.name)
+            agent_overlay_roots = [Path(tmp_agent_overlay_root)]
         os.environ["MEMORY_DIR"] = tmp_memory_dir
         os.environ["PATH_MEMORY_DIR"] = tmp_path_memory_dir
         # ケースが work_dir（プロジェクトルート相対パス）を指定していれば、
@@ -313,7 +362,7 @@ async def _run(case: EvalCase, skill_overlays: list[Path] | None = None, exclude
         # そこへ固定する（例: 大量ファイル探索シナリオのフィクスチャ）。
         # 1プロセス=1ケースなので他ケースへの影響はない。
         if case.work_dir:
-            src_dir = (_PROJECT_ROOT / case.work_dir).resolve()
+            src_dir = _resolve_work_dir(case)
             dst_dir = Path(tmp_workdir) / src_dir.name
             shutil.copytree(src_dir, dst_dir)
             os.environ["DEFAULT_WORKDIR"] = str(dst_dir)
@@ -375,7 +424,8 @@ async def _run(case: EvalCase, skill_overlays: list[Path] | None = None, exclude
         # app.py の _setup() と同じ手順で agent_type_defs を構築し、
         # {{agent_types}}/{{memory}} プレースホルダーを置換する
         # （本番と同じシステムプロンプトで評価するため）。
-        agent_type_defs = scan_agent_types([config.agents_dir, *config.locohane_agents_dirs])
+        # --agent-overlay も同じく本番の構成の上に最優先で重ねる（scan_agent_types は後方優先）。
+        agent_type_defs = scan_agent_types([config.agents_dir, *config.locohane_agents_dirs, *agent_overlay_roots])
         agent_types_block = render_agent_types_block(agent_type_defs)
         agent_type_defs = [
             replace(
@@ -412,7 +462,7 @@ async def _run(case: EvalCase, skill_overlays: list[Path] | None = None, exclude
         # キーワード引数で渡す（init_tools は開発中でシグネチャが変わりうるため、
         # 位置引数だとズレて誤った型を渡してしまう事故が起きやすい）。
         init_tools(
-            skills_root=[*overlay_roots, *config.locohane_skills_dirs, config.skills_dir],
+            skills_root=[*overlay_roots, *reversed(config.locohane_skills_dirs), config.skills_dir],
             script_python=config.script_python,
             script_timeout=config.script_timeout,
             llm_config=config,
@@ -604,22 +654,54 @@ def main() -> int:
         default=[],
         help="スキル一覧から除くスキル名。複数指定可（baseline 用）",
     )
+    parser.add_argument(
+        "--agent-overlay",
+        action="append",
+        default=[],
+        type=Path,
+        help="本番のエージェント種別の上に最優先で重ねるエージェント定義（agents/*.md 形式のファイル）。複数指定可",
+    )
+    parser.add_argument(
+        "--config-patch",
+        type=Path,
+        help="今の実効値に項目を足す設定パッチ（スキル研究室の config_patch.json。evals/config_patch.py）",
+    )
+    parser.add_argument(
+        "--llm-from-instance",
+        help="LLM の接続先（[llm] main_url/sub_url 等）だけをこのインスタンス（スキル研究室）のものにする",
+    )
     args = parser.parse_args()
     for skill_dir in args.skill_overlay:
         if not (skill_dir / "SKILL.md").is_file():
             parser.error(f"--skill-overlay には SKILL.md を持つフォルダを指定してください: {skill_dir}")
+    for agent_file in args.agent_overlay:
+        if not (agent_file.is_file() and agent_file.suffix == ".md"):
+            parser.error(f"--agent-overlay にはエージェント定義の .md ファイルを指定してください: {agent_file}")
 
     instance_name = resolve_instance_name(args.instance)
     # _run() 内で MEMORY_DIR 等の隔離用環境変数・ケースの env: を設定するより
     # 前に適用する（インスタンス別 .env は override=True で読むため、後に
     # 適用するとそれらを打ち消してしまう）。
     apply_instance(instance_name)
+    if args.llm_from_instance:
+        # 構成は評価対象インスタンスのまま、接続先だけを研究室のものにする
+        # （環境変数は config_overrides.json・インスタンス別 .env より優先される）。
+        os.environ.update(llm_env_from_instance(args.llm_from_instance))
+    if args.config_patch:
+        _apply_config_patch(args.config_patch.resolve())
 
     case = load_case(args.case_path)
     install_headless_chainlit(case.auto_approve, case.scripted_text_answers)
 
     try:
-        result = asyncio.run(_run(case, [d.resolve() for d in args.skill_overlay], args.exclude_skill))
+        result = asyncio.run(
+            _run(
+                case,
+                [d.resolve() for d in args.skill_overlay],
+                args.exclude_skill,
+                [f.resolve() for f in args.agent_overlay],
+            )
+        )
     except Exception as e:  # noqa: BLE001 - モデルの幻覚呼び出し等も診断可能なJSONにする
         result = {
             "case_id": case.id,

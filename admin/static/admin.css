@@ -306,3 +306,51 @@ select.inline-select { width: auto; }
 .log-list { display: flex; flex-direction: column; gap: 6px; }
 .log-entry { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; background: var(--panel); }
 .log-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
+
+/* ---------------------------------------------------------- スキル研究室 */
+.hidden { display: none !important; }
+.badge-lab { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: #3a2f5a; color: #d8ccff; }
+.lab-layout { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; }
+.lab-sidebar { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.lab-sidebar h4 { margin: 4px 0 8px; }
+.lab-instance-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.lab-instance-item { text-align: left; padding: 8px 10px; }
+.lab-instance-item.active { border-color: var(--accent); background: #1d2a40; }
+.lab-instance-name { font-weight: bold; margin-bottom: 2px; }
+.lab-lab-row { font-size: 13px; display: flex; align-items: center; gap: 4px; margin: 4px 0; }
+.lab-panel { min-width: 0; }
+.lab-panel-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.lab-panel-header h3 { margin: 2px 0 0; }
+.lab-section-head { display: flex; align-items: center; justify-content: space-between; }
+.lab-status { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); white-space: nowrap; }
+.lab-status-running, .lab-status-queued { border-color: var(--accent); color: var(--accent-hover); }
+.lab-status-review { border-color: var(--ok); color: var(--ok); }
+.lab-status-error, .lab-status-exhausted { border-color: var(--danger); color: var(--danger); }
+.lab-status-promoted { background: #1f3a2a; color: #9be0b5; }
+.theme-title-row { display: flex; align-items: center; gap: 10px; }
+.theme-title-row h3 { margin: 8px 0; }
+.theme-actions { display: flex; gap: 8px; margin: 8px 0 12px; flex-wrap: wrap; }
+.theme-body { margin-top: 12px; }
+.code-area { width: 100%; font-family: Consolas, "BIZ UDGothic", monospace; font-size: 13px; }
+.inline-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.inline-form input[type=text] { flex: 1; min-width: 160px; }
+input.narrow { width: 80px; }
+.asset-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; }
+.asset-title { margin-bottom: 4px; }
+.file-list { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+.asset-add { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 8px; }
+.asset-add textarea { width: 100%; }
+.tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 2px 10px; margin: 4px 0 10px; }
+.tool-check { margin: 0; font-size: 12px; }
+.case-expect { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 10px; }
+.lab-pre { white-space: pre-wrap; word-break: break-all; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; font-size: 12px; max-height: 420px; overflow: auto; }
+.diff-file { margin: 4px 0; }
+.diff-important > summary { color: var(--warn); font-weight: bold; }
+.run-detail { margin: 4px 0; }
+.run-fail > summary, .run-error > summary { color: var(--danger); }
+.run-pass > summary { color: var(--ok); }
+.warn-box { border: 1px solid var(--warn); color: var(--warn); border-radius: var(--radius); padding: 6px 10px; }
+.ok-text { color: var(--ok); }
+.placement { margin: 6px 0; font-size: 13px; }
+.promote-box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.lab-card { border-style: dashed; }

@@ -1,6 +1,6 @@
 ---
 name: promote-skill
-description: Locohane の利用者が skill-creator で作ったドラフトスキル（data/<インスタンス名>/skill_drafts/<ユーザー名>/<スキル名>/）を、スキル安定化トライアウト（同じ eval ケースを config.ini [skill_creator].tryout_repeats 回ずつ繰り返し、全回合格）に通したうえで、スキル開発者の承認を得て正式スキル（skills/ または project_locohane_dir 配下の skills/）へ昇格させる。不合格なら理由を付けて作成者へ差し戻す。「ドラフトを昇格して」「ドラフトスキルを正式化して」「skill_draftsを見て」「/promote-skill」等で使う。ドラフトの修正はしない（合否の関門役）。正式スキルのチューニングは tune-prompt、ケースの新規作成は create-eval-case の担当。
+description: Locohane の利用者が skill-creator で作ったドラフトスキル（data/<インスタンス名>/skill_drafts/<ユーザー名>/<スキル名>/）を、スキル安定化トライアウト（同じ eval ケースを config.ini [skill_creator].tryout_repeats 回ずつ繰り返し、全回合格）に通したうえで、スキル開発者の承認を得て、そのインスタンス専用の正式スキル置き場（[paths].instance_locohane_dir の skills/、既定 instances/<インスタンス名>/locohane/skills/）へ昇格させ、ドラフトはアーカイブする。不合格なら理由を付けて作成者へ差し戻す。「ドラフトを昇格して」「ドラフトスキルを正式化して」「skill_draftsを見て」「/promote-skill」等で使う。ドラフトの修正はしない（合否の関門役）。正式スキルのチューニングは tune-prompt、ケースの新規作成は create-eval-case の担当。
 ---
 
 # promote-skill: ドラフトスキルの昇格
@@ -8,6 +8,14 @@ description: Locohane の利用者が skill-creator で作ったドラフトス�
 Locohane はミスが許されない専門業務が前提のため、正式スキルへの反映は
 「スキル安定化トライアウトに全回合格」かつ「スキル開発者の承認」を経たものだけに限る。
 このスキルは合否を判断して昇格・差し戻しを行うだけで、ドラフトの中身は直さない。
+
+不具合を AI に自己修正させて仕上げる・複数のスキルやサブエージェントをまとめて扱う・ケースを画面で作る、
+といった通常の流れは管理ツールの「スキル研究室」で行う（README_DETAIL.md「スキル研究室」）。このスキルは、
+ドラフト1件をそのまま判定して昇格させたいときの、Claude Code からの経路として残している。
+
+昇格先は、ドラフトを作ったインスタンス（`<instance>`）専用の置き場だけ。同梱の `skills/` や、全インスタンス共通の
+`project_locohane_dir`（`.locohane/` 等）には置かない（組織別・役割別のほかのインスタンスまで汚染するため）。
+同梱・共有スキルの改善案も、専用の置き場に同じ名前で置く（そのインスタンスでだけ置き換わり、元のファイルは変わらない）。
 
 ファイル操作と機械的な確認は補助スクリプトで行う（CLAUDE.md 記載の Python 実行環境で、
 プロジェクトルートから実行する。以下 `H` = `.claude/skills/promote-skill/scripts/promote_helper.py`）。
@@ -58,29 +66,28 @@ Locohane はミスが許されない専門業務が前提のため、正式ス�
 
 ## 手順3: 昇格
 
-1. 昇格先を決める:
-   - `kind: improve` は元の正式スキルの場所に固定（補助スクリプトが確かめる）。
-   - `kind: new` は `AskUserQuestion` で、一覧の `skills_roots`（`skills/` と各 project_locohane_dir の `skills/`）から選ばせる。
-     会社専用のスキルは project_locohane_dir 側を推奨にする。
-2. `register_entries` がある場合、設定を登録するインスタンスを決める。設定はインスタンスごとの
-   `config_overrides.json` にあるため、昇格先を走査する他のインスタンス（`list` の `skills_roots` で分かる。
-   `skills/` は全インスタンス共通）にも登録が要る。`AskUserQuestion`（multiSelect）で、昇格先を走査する
-   インスタンスから選ばせる（`<instance>` を推奨）。選ばれなかったインスタンスではスクリプトが計画承認・
-   委譲の対象になり、トライアウトと挙動が変わる旨を説明に書く。
-3. `AskUserQuestion` で最終承認を得る（昇格先・登録先インスタンスと登録内容・トライアウト結果・差分の要点を説明に書く）。
+1. 昇格先は `<instance>` 専用の置き場（`list` の `dest_root`）に固定（補助スクリプトが決める）。
+   - `kind: improve` で元の正式スキルが専用の置き場にあれば、その場で置き換える。同梱・共有にあれば、専用の置き場に
+     同じ名前で置き、そのインスタンスでだけ置き換わる（元のファイルと他のインスタンスは変わらない）。
+   - `kind: new` で同じ名前の正式スキルがどこかにあれば、事前確認で止まる。
+2. `register_entries` がある場合、設定は `<instance>` の `config_overrides.json` にだけ登録する
+   （スキルを置くのが `<instance>` だけのため。他のインスタンスへの配布は管理ツールのスキル研究室で行う）。
+3. `AskUserQuestion` で最終承認を得る（昇格先・登録内容・トライアウト結果・差分の要点・ドラフトがアーカイブされることを説明に書く）。
    拒否されたら何もせず終える。
 4. 承認されたら実行する:
    ```
-   python H install <draft> --dest <昇格先の skills ルート> --instance <instance> --tryout <tryout.json のパス> --register-instance <登録先> [--register-instance <登録先> ...] [--judged-pass] [--note "判定メモ"]
+   python H install <draft> --instance <instance> --tryout <tryout.json のパス> [--judged-pass] [--note "判定メモ"]
    ```
    - `tryout.json` が今のドラフト（全ケース・`<N>` 回以上・トライアウト後に変更なし）のものでなければ止まる。
-   - 設定は管理ツールと同じ処理で `instances/<登録先>/config_overrides.json` に保存される（検証・バックアップ・
-     `instances/admin_changes.log` への記録つき）。登録先の `.env` に `PLAN_APPROVAL_EXEMPT_SCRIPTS` /
+   - 設定は管理ツールと同じ処理で `instances/<instance>/config_overrides.json` に保存される（検証・バックアップ・
+     `instances/admin_changes.log` への記録つき）。`<instance>` の `.env` に `PLAN_APPROVAL_EXEMPT_SCRIPTS` /
      `MAIN_AGENT_TOOL_GUARD_ALLOW_ENTRIES` があると登録が効かないため止まる（ユーザーに .env の見直しを頼む）。
-   - 改善案は置き換え前の正式スキルを `evals/history/promote/` に退避してから上書きする。ケースは `evals/cases/<スキル名>/` へ写され、
-     以後 tune-prompt の対象になる。記録は `evals/promotion_log.md` に追記される。
-5. 登録先インスタンスと、昇格先を走査するインスタンス（出力の `instances_using_dest`）の再起動で、
-   全ユーザーのスキル一覧に出て設定も効く旨を報告する。
+   - 置き換える正式スキルは `evals/history/promote/` に退避してから上書きする。ケースは専用の置き場の
+     `evals/<スキル名>/`（既定 `instances/<instance>/locohane/evals/<スキル名>/`）へ写る（回帰テストには
+     `python evals/run_all.py --cases-dir <そこ> --instance <instance>`）。記録は `evals/promotion_log.md` に追記される。
+   - 昇格したドラフトは `[skill_creator] archive_dir`（既定 `data/<instance>/skill_drafts_archive/<ユーザー名>/<スキル名>_<日時>/`）へ
+     `_workspace` ごと移り、作成者の一覧から消える。
+5. `<instance>` の再起動で、そのインスタンスの全ユーザーのスキル一覧に出て設定も効く旨を報告する。
 
 ## 手順4: 差し戻し
 

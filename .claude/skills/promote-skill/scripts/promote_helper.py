@@ -6,10 +6,17 @@
 
     python .claude/skills/promote-skill/scripts/promote_helper.py list
     python .claude/skills/promote-skill/scripts/promote_helper.py check <ドラフトのフォルダ> --instance <名前>
-    python .claude/skills/promote-skill/scripts/promote_helper.py install <ドラフトのフォルダ> --dest <skills ルート> --instance <名前> --tryout <tryout.json> [--register-instance <名前> ...]
+    python .claude/skills/promote-skill/scripts/promote_helper.py install <ドラフトのフォルダ> --instance <名前> --tryout <tryout.json>
     python .claude/skills/promote-skill/scripts/promote_helper.py return <ドラフトのフォルダ> --reason "..." [--reject]
 
 ハッシュ・コピー規則は evals/skill_tree.py（skill-creator の _common.py と同じ規則）を使う。
+
+昇格先は --instance のインスタンス専用の置き場（[paths].instance_locohane_dir の skills/、
+既定 instances/<名前>/locohane/skills/）だけ。同梱の skills/ や全インスタンス共通の
+project_locohane_dir に置くと他のインスタンスまで汚染するため。同梱・共有スキルの改善案も
+専用の置き場に同じ名前で置く（そのインスタンスでだけ置き換わる）。昇格したドラフトは
+[skill_creator] archive_dir へ移す（管理ツールのスキル研究室と同じ admin/skill_lab/promotion.py の
+archive_draft()）。
 
 install は昇格の前に次を確かめる:
 - tryout.json（evals/run_all.py が書く）が、今のドラフトの内容（SKILL.md・scripts 等の
@@ -17,7 +24,7 @@ install は昇格の前に次を確かめる:
   トライアウト後にドラフトが1か所でも変わっていれば合格回数は0に戻ったものとして
   扱い、昇格させない。
 - ドラフトのスクリプトは会話では計画承認・[main_agent_tool_guard] を免除されて
-  いたため、昇格後も同じ挙動になるよう、--register-instance（既定は --instance）の
+  いたため、昇格後も同じ挙動になるよう、--instance の
   インスタンスの config_overrides.json の [plan].plan_approval_exempt_scripts と
   [main_agent_tool_guard].allow_entries（max_calls=-1）へ登録する。トライアウト
   （evals/run_case.py --skill-overlay）も登録済みと同じ状態で評価している。
@@ -68,7 +75,8 @@ def _instance_config(name: str) -> dict:
         "import json,sys; from evals.instance import apply_instance; apply_instance(sys.argv[1]);"
         "from src.config import load_config; c=load_config();"
         "print(json.dumps({'draft_dir': str(c.skill_draft_dir), 'tryout_repeats': c.skill_tryout_repeats,"
-        "'skills_roots': [str(c.skills_dir), *[str(d) for d in c.locohane_skills_dirs]]}))"
+        "'skills_roots': [str(c.skills_dir), *[str(d) for d in c.locohane_skills_dirs]],"
+        "'dest_root': str(c.instance_locohane_dir / 'skills'), 'archive_dir': str(c.skill_archive_dir)}))"
     )
     out = subprocess.run([sys.executable, "-c", code, name], cwd=str(PROJECT_ROOT), capture_output=True, text=True, encoding="utf-8")
     if out.returncode != 0:
@@ -133,6 +141,7 @@ def cmd_list(_args) -> int:
                         "last_tryout": tryouts[-1] if tryouts else None,
                         "tryout_repeats": cfg["tryout_repeats"],
                         "skills_roots": cfg["skills_roots"],
+                        "dest_root": cfg["dest_root"],
                     }
                 )
     print(json.dumps(drafts, ensure_ascii=False, indent=2))
@@ -286,11 +295,13 @@ def _register_guard_exemptions(instance: str, entries: list[tuple[str, str]], ac
 
 def cmd_install(args) -> int:
     draft = Path(args.draft).resolve()
-    dest_root = Path(args.dest).resolve()
     cfg = _instance_config(args.instance)
-    allowed = [Path(r).resolve() for r in cfg["skills_roots"]]
-    if dest_root not in allowed:
-        raise SystemExit(f"--dest は正式スキルの走査ルートのどれかにしてください: {[str(r) for r in allowed]}")
+    dest_root = Path(cfg["dest_root"]).resolve()
+    if args.dest and Path(args.dest).resolve() != dest_root:
+        raise SystemExit(
+            f"昇格先はインスタンス {args.instance} 専用の置き場（{dest_root}）だけです"
+            "（同梱の skills/ や共有の project_locohane_dir に置くと他のインスタンスまで汚染するため）。"
+        )
     problems, _, _ = _check_problems(draft, args.instance)
     tryout = json.loads(Path(args.tryout).read_text(encoding="utf-8"))
     problems += _tryout_problems(draft, tryout, cfg["tryout_repeats"], args.judged_pass)
@@ -300,16 +311,25 @@ def cmd_install(args) -> int:
     target = dest_root / draft.name
     backup = None
     base_dir = Path(meta.get("base_root", "")) / meta.get("base_skill", draft.name)
-    if meta.get("kind") == "improve" and target.resolve() != base_dir.resolve():
-        raise SystemExit(f"改善案は元にした正式スキルの場所へ昇格してください: {base_dir}")
-    if target.exists() and meta.get("kind") != "improve":
+    # 改善案は、元の正式スキルが専用の置き場にあればその場で置き換え、同梱・共有にあれば
+    # 専用の置き場に同じ名前で置く（そのインスタンスでだけ置き換わる）。
+    replaces_base = meta.get("kind") == "improve" and target.resolve() == base_dir.resolve()
+    if target.exists() and not replaces_base:
         raise SystemExit(f"昇格先に同名のスキルがあります: {target}")
 
     # 設定の登録を先に行う（load_config() の検証で失敗したら、スキルを置く前に止める）。
+    # スキルは --instance 専用の置き場にだけ置くため、設定もそのインスタンスにだけ登録する
+    # （他のインスタンスへの配布は管理ツールのスキル研究室で行う）。
+    others = [n for n in args.register_instance if n != args.instance]
+    if others:
+        raise SystemExit(
+            f"--register-instance に {others} は指定できません。スキルは {args.instance} 専用の置き場にだけ置くため、"
+            f"設定も {args.instance} にだけ登録します（他のインスタンスへの配布は管理ツールのスキル研究室で行ってください）。"
+        )
     entries = _register_entries(draft)
     registrations = []
     if entries:
-        for name in dict.fromkeys(args.register_instance or [args.instance]):
+        for name in [args.instance]:
             registrations.append(_register_guard_exemptions(name, entries, actor=f"promote-skill ({draft.parent.name}/{draft.name})"))
 
     if target.exists():
@@ -318,7 +338,8 @@ def cmd_install(args) -> int:
         shutil.copytree(target, backup)
         shutil.rmtree(target)
     shutil.copytree(draft, target, ignore=copy_ignore_for(draft))
-    cases_dest = PROJECT_ROOT / "evals" / "cases" / draft.name
+    # 回帰テスト用のケースも、そのインスタンス専用の置き場へ（共有の evals/cases/ には混ぜない）。
+    cases_dest = dest_root.parent / "evals" / draft.name
     cases_dest.mkdir(parents=True, exist_ok=True)
     copied = []
     for case in sorted((draft / DRAFT_EVALS_DIRNAME).glob("*.yaml")):
@@ -327,16 +348,21 @@ def cmd_install(args) -> int:
     meta.update({"status": "promoted", "promoted_at": _now(), "promoted_to": str(target)})
     _write_meta(draft, meta)
     owner = draft.parent.name
+    skill_sha = tree_sha256(draft)
+    from admin.skill_lab.promotion import archive_draft
+
+    archived = archive_draft(draft, Path(cfg["archive_dir"]), extra={"promoted_to": str(target)})
     registered_text = "".join(
         f"- 設定登録（{r['instance']}）: {json.dumps(r['added'], ensure_ascii=False)}\n" for r in registrations if r["added"]
     )
     entry = (
         f"\n## {_now()} {draft.name}（{meta.get('kind')}、作成者 {owner}、インスタンス {args.instance}）\n\n"
-        f"- 昇格先: {target}\n- ケース: {', '.join(copied)} → evals/cases/{draft.name}/\n"
+        f"- 昇格先: {target}\n- ケース: {', '.join(copied)} → {cases_dest}\n"
         f"- トライアウト: 各{tryout.get('repeat')}回、判定 {tryout.get('verdict')}{'（judge 判定で全回合格）' if args.judged_pass else ''}"
-        f"、スキル内容 sha256 {tree_sha256(draft)[:12]}\n"
+        f"、スキル内容 sha256 {skill_sha[:12]}\n"
         + registered_text
         + (f"- 置き換え前のバックアップ: {backup}\n" if backup else "")
+        + f"- アーカイブしたドラフト: {archived}\n"
         + (f"- メモ: {args.note}\n" if args.note else "")
     )
     if not PROMOTION_LOG.exists():
@@ -349,6 +375,7 @@ def cmd_install(args) -> int:
                 "installed": str(target),
                 "cases": copied,
                 "backup": str(backup) if backup else None,
+                "archived_draft": str(archived),
                 "registrations": registrations,
                 "instances_using_dest": _instances_using([dest_root]),
             },
@@ -379,7 +406,7 @@ def main() -> int:
     p.add_argument("--instance", default="default")
     p = sub.add_parser("install")
     p.add_argument("draft")
-    p.add_argument("--dest", required=True)
+    p.add_argument("--dest", help="省略可。指定する場合は --instance 専用の置き場（list の dest_root）と同じにする")
     p.add_argument("--instance", default="default")
     p.add_argument("--tryout", required=True, help="evals/run_all.py が書いた tryout.json")
     p.add_argument("--judged-pass", action="store_true", help="needs_judge を judge 判定で全回合格と判断した")
@@ -387,7 +414,7 @@ def main() -> int:
         "--register-instance",
         action="append",
         default=[],
-        help="スクリプトの免除設定を config_overrides.json へ登録するインスタンス（複数可。省略時は --instance）",
+        help="互換のため残している。指定できるのは --instance と同じ名前だけ（設定は --instance にだけ登録する）",
     )
     p.add_argument("--note", default="")
     p = sub.add_parser("return")

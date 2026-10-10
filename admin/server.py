@@ -28,6 +28,7 @@ from src.config import PROJECT_ROOT, load_config, resolve_instances_root
 
 from . import api_docs, audit, auth, env_files, env_overrides, monitor, overrides, settings_files, supervisor
 from . import instances as inst
+from .skill_lab import api as skill_lab_api
 from .ini_catalog import parse_file as parse_ini_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -184,6 +185,7 @@ def _instance_summary(name: str) -> dict[str, Any]:
         # ブラウザから http://0.0.0.0:port は開けないため、ホストは 127.0.0.1 固定。
         "url": f"http://127.0.0.1:{meta.app_port}",
         "is_default": name == inst.DEFAULT_INSTANCE_NAME,
+        "kind": meta.kind,
     }
 
 
@@ -201,6 +203,10 @@ class CreateInstanceBody(BaseModel):
     headless: bool = True
     watch: bool = False
     copy_from: str | None = None
+    # app（Locohane 本体）/ skill_lab（スキル研究室。チャット画面・ポートを持たない）
+    kind: str = inst.KIND_APP
+    # copy_from のインスタンス専用の拡張ディレクトリ（昇格済みのスキル・サブエージェント）も写すか
+    copy_extensions: bool = False
 
 
 @app.post("/api/instances")
@@ -219,6 +225,8 @@ def create_instance(
             headless=body.headless,
             watch=body.watch,
             copy_from=body.copy_from,
+            kind=body.kind,
+            copy_extensions=body.copy_extensions,
         )
     except inst.InstanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -230,6 +238,8 @@ def create_instance(
             "remote_addr": _client_ip(request),
             "action": "instance_create",
             "copy_from": body.copy_from,
+            "kind": body.kind,
+            "copy_extensions": body.copy_extensions,
         },
     )
     return _instance_summary(meta.name)
@@ -282,7 +292,11 @@ def get_instance_data_paths(name: str, user: str = Depends(require_login)):
         entries = inst.list_data_paths(INSTANCES_ROOT, CONFIG_INI_PATH, name)
     except inst.InstanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"entries": [e.to_json() for e in entries]}
+    return {
+        "entries": [e.to_json() for e in entries],
+        # インスタンス専用の拡張ディレクトリ（昇格済みのスキル・サブエージェント）。削除ダイアログで警告する。
+        "extensions": inst.instance_extensions_summary(INSTANCES_ROOT, CONFIG_INI_PATH, name),
+    }
 
 
 class DeleteInstanceBody(BaseModel):
@@ -1022,6 +1036,23 @@ def get_api_reference(user: str = Depends(require_login)):
         return api_docs.render()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"{api_docs.API_REFERENCE_PATH.name} が見つかりません。") from exc
+
+
+# ---------------------------------------------------------------------------
+# スキル研究室（admin/skill_lab/api.py。テーマはインスタンスごとの /api/instances/{name}/skill-lab/ 配下）
+# ---------------------------------------------------------------------------
+
+app.include_router(
+    skill_lab_api.build_router(
+        require_login=require_login,
+        require_csrf=require_csrf,
+        instances_root=INSTANCES_ROOT,
+        supervisor=_supervisor,
+        audit_log_path=AUDIT_LOG_PATH,
+        client_ip=_client_ip,
+        backup_keep=_cfg.admin_backup_keep,
+    )
+)
 
 
 # ---------------------------------------------------------------------------

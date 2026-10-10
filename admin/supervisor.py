@@ -139,7 +139,12 @@ class Supervisor:
             try:
                 meta = inst.read_instance(self._instances_root, name)
                 inst.check_conflicts(
-                    self._instances_root, self._config_ini_path, name=name, app_host=meta.app_host, app_port=meta.app_port
+                    self._instances_root,
+                    self._config_ini_path,
+                    name=name,
+                    app_host=meta.app_host,
+                    app_port=meta.app_port,
+                    kind=meta.kind,
                 )
             except inst.InstanceError as exc:
                 raise SupervisorError(str(exc)) from exc
@@ -165,21 +170,7 @@ class Supervisor:
             # 場合はUIの「開く」リンクから明示的に開く）。
             # --watch(-w): ファイル変更検知での自動リロード。本番運用では非推奨のため
             # 既定False。開発時の動作確認用にインスタンスごとに有効化できる。
-            cmd = [
-                sys.executable,
-                "-m",
-                "chainlit",
-                "run",
-                "app.py",
-                "--host",
-                meta.app_host,
-                "--port",
-                str(meta.app_port),
-            ]
-            if meta.headless:
-                cmd.append("--headless")
-            if meta.watch:
-                cmd.append("--watch")
+            cmd = self._command_for(meta)
             try:
                 proc = subprocess.Popen(
                     cmd,
@@ -193,8 +184,38 @@ class Supervisor:
                 log_file.close()
             self._processes[name] = proc
             self._crashed_exit_codes.pop(name, None)
-            logger.info("インスタンス %r を起動しました（pid=%d, %s:%d）。", name, proc.pid, meta.app_host, meta.app_port)
+            if meta.is_skill_lab:
+                logger.info("スキル研究室 %r を起動しました（pid=%d）。", name, proc.pid)
+            else:
+                logger.info("インスタンス %r を起動しました（pid=%d, %s:%d）。", name, proc.pid, meta.app_host, meta.app_port)
             return InstanceStatus(state=InstanceState.RUNNING, pid=proc.pid)
+
+    @staticmethod
+    def _command_for(meta: inst.InstanceMeta) -> list[str]:
+        """インスタンスの種類に応じた起動コマンド。
+
+        スキル調整ワーカー（kind=skill_lab）はチャット画面を持たず、研究テーマを処理する
+        ワーカー（admin/skill_lab/worker.py）を起動する。ワーカーも app.lock を取るため、
+        稼働判定・停止（CTRL_BREAK_EVENT）は本体と同じ仕組みで扱える。
+        """
+        if meta.is_skill_lab:
+            return [sys.executable, "-m", "admin.skill_lab.worker", "--lab", meta.name]
+        cmd = [
+            sys.executable,
+            "-m",
+            "chainlit",
+            "run",
+            "app.py",
+            "--host",
+            meta.app_host,
+            "--port",
+            str(meta.app_port),
+        ]
+        if meta.headless:
+            cmd.append("--headless")
+        if meta.watch:
+            cmd.append("--watch")
+        return cmd
 
     def stop(self, name: str, timeout_seconds: float = 15.0) -> None:
         """稼働中の子プロセスへ CTRL_BREAK_EVENT を送って正常終了させる（タイムアウトでkill）。

@@ -9,6 +9,9 @@ skill-creator スキルの実行スクリプト（progressive disclosure 第3段
 config.ini [skill_creator].other_users_drafts が listed 以上のときだけ出る
 （listed では名前だけ。中身を読めるのは readable 以上）。差し戻された
 ドラフト（status=returned）は、中身を修正すると draft に戻り再び昇格候補になる。
+スキル開発者が管理ツールのスキル研究室に取り込んだドラフトには lab（テーマ）が付く
+（研究室は取り込んだ時点の複製で作業するため、その後の編集は昇格時に開発者が確認する）。
+昇格したドラフトはアーカイブされ、この一覧には出ない。
 
 自己完結（標準ライブラリのみ）。依存なし。
 """
@@ -18,6 +21,16 @@ from __future__ import annotations
 import argparse
 
 from _common import DraftRef, draft_context, parse_frontmatter, print_json, read_meta, run_main
+
+
+def _lab_note(lab: object) -> dict | None:
+    """スキル研究室に取り込まれていれば、その旨（作成者向けの説明つき）。"""
+    if not isinstance(lab, dict) or not lab.get("theme_id"):
+        return None
+    note = "スキル開発者が研究室で仕上げています（取り込んだ後の編集は、昇格時に開発者が確認します）。"
+    if lab.get("applied_fixes"):
+        note = "研究室での修正がこのドラフトに反映されています。差し戻しの理由を読んで直してください。"
+    return {**lab, "note": note}
 
 
 def main() -> int:
@@ -53,6 +66,7 @@ def main() -> int:
                         "eval_cases": sorted(p.stem for p in (skill_dir / "evals").glob("*.yaml")),
                         "last_tryout": tryouts[-1] if tryouts else None,
                         "returned_reason": meta.get("returned_reason"),
+                        "lab": _lab_note(meta.get("lab")),
                     }
                 )
     print_json({"user": ctx.user, "drafts": drafts})

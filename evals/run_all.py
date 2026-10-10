@@ -27,6 +27,11 @@ results.json（全件の生データ）と summary.md（pass/fail 一覧 + judge
 評価した内容のハッシュ（evals/skill_tree.py）とケースごとの合格回数を
 tryout.json に残し、昇格時に今のドラフトと照合する（修正が入っていれば
 合格回数は0に戻ったものとして昇格させない）。
+
+--agent-overlay・--config-patch・--llm-from-instance はスキル研究室
+（admin/skill_lab/）の評価に使う。開発中のサブエージェントと設定パッチも
+同じく開始時に固定してハッシュを残す。ケースフォルダの fixtures/（ケースの
+入力ファイル）もケースと一緒に固定し、cases_sha256 に含める。
 """
 
 from __future__ import annotations
@@ -48,7 +53,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from evals.case_schema import load_case  # noqa: E402
 from evals.instance import resolve_instance_name  # noqa: E402
-from evals.skill_tree import cases_sha256, tree_sha256  # noqa: E402
+from evals.skill_tree import FIXTURES_DIRNAME, cases_sha256, file_sha256, tree_sha256  # noqa: E402
 # 無言終了時の自動リトライ（src/graph.py の ainvoke_ensuring_final_text、
 # 既定 max_retries=2）や大量画像を扱うケースはグラフの ainvoke が複数回・
 # 長時間かかることがあるため、600秒では単体実行なら成功するケースまで
@@ -291,6 +296,9 @@ def main() -> int:
     parser.add_argument("--results-dir", type=Path, help="結果の出力先ルート（既定 evals/results/<target>/）")
     parser.add_argument("--skill-overlay", action="append", default=[], help="run_case.py の --skill-overlay へ渡す（複数可）")
     parser.add_argument("--exclude-skill", action="append", default=[], help="run_case.py の --exclude-skill へ渡す（複数可）")
+    parser.add_argument("--agent-overlay", action="append", default=[], help="run_case.py の --agent-overlay へ渡す（複数可）")
+    parser.add_argument("--config-patch", type=Path, help="run_case.py の --config-patch へ渡す")
+    parser.add_argument("--llm-from-instance", help="run_case.py の --llm-from-instance へ渡す")
     args = parser.parse_args()
     if not args.target and not args.cases_dir:
         parser.error("target か --cases-dir のどちらかを指定してください")
@@ -325,6 +333,9 @@ def main() -> int:
         snapshot_cases_dir.mkdir()
         for yaml_path in source_cases_dir.glob("*.yaml"):
             shutil.copy2(yaml_path, snapshot_cases_dir / yaml_path.name)
+        if (source_cases_dir / FIXTURES_DIRNAME).is_dir():
+            # ケースの work_dir（ケースのファイルからの相対パス）が写しを指すように一緒に固定する。
+            shutil.copytree(source_cases_dir / FIXTURES_DIRNAME, snapshot_cases_dir / FIXTURES_DIRNAME)
         run_paths = [snapshot_cases_dir / p.name for p in case_paths]
         overlays = []
         extra_args: list[str] = []
@@ -336,11 +347,34 @@ def main() -> int:
             extra_args += ["--skill-overlay", str(snapshot)]
         for name in args.exclude_skill:
             extra_args += ["--exclude-skill", name]
+        agent_overlays = []
+        for i, f in enumerate(args.agent_overlay):
+            source = Path(f).resolve()
+            snapshot = Path(tmp) / "agent_overlays" / str(i) / source.name
+            snapshot.parent.mkdir(parents=True)
+            shutil.copy2(source, snapshot)
+            agent_overlays.append({"path": str(source), "name": source.stem, "sha256": file_sha256(snapshot)})
+            extra_args += ["--agent-overlay", str(snapshot)]
+        config_patch = None
+        if args.config_patch:
+            source = args.config_patch.resolve()
+            snapshot = Path(tmp) / "config_patch.json"
+            if source.is_file():
+                shutil.copy2(source, snapshot)
+            else:
+                snapshot.write_text("{}", encoding="utf-8")
+            config_patch = {"path": str(source), "sha256": file_sha256(snapshot)}
+            extra_args += ["--config-patch", str(snapshot)]
+        if args.llm_from_instance:
+            extra_args += ["--llm-from-instance", args.llm_from_instance]
         snapshot_info = {
             "cases_dir": str(source_cases_dir),
             "cases_sha256": cases_sha256(snapshot_cases_dir),
             "case_files": [p.stem for p in case_paths],
             "skill_overlays": overlays,
+            "agent_overlays": agent_overlays,
+            "config_patch": config_patch,
+            "llm_from_instance": args.llm_from_instance,
         }
 
         results = []

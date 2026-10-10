@@ -5,6 +5,12 @@ instances/<name>/ 配下に instance.json（起動情報）・config_overrides.j
 （admin/overrides.py が書く設定差分）・.env（admin/env_files.py が書く
 ログイン情報）・backups/ を持つ。データ本体は config.ini 既定の
 common_data_dir = ./data/${instance} により data/<name>/ に置かれる（README_DETAIL.md「ディレクトリ構成」参照）。
+
+インスタンスには種類（instance.json の kind）がある:
+- app（既定）: Locohane 本体（chainlit run app.py）。
+- skill_lab: スキルスキル調整ワーカー（python -m admin.skill_lab.worker）。チャット画面・
+  ポートを持たず、研究テーマ（各 app インスタンスの ${common_data_dir}/skill_lab/）を
+  そのインスタンスの [llm] 接続先で評価・修正する。
 """
 
 from __future__ import annotations
@@ -23,6 +29,10 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 DEFAULT_INSTANCE_NAME = "default"
 DEFAULT_APP_HOST = "127.0.0.1"
 DEFAULT_APP_PORT = 8000
+
+KIND_APP = "app"
+KIND_SKILL_LAB = "skill_lab"
+INSTANCE_KINDS = (KIND_APP, KIND_SKILL_LAB)
 
 
 class InstanceError(Exception):
@@ -45,6 +55,12 @@ class InstanceMeta:
     # 既定 False（本番運用では非推奨。開発時の動作確認用にインスタンス単位で
     # 有効化できる）。
     watch: bool = False
+    # インスタンスの種類（KIND_APP / KIND_SKILL_LAB）。作成後は変更しない。
+    kind: str = KIND_APP
+
+    @property
+    def is_skill_lab(self) -> bool:
+        return self.kind == KIND_SKILL_LAB
 
     def to_json(self) -> dict:
         return {
@@ -54,6 +70,7 @@ class InstanceMeta:
             "autostart": self.autostart,
             "headless": self.headless,
             "watch": self.watch,
+            "kind": self.kind,
         }
 
 
@@ -114,6 +131,8 @@ def read_instance(instances_root: Path, name: str) -> InstanceMeta:
         # キー自体が無い場合は InstanceMeta の既定値（headless=True, watch=False）を使う。
         headless=bool(data.get("headless", True)),
         watch=bool(data.get("watch", False)),
+        # kind 導入前に作成済みのインスタンスは本体（app）。
+        kind=data.get("kind", KIND_APP) if data.get("kind", KIND_APP) in INSTANCE_KINDS else KIND_APP,
     )
 
 
@@ -150,7 +169,7 @@ def is_port_available(host: str, port: int) -> bool:
 
 def suggest_port(instances_root: Path, host: str, exclude_ports: set[int], start: int = 8000) -> int:
     """8000以上で、既存インスタンス・除外ポート・実際のbind確認のいずれとも重ならない最小のポートを提案する。"""
-    used = {read_instance(instances_root, n).app_port for n in list_instance_names(instances_root)}
+    used = {read_instance(instances_root, n).app_port for n in list_instance_names(instances_root)} - {0}
     used |= exclude_ports
     port = start
     while port in used or not is_port_available(host, port):
@@ -198,19 +217,23 @@ def check_conflicts(
     name: str,
     app_host: str,
     app_port: int,
+    kind: str = KIND_APP,
 ) -> None:
     """他インスタンスとのポート・データ保存先の重複を検出する。
 
-    作成時・設定変更時（ポート変更）・起動時に呼ぶ。
+    作成時・設定変更時（ポート変更）・起動時に呼ぶ。スキル調整ワーカー（kind=skill_lab）は
+    ポートを使わないため、ポートの重複は本体（app）同士だけで確かめる。
 
     Raises:
         InstanceError: 重複が見つかった場合。
     """
     own_checkpoint_db = _effective_checkpoint_db(config_ini_path, overrides_path(instances_root, name), name)
     for other_name in list_instance_names(instances_root):
-        if other_name == name:
+        if other_name == name or kind == KIND_SKILL_LAB:
             continue
         other_meta = read_instance(instances_root, other_name)
+        if other_meta.is_skill_lab:
+            continue
         if other_meta.app_host == app_host and other_meta.app_port == app_port:
             raise InstanceError(f"ポート {app_host}:{app_port} は既にインスタンス {other_name!r} が使用しています。")
     _check_data_dir_conflict(instances_root, config_ini_path, name=name, own_checkpoint_db=own_checkpoint_db)
@@ -248,8 +271,14 @@ def create_instance(
     headless: bool = True,
     watch: bool = False,
     copy_from: str | None = None,
+    kind: str = KIND_APP,
+    copy_extensions: bool = False,
 ) -> InstanceMeta:
     """新しいインスタンスを作成する。
+
+    kind は KIND_APP（Locohane 本体）か KIND_SKILL_LAB（スキル研究室）。
+    copy_extensions=True なら、複製元のインスタンス専用の拡張ディレクトリ
+    （[paths].instance_locohane_dir。研究室で昇格したスキル・サブエージェント）も写す。
 
     データの分離は config.ini 既定の common_data_dir = ./data/${instance} に
     任せる（上書きは書かない）。copy_from を指定した場合はそのインスタンスの
@@ -263,6 +292,8 @@ def create_instance(
         InstanceError: 名前が不正、既に存在する、または整合性チェック失敗。
     """
     validate_name(name)
+    if kind not in INSTANCE_KINDS:
+        raise InstanceError(f"インスタンスの種類が不正です: {kind!r}（{', '.join(INSTANCE_KINDS)} のいずれか）")
     if instance_dir(instances_root, name).exists():
         raise InstanceError(f"インスタンス {name!r} は既に存在します。")
     if copy_from:
@@ -272,7 +303,10 @@ def create_instance(
         validate_name(copy_from)
         if not instance_json_path(instances_root, copy_from).is_file():
             raise InstanceError(f"複製元のインスタンス {copy_from!r} が見つかりません。")
-    if app_port is None:
+    if kind == KIND_SKILL_LAB:
+        # 研究室はチャット画面を持たず、待ち受けもしない。
+        app_port = 0
+    elif app_port is None:
         app_port = suggest_port(instances_root, app_host, exclude_ports=set())
 
     try:
@@ -308,14 +342,55 @@ def create_instance(
             autostart=autostart,
             headless=headless,
             watch=watch,
+            kind=kind,
         )
         write_instance(instances_root, meta)
 
-        check_conflicts(instances_root, config_ini_path, name=name, app_host=app_host, app_port=app_port)
+        check_conflicts(instances_root, config_ini_path, name=name, app_host=app_host, app_port=app_port, kind=kind)
+        if copy_from and copy_extensions:
+            _copy_instance_extensions(instances_root, config_ini_path, copy_from, name)
     except Exception:
         shutil.rmtree(instance_dir(instances_root, name), ignore_errors=True)
         raise
     return meta
+
+
+def _instance_locohane_dir(instances_root: Path, config_ini_path: Path, name: str) -> Path:
+    cfg = load_config(config_path=config_ini_path, overrides_path=overrides_path(instances_root, name), instance_name=name)
+    return cfg.instance_locohane_dir
+
+
+def _copy_instance_extensions(instances_root: Path, config_ini_path: Path, src_name: str, dst_name: str) -> None:
+    """複製元のインスタンス専用の拡張ディレクトリ（skills/・agents/・LOCOHANE.md 等）を写す。"""
+    src = _instance_locohane_dir(instances_root, config_ini_path, src_name)
+    dst = _instance_locohane_dir(instances_root, config_ini_path, dst_name)
+    if not src.is_dir() or src.resolve() == dst.resolve():
+        return
+    if dst.exists() and any(dst.iterdir()):
+        raise InstanceError(f"複製先のインスタンス専用ディレクトリが空ではありません: {dst}")
+    shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+
+
+def instance_extensions_summary(instances_root: Path, config_ini_path: Path, name: str) -> dict:
+    """インスタンス専用の拡張ディレクトリにあるスキル・サブエージェントの一覧（削除ダイアログの警告用）。
+
+    Returns:
+        {"dir", "deleted_with_instance"（インスタンス削除で一緒に消えるか）, "skills", "agents"}。
+        設定が読めない場合は dir を None にする。
+    """
+    try:
+        ext = _instance_locohane_dir(instances_root, config_ini_path, name)
+    except Exception:  # noqa: BLE001 - 一覧表示用。設定エラーは別途 list_data_paths が伝える
+        return {"dir": None, "deleted_with_instance": False, "skills": [], "agents": []}
+    skills_dir, agents_dir = ext / "skills", ext / "agents"
+    skills = sorted(p.name for p in skills_dir.iterdir() if (p / "SKILL.md").is_file()) if skills_dir.is_dir() else []
+    agents = sorted(p.stem for p in agents_dir.glob("*.md")) if agents_dir.is_dir() else []
+    return {
+        "dir": str(ext),
+        "deleted_with_instance": ext.resolve().is_relative_to(instance_dir(instances_root, name).resolve()),
+        "skills": skills,
+        "agents": agents,
+    }
 
 
 def update_instance_meta(
@@ -340,8 +415,9 @@ def update_instance_meta(
         autostart=autostart if autostart is not None else current.autostart,
         headless=headless if headless is not None else current.headless,
         watch=watch if watch is not None else current.watch,
+        kind=current.kind,
     )
-    if (new_meta.app_host, new_meta.app_port) != (current.app_host, current.app_port):
+    if not current.is_skill_lab and (new_meta.app_host, new_meta.app_port) != (current.app_host, current.app_port):
         check_conflicts(instances_root, config_ini_path, name=name, app_host=new_meta.app_host, app_port=new_meta.app_port)
     write_instance(instances_root, new_meta)
     return new_meta
@@ -401,7 +477,7 @@ def _overlaps(a: Path, b: Path) -> bool:
 
 def _protected_paths(cfg) -> list[Path]:
     """そのインスタンスが使う、データ以外の（共有されうる）パス。"""
-    paths = [cfg.skills_dir, cfg.agents_dir, *cfg.project_locohane_dirs, *cfg.bin_path]
+    paths = [cfg.skills_dir, cfg.agents_dir, *cfg.project_locohane_dirs, cfg.instance_locohane_dir, *cfg.bin_path]
     paths += [entry.dir for entry in cfg.allow_sandbox_dirs]
     return [p.resolve() for p in paths]
 

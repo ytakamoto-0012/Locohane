@@ -305,7 +305,14 @@ class Config:
             .py スクリプトは run_script/run_script_background で script_python
             の代わりにこの Python で起動される（src/tools/_script_job.py の
             _script_python_for() 参照）。
-        bin_path: run_script/execute_python_code のサブプロセスへ渡す PATH の
+        instance_locohane_dir: そのインスタンスだけが走査する拡張ディレクトリ
+            （[paths].instance_locohane_dir、既定 instances/<名前>/locohane）の絶対パス。
+            project_locohane_dirs の後ろ（最優先）として locohane_skills_dirs/
+            locohane_agents_dirs/project_instructions_paths の末尾に必ず含まれる。
+            スキル研究室で昇格したスキル・サブエージェントの置き場。
+        instance_dir: インスタンスの設定フォルダ（[admin].instances_dir/<名前>）の
+            絶対パス。${instance_dir} プレースホルダーの展開先。
+        bin_path:run_script/execute_python_code のサブプロセスへ渡す PATH の
             先頭に追加するディレクトリの絶対パスのリスト（既定は空）。
             コマンド名を素の状態で叩く前提の外部バイナリをOS側のPATH登録なしで
             呼び出せるようにする（src/tools.py の _subprocess_env() 参照）。
@@ -905,6 +912,12 @@ class Config:
     locohane_skills_dirs: list[Path]
     locohane_agents_dirs: list[Path]
     locohane_skills_pythons: dict[Path, str]
+    # [paths].instance_locohane_dir の解決結果（そのインスタンスだけが走査する拡張ディレクトリ）。
+    # locohane_skills_dirs/locohane_agents_dirs/project_instructions_paths の末尾（最優先）に
+    # 必ず含まれる。スキル研究室の昇格先（admin/skill_lab/promotion.py）。
+    instance_locohane_dir: Path
+    # インスタンスの設定フォルダ（[admin].instances_dir/<インスタンス名>）。${instance_dir} の展開先。
+    instance_dir: Path
     bin_path: list[Path]
     system_prompt_path: Path
     project_instructions_paths: list[Path]
@@ -930,6 +943,15 @@ class Config:
     skill_tryout_repeats: int
     # 他ユーザーのドラフトの扱い（hidden/listed/readable/full、SKILL_DRAFT_VISIBILITY_MODES）。
     skill_other_users_drafts: str
+    # 昇格したドラフトの退避先（スキル走査対象・skill_draft_dir と重ならないことを load_config() が保証する）。
+    skill_archive_dir: Path
+
+    # --- スキル研究室（[skill_lab]、admin/skill_lab/） ---
+    skill_lab_max_iterations: int
+    skill_lab_max_hours: float
+    skill_lab_poll_interval_seconds: float
+    skill_lab_fixer_max_file_chars: int
+    skill_lab_transcript_excerpt_chars: int
 
     # --- アップロードファイルの自動削除 ---
     upload_retention_days: int
@@ -1239,6 +1261,11 @@ def default_overrides_path(config_path: Path | None = None) -> Path:
 def _sub_instance(value: str, instance_name: str) -> str:
     """値中の ${instance} プレースホルダーをインスタンス名へ置換する。"""
     return value.replace("${instance}", instance_name)
+
+
+def _sub_instance_dir(value: str, instance_dir: Path) -> str:
+    """値中の ${instance_dir} プレースホルダーをインスタンスの設定フォルダへ置換する。"""
+    return value.replace("${instance_dir}", str(instance_dir))
 
 
 def _sub_common_data_dir(value: str, common_data_dir: Path, instance_name: str) -> str:
@@ -1859,6 +1886,21 @@ def _parse_skill_draft_visibility(value: object) -> str:
     return mode
 
 
+def _positive_float(value: object, key: str) -> float:
+    """0より大きい数値として解釈して返す。
+
+    Raises:
+        ValueError: 数値として解釈できない、または0以下の場合。
+    """
+    try:
+        number = float(str(value).strip())
+    except ValueError as e:
+        raise ValueError(f"{key} は0より大きい数値で指定してください: {value!r}") from e
+    if number <= 0:
+        raise ValueError(f"{key} は0より大きい数値で指定してください: {value!r}")
+    return number
+
+
 def _positive_int(value: object, key: str) -> int:
     """1以上の整数として解釈して返す。
 
@@ -1883,21 +1925,31 @@ def _validate_skill_draft_dir(cfg: "Config") -> None:
     設定者の注意に頼らず、同一・包含関係のどちらも起動時に拒否する。
 
     Raises:
-        ValueError: skill_draft_dir が skills_dir・agents_dir・
-            project_locohane_dirs のいずれかと同一、または包含関係にある場合。
+        ValueError: skill_draft_dir・skill_archive_dir が skills_dir・agents_dir・
+            project_locohane_dirs・instance_locohane_dir のいずれかと同一、または
+            包含関係にある場合、または skill_draft_dir と skill_archive_dir が重なる場合。
     """
-    draft = cfg.skill_draft_dir.resolve()
-    for label, other in (
+    scanned = (
         ("[paths].skills_dir", cfg.skills_dir),
         ("[paths].agents_dir", cfg.agents_dir),
         *(("[paths].project_locohane_dir", d) for d in cfg.project_locohane_dirs),
-    ):
-        resolved = other.resolve()
-        if draft == resolved or draft.is_relative_to(resolved) or resolved.is_relative_to(draft):
-            raise ValueError(
-                f"[skill_creator].draft_dir（{draft}）は {label}（{resolved}）と重ならない場所にしてください"
-                "（ドラフトが全ユーザーのスキル一覧に混入するのを防ぐため）"
-            )
+        ("[paths].instance_locohane_dir", cfg.instance_locohane_dir),
+    )
+    for key, target in (("draft_dir", cfg.skill_draft_dir), ("archive_dir", cfg.skill_archive_dir)):
+        draft = target.resolve()
+        for label, other in scanned:
+            resolved = other.resolve()
+            if draft == resolved or draft.is_relative_to(resolved) or resolved.is_relative_to(draft):
+                raise ValueError(
+                    f"[skill_creator].{key}（{draft}）は {label}（{resolved}）と重ならない場所にしてください"
+                    "（ドラフトが全ユーザーのスキル一覧に混入するのを防ぐため）"
+                )
+    draft, archive = cfg.skill_draft_dir.resolve(), cfg.skill_archive_dir.resolve()
+    if draft == archive or draft.is_relative_to(archive) or archive.is_relative_to(draft):
+        raise ValueError(
+            f"[skill_creator].archive_dir（{archive}）は draft_dir（{draft}）と重ならない場所にしてください"
+            "（アーカイブしたドラフトが作成者の一覧に戻ってしまうため）"
+        )
 
 
 def _parse_auth_users(value: str | None) -> dict[str, str]:
@@ -2349,6 +2401,7 @@ def load_config(
     images_section = parser["images"] if parser.has_section("images") else {}
     default_workdir_section = parser["default_workdir"] if parser.has_section("default_workdir") else {}
     skill_creator_section = parser["skill_creator"] if parser.has_section("skill_creator") else {}
+    skill_lab_section = parser["skill_lab"] if parser.has_section("skill_lab") else {}
     path_memory = parser["path_memory"] if parser.has_section("path_memory") else {}
     log_section = parser["log"] if parser.has_section("log") else {}
     chat_log = parser["chat_log"] if parser.has_section("chat_log") else {}
@@ -2476,6 +2529,21 @@ def load_config(
         PROJECT_ROOT,
     )
     project_locohane_dirs = [d for d, _ in project_locohane_entries]
+    # インスタンス専用の拡張ディレクトリ。project_locohane_dirs の後ろ（最優先）に常に足す
+    # （config_overrides.json は project_locohane_dir のリストを丸ごと置き換えるため、
+    # リストに入れると上書きしたインスタンスで抜け落ちる）。
+    instance_dir = resolve_instances_root(path) / resolved_instance_name
+    instance_locohane_dir = _resolve(
+        PROJECT_ROOT,
+        _sub_common_data_dir(
+            _sub_instance_dir(
+                os.getenv("INSTANCE_LOCOHANE_DIR", paths.get("instance_locohane_dir", "${instance_dir}/locohane")), instance_dir
+            ),
+            common_data_dir,
+            resolved_instance_name,
+        ),
+    )
+    extension_dirs = [d for d in project_locohane_dirs if d != instance_locohane_dir] + [instance_locohane_dir]
     bin_path = _as_path_list(
         os.getenv("BIN_PATH", paths.get("bin_path", "")),
         PROJECT_ROOT,
@@ -2562,14 +2630,16 @@ def load_config(
         skills_dir=_resolve(PROJECT_ROOT, os.getenv("SKILLS_DIR", paths.get("skills_dir", "./skills"))),
         agents_dir=_resolve(PROJECT_ROOT, os.getenv("AGENTS_DIR", paths.get("agents_dir", "./agents"))),
         project_locohane_dirs=project_locohane_dirs,
-        locohane_skills_dirs=[d / "skills" for d in project_locohane_dirs],
-        locohane_agents_dirs=[d / "agents" for d in project_locohane_dirs],
+        locohane_skills_dirs=[d / "skills" for d in extension_dirs],
+        locohane_agents_dirs=[d / "agents" for d in extension_dirs],
         locohane_skills_pythons={d / "skills": py for d, py in project_locohane_entries if py},
+        instance_locohane_dir=instance_locohane_dir,
+        instance_dir=instance_dir,
         bin_path=bin_path,
         system_prompt_path=_resolve(
             PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", paths.get("system_prompt_path", "./system_prompt/system_prompt.md"))
         ),
-        project_instructions_paths=[d / "LOCOHANE.md" for d in project_locohane_dirs],
+        project_instructions_paths=[d / "LOCOHANE.md" for d in extension_dirs],
         common_data_dir=common_data_dir,
         checkpoint_db=_resolve(
             PROJECT_ROOT,
@@ -2608,6 +2678,30 @@ def load_config(
         ),
         skill_other_users_drafts=_parse_skill_draft_visibility(
             os.getenv("SKILL_OTHER_USERS_DRAFTS", skill_creator_section.get("other_users_drafts", "hidden"))
+        ),
+        skill_archive_dir=_resolve(
+            PROJECT_ROOT,
+            _sub_common_data_dir(
+                os.getenv("SKILL_ARCHIVE_DIR", skill_creator_section.get("archive_dir", "${common_data_dir}/skill_drafts_archive")),
+                common_data_dir,
+                resolved_instance_name,
+            ),
+        ),
+        skill_lab_max_iterations=_positive_int(
+            os.getenv("SKILL_LAB_MAX_ITERATIONS", skill_lab_section.get("max_iterations", 8)), "[skill_lab].max_iterations"
+        ),
+        skill_lab_max_hours=_positive_float(os.getenv("SKILL_LAB_MAX_HOURS", skill_lab_section.get("max_hours", 6)), "[skill_lab].max_hours"),
+        skill_lab_poll_interval_seconds=_positive_float(
+            os.getenv("SKILL_LAB_POLL_INTERVAL_SECONDS", skill_lab_section.get("poll_interval_seconds", 10)),
+            "[skill_lab].poll_interval_seconds",
+        ),
+        skill_lab_fixer_max_file_chars=_positive_int(
+            os.getenv("SKILL_LAB_FIXER_MAX_FILE_CHARS", skill_lab_section.get("fixer_max_file_chars", 20000)),
+            "[skill_lab].fixer_max_file_chars",
+        ),
+        skill_lab_transcript_excerpt_chars=_positive_int(
+            os.getenv("SKILL_LAB_TRANSCRIPT_EXCERPT_CHARS", skill_lab_section.get("transcript_excerpt_chars", 6000)),
+            "[skill_lab].transcript_excerpt_chars",
         ),
         upload_retention_days=int(os.getenv("UPLOAD_RETENTION_DAYS", uploads.get("retention_days", 7))),
         upload_cleanup_interval_hours=float(os.getenv("UPLOAD_CLEANUP_INTERVAL_HOURS", uploads.get("cleanup_interval_hours", 1))),

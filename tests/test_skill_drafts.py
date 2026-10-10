@@ -83,19 +83,52 @@ def env(tmp_path, monkeypatch):
 def test_draft_dir_overlapping_scan_roots_is_rejected(tmp_path, relation):
     skills_dir = tmp_path / "skills"
     draft = {"same": skills_dir, "inside": skills_dir / "drafts", "contains": tmp_path}[relation]
-    cfg = SimpleNamespace(skill_draft_dir=draft, skills_dir=skills_dir, agents_dir=tmp_path / "x" / "agents", project_locohane_dirs=[])
+    cfg = SimpleNamespace(
+        skill_draft_dir=draft,
+        skill_archive_dir=tmp_path / "y" / "archive",
+        skills_dir=skills_dir,
+        agents_dir=tmp_path / "x" / "agents",
+        project_locohane_dirs=[],
+        instance_locohane_dir=tmp_path / "x" / "instance",
+    )
     with pytest.raises(ValueError, match="draft_dir"):
         _validate_skill_draft_dir(cfg)
 
 
+def _scan_layout(tmp_path, **overrides):
+    values = {
+        "skill_draft_dir": tmp_path / "data" / "skill_drafts",
+        "skill_archive_dir": tmp_path / "data" / "skill_drafts_archive",
+        "skills_dir": tmp_path / "skills",
+        "agents_dir": tmp_path / "agents",
+        "project_locohane_dirs": [tmp_path / ".locohane"],
+        "instance_locohane_dir": tmp_path / "instances" / "default" / "locohane",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 def test_draft_dir_outside_scan_roots_is_accepted(tmp_path):
-    cfg = SimpleNamespace(
-        skill_draft_dir=tmp_path / "data" / "skill_drafts",
-        skills_dir=tmp_path / "skills",
-        agents_dir=tmp_path / "agents",
-        project_locohane_dirs=[tmp_path / ".locohane"],
-    )
-    _validate_skill_draft_dir(cfg)
+    _validate_skill_draft_dir(_scan_layout(tmp_path))
+
+
+def test_draft_dir_inside_instance_locohane_dir_is_rejected(tmp_path):
+    """インスタンス専用の置き場もスキル走査対象のため、ドラフト置き場と重ねられない。"""
+    layout = _scan_layout(tmp_path, skill_draft_dir=tmp_path / "instances" / "default" / "locohane" / "drafts")
+    with pytest.raises(ValueError, match="instance_locohane_dir"):
+        _validate_skill_draft_dir(layout)
+
+
+@pytest.mark.parametrize("where", ["skills", "instance", "draft"])
+def test_archive_dir_overlapping_is_rejected(tmp_path, where):
+    """アーカイブは走査対象とも作成者のドラフト置き場とも重ねられない（一覧に戻ってしまうため）。"""
+    archive = {
+        "skills": tmp_path / "skills" / "archive",
+        "instance": tmp_path / "instances" / "default" / "locohane" / "archive",
+        "draft": tmp_path / "data" / "skill_drafts" / "_archive",
+    }[where]
+    with pytest.raises(ValueError, match="archive_dir"):
+        _validate_skill_draft_dir(_scan_layout(tmp_path, skill_archive_dir=archive))
 
 
 # --- 権限表 -----------------------------------------------------------------

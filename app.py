@@ -1904,10 +1904,11 @@ async def _setup() -> None:
     agent_type_defs = [replace(a, system_prompt=f"{a.system_prompt}\n\n{subagent_common}") for a in agent_type_defs]
 
     # ツールに skills ルート等を注入（dispatch_agent 用にエージェント種別定義も渡す）。
-    # locohane_skills_dirs を先に置くことで、read_skill/run_script/analyze_image 等の
-    # 実体解決も scan_skills() と同じ「.locohane 側優先」のマージ挙動になる。
+    # locohane_skills_dirs を逆順で先に置くことで、read_skill/run_script/analyze_image 等の
+    # 実体解決も scan_skills() と同じ「後方（.locohane 側・インスタンス専用側）優先」のマージ挙動になる
+    # （scan_skills は後方優先、_SKILLS_ROOTS は前方優先のため逆順にする）。
     init_tools(
-        [*_config.locohane_skills_dirs, _config.skills_dir],
+        [*reversed(_config.locohane_skills_dirs), _config.skills_dir],
         _config.script_python,
         _config.script_timeout,
         _config,

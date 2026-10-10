@@ -19,6 +19,8 @@ from pathlib import Path
 DRAFT_META_FILENAME = "_draft_meta.json"
 # ドラフトの eval ケース置き場（昇格時に evals/cases/<スキル名>/ へ移す）。
 DRAFT_EVALS_DIRNAME = "evals"
+# ケースフォルダ直下の入力ファイル置き場（ケースの work_dir がケースからの相対パスで指す）。
+FIXTURES_DIRNAME = "fixtures"
 # スキルフォルダ直下にあってもスキル本体ではないもの（来歴・ケース）。
 _TOP_LEVEL_EXCLUDE = frozenset({DRAFT_META_FILENAME, DRAFT_EVALS_DIRNAME})
 # どの階層にあってもスキル本体ではないもの（キャッシュ）。
@@ -42,12 +44,25 @@ def tree_sha256(skill_dir: Path) -> str:
 
 
 def cases_sha256(cases_dir: Path) -> str:
-    """ケースフォルダ直下の *.yaml（ファイル名と内容）のハッシュ。"""
+    """ケースフォルダ直下の *.yaml と fixtures/ 配下（ファイル名と内容）のハッシュ。
+
+    fixtures/ が無ければ *.yaml だけのハッシュ（fixtures/ 導入前と同じ値）になる。
+    """
     digest = hashlib.sha256()
     for path in sorted(cases_dir.glob("*.yaml")):
         digest.update(path.name.encode("utf-8") + b"\0")
         digest.update(path.read_bytes() + b"\0")
+    fixtures = cases_dir / FIXTURES_DIRNAME
+    if fixtures.is_dir():
+        for path in sorted(p for p in fixtures.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
+            digest.update(path.relative_to(cases_dir).as_posix().encode("utf-8") + b"\0")
+            digest.update(path.read_bytes() + b"\0")
     return digest.hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    """1ファイルの内容のハッシュ（エージェント定義・設定パッチ用）。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def copy_ignore_for(root: Path):
